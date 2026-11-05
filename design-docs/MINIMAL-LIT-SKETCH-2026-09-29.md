@@ -1,7 +1,8 @@
 # The simplest lit that still fits the use case
 
-Status: snapshot, written 2026-09-29 against master `88672bf0` (v0.16.0 plus
-five fixes). This is the opening move of the simplification the owner asked
+Status: provisional. Carried into lit v2 on 2026-11-05 as the feature
+baseline until a v2 design supersedes it. Originally a snapshot, written
+2026-09-29 against lit v1 master `88672bf0` (v0.16.0 plus five fixes). This is the opening move of the simplification the owner asked
 for before the event-store campaign: a statement of what lit is for, the
 smallest lit that still delivers it, and everything else sorted by why it can
 go. Every line count below was measured with `wc -l` on non-test Go unless a
