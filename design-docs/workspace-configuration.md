@@ -2,8 +2,8 @@
 
 Status: draft / proposal. Written 2026-10-27 for owner review. This is the
 foundation the four designs written the same day stand on
-([custom-fields.md](custom-fields.md), [grooming.md](grooming.md),
-[workflow-sets.md](workflow-sets.md), [phases-and-rework.md](phases-and-rework.md)),
+([custom-fields.md](custom-fields.md), and three since superseded by
+[transition-requirements.md](transition-requirements.md), [workflows.md](workflows.md) and [columns-and-phases.md](columns-and-phases.md)),
 and it answers one rule the owner set that day: *"Whatever we did today should
 be cross-repo capable."*
 
@@ -47,7 +47,7 @@ when they can. The test is that sentence and nothing else.
 | `[levels]` names | planned for `.lit/config.toml` | workspace truth | the name of a level is a fact about the backlog, not about a machine |
 | `[strategies]` | planned for `.lit/config.toml` | workspace truth | which labels are strategies decides what a report counts |
 | custom field definitions | new | workspace truth | which fields exist, their kinds, which are required |
-| workflow set adoption | new | local preference (see [workflow-sets.md](workflow-sets.md)) | the switch lives in `.lit/config.toml`, with `--global` for the user config |
+| workflows | new | workspace truth (see [workflows.md](workflows.md), which supersedes the earlier local-preference row) | handlers bind to columns and epics, which are store nodes |
 | plan-review caps | new | local preference | policy for a writer in this clone; the record it produces is in the store either way |
 | `sync.*`, `snapshot.retention_budget`, `claims.freshness_window`, `quickstart.soil_mode` | config files | local preference | how this machine behaves |
 

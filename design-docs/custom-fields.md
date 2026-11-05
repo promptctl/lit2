@@ -14,6 +14,12 @@ Revised 2026-10-28: the storage design follows the
 [event-store design's §migration](event-store/design.md), and this document
 was revised to match the decisions recorded there.
 
+Corrected in part on 2026-11-05 by
+[transition-requirements.md](transition-requirements.md): the `required` flag
+on a field declaration and the check at the ready label are replaced by a
+requirement on the column where the field is needed. Where this document and
+that one disagree, it wins.
+
 ## What exists
 
 A ticket's fields are a fixed set: title, description, prompt, plan, type,
@@ -103,7 +109,7 @@ history` needs nothing new.
 ## Required
 
 Required means required to be pulled, not required to be created. The owner's
-grooming direction ([grooming.md](grooming.md)) is that work enters the
+grooming direction (the v1 grooming proposal, superseded by [transition-requirements.md](transition-requirements.md)) is that work enters the
 backlog and is made ready later, by a person or an agent putting an epic in
 order; a ticket that cannot be filed until every field is filled fights that
 flow and pushes authors toward placeholder values. So `lit new` accepts an item

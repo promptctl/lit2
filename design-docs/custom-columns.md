@@ -8,6 +8,12 @@ This document carries forward the custom-states half of the
 [workspace-schema draft](workspace-schema/design.md), which left it undecided,
 and replaces that draft's state machine with a different model.
 
+Corrected in part on 2026-11-05 by
+[columns-and-phases.md](columns-and-phases.md): a ticket's column is stored by
+the transition that set it, not computed on read; rules keep the `label` and
+`guidance` actions and lose `place`. Where this document and that one
+disagree, it wins.
+
 ## The model in one paragraph
 
 A column is a name in configuration and nothing else; no column means anything
@@ -192,7 +198,7 @@ nothing into a store it only reads.
   [custom-fields.md](custom-fields.md), required means required to be pulled,
   checked at the `ready-to-pull` label; under this model that check is one
   rule among many.
-- **Phase drift goes away.** [phases-and-rework.md](phases-and-rework.md)
+- **Phase drift goes away.** The v1 phases-and-rework proposal, superseded by [columns-and-phases.md](columns-and-phases.md),
   notes that agents let the phase go stale. If an approved plan places a ticket
   in impl, no move remains for anyone to forget, and rework is the derived
   state that document recommends.

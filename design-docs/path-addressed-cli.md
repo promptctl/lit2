@@ -2,6 +2,13 @@
 
 **Status:** accepted design, 2026-11-02. Written from one grooming session on a
 59-row backlog and the conversation that followed it. Nothing here is implemented.
+Corrected in part on 2026-11-05 by [columns-and-phases.md](columns-and-phases.md)
+(the workflow node is `/columns`; `review`'s forward edge is `merge`
+alone; reachability follows from `next` alone; levels 2 and 3 carry a derived
+`stage` and `rollup`, not a `status`) and by
+[transition-requirements.md](transition-requirements.md) (`gate` and `requires`
+are `exit` and `entry` lists of requirements). Where this document and those
+disagree, they win.
 
 ## The problem, measured on one session
 

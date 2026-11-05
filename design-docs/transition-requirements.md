@@ -1,0 +1,424 @@
+# Transition requirements: what a ticket needs to enter or leave a column
+
+Status: draft, 2026-11-05.
+
+The owner's ruling on the v1 grooming proposal (since removed): *"grooming: this isn't about
+grooming, this is about the question of defining requirements for transitioning
+in and out of a column/phase. also requires a design."* This is that design. It
+assumes what `columns-and-phases.md` settles: column, phase and workflow state
+are one concept, a **column**; a ticket's `status` holds its current column;
+the engine interprets only a column's `initial` and `terminal` flags. It builds
+on the four-verb surface of [path-addressed-cli.md](path-addressed-cli.md),
+whose `gate` and `requires` keys it replaces with one shape.
+
+## The model in one paragraph
+
+A column declares, in the workspace configuration beside its flags and its
+`next` list, two lists of **requirements**: `exit`, what a ticket needs before
+it may leave along a forward edge, and `entry`, what it needs before it may
+arrive by any edge. A requirement is one test over one path of the ticket, a
+scope, and a strength. The tests are evaluated in exactly one place, the
+transition write `set x/status <column>`, against the workflow the ticket
+resolves. A blocking requirement that fails refuses the write and nothing is
+written; an advisory one that fails is printed and the write proceeds. Every
+other surface that talks about readiness, `/next` first among them, reports
+what that one evaluation would say and enforces nothing.
+
+## Entry and exit are both needed
+
+Mechanically one side could carry everything, and each side fails a real case.
+Entry alone cannot say "a ticket may not leave the backlog" once the backlog
+has two forward destinations without writing the list twice, and the copies
+drift `[LAW:one-source-of-truth]`. Exit alone cannot say "`dup` needs `of`" at
+all: a terminal column is reachable from every column, so the requirement
+would be copied onto every column's exit, and an exit list does not know which
+destination the write is heading for. So a column has both, and the author
+puts a requirement on the side that owns its reason: **exit says this column's
+work is complete, whatever comes next; entry says the destination needs this,
+whatever it came from.** On a straight board the two are one check on one move,
+and the shipped default uses whichever reads as the reason.
+
+The two edges the engine supplies without `next` listing them, closing into a
+terminal column and parking into the initial one, carry the destination's
+entry requirements and never the source's exit requirements. Exit requirements
+guard the forward edges only. Closing and parking abandon a column's work
+rather than complete it, and a workspace that could not close a backlog ticket
+as `wontfix` until it had a description would be refusing the one write that
+makes the description unnecessary. Creation is the transition into the initial
+column and carries that column's entry requirements like any other arrival;
+the shipped default declares none, so creation is free, and
+[custom-fields.md](custom-fields.md)'s rule that required never means required
+to be created is kept by data rather than by a special case
+`[LAW:dataflow-not-control-flow]`.
+
+## What a requirement is
+
+A requirement is three values, no more:
+
+- **`test`**: one atom of the selector grammar the CLI already has, written
+  against a path relative to the ticket. The atoms are `p` (present: a scalar
+  with a value, a list with an element), `!p` (absent), `p=v`, `p!=v` (the
+  negation of `=`), and `p~re`. On a list path `=` and `~` hold when some
+  element does, so `labels=ready` is "carries the label" and
+  `labels!=needs-design` is "does not". Values are the CLI's values: a bare
+  word or a quoted string. There is no `and`, `or`, arithmetic or clock inside
+  an atom; a column's list is the conjunction, and that is the whole language.
+  The selector in `get '(status=open type=bug)'` and a requirement's `test`
+  are parsed by one grammar, so a reader learns it once
+  `[LAW:one-source-of-truth]`.
+- **`scope`**: `self`, the default, reads the path on the ticket. `ancestors`
+  reads it across the ticket and its ancestors: a list path is the union of
+  the lists up the chain, a scalar path is the nearest value going up. That
+  is what lets a mark on the epic satisfy a requirement on its ticket, lets a
+  `needs-design` on the epic hold every ticket under it, and lets a field
+  declared on level 2 be required before any of its tickets move, with one
+  resolution rule rather than three.
+- **`strength`**: `block` or `advise`, and it has no default. Every declaration
+  states its certainty, which is what the north star asks for
+  ([project-intent.md](project-intent.md): tune the strength of an intervention
+  to its certainty).
+
+The closed set is the atoms. The other candidate kinds are all instances of
+them reading a path the ticket already exposes: a field present or matching is
+`points` or `target_release~'^\d+\.\d+$'`; a label present is `labels=ready`;
+a verdict on the current plan digest is `plan/verdict=pass`, because
+`plan/verdict` is the derived field path-addressed-cli.md defines as the latest
+verdict on the current digest or nothing; a relation present is `of`; a
+dependency closed is `!blockers`, where `blockers` is a derived list, the
+members of `blocked_by` (the lane predecessor, and every ticket whose `blocks`
+names this one) that are not in a terminal column.
+
+Anything else is expressed as data, never as a new atom
+`[LAW:types-are-the-program]`. Either someone writes the fact (a field, a label,
+a verdict, a comment) and a requirement reads it, or the engine exposes a new
+derived field in the field table, which is engine code in one listed place, and
+a requirement reads that. A checklist, when one lands, exposes
+`checklist/unchecked` and the requirement is `!checklist/unchecked`. The test
+grammar does not grow.
+
+The configuration parse refuses, naming the key, a `test` whose path names a
+field declared on no level, a `strength` that is missing or not one of the two,
+a `scope` that is not one of the two, and an `exit` list on a terminal column,
+which has no forward edge and so could never be evaluated. A path declared on
+some level but not on this ticket's level reads as absent; that is what makes
+`scope = "ancestors"` on a level-2 field work.
+
+## The declaration
+
+Requirements live in the workflow section of the workspace configuration
+document ([workspace-configuration.md](workspace-configuration.md)), the same
+document `/columns` reads and writes, so there is one source whether the
+author edits TOML or runs `add /columns/backlog/exit '{…}'`. The
+shipped default, in full:
+
+```toml
+[columns.backlog]
+initial = true
+next = ["plan"]
+guidance = """
+A ticket leaves the backlog once it says what to build and someone has put its
+epic in order and marked it ready. Write the description; order the lane; then
+`add <epic>/labels ready`, or `add <ticket>/labels ready` for a ticket with no
+epic."""
+
+[[columns.backlog.exit]]
+test = "description"
+strength = "block"
+
+[[columns.backlog.exit]]
+test = "labels=ready"
+scope = "ancestors"
+strength = "block"
+
+[[columns.backlog.exit]]
+test = "labels!=needs-design"
+scope = "ancestors"
+strength = "block"
+
+[[columns.backlog.exit]]
+test = "labels!=external"
+scope = "ancestors"
+strength = "block"
+
+[[columns.backlog.exit]]
+test = "!blockers"
+strength = "block"
+
+[columns.plan]
+next = ["impl"]
+
+[columns.impl]
+next = ["review"]
+
+[[columns.impl.entry]]
+test = "plan/verdict=pass"
+strength = "block"
+
+[columns.review]
+next = ["merge"]
+
+[[columns.review.entry]]
+test = "plan/verdict=pass"
+strength = "advise"
+
+[columns.merge]
+next = ["done"]
+
+[[columns.merge.entry]]
+test = "verdict=pass"
+strength = "block"
+
+[columns.done]
+terminal = true
+
+[columns.dup]
+terminal = true
+[[columns.dup.entry]]
+test = "of"
+strength = "block"
+
+[columns.superseded]
+terminal = true
+[[columns.superseded.entry]]
+test = "of"
+strength = "block"
+
+[columns.obsolete]
+terminal = true
+[[columns.obsolete.entry]]
+test = "reason"
+strength = "block"
+
+[columns.wontfix]
+terminal = true
+[[columns.wontfix.entry]]
+test = "reason"
+strength = "block"
+```
+
+`merge`'s entry requirement reads `verdict`, the newest review verdict on the
+work as [columns-and-phases.md](columns-and-phases.md) defines it; a `fail`
+keeps the ticket in `review`, which is where rework happens, so `review` has no
+backward edge. The advisory on `review` is the one place the default nudges
+rather than refuses: editing the plan makes a new version and empties the derived verdict,
+so a ticket arriving at review with a plan changed since its verdict is worth
+a line, and an agent that changed the plan for a reason it can defend proceeds.
+
+As paths, the same declaration is `/columns/backlog/exit`, a list
+whose elements are objects, edited with `add` and `rm` like any list:
+
+```
+add /columns/backlog/exit '{test:points strength:advise}'
++ /columns/backlog/exit/5
+```
+
+## One enforcer
+
+Requirements are evaluated by one pure function, from the ticket's folded
+state, the resolved workflow and the edge, to a list of verdicts, one per
+requirement. It reads no clock and performs no I/O
+`[LAW:effects-at-boundaries]`. The transition write is the only caller that
+acts on its result: it evaluates the source column's exit list when the edge is
+forward and the destination's entry list always, all of them, with no
+short-circuit, so a refusal names everything unmet at once and an agent fixes
+it in one pass. If any blocking requirement is unmet the write is refused and
+nothing is written, including the claim the transition would have stamped
+`[LAW:single-enforcer]`. The refusal is the CLI's refusal shape:
+
+```
+$ lit set dee/status plan
+error (reason=gate): dee/status backlog → plan refused by backlog/exit; nothing written
+  block  description     empty
+  block  labels=ready    absent on dee and its ancestors (unfiled)
+A ticket leaves the backlog once it says what to build and someone has put its
+epic in order and marked it ready. …
+```
+
+The first line names the path, the edge and the side that refused; one line per
+unmet requirement gives its strength, its test, and the value found, so the
+agent is not sent back to `get`; then the ticket's current column's guidance,
+the same text `get dee` prints, because the column that holds a ticket is the
+one that says how to leave it. A bulk write, `set 'rin.*/status' plan`,
+expands first and is one write: every refused path is listed and nothing is
+written for any of them. `--dry-run` prints exactly this and performs nothing,
+which is how an agent asks "could I?" without trying.
+
+A requirement is evaluated at the transition and never again. A ticket whose
+column's requirements stop holding afterwards, a description deleted, a verdict
+emptied by a plan edit, stays where it is; the facts are in the history and in
+any selector that asks. There is no second evaluation on read that moves
+tickets, labels them, or holds them. Where [custom-columns.md](custom-columns.md)
+computed a ticket's position from rules on every read, this design keeps the
+sibling's stored `status` and puts the rule at the one write that changes it.
+
+## Strength
+
+`block` is the refusal above. `advise` lets the write through and prints the
+unmet requirement with the echo, in the same line shape, under the derivations:
+
+```
+$ lit set dee/status review
+dee/status impl → review
+  advise  review/entry  plan/verdict=pass   verdict is empty; plan edited since verdict on digest 3f1c…
+  requirements: 1 evaluated · 0 met · 1 unmet (advise) · 0 unmet (block)
+```
+
+Nothing more is asked of the agent: no `--reason`, no acknowledgement flag. A
+nudge that demands a receipt is a block wearing a softer name, and the record
+of the advisory, in the echo and the command event, is the feedback the north
+star wants placed where the agent can act on it. Which requirements are which
+is the author's call per declaration, and the default above shows the split:
+the invariants the workflow exists for (a plan passed before building, a
+canonical id on a duplicate, a ticket groomed before it is pulled) block; a
+heuristic the agent may overrule with reason advises.
+
+## Ready to pull
+
+The owner's motivating case: *"when things go into the backlog, they're not
+ready to pull yet. They have to be groomed and then they're ready to pull."*
+In this design "ready to pull" is not a feature. It is the initial column's
+exit list, as the default above declares it: a description, the `ready` label
+on the ticket or an ancestor, no `needs-design` or `external` on the ticket or
+an ancestor, no open blocker. It is declared on exit rather than on the first
+active column's entry because its reason is the ticket's fitness to leave,
+whatever it goes to next, and an epic that adds an `audit` column before
+`plan` must not have to copy the list.
+
+Who satisfies it: whoever grooms. Grooming an epic ends with
+`add <epic>/labels ready`, and because the requirement's scope is `ancestors`
+every ticket under the epic passes that requirement in one write, and a
+follow-up filed into the groomed epic later passes it at birth, which is the
+behavior the house workflow depends on. A ticket with no epic carries its own
+label. Removing the label from the epic holds every ticket under it again, and
+the label's arrival and removal are in the history with a writer and a time.
+
+What becomes of grooming.md's two pieces: the `ready-to-pull` label is carried
+as data and only as data. There is no reserved label, no constant in code, no
+`ungroomed` classifier kind; the name `ready` appears once, in the default
+workflow's `test`, and a workspace that wants `groomed` or `ready-to-pull`
+edits the string. `lit groom` is dropped. Its purpose, printing what grooming
+means here, is the initial column's `guidance`, which `get <ticket>` prints for
+any ticket sitting there, which every refusal and every held `/next` ends with,
+and which `get /columns/backlog/guidance` reads on demand. There is
+no event to fire because there is no command; the prose lives on the column it
+describes `[LAW:one-source-of-truth]`.
+
+How the queue treats a ticket that fails: `/next` is a read, so it enforces
+nothing; it reports the evaluation the start write would make. A derived field
+carries that report on every ticket: **`x/held`** is the unmet blocking
+requirements on each forward edge out of the ticket's current column, keyed by
+destination, empty when some forward edge is open and empty on a terminal
+column. It is the dry-run of the forward transition exposed as a path, so
+`get '(held)'` lists everything stuck and `get dee/held` says why one ticket is.
+A lane head with a non-empty `held` is held, and the lane with it, since lane
+order is sequence.
+
+`/next` then follows path-addressed-cli.md's two clauses with one reading each.
+The lane this checkout holds: if its head is held, `/next` prints the head, its
+`held` lines and the column's guidance, and serves nothing else. Commitment is
+the first clause; the only way off a lane mid-way is `rm` on the claim, a
+write, echoed, and the agent that filed the stub is usually the agent that can
+finish it. No lane held: `/next` serves the head of the top-ranked lane whose
+head is not held, and lists every held lane ranked above it with its reason, so
+nothing ranked higher goes unseen `[LAW:nothing-unseen]`:
+
+```
+$ lit get /next
+fw9   /lanes/parser   rank 2   backlog
+held above it:
+  /lanes/datetime  b64   plan ← backlog/exit  description empty; labels=ready absent on b64 and its ancestors (rin)
+```
+
+`get /lanes` prints `held` beside each head the same way, and a cross-repository
+reader computes the same `held` from the same store document, so the backlog
+counts agree inside and outside the repository.
+
+## v1's holds, mapped
+
+The readiness classifier knew six reasons to hold a ticket. Each is a
+requirement in the default above or a derivation it reads; none is engine code.
+
+- `ready.required_fields`, already moved by custom-fields.md to `required =
+  true` on a field per level, moves once more, to an exit requirement on the
+  initial column: `test = "<field>"`, `strength = "block"`. "Required means
+  required to be pulled" is exactly "an exit requirement on the initial
+  column", and a flag on the field was a second place that rule lived, one that
+  could not say which transition it guarded. The `required` key on a field
+  declaration goes away, and with it custom-fields.md's second check at the
+  `ready-to-pull` label write; a field a workspace wants before `merge` rather
+  than before `plan` declares it on `merge.entry`. A field declared required on
+  level 2 is the same requirement with `scope = "ancestors"`, which bites, as
+  before, on the tickets under the epic, since level 2 has no stored status to
+  transition.
+- `needs-design` and `external` are the two `labels!=` requirements, scoped to
+  ancestors. The constants are gone; a workspace that wants a third such label
+  adds a line.
+- An open dependency, an inherited dependency, and an earlier sibling in the
+  lane are `!blockers`, since `blocked_by` already derives from lane position
+  and from `blocks`.
+- The `ungroomed` kind grooming.md proposed is `labels=ready`, above.
+
+## Requirements and the hierarchy
+
+Requirements bind to level 1 only, because level 1 is the only level with a
+stored status and so the only level with a transition to write. A level-2 or
+level-3 item's state derives from its children and is never set, so it has
+nothing to enter or leave; its facts reach requirements through
+`scope = "ancestors"`.
+
+A level-2 item carries requirements its tickets inherit the way
+path-addressed-cli.md already says: it carries a `columns` child, and
+descendants resolve by walking up to the nearest one. Resolution is per column
+and whole: the nearest ancestor that declares a column at all supplies that
+column's flags, `next`, `entry`, `exit` and `guidance`, and nothing is merged
+across levels. An epic that wants one more exit requirement on `backlog`
+redeclares `backlog` with the full list. Merging lists would need a rule for
+order, for replacement and for removal, and every such rule is a second way
+for the configuration to say one thing `[LAW:no-mode-explosion]`. The command
+event records which node's workflow each column resolved to.
+
+## Observability
+
+Every transition echo ends with one summary line, and the line is printed when
+every count is zero, because a transition with no requirements declared and a
+transition whose requirements were not evaluated must not look alike
+`[LAW:nothing-unseen]`:
+
+```
+dee/status backlog → plan   ⇒ dee/claim = this checkout
+  requirements: 5 evaluated · 5 met · 0 unmet (advise) · 0 unmet (block)
+```
+
+Above the summary, one line per unmet requirement, advisory or blocking, with
+its strength, the column and side that declared it, its test, and the value
+found. The refusal is the same lines under the `error` header.
+
+The command event for a transition records, per requirement evaluated: the
+column and side, the test, the scope, the strength, the workflow node it
+resolved from, the outcome, and the value read, with `absent` as a value; the
+totals the echo prints; and `written: false` on a refusal. The event for `/next`
+records every lane considered, each head's `held` lines, which lane was served
+or that none was, and the count of held lanes, zero included. The event for a
+configuration write that touches a column's lists records the count of
+requirements before and after. `--dry-run` writes the same event with
+`dry_run: true`, so the question an agent asked is on the record beside the
+writes it made.
+
+## Decisions for the owner
+
+1. The label's name. Recommended: `ready`, the shorter word for the agents who
+   will type it; it is one string in the default workflow and nothing else
+   changes if it is `ready-to-pull`.
+2. `!blockers` ships as `block`. Recommended, because a lane's order and a
+   `blocks` edge are both statements that this cannot be done before that. The
+   alternative is `advise`, which lets an agent start the next lane member
+   while the previous sits in review; either is one word in the default.
+3. The `required` key on a field declaration is removed in favor of a
+   requirement on the column where it bites. Recommended, for one source; the
+   alternative keeps the key as shorthand that the configuration parse expands
+   into an initial-column exit requirement, which is the same rule in two
+   spellings.
+4. `/next` does not fall through when the held lane is the one this checkout
+   holds. Recommended, for commitment; the alternative serves the next open
+   lane and prints the held one above it, which moves an agent off its unit
+   without a write saying so.
