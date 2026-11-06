@@ -1,7 +1,16 @@
 # Design docs
 
+Start with `architecture.md`: the one strategy for building `lit2`, the
+primitives, how the functionality composes from them, and the decisions still
+open. `scenarios.md` walks the common situations through it and records where
+it strained. Where `architecture.md` and another document here disagree,
+`architecture.md` wins; its appendix lists each departure.
+
 ## Written for v2 (2026-11-05)
 
+- `architecture.md`: the unified architecture and build order.
+- `scenarios.md`: paper walk-throughs of sixteen common situations, with the
+  strains they found and how each was resolved.
 - `columns-and-phases.md`: column, phase and workflow state are one concept; the
   column is the one stored fact, labels are computed; rework is verdicts inside
   review. Owns the column graph at `/columns`.
