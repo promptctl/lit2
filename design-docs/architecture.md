@@ -39,7 +39,7 @@ are, rather than adding a mechanism beside the substrate.
 | one ref per writing checkout, fast-forward only | writes that never contend; push and fetch that never merge; no locks anywhere | coordination before a write: two offline writers can both do a thing |
 | a deterministic fold with a total order `(causal-position, writer)` | the same state on every machine from the same events; concurrent contradictions settled identically everywhere | reading a clock, so any "how long ago" question is answered after the fold |
 | read-time evaluation with `now` | labels, expiry, staleness, held, computed on every read, never stored, so they settle as facts change | a stored reaction to a condition, which would outlive the condition |
-| a versioned config stream in the same log | the model as data, folded like everything else, visible to every reader of the store | a model that depends on files outside the store |
+| committed configuration files, versioned by git | the model as data a person edits, reviews in a pull request and diffs; every version addressable by blob hash and carried in the event commits that cite it | a model that changes without someone's edit |
 | rewrites as events | purge, squash, compaction, erasure, converging on every replica | reaching copies that never sync again (charter #7) |
 | a git remote as a dumb replicated store | sync through the channel the code already uses; remote filing from a storeless machine | enforcement by the remote; a server of any kind |
 | a signature slot and opaque prose envelopes on every event | access control later without a schema change | hiding that an item exists (the visible skeleton) |
@@ -95,20 +95,21 @@ same shape:
 | `add <epic>/lanes/datetime '[dee, b64]'` | `lane.create`, then `lane.place {lane, item, after}` per member |
 | `set <epic>/lanes/datetime '[b64, dee, fw9]'` | one `lane.place` per member whose predecessor changed |
 | `set <lane>/rank 2`, `'{above: y}'`, `'{below: y}'`, `top`, `bottom` | `rank.place {subject, frame, above \| below \| top \| bottom}` |
-| `set /columns/impl/entry '[…]'` | `config.set {path, value}` |
+| `set /columns/impl/entry '[…]'` | no event: an edit to `.lit/workspace.toml` in the working tree, echoed as such |
 | `rm x` | `item.delete {item}`, a reversible tombstone |
 | `rm x --purge` | a rewrite naming the item |
 
-Ids are opaque: the project prefix from the config stream, then a hash of
+Ids are opaque: the project prefix from the workspace file, then a hash of
 `(writer, causal-position)`, children as `<parent>.<hash>`. Two offline
 writers cannot collide, and a short id resolves by unique suffix.
 
 ### 3.3 Fold and tick
 
-`fold(events) → state`: items, fields, comments, labels, links, lanes and
-their order, frames and their order, lane holders, the folded config, and
-every unresolved concurrent contradiction as a value on the thing it
-concerns. `tick(state, config, now) → view`: computed labels, `held`, claim
+`fold(events, config-at) → state`, where `config-at` resolves a cited blob
+hash to a parsed workspace file: items, fields, comments, labels, links,
+lanes and their order, frames and their order, lane holders, and every
+unresolved concurrent contradiction as a value on the thing it concerns.
+`tick(state, config, now) → view`: computed labels, `held`, claim
 expiry, staleness, stage, rollup. Every read is `tick(fold(events), now)`;
 every write is evaluated against the same. Neither function performs I/O.
 
@@ -259,19 +260,37 @@ the slot is real from the first event. The agent label is an optional opaque
 string the invoking harness supplies, shown beside comments and history. No
 usernames, hostnames or paths enter the store. `get /me` prints the three.
 
-### 3.14 The workspace document
+### 3.14 The workspace file
 
-The configuration is nodes: `/levels`, `/columns`, `/links`, `/rules`,
-`/workflows`, `/lanes` on epics, `claim_ttl` on any node. A write to one is
-`config.set {path, value}`, an event like any other, and the configuration
-document is a fold output parsed once into one typed schema value that every
-command carries. Two concurrent edits to different keys both land; two to one
-key fold like a scalar; a union that references something undeclared keeps
-the value, shows it as undeclared, and counts it on `/integrity`. The schema
-parse refuses locally what the designs say it refuses; the fold's tolerance
-exists for the one case the local check cannot see. A store with no config
-events reads as the shipped default profile. The user layer of workflows is
-the one configuration outside the store, because it spans repositories.
+The workspace's model is one committed file, `.lit/workspace.toml`: levels and
+their fields, columns and their requirements, link types, rules, the project
+layer of workflows, `claim_ttl`, the project prefix, `min-reader-version`.
+Per-epic overrides are sections keyed by the epic's id in the same file. A
+person edits it in an editor and reviews it in a pull request; git versions
+and merges it. The four verbs still read it as nodes, `get /columns`, and a
+write such as `set /columns/backlog/exit '[…]'` edits the file in the working
+tree and says so in the echo; committing it is the person's act, like any
+other file. It never becomes an event.
+
+lit2 runs inside a checkout, and the working tree's copy of the file is the
+model, like every tool that reads its configuration from the repository, so an
+edit can be tried before it is committed. A repository with no file reads as
+the shipped default profile.
+
+Every event carries `config-ref`, the blob hash of the file its writer read,
+and the commit that carries the event also carries that blob in its tree. So
+every cited version travels with the events that cite it, committed to the
+code repository or not, and the fold's validation engine reads the cited
+version from its own refs and judges the event against it
+(`INV:config-versioned`) with no dependence on the code repository's history.
+Git stores one copy per distinct version. The schema parse refuses, at the
+write, what the designs say it refuses. Two people who edit the file
+concurrently meet in a git merge, which is where people already resolve
+concurrent edits to a file.
+
+Workflows have three layers and nothing else does: shipped in the binary, the
+person's own `$XDG_CONFIG_HOME/lit/config.toml` across every repository, and
+the project's workspace file. Nearest wins per field.
 
 ## 4. Functionality, composed
 
@@ -295,8 +314,8 @@ row is that no primitive learned a new case.
 | finish a container | derived: an epic's stage is terminal when every child's is |
 | tell an agent what to do now | the handler bound `in <column>` prints after the ticket on `get x` and on `/next` |
 | nudge without blocking | a requirement with `strength = advise`; a handler |
-| customize the process per project or per epic | `columns`, `workflows`, `claim_ttl` on any node; nearest ancestor wins per column, per handler field |
-| add a field, a level name, a link type | `/levels/<n>/fields`, `/levels/<n>/name`, `/links/<name>`; no code |
+| customize the process per project or per epic | sections of `.lit/workspace.toml`, at the root or keyed by an epic's id; nearest ancestor wins per column, per handler field; reviewed in a pull request like any change to how the team works |
+| add a field, a level name, a link type | the same file: `[levels.1.fields.points]`, `[levels.2] name`, `[links.tests]`; no code |
 | see why a ticket is where it is | `get x/history`; `get x/held`; a rule's label names the rule |
 | undo | `set` back from the echo, or `get x/body/versions/N | set x/body -`; every version is in the history |
 | find things | selectors over any field, at any depth, across every frame's dialect of a column name |
@@ -305,10 +324,9 @@ row is that no primitive learned a new case.
 | work from several machines, offline | per-writer refs; background push and fetch; the fold settles concurrent edits; conflicts are values; `/integrity` lists advisories |
 | know the view is stale or the push failed | tick compares local refs to remote-tracking refs and reads the last push outcome; one advisory line on read and write |
 | file a bug with no clone | mint events, push to `refs/lit/inbox/<id>`; any clone's receive folds and anchors them |
-| read another repository's backlog | `--at <dir>` opens the store, folds, parses the same config, ticks; writes nothing |
 | erase content | `rm x --purge`, a rewrite; every replica converges; `gc` reclaims |
 | keep the store small and fast | the cache snapshot; compaction as a rewrite; budgets as gates |
-| survive a binary that is too old | `INV:preserve-unknown`: unknown events carried and counted; mutations on their subjects refused; `min-reader-version` in the config stream |
+| survive a binary that is too old | `INV:preserve-unknown`: unknown events carried and counted; mutations on their subjects refused; `min-reader-version` in the workspace file |
 | restrict who may do what, later | the principal on every event; capabilities as `(verb, path glob, binding)` over the same paths; the signature slot verified at receive |
 | hide content from some readers, later | prose fields are envelopes from the first event; structure stays visible |
 
@@ -327,8 +345,10 @@ of (events, clock, argv, writer); the rest is the hearth
 1. **Open.** Read every writer ref head; load the cache snapshot keyed by
    `(fold-version, ref heads)`. A miss or a torn snapshot is one refold; no
    lock.
-2. **Fold** the events newer than the snapshot.
-3. **Parse** the folded configuration into the schema value.
+2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.14) into the
+   schema value.
+3. **Fold** the events newer than the snapshot, reading each cited
+   configuration version from the object database as needed.
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with tick and the clock. A write
@@ -355,8 +375,9 @@ of (events, clock, argv, writer); the rest is the hearth
  verbs      get/set/add/rm on typed addresses; requirements; verb → intents; echo
  address    path grammar; selectors; globs; the field table
  tick       clocked derivations: labels, held, expiry, staleness, stage, rollup
- config     the folded document → one typed schema value
  fold       events → state; validation engine; rank; holders; conflicts
+ config     .lit/workspace.toml from the working tree, or any cited version
+            from an event commit's tree → one typed schema value
  events     record, codec, upcasters, ids, signature slot
  store      objects and refs under the common dir; per-writer and inbox refs;
             rewrites; snapshot; the background sync process
@@ -398,8 +419,9 @@ two keys in the default profile.
 
 ## 8. Constraints on later work
 
-- A new fact is an event kind plus a fold rule and, if it has a clock, a tick
-  rule. Never a table, never a second store, never a file beside the store.
+- A new ticket fact is an event kind plus a fold rule and, if it has a clock,
+  a tick rule. A new piece of the model is a key in `.lit/workspace.toml`.
+  Never a table, never a second store.
 - A new capability is a verb on a path. Policy will name capabilities as
   `(verb, path glob, binding)`; what cannot be spelled as a path write cannot
   be authorized.
@@ -442,7 +464,8 @@ walking skeleton.
 2. **Events and fold, first facts.** Items, fields, comments, labels, links;
    ids; the snapshot; `add /children`, `get`, `set`, `add`, `rm`; real objects
    under the common dir; `lit2 admin init`.
-3. **Config and columns.** Config events and the schema parse; levels and
+3. **Config and columns.** `.lit/workspace.toml` from the working tree, its
+   blob in each event commit, the schema parse, `config-ref` on events; levels and
    synthetic containers; columns, stage, rollup; transitions with the one
    enforcer; the default profile.
 4. **Lanes, rank, claims, next.** Frames and rank intents; lanes; holders and
@@ -453,7 +476,7 @@ walking skeleton.
    staleness, `/integrity`.
 7. **Rewrites.** Purge, squash, sweep, the receiver's rule; the budgets
    harness and the depth corpus.
-8. **Selectors in full, `--json`, `--at`.**
+8. **Selectors in full, `--json`.**
 
 ## Appendix: where this departs from a source document
 
@@ -463,9 +486,12 @@ One line each, so a reader of the older document knows the position moved.
   opaque form only.
 - event-store design §fold: determinism is asserted as state equality, not
   pinned bytes.
-- event-store design §security-and-config, workspace-configuration.md: the
-  configuration is folded from per-path `config.set` events; the whole
-  document is a rendering, not an event payload.
+- event-store design §security-and-config (birth requirement 6),
+  workspace-configuration.md, workflows.md decision 1: the configuration is a
+  committed file in the repository, not a stream in the store. Git supplies
+  the versioning, signing and review the config stream was to provide, and
+  events cite the file's blob hash. The access-control policy document, when
+  it comes, is read against this.
 - path-addressed-cli.md: lanes live in their epic; rank is per frame; `rank`
   takes relative forms that are the events' own shape.
 - work-claims.md: the routing steps collapse into the frame walk; the holder
@@ -479,3 +505,6 @@ One line each, so a reader of the older document knows the position moved.
   does not.
 - MINIMAL-LIT-SKETCH: lanes, claims and priority are kept, as the later
   designs require; its eleven guarantees are all rows of §4.
+- workspace-configuration.md, custom-fields.md: there is no reader of a store
+  from outside its checkout (`--at`, `stores --counts`); lit2 runs in a
+  checkout.

@@ -17,7 +17,7 @@ the contract is the behavior stated under "relies on", never the text.
 | S-3 | 3, 11 | a held lane whose head is held traps the checkout | `/next` reports the held head and falls through, labeled (architecture §4) |
 | S-4 | 2 | guidance at "an epic finishes" has no moment | a selector may read through `parent`; `(stage=terminal parent/stage=terminal)` on `enter *` |
 | S-5 | 6 | two offline clones create a lane of the same name in one epic | a lane is identified by its name in its frame; `lane.create` is idempotent; members union in total order |
-| S-6 | 7 | a column removed on one clone while a ticket holds it on another | the fold keeps the transition; tick reports the column undeclared; `/next` skips; `/integrity` lists it |
+| S-6 | 7 | a column removed from the workspace file while a ticket, somewhere, holds it | the transition stands; tick reports the column undeclared; `/next` skips; `/integrity` lists it |
 | S-7 | 9 | `add` with different values on different paths is N calls | `add` takes `path value` pairs like `set` |
 | S-8 | 9 | N long bodies in one call need shell substitution | open; low frequency; a file form is a later addition if it bites |
 | S-9 | 10 | a comment written concurrently with a purge vanishes | the fold drops it and counts it on `/integrity` as "events after purge" |
@@ -33,8 +33,8 @@ work and knows what to do.
 
 1. `lit2 admin init` mints the checkout id and the checkout's principal key,
    writes the managed block into `AGENTS.md` and `CLAUDE.md`, and creates the
-   store under the common dir with zero events. There is no config event, so
-   the store reads as the default profile: three level names, ten columns,
+   store under the common dir with zero events. There is no
+   `.lit/workspace.toml`, so the workspace reads as the default profile: three level names, ten columns,
    two link types, one rule, four workflows, `claim_ttl`, and the two synthetic
    containers.
 2. A fresh agent reads the managed block: work is tracked by lit2, run
@@ -233,36 +233,41 @@ members from both creations are placed in total order, so the lane folds to
 `[dee, b64, fw9]` on both machines with an advisory naming both creators.
 This is the same rule as two `label.add` of one label. Adopted.
 
-## 7. Configuration changes under running work
+## 7. The process changes under running work
 
-**Need.** Changing the process on one machine while another is mid-ticket
-produces a state every machine agrees on and an agent can act on.
+**Need.** Changing the process while others are mid-ticket produces a state
+every machine agrees on, and the change itself is reviewed like any change to
+how the team works.
 
 **Walk.**
 
-1. A adds `[[columns.backlog.exit]] test = "points" strength = "block"`.
-   One `config.set` event.
-2. B, not yet synced, runs `set b64/status plan`. B's fold has no such
-   requirement; the write lands, citing B's config position.
-3. After sync, both fold both events. The transition is judged against the
-   config B cited and stays legal; `b64` is in `plan` with no `points`. That
-   is what `INV:config-versioned` promises, and it is the right answer: a
-   requirement guards a transition, and this transition happened before the
-   requirement existed anywhere B could see.
-4. A removes column `audit` from `rin/columns` while B has `rin.4ou` in
-   `audit`. A's local `in_use` check cannot see B's ticket. Both events fold.
+1. A edits `.lit/workspace.toml` to add `[[columns.backlog.exit]] test =
+   "points" strength = "block"`, tries it in the working tree, commits, opens
+   a pull request. The diff is the change.
+2. B, on a branch without it, runs `set b64/status plan`. B's file has no
+   such requirement; the write lands, citing the blob hash of B's file.
+3. After both sync events and merge the file, the transition is judged
+   against the file version B cited and stays legal; `b64` is in `plan` with
+   no `points`. A requirement guards a transition, and this one happened
+   before the requirement existed anywhere B could see.
+4. Two people edit the file concurrently. They meet in a git merge conflict
+   on the file, which is where concurrent edits to a file are already
+   resolved, with the full diff in front of them.
+5. A's merged file removes `rin`'s `audit` column while `rin.4ou`, started on
+   another machine, sits in `audit`. The local `in_use` check saw no such
+   ticket at edit time.
 
-**Relies on.** Nothing a writer did legally is undone by a later rule, and
-nothing is hidden: `/integrity` on both machines lists the ticket in a column
-its frame no longer declares.
+**Relies on.** Nothing a writer did legally is undone by a later rule; the
+process is versioned, diffed and reviewed by git; and nothing is hidden:
+`/integrity` lists the ticket in a column its frame no longer declares.
 
 **Strain S-6.** columns-and-phases.md says a stored column its workflow does
-not define is unrepresentable. Under concurrent writers it is representable,
-and the engine needs one rule for it. The rule that follows the existing
-stance for an undeclared field value: the fold keeps the transition, tick
-reports `status: audit (undeclared)`, `stage` reads `active` (an undeclared
-column has neither flag), `/next` skips the lane whose head is in an
-undeclared column and says so, `/integrity` lists it, and the way out is a
+not define is unrepresentable. With the model in a file that merges
+independently of the events, it is representable, and the engine needs one
+rule for it. The rule follows the existing stance for an undeclared field
+value: the transition stands, tick reports `status: audit (undeclared)`,
+`stage` reads `active` (an undeclared column has neither flag), `/next`
+passes the lane over and says so, `/integrity` lists it, and the way out is a
 transition to a column that exists, which the universal edges always offer.
 Adopted.
 
@@ -273,13 +278,17 @@ its own text for that step, without touching the rest of the workspace.
 
 **Walk.**
 
-1. `set rin/columns/audit '{next:[impl]}' rin/columns/plan/next '[audit]'`.
-   One write, two config events. The resolved graph for `rin`'s tickets is
-   checked: one initial, terminal reachable, every `next` present.
-2. `set rin/workflows/audit '{summary:"…"}' rin/workflows/audit/handlers/run
-   '{on:[enter audit, in audit] body:"Run the law audit on the diff."}'`.
-   Handlers resolve from the ticket up, so the body prints for `rin`'s
-   tickets and no others.
+1. In `.lit/workspace.toml`, under `[epics.rin]`: `columns.audit.next =
+   ["impl"]` and `columns.plan.next = ["audit"]`. The same edit through the
+   verbs is `set rin/columns/audit '{next:[impl]}' rin/columns/plan/next
+   '[audit]'`, which edits the file and echoes that it did. The parse checks
+   the resolved graph for `rin`'s tickets: one initial, terminal reachable,
+   every `next` present. The change is committed and reviewed with the diff
+   in view.
+2. In the same section, a workflow `audit` with one handler: `on = ["enter
+   audit", "in audit"]`, `body = "Run the law audit on the diff."`. Handlers
+   resolve from the ticket up, so the body prints for `rin`'s tickets and no
+   others.
 3. `set rin.4ou/status audit` from `plan` lands; `set rin.4ou/status impl`
    from `plan` is refused, `plan/next = [audit]`.
 4. `(status=audit)` matches `rin`'s tickets; `(stage=active)` matches them
@@ -383,8 +392,8 @@ store that newer clients have written to.
 
 **Walk.**
 
-1. A newer client introduces an event kind and raises `min-reader-version`
-   in the config stream.
+1. A newer client introduces an event kind, and the team raises
+   `min-reader-version` in the workspace file.
 2. The old binary fetches. It carries the unknown events byte for byte, folds
    the rest, and prints one line: `3 events from a newer lit2 (min reader
    vX) not applied`.
@@ -448,8 +457,10 @@ write layer and then the read layer without migrating anything.
 
 **Walk.**
 
-1. Enrollment is a config event signed by the enrolling owner; history before
-   it is adopted by fiat; verification seeds there.
+1. Enrollment is a policy document committed to the repository in a commit
+   signed by the enrolling owner; history before it is adopted by fiat;
+   verification seeds there. The access-control design's policy mechanics are
+   re-read against configuration as committed files when that work is pulled.
 2. Capabilities name paths: the contributor role is `add */children`, `set
    own/*`, `set */status` out of `initial`, `add */comments`, `rm own/*`
    where level is 1. A contributor's `rm other-epic` is refused at the write
