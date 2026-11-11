@@ -75,7 +75,7 @@ and what it reserves for later.
     verified GitHub, GitLab and plain ssh remotes all accept `refs/lit/*`.
 - **Note:** the design's current layout puts a commit per command on each
   writer's ref (B3), so the objects on the remote are the whole command
-  history of every writer, forever. That is the growth you objected to.
+  history of every writer, forever, and that history is unbounded.
   Constraint A3 does not require it; B3 does.
 
 ### A4. Per-writer refs: each checkout appends to exactly one ref, and no checkout writes another's.
@@ -389,15 +389,15 @@ without touching the above:
 - **B3, one commit per command chained forever.** Nothing else depends on
   the chain. Replacing it with one object per writer (the writer's whole
   event set as a tree, one commit, the ref replaced on each push) keeps A4's
-  no-contention property, removes the growth you objected to, and removes
+  no-contention property, bounds what the remote holds per writer, and removes
   most of D3's intricacy, since a dead writer's events are one tree to
   anchor. The receiver's rewrite check (D1) becomes a set comparison.
 - **A4's choice of the code's remote as the transport, with per-writer refs
-  there.** The alternative you named, publishing a single snapshot, is what
-  the design rejects as a shared spine, because two writers must then agree
-  on one ref. There is a middle: per-writer refs on the remote are kept
-  (one per live checkout, bounded by D3), and what each one points at is a
-  snapshot of that writer, not a chain. That is B3 changed, not A4.
+  there.** The design's rejected-alternatives list rules out one shared ref
+  for the workspace, because two writers must then agree on it. Per-writer
+  refs can stay (one per live checkout, bounded by D3) while what each one
+  points at changes from a chain to that writer's current set. That is B3
+  changed, not A4.
 - **B5, no subprocess.** Buys a static binary; costs owning transport and
   authentication. Allowing the `git` binary for transport only (push,
   fetch) while keeping in-process object access would remove the largest
