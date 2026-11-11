@@ -47,8 +47,6 @@ func (k Key) Signer() Signer { return ed25519Signer{private: k.private()} }
 // Principal is the key's public half, the principal id.
 func (k Key) Principal() PrincipalID { return k.Signer().Principal() }
 
-func (k Key) String() string { return k.Principal().String() }
-
 // Format prints the principal under every verb, %#v and %x included.
 func (k Key) Format(f fmt.State, verb rune) { printPrincipal(f, verb, k.Principal(), "events.Key") }
 

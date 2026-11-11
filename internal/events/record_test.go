@@ -299,6 +299,8 @@ func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
 	at := context(1, Frontier{}, Names{})
 	noClock := at
 	noClock.Now = time.Time{}
+	noAgent := at
+	noAgent.Agent = nil
 	for name, tc := range map[string]struct {
 		c Context
 		d Draft
@@ -306,6 +308,7 @@ func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
 		"an act about nothing":       {at, Act{Payload: note{Text: text("x")}}},
 		"a payload's unset envelope": {at, Act{About: Root{}, Payload: note{}}},
 		"no clock reading":           {noClock, Act{About: Root{}, Payload: note{Text: text("x")}}},
+		"no agent":                   {noAgent, Act{About: Root{}, Payload: note{Text: text("x")}}},
 	} {
 		func() {
 			defer func() {

@@ -67,6 +67,22 @@ func ParseObjectID(f ObjectFormat, s string) (ObjectID, error) {
 	return id, nil
 }
 
+// ObjectIDFrom reads an object id held as its format and its sum, the
+// form Sum gives: the sum is the format's length in bytes.
+func ObjectIDFrom(f ObjectFormat, sum []byte) (ObjectID, error) {
+	switch f {
+	case SHA1, SHA256:
+	default:
+		return ObjectID{}, fmt.Errorf("a sum cannot be read as an id of %s", f)
+	}
+	if len(sum) != f.size() {
+		return ObjectID{}, fmt.Errorf("a %d-byte sum is not a %s object id", len(sum), f)
+	}
+	id := ObjectID{format: f}
+	copy(id.sum[:], sum)
+	return id, nil
+}
+
 // Format is the hash function the id was computed with.
 func (id ObjectID) Format() ObjectFormat { return id.format }
 

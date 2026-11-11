@@ -53,6 +53,16 @@ func PathOf(f File, c git.Checkout) string {
 	return filepath.Join(DirOf(f, c), filepath.FromSlash(string(NameOf(f))))
 }
 
+// Paths is the missing files' paths for c, the id file's first.
+func (u Unminted) Paths(c git.Checkout) []string {
+	files := u.Files()
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = PathOf(f, c)
+	}
+	return paths
+}
+
 // Identity is a checkout's writer identity, read from its two files: the
 // checkout id and the principal's key. A write needs both, so they are one
 // union, not two `[LAW:types-are-the-program]`.

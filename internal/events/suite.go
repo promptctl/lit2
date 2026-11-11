@@ -151,10 +151,8 @@ func (s ed25519Signer) Sign(message []byte) Signature {
 	return Signature{Suite: SuiteEd25519, Bytes: ed25519.Sign(s.private, message)}
 }
 
-// A signer prints its principal, as Key does: the private key holds the seed.
-func (s ed25519Signer) String() string { return s.Principal().String() }
-
-// Format prints the principal under every verb, %#v and %x included.
+// Format prints the principal under every verb, %#v and %x included, as
+// Key does: the private key holds the seed.
 func (s ed25519Signer) Format(f fmt.State, verb rune) {
 	printPrincipal(f, verb, s.Principal(), "events.Signer")
 }

@@ -17,6 +17,9 @@ type Envelope struct {
 	form       form
 	commitment Commitment
 	unknown    wire.Unknown
+	// [LAW:types-are-the-program] its forms hold bytes, so == would panic
+	// at run time; this makes it a compile error, and Commitment the way
+	_ [0]func()
 }
 
 // Commitment is a hash of an envelope's content, equal for equal texts.

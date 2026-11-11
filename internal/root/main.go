@@ -100,11 +100,7 @@ func openingIn(in command.InCheckout, entropy io.Reader) command.Opening {
 		}
 		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(in.Checkout, entropy), store.DefaultSegmentBound), Format: format}
 	case command.Unminted:
-		var paths []string
-		for _, f := range id.Files() {
-			paths = append(paths, command.PathOf(f, in.Checkout))
-		}
-		return command.Unopened{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(paths, " and "))}
+		return command.Unopened{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(in.Checkout), " and "))}
 	case command.Unreadable:
 		return command.Unopened{Why: fmt.Errorf("reading %s: %w", command.PathOf(id.File, in.Checkout), id.Err)}
 	}

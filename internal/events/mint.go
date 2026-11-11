@@ -192,14 +192,13 @@ func Mint(c Context, ds Drafts, s Signer, salts io.Reader) (Minted, error) {
 		raw := h.wire()
 		read, err := readHeader(raw)
 		if err != nil {
-			// [LAW:single-enforcer] readHeader is the one judge of a header;
-			// one Mint wrote that it refuses has a Context naming no
-			// policy version, a caller's bug
+			// [LAW:single-enforcer] readHeader is the one judge of a header,
+			// and its error names the field a caller left unset
 			panic(fmt.Sprintf("events: Mint wrote a header that does not read: %v", err))
 		}
 		sig := s.Sign(signed(raw))
 		sigRaw := signatureWire(sig)
-		m.Events = append(m.Events, Event{id: eventID(raw, sigRaw), header: read, body: Readable{Payload: p, Salt: salt}, sig: sig, raw: raw})
+		m.Events = append(m.Events, Event{id: eventID(raw, sigRaw), header: read, body: Readable{Payload: p, Salt: salt}, sig: sig, raw: raw, sigRaw: sigRaw})
 		records = append(records, store.Record(recordWire(raw, sigRaw, salt, body)))
 	}
 	b, err := store.NewBatch(records...)

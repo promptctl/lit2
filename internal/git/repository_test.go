@@ -201,6 +201,21 @@ func TestTwoIDsOfOneSumInTwoFormatsDiffer(t *testing.T) {
 	if got := hex.EncodeToString(sha256.Sum()); got != sum+"000000000000000000000000" {
 		t.Errorf("a sha256 id's sum is %s; want its 32 bytes", got)
 	}
+	for _, id := range []git.ObjectID{sha1, sha256} {
+		if back, err := git.ObjectIDFrom(id.Format(), id.Sum()); err != nil || back != id {
+			t.Errorf("ObjectIDFrom(%v, Sum) = %v, %v; want %v", id.Format(), back, err, id)
+		}
+	}
+	for name, read := range map[string]func() (git.ObjectID, error){
+		"a sha1 sum as sha256": func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA256, sha1.Sum()) },
+		"a sha256 sum as sha1": func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA1, sha256.Sum()) },
+		"no format":            func() (git.ObjectID, error) { return git.ObjectIDFrom(0, sha1.Sum()) },
+		"an empty sum":         func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA1, nil) },
+	} {
+		if id, err := read(); err == nil {
+			t.Errorf("%s reads as %v; want it refused", name, id)
+		}
+	}
 }
 
 // The zero id names no object: it prints as such, and no format reads one.

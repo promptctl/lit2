@@ -26,6 +26,7 @@ type Event struct {
 	body   Body
 	sig    Signature
 	raw    []byte // the header as stored, which the signature covers
+	sigRaw []byte // the signature as stored, which the id hashes with raw
 }
 
 // ID is the event's identity: a hash of its header bytes and its signature,
@@ -271,7 +272,7 @@ func Decode(k Kinds, r store.Record) Decoded {
 	if err != nil {
 		return Malformed{Why: err.Error(), Digest: sha256.Sum256(r)}
 	}
-	return Event{id: eventID(rec.header, rec.sigRaw), header: h, body: bodyOf(k, h, rec), sig: rec.sig, raw: rec.header}
+	return Event{id: eventID(rec.header, rec.sigRaw), header: h, body: bodyOf(k, h, rec), sig: rec.sig, raw: rec.header, sigRaw: rec.sigRaw}
 }
 
 // record is a record's parts as stored.
@@ -402,6 +403,10 @@ func attributionWire(a Attribution) []byte {
 	case Labeled:
 		w.Bytes(3, []byte(agent.label))
 	case Unlabeled:
+	default:
+		// [LAW:no-silent-failure] no label reads back as Unlabeled, so a
+		// Context naming no agent would sign a claim it never made
+		panic(fmt.Sprintf("events: %T is not an Agent", a.Agent))
 	}
 	return w.Encoded()
 }
@@ -607,7 +612,7 @@ func readConfigRef(b []byte) (git.ObjectID, error) {
 	if err := r.Err(); err != nil {
 		return git.ObjectID{}, fmt.Errorf("the config-ref: %w", err)
 	}
-	id, err := git.ParseObjectID(format, hex.EncodeToString(sum))
+	id, err := git.ObjectIDFrom(format, sum)
 	if err != nil {
 		return git.ObjectID{}, fmt.Errorf("the config-ref: %w", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -36,10 +37,15 @@ const (
 )
 
 // readers is the units that may open an envelope or name the keyring that
-// does, its type or its constructor: the root, which reads the keys, the
-// verbs, which seal and open prose, and cli, which renders it (§3.19).
+// does, its type or its constructor: events, which defines them, the root,
+// which reads the keys, the verbs, which seal and open prose, and cli,
+// which renders it (§3.19).
 // This test is INV:opaque-envelope's one enforcer `[LAW:single-enforcer]`.
-var readers = []string{"root", "verbs", "cli"}
+var readers = []string{"events", "root", "verbs", "cli"}
+
+// guarded is the events names that open an envelope: Open and the keyring
+// it reads with, its type and its constructor.
+var guarded = []string{"Open", "Keyring", "NewKeyring"}
 
 type violation struct {
 	where string
@@ -225,7 +231,7 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 			vs = append(vs, violation{path + ": os.Exit", exits})
 		case !test && owner != "root" && world[ip] != nil && world[ip](name) && (owner != "cmd" || ip+"."+name != "os.Args"):
 			vs = append(vs, violation{path + ": " + ip + "." + name, ambient})
-		case ip == mod+"/internal/events" && (name == "Open" || name == "NewKeyring" || name == "Keyring") && !slices.Contains(readers, owner):
+		case ip == mod+"/internal/events" && slices.Contains(guarded, name) && !slices.Contains(readers, owner):
 			vs = append(vs, violation{path + ": events." + name, opened})
 		}
 		return true
@@ -451,6 +457,45 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		}
 		if !slices.ContainsFunc(vs, func(v violation) bool { return v.rule == tc.want }) {
 			t.Errorf("%s: the checker names %v; want a violation that %s", tc.name, vs, tc.want)
+		}
+	}
+}
+
+// A rename in events would void the rule without a word, so the rule's
+// names are checked against the package they guard.
+func TestEventsDeclaresEveryNameTheEnvelopeRuleGuards(t *testing.T) {
+	declared := map[string]bool{}
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("../events/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			switch d := d.(type) {
+			case *ast.FuncDecl:
+				if d.Recv == nil {
+					declared[d.Name.Name] = true
+				}
+			case *ast.GenDecl:
+				for _, s := range d.Specs {
+					if ts, ok := s.(*ast.TypeSpec); ok {
+						declared[ts.Name.Name] = true
+					}
+				}
+			}
+		}
+	}
+	for _, name := range guarded {
+		if !declared[name] {
+			t.Errorf("internal/events declares no %s, which the envelope rule guards", name)
 		}
 	}
 }

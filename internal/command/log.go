@@ -185,11 +185,7 @@ func identityLine(id Identity, c git.Checkout) any {
 	case Minted:
 		return mintedLine{Checkout: id.Checkout.String(), Principal: id.Key.Principal().String()}
 	case Unminted:
-		paths := []string{}
-		for _, f := range id.Files() {
-			paths = append(paths, PathOf(f, c))
-		}
-		return unmintedLine{paths}
+		return unmintedLine{id.Paths(c)}
 	case Unreadable:
 		return unreadableLine{pathErrorLine{PathOf(id.File, c), id.Err.Error()}}
 	}
