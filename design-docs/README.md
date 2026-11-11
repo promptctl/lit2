@@ -13,6 +13,8 @@ it strained. Where `architecture.md` and another document here disagree,
   strains they found and how each was resolved.
 - `build-map.md`: the capability map the backlog is a view of; the slices,
   the walking skeleton first.
+- `requirements.md`: what lit2 must do and must not do, stated from what lit
+  is for; the plan is judged against it.
 - `constraints.md`: every constraint the charters and the event-store design
   impose, with what each implies, buys and costs, and which are load-bearing.
 - `columns-and-phases.md`: column, phase and workflow state are one concept; the
