@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -467,7 +468,11 @@ func readHeader(b []byte) (Header, error) {
 		case headerPosition:
 			h.position = CausalPosition{n: r.Uvarint()}
 		case headerRecordedAt:
-			h.recordedAt = time.Unix(0, int64(r.Uvarint())).UTC()
+			ns := r.Uvarint()
+			if ns == 0 || ns > math.MaxInt64 {
+				err = fmt.Errorf("the recorded-at is %d ns, which no clock past 1970 reads as a time", ns)
+			}
+			h.recordedAt = time.Unix(0, int64(ns)).UTC()
 		case headerPayloadHash:
 			c := r.Bytes()
 			copy(h.payload[:], c)

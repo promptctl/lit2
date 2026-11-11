@@ -29,7 +29,17 @@ func NewKey(entropy io.Reader) (Key, error) {
 	return k, nil
 }
 
-func (k Key) private() ed25519.PrivateKey { return ed25519.NewKeyFromSeed(k.seed[:]) }
+// private is the key pair, the one place the seed is read.
+func (k Key) private() ed25519.PrivateKey {
+	if k.suite != SuiteEd25519 {
+		// [LAW:types-are-the-program] exception: the zero Key names no
+		// suite and is no key, yet would sign with the all-zero seed; one
+		// reaches here only past a ParseKeyFile or ParsePhrase error, or
+		// built by zero value, a caller's bug
+		panic("events: a Key naming no suite, which is no key")
+	}
+	return ed25519.NewKeyFromSeed(k.seed[:])
+}
 
 // Signer signs as the key's principal.
 func (k Key) Signer() Signer { return ed25519Signer{private: k.private()} }
@@ -37,16 +47,19 @@ func (k Key) Signer() Signer { return ed25519Signer{private: k.private()} }
 // Principal is the key's public half, the principal id.
 func (k Key) Principal() PrincipalID { return k.Signer().Principal() }
 
-func (k Key) String() string   { return k.Principal().String() }
-func (k Key) GoString() string { return "events.Key{" + k.Principal().String() + "}" }
+func (k Key) String() string { return k.Principal().String() }
 
 // Format prints the principal under every verb, %#v and %x included.
-func (k Key) Format(f fmt.State, verb rune) {
+func (k Key) Format(f fmt.State, verb rune) { printPrincipal(f, verb, k.Principal(), "events.Key") }
+
+// printPrincipal is how a value holding a private key prints: p under
+// every verb, and under %#v as typeName{p}, so no verb reaches the seed.
+func printPrincipal(f fmt.State, verb rune, p PrincipalID, typeName string) {
 	if verb == 'v' && f.Flag('#') {
-		_, _ = io.WriteString(f, k.GoString())
+		_, _ = io.WriteString(f, typeName+"{"+p.String()+"}")
 		return
 	}
-	_, _ = io.WriteString(f, k.String())
+	_, _ = io.WriteString(f, p.String())
 }
 
 // keyFile is the key file's first word, its suite.
@@ -55,7 +68,7 @@ const keyFile = "ed25519 "
 // FileText is the key in the key file's form: "ed25519 ", the seed in
 // unpadded base64url, and a newline. ParseKeyFile reads it.
 func (k Key) FileText() []byte {
-	return []byte(keyFile + base64.RawURLEncoding.EncodeToString(k.seed[:]) + "\n")
+	return []byte(keyFile + base64.RawURLEncoding.EncodeToString(k.private().Seed()) + "\n")
 }
 
 // ParseKeyFile reads the key file's form, exactly. No error carries the
@@ -113,8 +126,9 @@ func (k Key) Phrase() Phrase {
 	// 264 bits, the entropy then its 8-bit checksum, and two zero bytes
 	// past the end, so each word reads three bytes
 	var bits [35]byte
-	copy(bits[:], k.seed[:])
-	bits[32] = sha256.Sum256(k.seed[:])[0]
+	seed := k.private().Seed()
+	copy(bits[:], seed)
+	bits[32] = sha256.Sum256(seed)[0]
 	var p Phrase
 	for i := range p.words {
 		at := 11 * i

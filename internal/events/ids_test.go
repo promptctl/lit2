@@ -2,6 +2,7 @@ package events
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -146,6 +147,32 @@ func clashingSalts(t *testing.T, ns Namespace) (Salt, Salt) {
 	}
 	t.Fatalf("no clash in 2^20 salts in %v", ns)
 	return Salt{}, Salt{}
+}
+
+// repeating is a broken salt source: every byte it gives is 7.
+type repeating struct{}
+
+func (repeating) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 7
+	}
+	return len(p), nil
+}
+
+func TestABrokenSaltSourceFailsMintInsteadOfHangingIt(t *testing.T) {
+	ns := Children{Parent: Top{Prefix: prefix}}
+	create := Create{In: ns, Payload: made{Title: text("x")}}
+	c := context(1, Frontier{}, Names{})
+	first, err := Mint(c, NewDrafts(create), keyOf(1).Signer(), repeating{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b NamesBuilder
+	b.Add(ns, first.Events[0].Header().About().(Item).ID.Segments()[0])
+	c.Names = b.Names()
+	if m, err := Mint(c, NewDrafts(create), keyOf(1).Signer(), repeating{}); err == nil || !strings.Contains(err.Error(), "salt") {
+		t.Errorf("a salt source that repeats a taken name mints %v, %v; want an error naming the salt source", m.Events, err)
+	}
 }
 
 type stream struct{ salts []Salt }

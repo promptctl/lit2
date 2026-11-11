@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"strings"
 )
@@ -153,16 +152,11 @@ func (s ed25519Signer) Sign(message []byte) Signature {
 }
 
 // A signer prints its principal, as Key does: the private key holds the seed.
-func (s ed25519Signer) String() string   { return s.Principal().String() }
-func (s ed25519Signer) GoString() string { return "events.Signer{" + s.Principal().String() + "}" }
+func (s ed25519Signer) String() string { return s.Principal().String() }
 
 // Format prints the principal under every verb, %#v and %x included.
 func (s ed25519Signer) Format(f fmt.State, verb rune) {
-	if verb == 'v' && f.Flag('#') {
-		_, _ = io.WriteString(f, s.GoString())
-		return
-	}
-	_, _ = io.WriteString(f, s.String())
+	printPrincipal(f, verb, s.Principal(), "events.Signer")
 }
 
 // The base58btc alphabet, Bitcoin's.

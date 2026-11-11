@@ -258,6 +258,8 @@ func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 		"no payload hash":              edited(e.raw, headerPayloadHash, none),
 		"policy version 0":             edited(e.raw, headerPolicy, func(w *wire.Writer) { w.Uvarint(headerPolicy, 0) }),
 		"causal position 0":            edited(e.raw, headerPosition, func(w *wire.Writer) { w.Uvarint(headerPosition, 0) }),
+		"recorded-at 0":                edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 0) }),
+		"recorded-at past int64":       edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 1<<63) }),
 		"a root that names an element": edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(2, "abc")) }),
 		"a subject that is no item id": edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(1, "not an id")) }),
 		"bytes that are no message":    {0xff, 0xff},
@@ -269,6 +271,27 @@ func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 	}
 	if _, ok := Decode(here, store.Record(futureField(recordHeader, string(e.raw)))).(Malformed); !ok {
 		t.Error("a record with no signature decodes; want it malformed")
+	}
+}
+
+func TestARecordWithNewerRecordAndSignatureFieldsDecodesAsItsEvent(t *testing.T) {
+	k := keyOf(1)
+	at := Item{ID: Top{Prefix: prefix}.Child(Segment{s: "abc"})}
+	e := mint(t, context(1, Frontier{highest: 8}, Names{}), k, 1, Act{About: at, Payload: note{Text: text("x")}}).Events[0]
+	var w wire.Writer
+	w.Bytes(recordHeader, e.raw)
+	w.Bytes(recordSignature, append(signatureWire(e.Signature()), futureField(3, "a newer signature field")...))
+	w.Bytes(recordBody, bodyWire(t, e))
+	w.Bytes(4, []byte("a newer record field"))
+	got := decoded(t, here, store.Record(w.Encoded()))
+	if got.Header() != e.Header() || got.Header().Position().n != 9 || got.Header().About() != at {
+		t.Errorf("the header reads as %+v; want the minted one, at 9, about %v", got.Header(), at)
+	}
+	if v := suites.Check(k.Principal(), got.SignedBytes(), got.Signature()); v != Valid {
+		t.Errorf("the signature checks %s; want valid", v)
+	}
+	if _, ok := got.Body().(Readable); !ok {
+		t.Errorf("the body is %#v; want it readable", got.Body())
 	}
 }
 

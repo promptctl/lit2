@@ -125,7 +125,8 @@ type Minted struct {
 // taken in c.Names or earlier in this command is drawn again with a new
 // salt, which changes the payload hash. The name is a signed header fact,
 // never a payload field, so it outlives the payload. Its error is the salt
-// read failing, or the events being more than one frame of the log holds.
+// read failing or repeating, or the events being more than one frame of
+// the log holds.
 func Mint(c Context, ds Drafts, s Signer, salts io.Reader) (Minted, error) {
 	if c.Now.IsZero() {
 		// [LAW:no-silent-failure] the zero time is past UnixNano's range and
@@ -160,7 +161,13 @@ func Mint(c Context, ds Drafts, s Signer, salts io.Reader) (Minted, error) {
 		case Create:
 			p, body = d.Payload, payloadWire(d.Payload)
 			width := Width(c.Names.Count(d.In) + len(mine[d.In]))
-			for {
+			for draws := 0; ; draws++ {
+				if draws == maxDraws {
+					// [LAW:no-silent-failure] each draw is taken with chance at
+					// most 1/1024, so this many taken in a row is a salt source
+					// repeating itself, not bad luck
+					return Minted{}, fmt.Errorf("drawing a payload's salt: %d draws in a row named a taken name in %v, so the salt source repeats", maxDraws, d.In)
+				}
 				if err := draw(); err != nil {
 					return Minted{}, err
 				}
@@ -202,6 +209,9 @@ func Mint(c Context, ds Drafts, s Signer, salts io.Reader) (Minted, error) {
 	m.Batch = b
 	return m, nil
 }
+
+// maxDraws bounds the draws of one created name.
+const maxDraws = 64
 
 func payloadWire(p Payload) []byte {
 	var w wire.Writer

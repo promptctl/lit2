@@ -136,6 +136,24 @@ func TestThePrincipalIsItsDIDKey(t *testing.T) {
 	}
 }
 
+func TestTheZeroKeyIsNoKey(t *testing.T) {
+	for name, use := range map[string]func(Key){
+		"Signer":    func(k Key) { k.Signer() },
+		"Principal": func(k Key) { k.Principal() },
+		"FileText":  func(k Key) { k.FileText() },
+		"Phrase":    func(k Key) { k.Phrase() },
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("the zero Key's %s answered; want a panic", name)
+				}
+			}()
+			use(Key{})
+		}()
+	}
+}
+
 func TestTheKeyComesBackFromItsFileAndItsPhrase(t *testing.T) {
 	for seed := range byte(20) {
 		k := keyOf(seed)
