@@ -32,7 +32,7 @@ func TestEachRowParsesToItsCommand(t *testing.T) {
 }
 
 func TestHelpIsAskedForAnywhereOrByNothing(t *testing.T) {
-	for _, args := range [][]string{{}, {"--help"}, {"get", "x", "--help"}, {"--help", "frobnicate"}, {"admin", "--help"}, {"--"}} {
+	for _, args := range [][]string{{}, {"--help"}, {"get", "x", "--help"}, {"--help", "frobnicate"}, {"admin", "--help"}, {"--"}, {"--bogus", "--help"}, {"get", "--bogus", "--help"}} {
 		if got, err := parse(args...); err != nil || got != (Help{}) {
 			t.Errorf("Parse(%q) = %#v, %v; want Help", args, got, err)
 		}

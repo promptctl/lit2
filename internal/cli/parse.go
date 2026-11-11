@@ -121,19 +121,29 @@ func Parse(verbs, admin Table, args []string) (Command, error) {
 
 // scan splits argv into operands and flags. --help is the one flag; -- ends
 // the flags; a word that does not start with -- is an operand, - included.
+// --help anywhere wins over an unknown flag, which is a usage failure only
+// when no --help is on the line, so the whole line is read before judging.
 func scan(args []string) (words []string, help bool, err error) {
+	var unknown string
 	for i, a := range args {
 		if a == "--" {
-			return append(words, args[i+1:]...), help, nil
+			words = append(words, args[i+1:]...)
+			break
 		}
 		if !strings.HasPrefix(a, "--") {
 			words = append(words, a)
 			continue
 		}
-		if a != "--help" {
-			return nil, false, ParseFailure{Code: Usage, Detail: fmt.Sprintf("unknown flag %s; the one flag is --help", a)}
+		if a == "--help" {
+			help = true
+			continue
 		}
-		help = true
+		if unknown == "" {
+			unknown = a
+		}
+	}
+	if !help && unknown != "" {
+		return nil, false, ParseFailure{Code: Usage, Detail: fmt.Sprintf("unknown flag %s; the one flag is --help", unknown)}
 	}
 	return words, help, nil
 }
