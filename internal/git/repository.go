@@ -87,14 +87,6 @@ func (r Repository) exists() (bool, error) {
 	return err == nil, err
 }
 
-// ensure creates the repository unless it exists.
-func (r Repository) ensure() error {
-	if exists, err := r.exists(); exists || err != nil {
-		return err
-	}
-	return r.create()
-}
-
 // create builds a bare repository in a sibling temporary directory and
 // renames it into place. Two racing creations each build one; the rename
 // that loses finds the directory there, which is the repository it wanted.
@@ -192,7 +184,8 @@ func (r Repository) packed(prefix RefName, found map[RefName]refFile) error {
 }
 
 // loose reads the loose ref files under prefix. A name starting with . or
-// ending in .lock is no ref, as git's refnames allow neither, so neither the
+// ending in .lock, a directory's or a file's, is no ref, as git's refnames
+// allow neither, so neither the
 // temporary file of a replace in flight nor the lock of a git command
 // updating a ref is read as one, as git's own iteration skips them.
 func (r Repository) loose(prefix RefName, found map[RefName]refFile) error {
@@ -205,7 +198,10 @@ func (r Repository) loose(prefix RefName, found map[RefName]refFile) error {
 		if err != nil {
 			return err
 		}
-		if strings.HasPrefix(d.Name(), ".") || strings.HasSuffix(d.Name(), ".lock") || d.IsDir() {
+		switch {
+		case d.IsDir() && strings.HasPrefix(d.Name(), "."):
+			return fs.SkipDir // no ref is under it
+		case d.IsDir(), strings.HasPrefix(d.Name(), "."), strings.HasSuffix(d.Name(), ".lock"):
 			return nil
 		}
 		rel, err := filepath.Rel(r.dir, p)
@@ -230,9 +226,12 @@ func (r Repository) loose(prefix RefName, found map[RefName]refFile) error {
 }
 
 // Replace points name at to by writing a temporary file beside the loose
-// ref and renaming it over the ref, so a reader sees the old ref or the new
-// one whole, never an empty file, and no lock is taken (the store's
-// decision 6). It creates the repository first, as every write does.
+// ref and renaming it over the ref, so a concurrent reader sees the old
+// ref or the new one whole, never an empty file, and no lock file is taken
+// (the store's decision 6). The temporary file is not fsynced: a power loss
+// before its bytes land can leave the ref empty, which reads as a torn ref,
+// and the next publish reseals it (decision 11). It creates the repository
+// first, by the one path every object write takes.
 func (r Repository) Replace(name RefName, to ObjectID) error {
 	if err := checkRefName(name); err != nil {
 		return err
@@ -240,9 +239,11 @@ func (r Repository) Replace(name RefName, to ObjectID) error {
 	if _, err := to.hash(); err != nil {
 		return err
 	}
-	if err := r.ensure(); err != nil {
+	_, release, err := r.reach(true)
+	if err != nil {
 		return err
 	}
+	release()
 	file := filepath.Join(r.dir, filepath.FromSlash(string(name)))
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return err

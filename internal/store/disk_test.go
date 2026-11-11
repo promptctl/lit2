@@ -141,7 +141,8 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 }
 
 // Only a file can hold a torn ref, so the case is the disk's: a ref file
-// that holds no object id is resealed from 0 and created again, at the
+// that holds no object id, beside its writer's log, is the writer's stream
+// and not unreadable, and is resealed from 0 and created again, at the
 // commit the log's bytes make; an idle publish then leaves the file as it is.
 func TestATornWriterRefIsResealedAndCreatedAgain(t *testing.T) {
 	c := gittest.Clone(t)
@@ -151,6 +152,10 @@ func TestATornWriterRefIsResealedAndCreatedAgain(t *testing.T) {
 	ref := filepath.Join(c.SharedDir(), "store", "repo", filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name())))
 	if err := os.WriteFile(ref, []byte("torn"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	// its log is here, so the writer is one stream, read from the log
+	if h, err := s.Heads(); err != nil || len(h.Streams) != 1 || len(h.Unreadable) != 0 {
+		t.Errorf("with its own ref torn a writer's heads are %+v, %v; want its one stream and nothing unreadable", h, err)
 	}
 	out := storetest.PublishOwn(t, s)
 	if _, ok := out.Prior.(store.Resealed); !ok || out.Move != (store.RefCreated{}) || out.Commit != first.Commit {

@@ -1,6 +1,7 @@
 package gittest
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,21 @@ import (
 )
 
 // Git runs the git binary in dir and is its output, failing t when git is
-// missing or refuses. It is the oracle lit's own code never calls. Its
-// environment is fixed, not inherited, so no config, hook or GIT_DIR of
-// the caller's reaches what it reports.
+// missing or refuses. It is the oracle lit's own code never calls.
 func Git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := Ask(t, dir, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Ask runs the git binary in dir and is its output, or its refusal with
+// what it said, for a test whose answer may be that git refuses. It fails
+// t only when git is missing. Its environment is fixed, not inherited, so
+// no config, hook or GIT_DIR of the caller's reaches what it reports.
+func Ask(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	bin, err := exec.LookPath("git")
 	if err != nil {
@@ -25,9 +37,9 @@ func Git(t *testing.T, dir string, args ...string) string {
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t"}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
+		return "", fmt.Errorf("git %s in %s: %w\n%s", strings.Join(args, " "), dir, err, out)
 	}
-	return strings.TrimRight(string(out), "\n")
+	return strings.TrimRight(string(out), "\n"), nil
 }
 
 // Physical is a temporary directory by its physical path, as Locate and

@@ -120,15 +120,11 @@ type source interface{ source() }
 type logFile struct{ path Path }
 
 // published is a stream read from a publication's segments, in stream
-// order; a segment ends where the next starts, the last at end.
+// order, each with the span publication read it to hold, which tile the
+// stream to end.
 type published struct {
-	segs []placed
+	segs []Kept
 	end  Offset
-}
-
-type placed struct {
-	start Offset
-	blob  git.ObjectID
 }
 
 func (logFile) source()   {}
@@ -196,6 +192,9 @@ func (s *Store) Heads() (Heads, error) {
 		h.Streams = append(h.Streams, Stream{Ref: ref, Until: Position{Log: log, At: pub.end}, src: pub})
 	}
 	for _, b := range bad {
+		if ref, err := ParseRef(b.Name); err == nil && local[ref] {
+			continue // read from its log; the publish that follows replaces the torn ref
+		}
 		unreadable(string(b.Name), b.Why)
 	}
 	slices.SortFunc(h.Streams, func(a, b Stream) int { return cmp.Compare(a.Ref.Name(), b.Ref.Name()) })
@@ -237,7 +236,7 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 	if err != nil {
 		return published{}, LogID{}, err
 	}
-	pub := published{segs: make([]placed, len(es))}
+	pub := published{segs: make([]Kept, len(es))}
 	for i, e := range es {
 		at, err := parseSegmentName(e.Name)
 		if err != nil {
@@ -254,8 +253,8 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 		if size == 0 {
 			return published{}, LogID{}, fmt.Errorf("tree %s: segment %s holds no bytes", c.Tree, e.Name)
 		}
-		pub.segs[i] = placed{start: at, blob: e.Blob}
-		pub.end = at + Offset(size)
+		pub.segs[i] = Kept{Span: Span{From: at, To: at + Offset(size)}, Blob: e.Blob}
+		pub.end = pub.segs[i].Span.To
 	}
 	return pub, log, nil
 }
@@ -279,22 +278,19 @@ func (s *Store) bytes(src source, want Span) ([]byte, error) {
 		return s.ports.Files.ReadAt(src.path, headerSize+uint64(want.From), want.Len())
 	case published:
 		b := make([]byte, 0, want.Len())
-		for i, seg := range src.segs {
-			end := src.end
-			if i+1 < len(src.segs) {
-				end = src.segs[i+1].start
-			}
-			if end <= want.From || seg.start >= want.To {
+		for _, seg := range src.segs {
+			sp := seg.Span
+			if sp.To <= want.From || sp.From >= want.To {
 				continue // outside the range read
 			}
-			blob, err := s.ports.Objects.Blob(seg.blob)
+			blob, err := s.ports.Objects.Blob(seg.Blob)
 			if err != nil {
 				return nil, err
 			}
-			if Offset(len(blob)) != end-seg.start {
-				return nil, fmt.Errorf("segment at %d is %d bytes; the next starts %d bytes after it", seg.start, len(blob), end-seg.start)
+			if uint64(len(blob)) != sp.Len() {
+				return nil, fmt.Errorf("segment at %d is %d bytes; its header said %d", sp.From, len(blob), sp.Len())
 			}
-			b = append(b, blob[max(want.From, seg.start)-seg.start:min(want.To, end)-seg.start]...)
+			b = append(b, blob[max(want.From, sp.From)-sp.From:min(want.To, sp.To)-sp.From]...)
 		}
 		return b, nil
 	}
@@ -422,15 +418,7 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, error) {
 		case pub.end > until.At:
 			return nil, 0, nil, ShorterThanPublished{Ref: ref, Log: until.At, Published: pub.end}
 		}
-		segs := make([]Kept, len(pub.segs))
-		for i, seg := range pub.segs {
-			to := pub.end
-			if i+1 < len(pub.segs) {
-				to = pub.segs[i+1].start
-			}
-			segs[i] = Kept{Span: Span{From: seg.start, To: to}, Blob: seg.blob}
-		}
-		kept, from := keepWithin(segs, s.bound)
+		kept, from := keepWithin(pub.segs, s.bound)
 		return kept, from, KeptFrom{Commit: h.commit}, nil
 	}
 	panic(fmt.Sprintf("store: %T is not a refHead", h))

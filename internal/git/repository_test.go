@@ -58,26 +58,49 @@ func TestLocateAgreesWithGit(t *testing.T) {
 	}
 }
 
+// ReadObjectFormat reads what git reads, git being the one source of when
+// the extension counts: in a repository git made in each format, with its
+// config removed, and with the extension under a format version that does
+// not admit extensions.
 func TestReadObjectFormatAgreesWithGit(t *testing.T) {
 	for _, tc := range []struct {
-		format   git.ObjectFormat
-		noConfig bool
-	}{{git.SHA1, false}, {git.SHA256, false}, {git.SHA1, true}} {
+		name   string
+		init   git.ObjectFormat
+		config func(path string) error
+	}{
+		{"sha1", git.SHA1, nil},
+		{"sha256", git.SHA256, nil},
+		{"no config", git.SHA1, os.Remove},
+		{"sha256 under version 0", git.SHA1, underVersion0("sha256")},
+		{"sha1 under version 0", git.SHA1, underVersion0("sha1")},
+	} {
 		dir := gittest.Physical(t)
-		gittest.Git(t, dir, "init", "-q", "--object-format="+tc.format.String())
+		gittest.Git(t, dir, "init", "-q", "--object-format="+tc.init.String())
 		c, err := git.Locate(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if tc.noConfig {
-			if err := os.Remove(filepath.Join(c.CommonDir, "config")); err != nil {
+		if tc.config != nil {
+			if err := tc.config(filepath.Join(c.CommonDir, "config")); err != nil {
 				t.Fatal(err)
 			}
 		}
 		got, err := git.ReadObjectFormat(c.CommonDir)
-		if want := gittest.Git(t, dir, "rev-parse", "--show-object-format"); err != nil || got.String() != want || got != tc.format {
-			t.Errorf("ReadObjectFormat in a %s repository (config removed: %v) = %v, %v; git says %s", tc.format, tc.noConfig, got, err, want)
+		want, refused := gittest.Ask(t, dir, "rev-parse", "--show-object-format")
+		switch {
+		case refused != nil && err == nil:
+			t.Errorf("%s: ReadObjectFormat = %v; git refuses: %v", tc.name, got, refused)
+		case refused == nil && (err != nil || got.String() != want):
+			t.Errorf("%s: ReadObjectFormat = %v, %v; git says %s", tc.name, got, err, want)
 		}
+	}
+}
+
+// underVersion0 writes a config naming format as extensions.objectformat
+// under repository format version 0.
+func underVersion0(format string) func(path string) error {
+	return func(path string) error {
+		return os.WriteFile(path, []byte("[core]\n\trepositoryformatversion = 0\n\tbare = false\n[extensions]\n\tobjectformat = "+format+"\n"), 0o644)
 	}
 }
 
@@ -129,9 +152,17 @@ func TestATornRefIsBadAndTheRestRead(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "refs", "lit", "log", "good.lock"), []byte("ce01"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// and a directory starting with . holds no ref, whatever is in it
+	hidden := filepath.Join(dir, "refs", "lit", ".hidden")
+	if err := os.MkdirAll(hidden, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hidden, "torn"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	heads, bad, err := repo.List("refs/lit/")
 	if err != nil || !slices.Equal(heads, []git.RefHead{{Name: "refs/lit/log/good", Target: blob}}) || len(bad) != 1 || bad[0].Name != "refs/lit/log/torn" {
-		t.Errorf("List = %v, %v, %v; want the good ref, the torn one bad, and no lock", heads, bad, err)
+		t.Errorf("List = %v, %v, %v; want the good ref, the torn one bad, no lock, nothing hidden", heads, bad, err)
 	}
 }
 
