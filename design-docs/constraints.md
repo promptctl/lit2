@@ -345,25 +345,26 @@ and what it reserves for later.
 
 ---
 
-## F. What is reserved for later
+## F. Access control
 
 ### F1. Birth requirements: a signature slot and principal on every event; prose payloads envelope-capable; a versioned signed configuration; validation as a generic engine.
 *Charter #6; design §security-and-config.*
 
-- **Buys:** access control and tiered visibility arrive as policy changes,
-  not fleet migrations. The design's own argument: "their absence is not a
-  smaller system but a fleet-wide schema migration standing between the
-  system and its own roadmap."
-- **Costs:** fields and envelope handling that the first release carries
-  inert; the envelope rule (F2) shapes every layer below the CLI now.
-  Already partly departed: the signed configuration *stream* became a
-  committed file (C4).
+- **Buys:** signed, verified history and tiered visibility with no server,
+  which `requirements.md` §1 makes part of the first release.
+- **Costs:** the event shape, the fold and the receive boundary carry
+  signing, verification and envelopes from the first event; key material
+  must be available to detached processes without a prompt.
+- **Departure made:** nothing here is inert or later. `architecture.md`
+  §3.16–3.19 put the write layer and the encrypted default tier in the
+  first release. The signed configuration *stream* became a committed file
+  (C4); the policy stays in the store as events.
 
 ### F2. Layers below the CLI boundary treat prose as opaque bytes.
 *Design `INV:opaque-envelope`.*
 
-- **Buys:** encryption later touches only the CLI boundary; the fold, cache,
-  codec and sync never change.
+- **Buys:** encryption touches only the CLI boundary; the fold, cache,
+  codec and sync never see prose.
 - **Costs:** nothing computed across items may read prose. Requirements and
   selectors on prose by content are evaluated only by the writer; a reader
   without the key sees `unknown`. Search over bodies is a CLI-boundary

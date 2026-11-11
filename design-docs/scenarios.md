@@ -450,34 +450,45 @@ the table does not show.
 
 **Strain.** None.
 
-## 15. Access control arrives later
+## 15. Access control from the first event
 
-**Need.** A workspace that has run unprotected for two years turns on the
-write layer and then the read layer without migrating anything.
+**Need.** A contributor may file and work tickets but not delete epics or
+other people's tickets; some tickets are readable only by some members; a
+modified client cannot forge any of it; no server.
 
 **Walk.**
 
-1. Enrollment is a policy document committed to the repository in a commit
-   signed by the enrolling owner; history before it is adopted by fiat;
-   verification seeds there. The access-control design's policy mechanics are
-   re-read against configuration as committed files when that work is pulled.
-2. Capabilities name paths: the contributor role is `add */children`, `set
-   own/*`, `set */status` out of `initial`, `add */comments`, `rm own/*`
-   where level is 1. A contributor's `rm other-epic` is refused at the write
-   by the same enforcer that refuses a transition, reading the policy from
-   the folded config and the principal from the writer. A forged event from
-   a modified client is refused at every receiver, which stops advancing that
-   writer's ref at the offending event and keeps everything before it.
-3. `set x/tier internal` re-keys the item's current prose under the tier's
-   epoch; comments carry their own tier. A reader without the key sees the
-   skeleton: id, column, lane, labels, links, and an envelope where the body
-   is.
-4. `get '(text~"powerd")'` on a reader without a key searches what it can
+1. `lit2 admin init` on a fresh repository mints the checkout's principal,
+   prints one recovery phrase, and writes the enrollment: the first policy,
+   one owner, one tier, encrypted, as the first signed event. Every event
+   after it is signed and cites the policy version in force.
+2. A second person clones, runs `lit2 admin init`, and the checkout finds
+   the enrollment on the remote, adopts it, and pushes a signed membership
+   request. The owner runs `add /members '{principal: <id>, role:
+   contributor}'`; the proposal and its approval are one command because
+   one owner is the threshold. The joiner's next sync wraps the tier's
+   epochs to them and their backlog reads in full.
+3. The contributor runs `rm <epic>`. The enforcer refuses it at the write:
+   `rm own/*` at level 1 is the contributor's capability and this path is
+   neither. The refusal names the capability it needed. A modified client
+   that appends the event anyway publishes a segment every receiver refuses
+   before folding; the local copies stay, `/integrity` names the writer and
+   the event, and a valid replica re-publishes over the remote.
+4. `set x/tier internal` on a ticket re-keys its current prose under the
+   `internal` tier's epoch; the ticket's comments keep their own tiers. A
+   member without the key sees the skeleton: id, column, lane, labels,
+   links, and an envelope where the body is.
+5. `rm /members/<id>` rotates every tier the member held to a new epoch for
+   the survivors and says plainly that they keep what they could read.
+   Their events after the removal's causal position fail verification; any
+   they minted offline before it apply and are listed with their
+   `recorded-at` for the owner to judge.
+6. `get '(text~"powerd")'` on a reader without a key searches what it can
    decrypt and says how many envelopes it could not open.
 
-**Relies on.** No event schema changed; the slots were there from the first
-event. Every capability is a verb on a path, so the policy vocabulary grew
-with the surface and nothing else.
+**Relies on.** Signatures, envelopes and the policy are in the event shape
+and the fold from the first event, so nothing is retrofitted. Every
+capability is a verb on a path, so the policy vocabulary is the surface.
 
 **Strain S-11.** A requirement whose `test` reads a prose field by content,
 `description~'Done when'`, cannot be evaluated by a reader lacking the tier's

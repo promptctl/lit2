@@ -42,7 +42,7 @@ are, rather than adding a mechanism beside the substrate.
 | committed configuration files, versioned by git | the model as data a person edits, reviews in a pull request and diffs; every version addressable by blob hash and carried in the tree of every writer that cites it | a model that changes without someone's edit |
 | rewrites as events | purge, squash, compaction, erasure, converging on every replica | reaching copies that never sync again (charter #7) |
 | a git remote as a dumb replicated store | sync through the channel the code already uses; remote filing from a storeless machine | enforcement by the remote; a server of any kind |
-| a signature slot and opaque prose envelopes on every event | access control later without a schema change | hiding that an item exists (the visible skeleton) |
+| a signature on every event and opaque prose envelopes | every verifier enforces who may write what, with no server; content hidden from readers without the key; policy as events in the same store | hiding that an item exists (the visible skeleton) |
 
 Two consequences shape everything above the substrate. Because the fold has
 no clock, every derivation is sorted into one of two homes: the **fold**
@@ -254,11 +254,12 @@ squashes. Nothing else removes anything.
 
 Every event's attribution is `(checkout, principal, agent)`. The checkout id
 is the 128-bit token in the checkout's private git dir, the thing claims and
-writer refs key on. The principal is the key that signed the event; until the
-access-control write layer ships it is a key the checkout mints at init, so
-the slot is real from the first event. The agent label is an optional opaque
-string the invoking harness supplies, shown beside comments and history. No
-usernames, hostnames or paths enter the store. `get /me` prints the three.
+writer refs key on. The principal is the key that signed the event (§3.16),
+minted at init and kept beside the checkout id, never in the store. The
+agent label is an optional opaque string the invoking harness supplies,
+shown beside comments and history. No usernames, hostnames or paths enter
+the store; display names come from the policy's member entries. `get /me`
+prints the three and the tiers this principal holds.
 
 ### 3.14 The workspace file
 
@@ -312,6 +313,90 @@ consumed, so an incremental fold reads only what was appended. Compaction
 (§3.12) is what bounds a segment set over a project's life: a squash
 re-seals history into fewer, smaller segments on every replica.
 
+### 3.16 Principal and policy
+
+A **principal** is an Ed25519 key. Its fingerprint is the principal id, the
+only identity form that enters the store; names live in the policy's member
+entry. `lit2 admin init` mints the checkout's principal silently and prints
+one recovery phrase. Every event is signed by its principal over the header
+and a salted hash of the payload (§3.2). A **succession** record links an
+old principal id to a new one: signed by the old key and one `member.admin`
+when the old key still exists, by the owner threshold when it is lost.
+
+The **policy** is the member list (principal, role, and the wrapped tier
+keys per member), the role definitions, and a monotone version. It lives in
+the store as events: `policy.propose` carries the new document and
+`policy.approve` cites its hash; a version activates at the causal position
+where the approvals the previous version requires are all present. A change
+that touches the owner set or widens any role's capabilities requires the
+owner threshold, one while there is one owner and a majority once there are
+more, with the owner being removed excluded from the quorum that removes
+them; every other change needs one `member.admin` or `policy.admin`
+signature. The verifier decides which case applies by diffing the granted
+surface, never by the change's framing. The first policy is the
+**enrollment**, the first event of a workspace, signed by its founding
+owner; verification seeds there and never walks before it. A checkout that
+joins a remote already holding an enrollment adopts it and pushes a signed
+membership request; two enrollments meeting on one remote is a
+contradiction the fold reports, and the later one in total order yields.
+
+### 3.17 Capability
+
+A capability is `(verb, path glob, binding)`: one of the four verbs, a glob
+over paths, and a binding of `own`, `assignee`, `own-or-assignee` or `all`.
+`own` binds to the item's creating principal; `assignee` to the principal
+holding its lane's claim. A role is a named bundle of capabilities, and the
+default profile ships the access-control design's four, observer,
+contributor, editor and owner, spelled as path globs: contributor is
+`add */children`, `set own/*`, `set */status` out of the initial column,
+`add */comments`, `rm own/*` at level 1. The enforcer that judges a
+transition also judges, for every intent a command would mint, the writer's
+principal against the policy version in force at the writer's current fold;
+refusal of any path refuses the whole. Membership is paths too:
+`add /members '{principal, role}'`, `set /members/<id>/role editor`,
+`rm /members/<id>`, `set /policy/threshold 2`, each compiling to a proposal
+and, where the writer's own signature suffices, its approval.
+
+### 3.18 Tier and envelope
+
+Every prose field is an **envelope** `{tier, epoch, nonce, ciphertext,
+commitment}` from its first event, and no layer below the verbs ever sees
+prose (`INV:opaque-envelope`). A **tier** is a named visibility group with
+an epoch key wrapped to each member's public key in the policy. A workspace
+starts with one tier, encrypted, every member entitled; a project that
+wants its backlog world-readable sets the default tier to plaintext, the
+documented public mode. Each item and each comment carries `tier`, a
+structural field, a comment's defaulting to its item's. Each encrypted item
+and comment has its own content key wrapped under its tier's epoch, so
+`rm x --destroy` shreds the key and the content is unrecoverable on every
+replica. Granting a tier wraps all its epochs to the joiner; removing a
+member rotates the tier to a new epoch for the survivors, and the removed
+member keeps what they could already read. Structure stays visible to
+every member: the backlog lists every item and redacts what the reader
+cannot open. The commitment lets the fold decide that two concurrent
+writes of one prose field are the same text without reading either.
+
+### 3.19 Verification
+
+The model is Monero's, as the access-control charter fixes it: validity is
+enforced by every verifier and by no trusted party, a reading key is
+separate from a writing key, and the person uses none of it knowingly.
+Authorization is one fold rule. For each event in total order the fold
+checks the signature against its principal's key and the intent against
+the policy in force at the event's causal position; an event that fails is
+carried, counted on `/integrity` with its writer, and never applied, and an
+event whose cited policy version is lower than its writer's previous one
+fails the same way. Every receiver runs that rule over a writer's published
+segments before accepting them, so a forged or unauthorized publication
+never reaches a replica's fold and the local copy stays; a valid replica
+re-publishes over a vandalized remote. A revoked principal that stays
+offline from its revocation can mint events whose positions sort before it;
+the fold applies them, as it applies any offline work made before the news
+arrived, and reports them with their `recorded-at` so an owner can judge
+and rewrite. That residual is the seam the carried design leaves open,
+resolved here as a deterministic rule plus an advisory rather than a rule
+keyed to what a receiver happens to know.
+
 ## 4. Functionality, composed
 
 What an issue tracker must do, and which primitives do it. The test for each
@@ -347,8 +432,10 @@ row is that no primitive learned a new case.
 | erase content | `rm x --purge`, a rewrite; every replica converges; `gc` reclaims |
 | keep the store small and fast | the cache snapshot; compaction as a rewrite; budgets as gates |
 | survive a binary that is too old | `INV:preserve-unknown`: unknown events carried and counted; mutations on their subjects refused; `min-reader-version` in the workspace file |
-| restrict who may do what, later | the principal on every event; capabilities as `(verb, path glob, binding)` over the same paths; the signature slot verified at receive |
-| hide content from some readers, later | prose fields are envelopes from the first event; structure stays visible |
+| say who may do what | the principal on every event; capabilities `(verb, path glob, binding)` in the policy; the one enforcer refuses at the write; every receiver verifies before accepting |
+| hide content from some readers | tiers; every prose field an envelope from its first event; `set x/tier internal`; structure stays visible |
+| admit, change, remove a member | `add /members`, `set /members/<id>/role`, `rm /members/<id>`: proposal and approval events; the owner threshold where the change touches owners or widens a role |
+| replace a lost key | a succession record, `add /members/<id>/succession <new-principal>` |
 
 Three functions the source documents asked about and this table answers
 without a new mechanism: "ready to pull" is the initial column's exit list;
@@ -368,24 +455,25 @@ of (events, clock, argv, writer); the rest is the hearth
 2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.14) into the
    schema value.
 3. **Fold** the events newer than the snapshot, from the sealed segments
-   and the open log, reading each cited configuration version from the
-   object database as needed.
+   and the open log, verifying each (§3.19) and reading each cited
+   configuration version from the object database as needed.
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with tick and the clock. A write
-   computes a description: the intents it would mint, the requirement
-   verdicts, the derivations, the echo. Refusal of any path refuses the whole.
-6. **Perform.** Append the intents to this checkout's log, or decline
-   because `--dry-run` was given. Update the snapshot by atomic rename.
+   computes a description: the intents it would mint, the requirement and
+   capability verdicts, the derivations, the echo. Refusal of any path
+   refuses the whole.
+6. **Perform.** Sign and append the intents to this checkout's log, or
+   decline because `--dry-run` was given. Update the snapshot by atomic rename.
 7. **Speak.** Print the echo, then the handlers' bodies for the moments
    raised, after the data; under `--json`, one object keyed by path.
 8. **Record** the command event: paths, expansion, verdicts, events, handlers
    fired and suppressed, cache hit or refold, timings, `dry_run`, `written`.
    One record per invocation, local, never synced `[LAW:nothing-unseen]`.
 9. **Sync.** A write schedules a detached `lit2 admin sync` to seal this
-   checkout's log and publish its commit; a read starts the same when the
-   last fetch is older than the debounce. Nothing in the foreground waits on
-   the network.
+   checkout's log and publish its commit, and to fetch and verify the
+   others' (§3.19); a read starts the same when the last fetch is older
+   than the debounce. Nothing in the foreground waits on the network.
 
 ## 6. The parts, downhill
 
@@ -400,7 +488,7 @@ of (events, clock, argv, writer); the rest is the hearth
  fold       events → state; validation engine; rank; holders; conflicts
  config     .lit/workspace.toml from the working tree, or any cited version
             from a writer's tree → one typed schema value
- events     record, codec, upcasters, ids, signature slot
+ events     record, codec, upcasters, ids, signature, envelope
  store      the append-only log; sealing into segments; one commit and one
             ref per writer, inbox refs; rewrites; snapshot; the background
             sync process
@@ -410,7 +498,9 @@ of (events, clock, argv, writer); the rest is the hearth
 
 Beside the stack, passed through by every layer: the command event, and the
 composition root, the one place a store is opened and the clock, the writer
-identity and the agent label are read. Tests build the same stack over an
+identity, the principal's key with its wrapped tier keys, and the agent
+label are read. Key material lives beside the checkout id in the private
+git dir, never in the store and never behind a prompt. Tests build the same stack over an
 in-memory object store, a fixed clock and a fixed identity.
 
 ## 7. Decisions for Brandon
@@ -435,8 +525,11 @@ prefix, and an area of focus is a label.
 terminal column, one that should not exist is deleted (tombstone) or purged
 (rewrite).
 
-**E. First release.** Recommended: everything in §3 and §4 except the two
-rows marked "later", with the signature slot and envelopes present and inert.
+**E. Crypto suite.** Recommended: Go's standard library and its extended
+crypto packages, Ed25519 for signatures, X25519 for key wrapping,
+ChaCha20-Poly1305 for envelopes, HKDF for the commitment subkey, with the
+age file format as the reference design. FIPS-validated modules are a
+packaging question for the organizations that need them, not a design one.
 
 **F. Synthetic container names.** Recommended: `unfiled` and `unassigned`,
 two keys in the default profile.
@@ -457,9 +550,9 @@ yours to make.
 - A new ticket fact is an event kind plus a fold rule and, if it has a clock,
   a tick rule. A new piece of the model is a key in `.lit/workspace.toml`.
   Never a table, never a second store.
-- A new capability is a verb on a path. Policy will name capabilities as
-  `(verb, path glob, binding)`; what cannot be spelled as a path write cannot
-  be authorized.
+- Every mutating verb on a path has a capability `(verb, path glob,
+  binding)`; what cannot be spelled as a path write cannot be authorized,
+  and a path write with no capability does not ship.
 - Every prose field is an envelope below the verb layer from its first event.
 - Everything computed across items reads structural fields only. A
   requirement that reads prose by content is evaluated by its writer, who
@@ -496,22 +589,32 @@ walking skeleton.
 1. **Skeleton.** The layout of §6, the composition root, the command event,
    the in-memory store, the harness, `lit2 --help` from the field table.
    (ticket lit-bootstrap-1f9.438)
-2. **Events and fold, first facts.** Items, fields, comments, labels; ids;
-   the local log and the snapshot; `add /children`, `get`, `set`, `add`,
-   `rm`; `lit2 admin init`.
-3. **Config and columns.** `.lit/workspace.toml` from the working tree, its
+2. **Events, principal and fold, first facts.** Items, fields, comments,
+   labels; ids; the principal minted at init and every event signed; the
+   local log and the snapshot; `add /children`, `get`, `set`, `add`, `rm`;
+   `lit2 admin init`.
+3. **Policy.** Enrollment at init; the policy document as events; roles
+   and capabilities as path globs in the default profile; the enforcer's
+   capability verdict; membership verbs and the owner threshold;
+   verification as a fold rule and at receive.
+4. **Config and columns.** `.lit/workspace.toml` from the working tree, its
    blob in the writer's tree, the schema parse, `config-ref` on events; levels and
    synthetic containers; columns, stage, rollup; transitions with the one
    enforcer; the default profile.
-4. **Lanes, rank, claims, next.** Frames and rank intents; lanes; holders and
+5. **Tiers.** Envelopes encrypted under the default tier; content keys and
+   wrapped epoch keys; `tier` on items and comments; `set x/tier`; grant
+   on admit and rotation on removal; `rm x --destroy`; succession;
+   `get /me`.
+6. **Lanes, rank, claims, next.** Frames and rank intents; lanes; holders and
    expiry; `/lanes`, `/next`, `held`, rules.
-5. **Guidance.** Workflows, handlers, the three layers, moments, the managed
+7. **Guidance.** Workflows, handlers, the three layers, moments, the managed
    block, `--dry-run` printing guidance.
-6. **Sync.** Sealing the log into segments, the writer's commit and ref,
-   the background process, inbox refs, staleness, `/integrity`.
-7. **Rewrites.** Purge, squash, sweep, the receiver's rule; the budgets
+8. **Sync.** Sealing the log into segments, the writer's commit and ref,
+   the background process, verification at receive and re-publishing over
+   a vandalized remote, inbox refs, staleness, `/integrity`.
+9. **Rewrites.** Purge, squash, sweep, the receiver's rule; the budgets
    harness and the depth corpus.
-8. **Selectors in full, `--json`.**
+10. **Selectors in full, `--json`.**
 
 ## Appendix: where this departs from a source document
 
@@ -550,3 +653,10 @@ One line each, so a reader of the older document knows the position moved.
   one tree to anchor instead of a chain.
 - event-store charter #4: transport through the user's git in the background
   process, if decision G is taken.
+- access-control design: nothing in it is later; the write layer and the
+  encrypted default tier are in the first release (requirements.md §1).
+  Capabilities name path globs rather than the v1 command table's verbs;
+  the policy document is events in the store, not a Dolt object; replayed-
+  commit re-signing does not arise because nothing is replayed; `start`
+  recording the assignee becomes the `assignee` binding reading the lane's
+  claim holder.
