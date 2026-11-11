@@ -13,6 +13,8 @@ it strained. Where `architecture.md` and another document here disagree,
   strains they found and how each was resolved.
 - `build-map.md`: the capability map the backlog is a view of; the slices,
   the walking skeleton first.
+- `constraints.md`: every constraint the charters and the event-store design
+  impose, with what each implies, buys and costs, and which are load-bearing.
 - `columns-and-phases.md`: column, phase and workflow state are one concept; the
   column is the one stored fact, labels are computed; rework is verdicts inside
   review. Owns the column graph at `/columns`.
