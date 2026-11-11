@@ -117,20 +117,22 @@ func (Internal) Reason() string { return "internal" }
 
 // Record runs work as one invocation and returns its event on every path.
 // The first clock reading is now, handed to work and recorded as Started;
-// the second is only the duration. A panic in work becomes an Internal
-// outcome carrying its value and stack; work's summary is then unknown and
-// left empty.
-func Record(c Clock, inv Invocation, work func(now time.Time) (cli.Summary, cli.Outcome)) Event {
+// the second is only the duration. Work says what was asked through asked
+// as soon as it knows, before its body runs, so the event keeps the last
+// summary given even when the body panics `[LAW:nothing-unseen]`; the
+// panic becomes an Internal outcome carrying its value and stack.
+func Record(c Clock, inv Invocation, work func(now time.Time, asked func(cli.Summary)) cli.Outcome) Event {
 	started := c.Now()
-	summary, outcome := recovered(work, started)
+	var summary cli.Summary
+	outcome := recovered(func() cli.Outcome { return work(started, func(s cli.Summary) { summary = s }) })
 	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Outcome: outcome}
 }
 
-func recovered(work func(now time.Time) (cli.Summary, cli.Outcome), now time.Time) (summary cli.Summary, outcome cli.Outcome) {
+func recovered(work func() cli.Outcome) (outcome cli.Outcome) {
 	defer func() {
 		if r := recover(); r != nil {
 			outcome = cli.Failed{Failure: Internal{Err: fmt.Errorf("panic: %v", r), Stack: debug.Stack()}}
 		}
 	}()
-	return work(now)
+	return work()
 }

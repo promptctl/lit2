@@ -21,7 +21,7 @@ const (
 	// ClassUsage: the argv is not a lit2 command line.
 	ClassUsage
 	// ClassEnvironment: no checkout, not initialized, an unparseable
-	// workspace file, an unreadable store.
+	// workspace file, an unreadable store, a stdout that refuses the answer.
 	ClassEnvironment
 	// ClassInternal: lit2 failed and recorded why.
 	ClassInternal

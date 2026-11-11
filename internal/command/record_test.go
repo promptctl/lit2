@@ -35,21 +35,34 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 		{"help", cli.Done{}, 0},
 		{"get", cli.Failed{Failure: Internal{Err: errors.New("not built")}}, 70},
 	} {
-		e := Record(&FixedClock{At: t0}, inv, func(time.Time) (cli.Summary, cli.Outcome) { return cli.Summary{Name: tc.name}, tc.outcome })
+		e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, asked func(cli.Summary)) cli.Outcome {
+			asked(cli.Summary{Name: tc.name})
+			return tc.outcome
+		})
 		if e.Invocation != inv || e.Command.Name != tc.name || cli.ExitCode(e.Outcome) != tc.exit {
 			t.Errorf("%s: the event is %#v; want the invocation, the summary and exit %d", tc.name, e, tc.exit)
 		}
 	}
 }
 
-func TestRecordTurnsAPanicIntoInternal(t *testing.T) {
-	e := Record(&FixedClock{At: t0}, inv, func(time.Time) (cli.Summary, cli.Outcome) { panic("the work broke") })
+func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
+	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, asked func(cli.Summary)) cli.Outcome {
+		cmd, err := cli.Parse(cli.Verbs(), cli.Admin(), []string{"get", "x"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		asked(cli.Summarize(cmd))
+		panic("the body broke")
+	})
+	if e.Command.Name != "get" || len(e.Command.Paths) != 1 || e.Command.Paths[0] != "x" {
+		t.Errorf("a panic in get x recorded %#v; want get with its one path", e.Command)
+	}
 	failed, ok := e.Outcome.(cli.Failed)
 	if !ok {
 		t.Fatalf("a panic ended %#v; want Failed", e.Outcome)
 	}
 	in, ok := failed.Failure.(Internal)
-	if !ok || !strings.Contains(in.Error(), "the work broke") || len(in.Stack) == 0 || cli.ExitCode(e.Outcome) != 70 {
+	if !ok || !strings.Contains(in.Error(), "the body broke") || len(in.Stack) == 0 || cli.ExitCode(e.Outcome) != 70 {
 		t.Errorf("a panic is %#v; want Internal with its value and stack, exit 70", failed.Failure)
 	}
 }
@@ -57,10 +70,10 @@ func TestRecordTurnsAPanicIntoInternal(t *testing.T) {
 func TestRecordHandsNowToWorkAndTimesIt(t *testing.T) {
 	clock := &FixedClock{At: t0}
 	var handed time.Time
-	e := Record(clock, inv, func(now time.Time) (cli.Summary, cli.Outcome) {
+	e := Record(clock, inv, func(now time.Time, _ func(cli.Summary)) cli.Outcome {
 		handed = now
 		clock.At = clock.At.Add(1500 * time.Millisecond)
-		return cli.Summary{Name: "help"}, cli.Done{}
+		return cli.Done{}
 	})
 	if !handed.Equal(t0) || !e.Started.Equal(t0) || e.Duration != 1500*time.Millisecond {
 		t.Errorf("work saw %v, Started %v, Duration %v; want %v, %v, 1.5s", handed, e.Started, e.Duration, t0, t0)

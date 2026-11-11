@@ -224,19 +224,23 @@ func declaredFor(declared map[string]string, ip, owner string) bool {
 	return false
 }
 
-// reads is whether ip.name reads the process's world: its clock, its
-// environment, its arguments and streams, its entropy, or the shared
-// source behind math/rand's top-level functions.
+// reads is whether ip.name reads the process's world: its clock and
+// timers, its environment, host and directories, its arguments and
+// streams, its entropy, the standard logger, or the shared source behind
+// math/rand's top-level functions.
 func reads(ip, name string) bool {
 	switch ip {
 	case "time":
-		return slices.Contains([]string{"Now", "Since", "Until"}, name)
+		return slices.Contains([]string{"Now", "Since", "Until", "After", "Tick", "Sleep", "NewTimer", "NewTicker", "AfterFunc"}, name)
 	case "os":
-		return slices.Contains([]string{"Getenv", "LookupEnv", "Environ", "Getwd", "Args", "Stdin", "Stdout", "Stderr"}, name)
+		return slices.Contains([]string{"Getenv", "LookupEnv", "Environ", "Getwd", "Args", "Stdin", "Stdout", "Stderr",
+			"Hostname", "UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir", "Executable"}, name)
 	case "crypto/rand":
-		return slices.Contains([]string{"Reader", "Read"}, name)
+		return slices.Contains([]string{"Reader", "Read", "Text"}, name)
 	case "fmt":
 		return slices.Contains([]string{"Print", "Printf", "Println"}, name)
+	case "log":
+		return true // the standard logger writes stderr, and log.Fatal* calls os.Exit
 	case "math/rand", "math/rand/v2":
 		return !slices.Contains([]string{"New", "NewSource", "NewPCG", "NewChaCha8", "NewZipf", "Rand", "Source", "Source64", "PCG", "ChaCha8", "Zipf"}, name)
 	}
@@ -377,6 +381,10 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"the program importing past root", "cmd/lit2/main.go", "package main\n\nimport _ \"example.com/m/internal/cli\"\n", program},
 		{"time.Now outside root", "internal/cli/cli.go", "package cli\n\nimport \"time\"\n\nvar At = time.Now()\n", ambient},
 		{"an aliased math/rand/v2 global", "internal/git/git.go", "package git\n\nimport r \"math/rand/v2\"\n\nvar N = r.IntN(9)\n", ambient},
+		{"crypto/rand.Text outside root", "internal/git/git.go", "package git\n\nimport \"crypto/rand\"\n\nvar S = rand.Text()\n", ambient},
+		{"a timer outside root", "internal/cli/cli.go", "package cli\n\nimport \"time\"\n\nfunc Wait() { time.Sleep(time.Second) }\n", ambient},
+		{"the standard logger outside root", "internal/cli/cli.go", "package cli\n\nimport \"log\"\n\nfunc Say() { log.Printf(\"hi\") }\n", ambient},
+		{"the host outside root", "internal/git/git.go", "package git\n\nimport \"os\"\n\nvar H, _ = os.Hostname()\n", ambient},
 		{"os.Exit outside cmd/lit2", "internal/root/exit.go", "package root\n\nimport \"os\"\n\nfunc init() { os.Exit(0) }\n", exits},
 		{"a §3 heading with no row", "design-docs/architecture.md", strings.Replace(design, "## 5.", "### 3.2 Event and intent\n\n## 5.", 1), missingRow},
 		{"a §5 step with no row", "design-docs/architecture.md", strings.Replace(design, "## 6.", "2. **Parse** the file.\n\n## 6.", 1), missingRow},

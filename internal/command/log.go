@@ -25,10 +25,17 @@ func NewLog(dir string) Sink { return commandLog{dir: dir} }
 
 type commandLog struct{ dir string }
 
-// Write removes the day files more than 30 days older than the event's day,
-// then appends the event's line in one O_APPEND write, so concurrent
-// invocations never interleave. Any failure is returned and the event is
-// then not in the log, which is what the caller reports.
+// Housekeeping is a write whose event is in the log and whose removal of
+// old day files failed: a fact of its own, not a lost record.
+type Housekeeping struct{ Err error }
+
+func (h Housekeeping) Error() string { return h.Err.Error() }
+
+// Write appends the event's line in one O_APPEND write, so concurrent
+// invocations never interleave, then removes the day files more than 30
+// days older than the event's day. The record is the job, so it comes
+// first: a failed removal is a Housekeeping, and any other failure means
+// the event is not in the log.
 func (l commandLog) Write(e Event) error {
 	line, err := encode(e)
 	if err != nil {
@@ -38,15 +45,18 @@ func (l commandLog) Write(e Event) error {
 		return err
 	}
 	day := e.Started.UTC().Truncate(24 * time.Hour)
-	if err := l.prune(day.Add(-retention)); err != nil {
-		return err
-	}
 	f, err := os.OpenFile(filepath.Join(l.dir, day.Format(time.DateOnly)+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	_, werr := f.Write(append(line, '\n'))
-	return errors.Join(werr, f.Close())
+	if err := errors.Join(werr, f.Close()); err != nil {
+		return err
+	}
+	if err := l.prune(day.Add(-retention)); err != nil {
+		return Housekeeping{Err: err}
+	}
+	return nil
 }
 
 // prune removes every day file dated before cutoff. A file another
@@ -90,21 +100,21 @@ func (u Unwritable) Write(Event) error { return u.Err }
 // nothing is a line with zeros and a run that never happened is no line
 // `[LAW:nothing-unseen]`.
 type line struct {
-	Event      string         `json:"event"`
-	TraceID    string         `json:"trace_id"`
-	Service    string         `json:"service"`
-	StartedAt  string         `json:"started_at"`
-	DurationMS float64        `json:"duration_ms"`
-	Outcome    string         `json:"outcome"`
-	Error      string         `json:"error,omitempty"`
-	Reason     string         `json:"reason,omitempty"`
-	Stack      string         `json:"stack,omitempty"`
-	ExitCode   int            `json:"exit_code"`
-	Version    string         `json:"version"`
-	Command    commandFacts   `json:"command"`
-	Counts     counts         `json:"counts"`
-	Place      map[string]any `json:"place"`
-	Agent      string         `json:"agent,omitempty"`
+	Event      string       `json:"event"`
+	TraceID    string       `json:"trace_id"`
+	Service    string       `json:"service"`
+	StartedAt  string       `json:"started_at"`
+	DurationMS float64      `json:"duration_ms"`
+	Outcome    string       `json:"outcome"`
+	Error      string       `json:"error,omitempty"`
+	Reason     string       `json:"reason,omitempty"`
+	Stack      string       `json:"stack,omitempty"`
+	ExitCode   int          `json:"exit_code"`
+	Version    string       `json:"version"`
+	Command    commandFacts `json:"command"`
+	Counts     counts       `json:"counts"`
+	Place      any          `json:"place"`
+	Agent      string       `json:"agent,omitempty"`
 }
 
 type commandFacts struct {
@@ -127,7 +137,7 @@ func encode(e Event) ([]byte, error) {
 		Version:    e.Version,
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
-		Place:      placeFacts(e.Place),
+		Place:      placeLine(e.Place),
 	}
 	switch o := e.Outcome.(type) {
 	case cli.Done:
@@ -150,31 +160,71 @@ func encode(e Event) ([]byte, error) {
 	return b, nil
 }
 
-func placeFacts(p Place) map[string]any {
+func placeLine(p Place) any {
 	switch p := p.(type) {
 	case InCheckout:
-		return map[string]any{"checkout": map[string]any{
-			"work_tree":  p.Checkout.WorkTree,
-			"git_dir":    p.Checkout.GitDir,
-			"common_dir": p.Checkout.CommonDir,
-			"writer":     writerFacts(p.Writer),
-		}}
+		c := p.Checkout
+		return inCheckoutLine{checkoutLine{c.WorkTree, c.GitDir, c.CommonDir, writerLine(p.Writer)}}
 	case NoCheckout:
-		return map[string]any{"outside": map[string]any{"dir": p.Dir}}
+		return noCheckoutLine{dirLine(p)}
 	case Unlocatable:
-		return map[string]any{"unlocatable": map[string]any{"dir": p.Dir, "error": p.Err.Error()}}
+		return unlocatableLine{dirErrorLine{p.Dir, p.Err.Error()}}
 	}
 	panic(fmt.Sprintf("command: %T is not a Place", p))
 }
 
-func writerFacts(w Writer) map[string]any {
+func writerLine(w Writer) any {
 	switch w := w.(type) {
 	case Minted:
-		return map[string]any{"id": w.ID.String()}
+		return mintedLine{w.ID.String()}
 	case Unminted:
-		return map[string]any{"unminted": map[string]any{"path": w.Path}}
+		return unmintedLine{pathLine(w)}
 	case Unreadable:
-		return map[string]any{"unreadable": map[string]any{"path": w.Path, "error": w.Err.Error()}}
+		return unreadableLine{pathErrorLine{w.Path, w.Err.Error()}}
 	}
 	panic(fmt.Sprintf("command: %T is not a Writer", w))
 }
+
+// The place and the writer as the line spells them: one struct per variant,
+// keyed by the variant's wire name, so the shape has one typed source.
+type (
+	inCheckoutLine struct {
+		Checkout checkoutLine `json:"checkout"`
+	}
+	noCheckoutLine struct {
+		Outside dirLine `json:"outside"`
+	}
+	unlocatableLine struct {
+		Unlocatable dirErrorLine `json:"unlocatable"`
+	}
+	mintedLine struct {
+		ID string `json:"id"`
+	}
+	unmintedLine struct {
+		Unminted pathLine `json:"unminted"`
+	}
+	unreadableLine struct {
+		Unreadable pathErrorLine `json:"unreadable"`
+	}
+
+	checkoutLine struct {
+		WorkTree  string `json:"work_tree"`
+		GitDir    string `json:"git_dir"`
+		CommonDir string `json:"common_dir"`
+		Writer    any    `json:"writer"`
+	}
+	dirLine struct {
+		Dir string `json:"dir"`
+	}
+	dirErrorLine struct {
+		Dir   string `json:"dir"`
+		Error string `json:"error"`
+	}
+	pathLine struct {
+		Path string `json:"path"`
+	}
+	pathErrorLine struct {
+		Path  string `json:"path"`
+		Error string `json:"error"`
+	}
+)

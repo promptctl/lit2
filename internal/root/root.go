@@ -55,16 +55,18 @@ func Run(p Process, args []string) int {
 		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
 	}
 	inv := command.Invocation{Trace: trace, Version: p.Version, Place: p.Place, Agent: p.Agent}
-	event := command.Record(p.Clock, inv, func(time.Time) (cli.Summary, cli.Outcome) {
+	event := command.Record(p.Clock, inv, func(_ time.Time, asked func(cli.Summary)) cli.Outcome {
 		cmd, err := cli.Parse(cli.Verbs(), cli.Admin(), args)
 		if err != nil {
-			return cli.Summary{Name: cli.Unparsed}, failed(err)
+			asked(cli.Summary{Name: cli.Unparsed})
+			return failed(err)
 		}
-		return cli.Summarize(cmd), dispatch(p, cmd)
+		asked(cli.Summarize(cmd))
+		return dispatch(p, cmd)
 	})
 	stderr := cli.Report(event.Outcome)
 	if err := p.Commands.Write(event); err != nil {
-		stderr += fmt.Sprintf("lit2: command event not recorded: %v\n", err)
+		stderr += logFailure(err)
 	}
 	// [LAW:no-silent-failure] exception: stderr is where failures are said;
 	// when writing to it fails there is no channel left but the exit status,
@@ -77,8 +79,7 @@ func Run(p Process, args []string) int {
 func dispatch(p Process, cmd cli.Command) cli.Outcome {
 	switch cmd.(type) {
 	case cli.Help:
-		_, err := io.WriteString(p.Out, cli.HelpText(cli.Verbs(), cli.Admin(), address.FieldTable{}))
-		return outcome(err)
+		return written(io.WriteString(p.Out, cli.HelpText(cli.Verbs(), cli.Admin(), address.FieldTable{})))
 	case cli.Get:
 		return notBuilt("get", "lit-bootstrap-1f9.7gj")
 	case cli.Set:
@@ -95,22 +96,41 @@ func dispatch(p Process, cmd cli.Command) cli.Outcome {
 	panic(fmt.Sprintf("root: %T is not a Command", cmd))
 }
 
-// outcome is a body's error as an outcome: none is Done, a Failure is its
-// own class, and any other error is a lit2 bug, reported as one
-// `[LAW:no-silent-failure]`.
-func outcome(err error) cli.Outcome {
-	if err == nil {
-		return cli.Done{}
+// written is the outcome of writing the answer to stdout. A failed write is
+// the environment's, stdout closed or full, never a lit2 bug.
+func written(_ int, err error) cli.Outcome {
+	if err != nil {
+		return cli.Failed{Failure: output{err: err}}
 	}
-	return failed(err)
+	return cli.Done{}
 }
 
+// output is an answer that could not be written to stdout.
+type output struct{ err error }
+
+func (o output) Error() string     { return "writing the answer to stdout: " + o.err.Error() }
+func (output) Class() reason.Class { return reason.ClassEnvironment }
+func (output) Reason() string      { return "output" }
+
+// failed is an error as an outcome: a Failure is its own class, and any
+// other error is a lit2 bug, reported as one `[LAW:no-silent-failure]`.
 func failed(err error) cli.Outcome {
 	var f reason.Failure
 	if errors.As(err, &f) {
 		return cli.Failed{Failure: f}
 	}
 	return cli.Failed{Failure: command.Internal{Err: err}}
+}
+
+// logFailure is what a failed command log write says on stderr: an event
+// whose old day files could not be removed is in the log, and any other
+// failure means it is not.
+func logFailure(err error) string {
+	var h command.Housekeeping
+	if errors.As(err, &h) {
+		return fmt.Sprintf("lit2: command log: pruning failed: %v\n", h.Err)
+	}
+	return fmt.Sprintf("lit2: command event not recorded: %v\n", err)
 }
 
 // notBuilt ends a row whose body is not in this binary yet (D14). Once the

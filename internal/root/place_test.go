@@ -1,6 +1,8 @@
 package root
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,5 +85,38 @@ func TestAnUnwritableLogIsSaidAndTheStatusStands(t *testing.T) {
 	status := Run(twin.Process, []string{"frobnicate"})
 	if status != 64 || !strings.Contains(twin.Err.String(), "error (reason=unknown_verb)") || strings.Count(twin.Err.String(), "not recorded") != 2 {
 		t.Errorf("frobnicate with an unwritable log: status %d, stderr %q", status, twin.Err)
+	}
+}
+
+func TestAnUnremovableOldDayFileStillLeavesTheRecord(t *testing.T) {
+	dir := t.TempDir()
+	// a directory with something in it is a day file os.Remove cannot remove
+	if err := os.MkdirAll(filepath.Join(dir, "2026-09-01.jsonl", "held"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	twin := NewTwin()
+	twin.Process.Commands = command.NewLog(dir)
+	if status := Run(twin.Process, []string{"--help"}); status != 0 || !strings.HasPrefix(twin.Err.String(), "lit2: command log: pruning failed: ") {
+		t.Errorf("--help with an unremovable old day file: status %d, stderr %q", status, twin.Err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "2026-11-11.jsonl")); err != nil || strings.Count(string(b), "\n") != 1 {
+		t.Errorf("the log holds %q, %v; want the one new line", b, err)
+	}
+}
+
+func TestARelativeXDGStateHomeCountsAsUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", "relative-state")
+	twin := NewTwin()
+	twin.Process.Commands = commandLog()
+	if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.Len() != 0 {
+		t.Fatalf("--help: status %d, stderr %q", status, twin.Err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "state", "lit", "commands", "2026-11-11.jsonl")); err != nil {
+		t.Errorf("the event is not under ~/.local/state: %v", err)
+	}
+	if _, err := os.Stat("relative-state"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a relative XDG_STATE_HOME was used: %v", err)
 	}
 }

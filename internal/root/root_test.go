@@ -73,12 +73,19 @@ type brokenPipe struct{}
 
 func (brokenPipe) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
 
-func TestAnErrorThatIsNotAFailureIsInternal(t *testing.T) {
+func TestAnAnswerStdoutRefusesIsTheEnvironments(t *testing.T) {
 	twin := NewTwin()
 	twin.Process.Out = brokenPipe{}
 	status, e := run(t, twin, "--help")
-	if status != 70 || reasonOf(e) != "internal" || !strings.Contains(twin.Err.String(), "broken pipe") {
+	if status != 78 || reasonOf(e) != "output" || !strings.Contains(twin.Err.String(), "broken pipe") {
 		t.Errorf("--help into a broken pipe: status %d, stderr %q", status, twin.Err)
+	}
+}
+
+func TestAnErrorThatIsNotAFailureIsInternal(t *testing.T) {
+	o := failed(errors.New("an unclassified error"))
+	if f, ok := o.(cli.Failed); !ok || cli.ExitCode(o) != 70 || f.Failure.Reason() != "internal" {
+		t.Errorf("an unclassified error is %#v; want internal, exit 70", o)
 	}
 }
 

@@ -79,13 +79,14 @@ func writer(path string) command.Writer {
 }
 
 // commandLog is this machine's command log, $XDG_STATE_HOME/lit/commands,
-// ~/.local/state when XDG_STATE_HOME is unset (D12).
+// ~/.local/state when XDG_STATE_HOME is unset (D12). The XDG spec makes a
+// relative value invalid, to be ignored, so one counts as unset.
 func commandLog() command.Sink {
 	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" {
+	if !filepath.IsAbs(state) {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return command.Unwritable{Err: fmt.Errorf("no directory for the command log: XDG_STATE_HOME is unset and %w", err)}
+			return command.Unwritable{Err: fmt.Errorf("no directory for the command log: XDG_STATE_HOME is unset or relative and %w", err)}
 		}
 		state = filepath.Join(home, ".local", "state")
 	}
