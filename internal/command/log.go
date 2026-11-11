@@ -114,6 +114,7 @@ type line struct {
 	Version    string       `json:"version"`
 	Command    commandFacts `json:"command"`
 	Counts     counts       `json:"counts"`
+	Store      *storeLine   `json:"store,omitempty"`
 	Place      any          `json:"place"`
 	Agent      string       `json:"agent,omitempty"`
 }
@@ -138,6 +139,7 @@ func encode(e Event) ([]byte, error) {
 		Version:    e.Version,
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
+		Store:      storeBlock(e.Store),
 		Place:      placeLine(e.Place),
 	}
 	switch o := e.Outcome.(type) {

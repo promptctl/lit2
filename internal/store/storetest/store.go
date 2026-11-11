@@ -1,0 +1,421 @@
+// Package storetest is the behavioral suite every substrate of the store
+// passes, and the contract suite of its Files port. Its assertions speak of
+// logs, segments, publications, refs and snapshots (architecture.md
+// §3.16), never of file layouts or bytes beyond git's object ids.
+package storetest
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"math/rand/v2"
+	"slices"
+	"sync"
+	"testing"
+
+	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/store"
+)
+
+// Entropy is seeded entropy safe for concurrent reads, for a substrate's
+// ports: logs created at once by many appenders each read an id.
+func Entropy(seed byte) io.Reader { return &locked{r: rand.NewChaCha8([32]byte{seed})} }
+
+type locked struct {
+	mu sync.Mutex
+	r  io.Reader
+}
+
+func (l *locked) Read(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.r.Read(b)
+}
+
+// Fresh is a substrate: the ports of a fresh common dir, empty, each call.
+type Fresh func(*testing.T) store.Ports
+
+var (
+	a = store.CheckoutID{0xa}
+	b = store.CheckoutID{0xb}
+	// tag is the fold version the suite's snapshots are swapped under.
+	tag = store.FoldTag("fold v1")
+)
+
+func batch(t *testing.T, rs ...string) store.Batch {
+	t.Helper()
+	records := make([]store.Record, len(rs))
+	for i, r := range rs {
+		records[i] = store.Record(r)
+	}
+	bt, err := store.NewBatch(records...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bt
+}
+
+func texts(bt store.Batch) []string {
+	var ts []string
+	for _, r := range bt.Records() {
+		ts = append(ts, string(r))
+	}
+	return ts
+}
+
+func appendAll(t *testing.T, s *store.Store, bs ...store.Batch) []store.Appended {
+	t.Helper()
+	out := make([]store.Appended, len(bs))
+	for i, bt := range bs {
+		var err error
+		if out[i], err = s.Append(bt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return out
+}
+
+func numbered(t *testing.T, n int, prefix string) []store.Batch {
+	t.Helper()
+	bs := make([]store.Batch, n)
+	for i := range bs {
+		bs[i] = batch(t, fmt.Sprintf("%s-%04d", prefix, i))
+	}
+	return bs
+}
+
+func heads(t *testing.T, s *store.Store) store.Heads {
+	t.Helper()
+	h, err := s.Heads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Unreadable) != 0 {
+		t.Errorf("heads hold unreadable streams: %v", h.Unreadable)
+	}
+	return h
+}
+
+// stream is the stream of ref in h.
+func stream(t *testing.T, h store.Heads, ref store.Ref) store.Stream {
+	t.Helper()
+	for _, s := range h.Streams {
+		if s.Ref == ref {
+			return s
+		}
+	}
+	t.Fatalf("no stream of %s in %v", ref.Name(), h.Streams)
+	return store.Stream{}
+}
+
+// whole reads ref's stream from 0 and returns its scan.
+func whole(t *testing.T, s *store.Store, ref store.Ref) store.Scan {
+	t.Helper()
+	scan, err := s.Read(store.Range{Stream: stream(t, heads(t, s), ref), From: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scan
+}
+
+// read is every record of a scan's frames, in order.
+func read(scan store.Scan) []string {
+	var ts []string
+	for _, f := range scan.Frames {
+		ts = append(ts, texts(f.Batch)...)
+	}
+	return ts
+}
+
+func all(bs []store.Batch) []string {
+	var ts []string
+	for _, bt := range bs {
+		ts = append(ts, texts(bt)...)
+	}
+	return ts
+}
+
+func publishOwn(t *testing.T, s *store.Store) store.Published {
+	t.Helper()
+	p, err := s.SealOwn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Publish(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// segments is the publication a commit holds, as its tree's entries.
+func segments(t *testing.T, objects git.Objects, commit git.ObjectID) []git.Entry {
+	t.Helper()
+	c, err := objects.Commit(commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	es, err := objects.Tree(c.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return es
+}
+
+func plan(t *testing.T, s *store.Store) store.Resume {
+	t.Helper()
+	file, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store.Plan(tag, heads(t, s), file)
+}
+
+// swap swaps a snapshot that consumed every stream to its scan's end.
+func swap(t *testing.T, s *store.Store, payload string) {
+	t.Helper()
+	var marks []store.Mark
+	for _, st := range heads(t, s).Streams {
+		scan, err := s.Read(store.Range{Stream: st, From: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		marks = append(marks, store.Mark{Ref: st.Ref, Upto: store.Position{Log: st.Until.Log, At: scan.End}})
+	}
+	if _, err := s.Swap(tag, marks, []byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Store holds fresh to the store's behavior.
+func Store(t *testing.T, fresh Fresh) {
+	t.Run("a fresh common dir reads zero refs, zero logs and no stream", func(t *testing.T) {
+		t.Parallel()
+		s := store.Open(a, fresh(t), store.DefaultSegmentBound)
+		h := heads(t, s)
+		if h.RefsRead != 0 || h.LogsRead != 0 || len(h.Streams) != 0 {
+			t.Errorf("a fresh store's heads are %+v; want zero refs, zero logs, no stream", h)
+		}
+		if _, err := s.SealOwn(); !errors.As(err, new(store.NotFound)) {
+			t.Errorf("sealing with no log failed with %v; want NotFound", err)
+		}
+	})
+
+	t.Run("appended batches read back in order, each whole, at increasing offsets", func(t *testing.T) {
+		t.Parallel()
+		s := store.Open(a, fresh(t), store.DefaultSegmentBound)
+		bs := []store.Batch{batch(t, "one"), batch(t, "two", "three"), batch(t, "four", "five", "six")}
+		appended := appendAll(t, s, bs...)
+		if appended[0].Log != store.Created || appended[1].Log != store.Existing || appended[2].Records != 3 {
+			t.Errorf("the appends were %+v; want the first to create the log", appended)
+		}
+		scan := whole(t, s, store.WriterRef{Checkout: a})
+		if len(scan.Frames) != len(bs) || len(scan.Torn) != 0 || scan.End != scan.Until || scan.End != appended[2].Until.At {
+			t.Fatalf("the log reads %+v; want %d whole frames ending where the last append ended", scan, len(bs))
+		}
+		for i, f := range scan.Frames {
+			if !slices.Equal(texts(f.Batch), texts(bs[i])) || i > 0 && f.At <= scan.Frames[i-1].At {
+				t.Errorf("frame %d is %v at %d; want %v after the frame before it", i, texts(f.Batch), f.At, texts(bs[i]))
+			}
+		}
+	})
+
+	t.Run("a partial frame is not read or consumed, and is one torn span once a frame follows it", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		appendAll(t, s, batch(t, "before"))
+		partial := store.Encode(batch(t, "lost in a crash"))
+		partial = partial[:len(partial)/2]
+		if _, err := p.Files.Append(store.LogPath(a), partial); err != nil {
+			t.Fatal(err)
+		}
+		scan := whole(t, s, store.WriterRef{Checkout: a})
+		if !slices.Equal(read(scan), []string{"before"}) || len(scan.Torn) != 0 || uint64(scan.Until-scan.End) != uint64(len(partial)) {
+			t.Errorf("with a partial frame the log reads %+v; want the whole frame and the rest an incomplete tail", scan)
+		}
+		appendAll(t, s, batch(t, "after"))
+		scan = whole(t, s, store.WriterRef{Checkout: a})
+		if !slices.Equal(read(scan), []string{"before", "after"}) || len(scan.Torn) != 1 || scan.Torn[0].Len() != uint64(len(partial)) || scan.End != scan.Until {
+			t.Errorf("after one more append the log reads %+v; want both records and one torn span of %d bytes", scan, len(partial))
+		}
+	})
+
+	t.Run("many appenders to one log lose no record", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		var want []string
+		var wg sync.WaitGroup
+		for g := range 8 {
+			bs := numbered(t, 25, fmt.Sprintf("g%d", g))
+			want = append(want, all(bs)...)
+			wg.Go(func() {
+				s := store.Open(a, p, store.DefaultSegmentBound)
+				for _, bt := range bs {
+					if _, err := s.Append(bt); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			})
+		}
+		wg.Wait()
+		scan := whole(t, store.Open(a, p, store.DefaultSegmentBound), store.WriterRef{Checkout: a})
+		got := read(scan)
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) || len(scan.Torn) != 0 {
+			t.Errorf("200 concurrent appends read back %d records and %d torn spans; want each record once, none torn", len(got), len(scan.Torn))
+		}
+	})
+
+	t.Run("a thousand appends publish as one commit whose stream reads back the log", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		bs := numbered(t, 1000, "event")
+		appendAll(t, s, bs...)
+		out := publishOwn(t, s)
+		if out.Move != (store.RefCreated{}) || out.Kept != 0 || out.Sealed == 0 || len(out.New) != out.Sealed+2 {
+			t.Errorf("the publish was %+v; want a created ref and only its segments, one tree and one commit new", out)
+		}
+		// a clone that fetched lit's repository and holds no log of a
+		other := fresh(t)
+		other.Objects, other.Refs = p.Objects, p.Refs
+		reader := store.Open(b, other, store.DefaultSegmentBound)
+		scan := whole(t, reader, store.WriterRef{Checkout: a})
+		if !slices.Equal(read(scan), all(bs)) || len(scan.Torn) != 0 || scan.End != scan.Until {
+			t.Errorf("the publication reads back %d records; want the log's %d", len(read(scan)), len(bs))
+		}
+	})
+
+	t.Run("a second publish sends only the open segment's delta, and an idle one nothing", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, 256)
+		appendAll(t, s, numbered(t, 100, "first")...)
+		first := publishOwn(t, s)
+		before := segments(t, p.Objects, first.Commit)
+		appendAll(t, s, numbered(t, 10, "more")...)
+		second := publishOwn(t, s)
+		after := segments(t, p.Objects, second.Commit)
+		if second.Kept != len(before)-1 || len(second.New) != second.Sealed+2 || second.Move != (store.RefReplaced{Previous: first.Commit}) {
+			t.Errorf("the second publish was %+v over %d segments; want the %d full ones kept, the rest, a tree and a commit new", second, len(before), len(before)-1)
+		}
+		if !slices.Equal(after[:len(before)-1], before[:len(before)-1]) {
+			t.Errorf("the full segments changed: %v, then %v", before, after)
+		}
+		idle := publishOwn(t, s)
+		if idle.Move != (store.RefUnchanged{}) || len(idle.New) != 0 || idle.NewBytes != 0 || idle.Commit != second.Commit {
+			t.Errorf("an idle publish was %+v; want the ref unchanged and nothing new", idle)
+		}
+	})
+
+	t.Run("an inbox publication reads like a writer's, and its rewrite refolds", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		inbox := store.InboxRef{Inbox: store.InboxID{1}}
+		publish := func(log store.LogID, records ...string) store.Published {
+			t.Helper()
+			pub, err := store.NewPublication(inbox, log, []store.Segment{store.Fresh{Start: 0, Bytes: store.Encode(batch(t, records...))}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := s.Publish(pub)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return out
+		}
+		filed := publish(store.LogID{1}, "filed", "remotely")
+		if got := read(whole(t, s, inbox)); filed.Move != (store.RefCreated{}) || !slices.Equal(got, []string{"filed", "remotely"}) {
+			t.Errorf("the inbox reads %v after %+v; want its two records", got, filed)
+		}
+		swap(t, s, "consumed the inbox")
+		rewrite := publish(store.LogID{2}, "filed")
+		if rewrite.Move != (store.RefReplaced{Previous: filed.Commit}) {
+			t.Errorf("the rewrite's publish was %+v; want it to replace the ref", rewrite)
+		}
+		if base := plan(t, s).Base; base != (store.Genesis{Why: store.Rewritten{Ref: inbox}}) {
+			t.Errorf("after a rewrite the plan starts from %#v; want genesis, rewritten", base)
+		}
+	})
+
+	t.Run("two checkouts over one common dir write their own logs and refs and read each other", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		sa, sb := store.Open(a, p, store.DefaultSegmentBound), store.Open(b, p, store.DefaultSegmentBound)
+		appendAll(t, sa, batch(t, "from a"))
+		appendAll(t, sb, batch(t, "from b"))
+		for _, s := range []*store.Store{sa, sb} {
+			h := heads(t, s)
+			if h.LogsRead != 2 || len(h.Streams) != 2 ||
+				!slices.Equal(read(whole(t, s, store.WriterRef{Checkout: a})), []string{"from a"}) ||
+				!slices.Equal(read(whole(t, s, store.WriterRef{Checkout: b})), []string{"from b"}) {
+				t.Errorf("a checkout sees %+v; want both logs, each with its own record", h)
+			}
+		}
+		publishOwn(t, sa)
+		publishOwn(t, sb)
+		refs, _, err := p.Refs.List("refs/lit/")
+		if err != nil || len(refs) != 2 || refs[0].Name != (store.WriterRef{Checkout: a}).Name() || refs[1].Name != (store.WriterRef{Checkout: b}).Name() {
+			t.Errorf("after both publish the refs are %v, %v; want one per checkout", refs, err)
+		}
+		if h := heads(t, sa); h.RefsRead != 2 || len(h.Streams) != 2 {
+			t.Errorf("after both publish a checkout sees %+v; want two refs read and two streams, each from its log", h)
+		}
+	})
+
+	t.Run("a snapshot is resumed when the heads match it and extended when they grew", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		if base := plan(t, s).Base; base != (store.Genesis{Why: store.Absent{}}) {
+			t.Errorf("with no snapshot the plan starts from %#v; want genesis, absent", base)
+		}
+		appendAll(t, s, batch(t, "one"))
+		swap(t, s, "state after one")
+		// a second open, with no write between: a hit
+		again := store.Open(a, p, store.DefaultSegmentBound)
+		hit := plan(t, again)
+		if !equalBase(hit.Base, store.FromSaved{Payload: []byte("state after one")}) || len(hit.Delta) != 0 {
+			t.Errorf("a second open with no write plans %#v; want the snapshot resumed with nothing to read", hit)
+		}
+		mark := heads(t, again).Streams[0].Until.At
+		appendAll(t, again, batch(t, "two"))
+		extended := plan(t, again)
+		if !equalBase(extended.Base, store.FromSaved{Payload: []byte("state after one")}) || len(extended.Delta) != 1 || extended.Delta[0].From != mark {
+			t.Fatalf("after an append the plan is %#v; want the snapshot extended from %d", extended, mark)
+		}
+		scan, err := again.Read(extended.Delta[0])
+		if err != nil || !slices.Equal(read(scan), []string{"two"}) {
+			t.Errorf("the delta reads %v, %v; want only the new record", read(scan), err)
+		}
+		if base := store.Plan(store.FoldTag("fold v2"), heads(t, again), mustSnapshot(t, again)).Base; base != (store.Genesis{Why: store.TagChanged{}}) {
+			t.Errorf("under another fold version the plan starts from %#v; want genesis, tag changed", base)
+		}
+		if err := p.Files.Replace(store.SnapshotPath, []byte("not a snapshot")); err != nil {
+			t.Fatal(err)
+		}
+		genesis, ok := plan(t, again).Base.(store.Genesis)
+		if _, torn := genesis.Why.(store.Torn); !ok || !torn {
+			t.Errorf("over a corrupted snapshot the plan starts from %#v; want genesis, torn", genesis)
+		}
+	})
+}
+
+func mustSnapshot(t *testing.T, s *store.Store) store.SnapshotFile {
+	t.Helper()
+	f, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func equalBase(got store.Base, want store.FromSaved) bool {
+	f, ok := got.(store.FromSaved)
+	return ok && bytes.Equal(f.Payload, want.Payload)
+}

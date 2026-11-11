@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/signal"
@@ -27,11 +28,13 @@ import (
 // as usual. Nothing reads the channel: delivery to a full one is dropped.
 func Main(args []string) int {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+	place := here()
 	return Run(Process{
 		Clock:    systemClock{},
 		Entropy:  rand.Reader,
 		Agent:    events.AgentFrom(os.Getenv("LIT_AGENT")),
-		Place:    here(),
+		Place:    place,
+		Store:    opening(place, rand.Reader),
 		Version:  version(),
 		Commands: commandLog(),
 		In:       os.Stdin,
@@ -87,6 +90,38 @@ func writer(path string) command.Writer {
 		return command.Unreadable{Path: path, Err: err}
 	}
 	return command.Minted{ID: id}
+}
+
+// opening opens the store of a minted checkout, the one place a store is
+// opened: over its clone's common dir on disk, beside the code
+// repository's object format, read once. Any other place has no store and
+// says why.
+func opening(p command.Place, entropy io.Reader) Opening {
+	switch p := p.(type) {
+	case command.InCheckout:
+		return openingIn(p, entropy)
+	case command.NoCheckout:
+		return Unopened{Why: fmt.Errorf("no git checkout at or above %s", p.Dir)}
+	case command.Unlocatable:
+		return Unopened{Why: p.Err}
+	}
+	panic(fmt.Sprintf("root: %T is not a Place", p))
+}
+
+func openingIn(in command.InCheckout, entropy io.Reader) Opening {
+	switch w := in.Writer.(type) {
+	case command.Minted:
+		format, err := git.ReadObjectFormat(in.Checkout.CommonDir)
+		if err != nil {
+			return Unopened{Why: fmt.Errorf("reading the object format: %w", err)}
+		}
+		return Opened{Store: store.Open(w.ID, store.DiskPorts(in.Checkout, entropy), store.DefaultSegmentBound), Format: format}
+	case command.Unminted:
+		return Unopened{Why: fmt.Errorf("this checkout has no id at %s: lit2 admin init mints it", w.Path)}
+	case command.Unreadable:
+		return Unopened{Why: fmt.Errorf("reading the checkout id: %w", w.Err)}
+	}
+	panic(fmt.Sprintf("root: %T is not a Writer", in.Writer))
 }
 
 // commandLog is this machine's command log, $XDG_STATE_HOME/lit/commands,

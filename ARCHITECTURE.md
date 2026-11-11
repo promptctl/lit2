@@ -44,6 +44,8 @@ library and the one unit that may import it. A unit that takes a module
 names it here first.
 
 ```dependencies
+github.com/go-git/go-git/v5 git
+github.com/go-git/go-billy/v5 git
 ```
 
 ## Concerns
@@ -73,7 +75,7 @@ row; the architecture test fails on one without.
 | §3.18 Capability | `verbs`, `fold` | the capability verdict at the one enforcer; roles from the folded policy |
 | §3.19 Tier and envelope | `events`, `verbs` | the envelope and suite in events; prose sealed in verbs, so no layer below sees it |
 | §3.20 Verification | `fold`, `store` | one fold rule via the suite in events; run by store at receive |
-| §5.1 Open | `store` | ref heads, the open log and the snapshot read |
+| §5.1 Open | `store` | ref heads, every open log under the common dir and the snapshot read |
 | §5.2 Parse | `config` | the workspace file into the schema value |
 | §5.3 Fold | `fold` | events newer than the snapshot, verified |
 | §5.4 Address | `address` | paths into typed addresses; selectors and globs expanded once |
@@ -100,7 +102,10 @@ The decisions the layout needed and the design documents did not make, from
 the skeleton ticket's plan (lit-bootstrap-1f9.438).
 
 - **D1 Module path** `github.com/promptctl/lit2`: v1's org, the binary's name.
-- **D2 Go and tooling.** `go 1.26`; no third-party module linked. Tests are
+- **D2 Go and tooling.** `go 1.26`; the one third-party module linked is
+  go-git, with its go-billy filesystem, in `git` alone, for lit's objects
+  and refs (architecture.md decision B); none of its transport packages is
+  imported. Tests are
   the standard `testing` package. Lint is golangci-lint v2 as a `tool`
   directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums

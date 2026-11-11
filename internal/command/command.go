@@ -45,12 +45,13 @@ type Invocation struct {
 }
 
 // Event is the command event: the invocation, what was asked, when it
-// started, how long it took and how it ended.
+// started, how long it took, what its store steps did, and how it ended.
 type Event struct {
 	Invocation
 	Command  cli.Summary
 	Started  time.Time
 	Duration time.Duration
+	Store    StoreFacts
 	Outcome  cli.Outcome
 }
 
@@ -122,12 +123,14 @@ func (Internal) Reason() string { return "internal" }
 // says otherwise through asked, as soon as it knows, before its body runs,
 // so the event keeps the last summary given even when the body panics
 // `[LAW:nothing-unseen]`; the panic becomes an Internal outcome carrying
-// its value and stack.
-func Record(c Clock, inv Invocation, work func(now time.Time, asked func(cli.Summary)) cli.Outcome) Event {
+// its value and stack. Each store step's result goes on stored as the step
+// returns it, so the facts of the steps that ran survive a panic too.
+func Record(c Clock, inv Invocation, work func(now time.Time, asked func(cli.Summary), stored *StoreFacts) cli.Outcome) Event {
 	started := c.Now()
 	summary := cli.Summary{Name: cli.Unparsed}
-	outcome := recovered(func() cli.Outcome { return work(started, func(s cli.Summary) { summary = s }) })
-	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Outcome: outcome}
+	var facts StoreFacts
+	outcome := recovered(func() cli.Outcome { return work(started, func(s cli.Summary) { summary = s }, &facts) })
+	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Outcome: outcome}
 }
 
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {

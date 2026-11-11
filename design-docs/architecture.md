@@ -488,9 +488,10 @@ values `[LAW:dataflow-not-control-flow]`. Steps 2 through 5 are pure functions
 of (events, clock, argv, writer); the rest is the hearth
 `[LAW:effects-at-boundaries]`.
 
-1. **Open.** Read every writer ref head and this checkout's open log; load
-   the cache snapshot keyed by `(fold-version, ref heads, log length)`. A
-   miss or a torn snapshot is one refold; no lock.
+1. **Open.** Read every writer ref head and every open log under the
+   common dir, this checkout's and its sibling worktrees'; load the cache
+   snapshot keyed by `(fold-version, ref heads, log lengths)`. A miss or a
+   torn snapshot is one refold; no lock.
 2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.15) into the
    schema value.
 3. **Fold** the events newer than the snapshot, from the sealed segments

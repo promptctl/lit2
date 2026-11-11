@@ -1,0 +1,249 @@
+package store
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"maps"
+	"os"
+	"path"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+)
+
+// Path names a file under the store's root, slash-separated. Only the
+// store's layout builds one.
+type Path string
+
+// Files appends to and atomically replaces plain files under the store's
+// root. It is the port every local byte the store keeps goes through.
+type Files interface {
+	// Append writes b at the end of the file in one write on an O_APPEND
+	// descriptor, then fsyncs, and returns the file's offset after it; so
+	// concurrent appends land whole with no lock. A missing file is
+	// NotFound.
+	Append(p Path, b []byte) (end uint64, err error)
+	// CreateOnce creates the file holding b unless it exists: b is written
+	// to a temporary file linked into place, so exactly one creation wins
+	// and the file is never seen partly written.
+	CreateOnce(p Path, b []byte) (LogOpened, error)
+	// ReadAt reads up to n bytes at off, fewer at the end of the file.
+	ReadAt(p Path, off, n uint64) ([]byte, error)
+	Size(p Path) (uint64, error)
+	// Replace makes the file hold b by renaming a temporary file over it,
+	// so a reader sees the old bytes or the new ones whole.
+	Replace(p Path, b []byte) error
+	// List is the files directly in dir, sorted; a missing dir holds none.
+	List(dir Path) ([]Path, error)
+}
+
+// LogOpened says whether an open found the file there or created it.
+type LogOpened uint8
+
+// The two answers of CreateOnce.
+const (
+	Existing LogOpened = iota + 1
+	Created
+)
+
+// NotFound is a file that does not exist.
+type NotFound struct{ Path Path }
+
+func (n NotFound) Error() string { return fmt.Sprintf("%s does not exist in the store", n.Path) }
+
+// OSFiles is Files on disk, under the directory root.
+type OSFiles struct{ root string }
+
+// FilesAt is the store's files under root, which need not exist yet.
+func FilesAt(root string) OSFiles { return OSFiles{root: root} }
+
+func (o OSFiles) file(p Path) string { return filepath.Join(o.root, filepath.FromSlash(string(p))) }
+
+// missing is err as NotFound when it says the file does not exist.
+func missing(p Path, err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return NotFound{Path: p}
+	}
+	return err
+}
+
+func (o OSFiles) Append(p Path, b []byte) (end uint64, err error) {
+	f, err := os.OpenFile(o.file(p), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return 0, missing(p, err)
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	if _, err := f.Write(b); err != nil {
+		return 0, err
+	}
+	// a printed echo must survive a power loss, so the append is not done
+	// until it is on disk (the store's decision 11)
+	if err := f.Sync(); err != nil {
+		return 0, err
+	}
+	at, err := f.Seek(0, io.SeekCurrent)
+	return uint64(at), err
+}
+
+func (o OSFiles) CreateOnce(p Path, b []byte) (opened LogOpened, err error) {
+	dir := filepath.Dir(o.file(p))
+	tmp, err := o.temp(dir, b)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { err = errors.Join(err, os.Remove(tmp)) }()
+	err = os.Link(tmp, o.file(p))
+	if errors.Is(err, fs.ErrExist) {
+		return Existing, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	// the new name must survive a power loss as the appends to it will
+	return Created, syncDir(dir)
+}
+
+func syncDir(dir string) (err error) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, d.Close()) }()
+	return d.Sync()
+}
+
+// temp writes b to a new temporary file in dir, creating dir, and returns
+// its path. Its name starts with ., which List never reports.
+func (o OSFiles) temp(dir string, b []byte) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, ".tmp-")
+	if err != nil {
+		return "", err
+	}
+	_, werr := f.Write(b)
+	if err := errors.Join(werr, f.Close()); err != nil {
+		return "", errors.Join(err, os.Remove(f.Name()))
+	}
+	return f.Name(), nil
+}
+
+func (o OSFiles) ReadAt(p Path, off, n uint64) (b []byte, err error) {
+	f, err := os.Open(o.file(p))
+	if err != nil {
+		return nil, missing(p, err)
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	return io.ReadAll(io.NewSectionReader(f, int64(off), int64(n)))
+}
+
+func (o OSFiles) Size(p Path) (uint64, error) {
+	info, err := os.Stat(o.file(p))
+	if err != nil {
+		return 0, missing(p, err)
+	}
+	return uint64(info.Size()), nil
+}
+
+func (o OSFiles) Replace(p Path, b []byte) error {
+	tmp, err := o.temp(filepath.Dir(o.file(p)), b)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, o.file(p)); err != nil {
+		return errors.Join(err, os.Remove(tmp))
+	}
+	return nil
+}
+
+func (o OSFiles) List(dir Path) ([]Path, error) {
+	entries, err := os.ReadDir(o.file(dir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return []Path{}, nil // nothing is created by a read: no directory yet holds no file
+	}
+	if err != nil {
+		return nil, err
+	}
+	ps := []Path{}
+	for _, e := range entries {
+		if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), ".") {
+			ps = append(ps, Path(path.Join(string(dir), e.Name())))
+		}
+	}
+	return ps, nil
+}
+
+// MemoryFiles is Files in process, the twin of OSFiles, held to the same
+// contract suite and safe for concurrent use.
+type MemoryFiles struct {
+	mu    sync.Mutex
+	files map[Path][]byte
+}
+
+// NewMemoryFiles is an empty store root in process.
+func NewMemoryFiles() *MemoryFiles { return &MemoryFiles{files: map[Path][]byte{}} }
+
+func (m *MemoryFiles) Append(p Path, b []byte) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f, ok := m.files[p]
+	if !ok {
+		return 0, NotFound{Path: p}
+	}
+	m.files[p] = append(f, b...)
+	return uint64(len(m.files[p])), nil
+}
+
+func (m *MemoryFiles) CreateOnce(p Path, b []byte) (LogOpened, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.files[p]; ok {
+		return Existing, nil
+	}
+	m.files[p] = slices.Clone(b)
+	return Created, nil
+}
+
+func (m *MemoryFiles) ReadAt(p Path, off, n uint64) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f, ok := m.files[p]
+	if !ok {
+		return nil, NotFound{Path: p}
+	}
+	from := min(off, uint64(len(f)))
+	return slices.Clone(f[from:min(from+n, uint64(len(f)))]), nil
+}
+
+func (m *MemoryFiles) Size(p Path) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f, ok := m.files[p]
+	if !ok {
+		return 0, NotFound{Path: p}
+	}
+	return uint64(len(f)), nil
+}
+
+func (m *MemoryFiles) Replace(p Path, b []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.files[p] = slices.Clone(b)
+	return nil
+}
+
+func (m *MemoryFiles) List(dir Path) ([]Path, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ps := []Path{}
+	for _, p := range slices.Sorted(maps.Keys(m.files)) {
+		if path.Dir(string(p)) == string(dir) {
+			ps = append(ps, p)
+		}
+	}
+	return ps, nil
+}

@@ -4,8 +4,11 @@
 // Its layer in architecture.md §6: the append-only log; sealing into
 // segments; one commit and one ref per writer, inbox refs; rewrites;
 // snapshot; the background sync process (§3.13, §3.16, §5 steps 1, 6 and 9).
-// Its root is <git-common-dir>/lit/store/ (D11). Here it holds the checkout
-// id, the 128-bit token writer refs and claims key on (§3.14).
+// Its root is <git-common-dir>/lit/store/ (D11). One Store type runs over
+// three ports, each with an adapter on disk and a twin in memory: Files
+// for the log and the snapshot, and lit's repository's Objects and Refs.
+// It also holds the checkout id, the 128-bit token writer refs and claims
+// key on (§3.14).
 package store
 
 import (
@@ -23,12 +26,10 @@ type CheckoutID [16]byte
 // Its error names the length, never the text, which is not known to be an
 // id and lands on every command event.
 func ParseCheckoutID(s string) (CheckoutID, error) {
-	var id CheckoutID
-	b, err := hex.DecodeString(s)
-	if err != nil || len(b) != len(id) || hex.EncodeToString(b) != s {
+	id, ok := token(s)
+	if !ok {
 		return CheckoutID{}, fmt.Errorf("%d bytes that are not a checkout id, 32 lowercase hex digits", len(s))
 	}
-	copy(id[:], b)
 	return id, nil
 }
 

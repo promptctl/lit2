@@ -12,9 +12,9 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// Twin is lit2 in process: Run over a fixed clock, seeded entropy and a
-// fixed writer, with its streams and its command log kept for a test to
-// read.
+// Twin is lit2 in process: Run over a fixed clock, seeded entropy, a
+// fixed writer and a store over the in-memory twins, with its streams and
+// its command log kept for a test to read.
 type Twin struct {
 	Process  Process
 	Out, Err *bytes.Buffer
@@ -30,12 +30,16 @@ var (
 // NewTwin is a twin whose checkout is minted, so its writer is known.
 func NewTwin() Twin {
 	out, errOut, commands := &bytes.Buffer{}, &bytes.Buffer{}, &command.Memory{}
+	entropy := rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 't', 'w', 'i', 'n'})
+	repo := git.NewMemory()
+	ports := store.Ports{Files: store.NewMemoryFiles(), Objects: repo, Refs: repo, Entropy: entropy}
 	return Twin{
 		Process: Process{
 			Clock:    &command.FixedClock{At: time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)},
-			Entropy:  rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 't', 'w', 'i', 'n'}),
+			Entropy:  entropy,
 			Agent:    events.Unlabeled{},
 			Place:    command.InCheckout{Checkout: twinCheckout, Writer: command.Minted{ID: twinID}},
+			Store:    Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
 			Version:  "twin",
 			Commands: commands,
 			In:       strings.NewReader(""),
