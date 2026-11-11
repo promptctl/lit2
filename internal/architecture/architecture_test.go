@@ -27,6 +27,7 @@ const (
 	program    rule = "is the program and imports a unit other than root"
 	ambient    rule = "reads the process's world outside root"
 	exits      rule = "calls os.Exit outside cmd/lit2"
+	network    rule = "imports the network, which lit2 never speaks; the user's git does (decision G, D13)"
 	missingRow rule = "has no row in ARCHITECTURE.md's concern table"
 	rowUnit    rule = "has a concern row naming no unit, or one not in the layers block"
 	drawing    rule = "is not the layers block's order from cli to git"
@@ -173,6 +174,9 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 		if imp.Name != nil && imp.Name.Name == "." && world[ip] != nil && !test && owner != "root" {
 			vs = append(vs, violation{path + ": import . " + ip, ambient})
 		}
+		if ip == "net" || strings.HasPrefix(ip, "net/") || ip == "crypto/tls" {
+			vs = append(vs, violation{path + ": import " + ip, network})
+		}
 		at := violation{path + ": import " + ip, ""}
 		if rest, ok := strings.CutPrefix(ip, mod+"/internal/"); ok {
 			unit := strings.Split(rest, "/")[0]
@@ -245,9 +249,10 @@ func declaredFor(declared map[string]string, ip, owner string) bool {
 // dot import of one hides its names from the selector check, so the import
 // is itself a read.
 var world = map[string]func(name string) bool{
-	"time": oneOf("Now", "Since", "Until", "After", "Tick", "Sleep", "NewTimer", "NewTicker", "AfterFunc"),
+	"time": oneOf("Now", "Since", "Until", "After", "Tick", "Sleep", "NewTimer", "NewTicker", "AfterFunc", "Local"),
 	"os": oneOf("Getenv", "LookupEnv", "Environ", "ExpandEnv", "Getwd", "Args", "Stdin", "Stdout", "Stderr",
-		"Hostname", "Getpid", "Getuid", "UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir", "Executable"),
+		"Hostname", "Getpid", "Getppid", "Getuid", "Geteuid", "Getgid", "Getegid",
+		"UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir", "Executable"),
 	"crypto/rand":  oneOf("Reader", "Read", "Text"),
 	"fmt":          oneOf("Print", "Printf", "Println"),
 	"log":          everyName, // the standard logger writes stderr, and log.Fatal* calls os.Exit
@@ -408,6 +413,11 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"the host outside root", "internal/git/git.go", "package git\n\nimport \"os\"\n\nvar H, _ = os.Hostname()\n", ambient},
 		{"a dot import of time outside root", "internal/cli/cli.go", "package cli\n\nimport . \"time\"\n\nvar At = Now()\n", ambient},
 		{"os/user outside root", "internal/git/git.go", "package git\n\nimport \"os/user\"\n\nvar U, _ = user.Current()\n", ambient},
+		{"the effective uid outside root", "internal/git/git.go", "package git\n\nimport \"os\"\n\nvar U = os.Geteuid()\n", ambient},
+		{"the local zone outside root", "internal/cli/cli.go", "package cli\n\nimport \"time\"\n\nvar Z = time.Local\n", ambient},
+		{"net, even in root", "internal/root/root.go", "package root\n\nimport _ \"net\"\n", network},
+		{"a net/ package, even in a test", "internal/git/git_test.go", "package git\n\nimport _ \"net/http\"\n", network},
+		{"crypto/tls in the program", "cmd/lit2/main.go", "package main\n\nimport _ \"crypto/tls\"\n", network},
 		{"a file under internal/", "internal/README", "notes\n", unlisted},
 		{"os.Exit outside cmd/lit2", "internal/root/exit.go", "package root\n\nimport \"os\"\n\nfunc init() { os.Exit(0) }\n", exits},
 		{"a §3 heading with no row", "design-docs/architecture.md", strings.Replace(design, "## 5.", "### 3.2 Event and intent\n\n## 5.", 1), missingRow},

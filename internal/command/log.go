@@ -165,7 +165,7 @@ func placeLine(p Place) any {
 	switch p := p.(type) {
 	case InCheckout:
 		c := p.Checkout
-		return inCheckoutLine{checkoutLine{c.WorkTree, c.GitDir, c.CommonDir, writerLine(p.Writer)}}
+		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, Writer: writerLine(p.Writer)}}
 	case NoCheckout:
 		return noCheckoutLine{dirLine(p)}
 	case Unlocatable:

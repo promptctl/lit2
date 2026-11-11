@@ -58,6 +58,14 @@ func Locate(dir string) (Checkout, error) {
 				return Checkout{}, err
 			}
 		}
+		// as git's own discovery does, cheaply: a git dir holds HEAD
+		head, err := os.Stat(filepath.Join(gitDir, "HEAD"))
+		if err != nil {
+			return Checkout{}, fmt.Errorf("%s is not a git dir: %w", gitDir, err)
+		}
+		if !head.Mode().IsRegular() {
+			return Checkout{}, fmt.Errorf("%s is not a git dir: its HEAD is not a file", gitDir)
+		}
 		commonDir, err := readCommondir(gitDir)
 		if err != nil {
 			return Checkout{}, err
@@ -80,29 +88,39 @@ func readGitdirFile(path string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("%s: no gitdir: line", path)
 	}
-	gitDir := resolve(filepath.Dir(path), named)
-	info, err := os.Stat(gitDir)
-	if err != nil {
-		return "", fmt.Errorf("%s names a git dir that cannot be read: %w", path, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("%s names %s, which is not a directory", path, gitDir)
-	}
-	return gitDir, nil
+	return namedDir(path, filepath.Dir(path), named)
 }
 
 // readCommondir reads <git-dir>/commondir, which a linked worktree's git dir
 // holds and a main worktree's does not; with none, the git dir is the common
 // dir.
 func readCommondir(gitDir string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	path := filepath.Join(gitDir, "commondir")
+	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return gitDir, nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return resolve(gitDir, strings.TrimRight(string(b), "\r\n")), nil
+	return namedDir(path, gitDir, strings.TrimRight(string(b), "\r\n"))
+}
+
+// namedDir is the directory the file at path names: named, absolute or
+// relative to base, non-empty and a directory, or an error naming path.
+func namedDir(path, base, named string) (string, error) {
+	if named == "" {
+		return "", fmt.Errorf("%s names no directory", path)
+	}
+	dir := resolve(base, named)
+	info, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("%s names a directory that cannot be read: %w", path, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s names %s, which is not a directory", path, dir)
+	}
+	return dir, nil
 }
 
 // resolve reads a path git wrote, which is absolute or relative to base.

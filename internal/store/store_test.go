@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -28,9 +29,9 @@ func TestTheIDFileFormReadsBackWhatItWrites(t *testing.T) {
 	if back, err := ReadCheckoutIDFile(id.FileText()); err != nil || back != id {
 		t.Errorf("ReadCheckoutIDFile(FileText()) = %v, %v; want %v", back, err, id)
 	}
-	for _, bad := range []string{s, s + "\n\n", s + "\r\n", " " + s + "\n", "\n"} {
-		if _, err := ReadCheckoutIDFile([]byte(bad)); err == nil {
-			t.Errorf("ReadCheckoutIDFile(%q) read an id", bad)
+	for _, bad := range []string{s, s + "\n\n", s + "\r\n", " " + s + "\n", "\n", strings.Repeat("hunter2", 999), strings.Repeat("hunter2", 4) + "zzzz\n"} {
+		if _, err := ReadCheckoutIDFile([]byte(bad)); err == nil || strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("ReadCheckoutIDFile(%q) = %v; want an error that does not carry the file", bad, err)
 		}
 	}
 }

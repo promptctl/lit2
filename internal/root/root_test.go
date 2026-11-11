@@ -1,8 +1,11 @@
 package root
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/cli"
@@ -69,16 +72,45 @@ func TestARowWithNoBodyIsInternal(t *testing.T) {
 	}
 }
 
-type brokenPipe struct{}
+type refusing struct{ err error }
 
-func (brokenPipe) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+func (r refusing) Write([]byte) (int, error) { return 0, r.err }
 
 func TestAnAnswerStdoutRefusesIsTheEnvironments(t *testing.T) {
 	twin := NewTwin()
-	twin.Process.Out = brokenPipe{}
+	twin.Process.Out = refusing{fmt.Errorf("write /dev/stdout: %w", syscall.ENOSPC)}
 	status, e := run(t, twin, "--help")
-	if status != 78 || reasonOf(e) != "output" || !strings.Contains(twin.Err.String(), "broken pipe") {
-		t.Errorf("--help into a broken pipe: status %d, stderr %q", status, twin.Err)
+	if status != 78 || reasonOf(e) != "output" || !strings.Contains(twin.Err.String(), "no space left") {
+		t.Errorf("--help into a full stdout: status %d, stderr %q", status, twin.Err)
+	}
+}
+
+func TestAReaderLeavingIsDone(t *testing.T) {
+	twin := NewTwin()
+	twin.Process.Out = refusing{fmt.Errorf("write /dev/stdout: %w", syscall.EPIPE)}
+	if status, e := run(t, twin, "--help"); status != 0 || e.Outcome != (cli.Done{}) || twin.Err.Len() != 0 {
+		t.Errorf("--help into a pipe whose reader left: status %d, outcome %#v, stderr %q", status, e.Outcome, twin.Err)
+	}
+}
+
+// peek is a command log that keeps what stderr held when the event came.
+type peek struct {
+	stderr *bytes.Buffer
+	saw    string
+}
+
+func (p *peek) Write(command.Event) error {
+	p.saw = p.stderr.String()
+	return nil
+}
+
+func TestTheOutcomeIsSaidBeforeTheEventIsWritten(t *testing.T) {
+	twin := NewTwin()
+	log := &peek{stderr: twin.Err}
+	twin.Process.Commands = log
+	Run(twin.Process, []string{"frobnicate"})
+	if !strings.HasPrefix(log.saw, "error (reason=unknown_verb): ") {
+		t.Errorf("stderr held %q when the event was written; want the outcome's line", log.saw)
 	}
 }
 

@@ -11,6 +11,7 @@ package store
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
@@ -19,11 +20,13 @@ type CheckoutID [16]byte
 
 // ParseCheckoutID reads a checkout id written as 32 lowercase hex digits,
 // the one form String writes, so an id has one spelling.
+// Its error names the length, never the text, which is not known to be an
+// id and lands on every command event.
 func ParseCheckoutID(s string) (CheckoutID, error) {
 	var id CheckoutID
 	b, err := hex.DecodeString(s)
 	if err != nil || len(b) != len(id) || hex.EncodeToString(b) != s {
-		return CheckoutID{}, fmt.Errorf("checkout id %q is not 32 lowercase hex digits", s)
+		return CheckoutID{}, fmt.Errorf("%d bytes that are not a checkout id, 32 lowercase hex digits", len(s))
 	}
 	copy(id[:], b)
 	return id, nil
@@ -33,11 +36,15 @@ func ParseCheckoutID(s string) (CheckoutID, error) {
 func (id CheckoutID) String() string { return hex.EncodeToString(id[:]) }
 
 // ReadCheckoutIDFile reads the id file's form (D11), exactly: the id's 32
-// lowercase hex digits and one newline. It is FileText's inverse.
+// lowercase hex digits and one newline. It is FileText's inverse. It
+// refuses by length first, and no error carries the file's bytes.
 func ReadCheckoutIDFile(b []byte) (CheckoutID, error) {
+	if form := 2*len(CheckoutID{}) + 1; len(b) != form {
+		return CheckoutID{}, fmt.Errorf("checkout id file holds %d bytes; its form is %d", len(b), form)
+	}
 	text, ok := bytes.CutSuffix(b, []byte("\n"))
 	if !ok {
-		return CheckoutID{}, fmt.Errorf("checkout id file %q does not end in a newline", b)
+		return CheckoutID{}, errors.New("checkout id file does not end in a newline")
 	}
 	return ParseCheckoutID(string(text))
 }

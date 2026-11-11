@@ -25,6 +25,12 @@ func mkdir(t *testing.T, path string) {
 	}
 }
 
+// head makes gitDir a git dir, as git's discovery reads one: it holds HEAD.
+func head(t *testing.T, gitDir string) {
+	t.Helper()
+	write(t, filepath.Join(gitDir, "HEAD"), "ref: refs/heads/main\n")
+}
+
 func locate(t *testing.T, dir string, want Checkout) {
 	t.Helper()
 	got, err := Locate(dir)
@@ -35,7 +41,7 @@ func locate(t *testing.T, dir string, want Checkout) {
 
 func TestLocateFindsAMainWorktree(t *testing.T) {
 	main := t.TempDir()
-	mkdir(t, filepath.Join(main, ".git"))
+	head(t, filepath.Join(main, ".git"))
 	locate(t, main, Checkout{WorkTree: main, GitDir: filepath.Join(main, ".git"), CommonDir: filepath.Join(main, ".git")})
 }
 
@@ -44,6 +50,7 @@ func TestLocateFindsALinkedWorktreeAndItsCommonDir(t *testing.T) {
 	main, linked := filepath.Join(root, "main"), filepath.Join(root, "linked")
 	gitDir := filepath.Join(main, ".git", "worktrees", "linked")
 	// as git worktree add writes them
+	head(t, gitDir)
 	write(t, filepath.Join(gitDir, "commondir"), "../..\n")
 	write(t, filepath.Join(linked, ".git"), "gitdir: "+gitDir+"\n")
 	locate(t, linked, Checkout{WorkTree: linked, GitDir: gitDir, CommonDir: filepath.Join(main, ".git")})
@@ -52,15 +59,15 @@ func TestLocateFindsALinkedWorktreeAndItsCommonDir(t *testing.T) {
 func TestLocateReadsAGitFileWithNoCommondir(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "sub")
-	mkdir(t, filepath.Join(root, ".git", "modules", "sub"))
-	write(t, filepath.Join(sub, ".git"), "gitdir: ../.git/modules/sub\n")
 	gitDir := filepath.Join(root, ".git", "modules", "sub")
+	head(t, gitDir)
+	write(t, filepath.Join(sub, ".git"), "gitdir: ../.git/modules/sub\n")
 	locate(t, sub, Checkout{WorkTree: sub, GitDir: gitDir, CommonDir: gitDir})
 }
 
 func TestLocateWalksUpFromANestedDirectory(t *testing.T) {
 	main := t.TempDir()
-	mkdir(t, filepath.Join(main, ".git"))
+	head(t, filepath.Join(main, ".git"))
 	nested := filepath.Join(main, "a", "b")
 	mkdir(t, nested)
 	locate(t, nested, Checkout{WorkTree: main, GitDir: filepath.Join(main, ".git"), CommonDir: filepath.Join(main, ".git")})
@@ -75,19 +82,30 @@ func TestLocateWithNoGitIsNotFound(t *testing.T) {
 	}
 }
 
-func TestLocateStopsAtAGitFileThatNamesNoGitDir(t *testing.T) {
-	for name, content := range map[string]string{
-		"no gitdir: line":          "not a gitdir line\n",
-		"a pruned worktree":        "gitdir: ../main/.git/worktrees/gone\n",
-		"a git dir that is a file": "gitdir: notes.txt\n",
+func TestLocateStopsAtAGitThatIsNoGitDir(t *testing.T) {
+	for name, lay := range map[string]func(dir string){
+		"no gitdir: line":   func(dir string) { write(t, filepath.Join(dir, ".git"), "not a gitdir line\n") },
+		"a pruned worktree": func(dir string) { write(t, filepath.Join(dir, ".git"), "gitdir: ../main/.git/worktrees/gone\n") },
+		"a git dir that is a file": func(dir string) {
+			write(t, filepath.Join(dir, "notes.txt"), "")
+			write(t, filepath.Join(dir, ".git"), "gitdir: notes.txt\n")
+		},
+		"an empty .git directory": func(dir string) { mkdir(t, filepath.Join(dir, ".git")) },
+		"an empty commondir": func(dir string) {
+			head(t, filepath.Join(dir, ".git"))
+			write(t, filepath.Join(dir, ".git", "commondir"), "")
+		},
+		"a commondir naming nothing there": func(dir string) {
+			head(t, filepath.Join(dir, ".git"))
+			write(t, filepath.Join(dir, ".git", "commondir"), "../gone\n")
+		},
 	} {
 		dir := t.TempDir()
-		write(t, filepath.Join(dir, "notes.txt"), "")
-		write(t, filepath.Join(dir, ".git"), content)
+		lay(dir)
 		_, err := Locate(dir)
 		var none NotFound
 		if err == nil || errors.As(err, &none) || !strings.Contains(err.Error(), filepath.Join(dir, ".git")) {
-			t.Errorf("%s: Locate(%s) failed with %v; want the error that stopped the walk, naming the .git file", name, dir, err)
+			t.Errorf("%s: Locate(%s) failed with %v; want the error that stopped the walk, naming the .git it read", name, dir, err)
 		}
 	}
 }

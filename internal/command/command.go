@@ -8,6 +8,7 @@
 package command
 
 import (
+	"encoding/hex"
 	"fmt"
 	"runtime/debug"
 	"time"
@@ -33,7 +34,7 @@ func (c *FixedClock) Now() time.Time { return c.At }
 // entropy, one per invocation.
 type TraceID [16]byte
 
-func (t TraceID) String() string { return fmt.Sprintf("%x", t[:]) }
+func (t TraceID) String() string { return hex.EncodeToString(t[:]) }
 
 // Invocation is what is known of an invocation before its work runs.
 type Invocation struct {

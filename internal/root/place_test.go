@@ -11,13 +11,19 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 )
 
-// checkout makes a main worktree in a temporary directory, its id file
-// holding id, or no id file when id is empty.
+// checkout makes a main worktree in a temporary directory, its physical
+// path, its id file holding id, or no id file when id is empty.
 func checkout(t *testing.T, id string) (dir, idPath string) {
 	t.Helper()
-	dir = t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	private := filepath.Join(dir, ".git", "lit", "checkout")
 	if err := os.MkdirAll(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	idPath = filepath.Join(private, "id")
@@ -53,6 +59,20 @@ func TestNoIDFileIsUnmintedAndGarbageIsUnreadable(t *testing.T) {
 	dir, idPath = checkout(t, "not an id\n")
 	if got, ok := writerAt(t, dir).(command.Unreadable); !ok || got.Path != idPath {
 		t.Errorf("with a garbage id file the writer is %#v; want Unreadable at %s", got, idPath)
+	}
+}
+
+func TestACwdReachedThroughASymlinkFindsItsCheckout(t *testing.T) {
+	dir, _ := checkout(t, "")
+	sub, link := filepath.Join(dir, "sub"), filepath.Join(t.TempDir(), "link")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(sub, link); err != nil {
+		t.Fatal(err)
+	}
+	if in, ok := place(link).(command.InCheckout); !ok || in.Checkout.WorkTree != dir {
+		t.Errorf("place(%s), a link to %s, = %#v; want the checkout at %s", link, sub, place(link), dir)
 	}
 }
 

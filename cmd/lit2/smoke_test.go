@@ -32,7 +32,7 @@ func TestSmoke(t *testing.T) {
 		{nil, 0, "admin sync", "", false},
 		{[]string{"--help"}, 0, "admin init", "", false},
 		{[]string{"frobnicate"}, 64, "", "error (reason=unknown_verb): ", false},
-		{nil, 78, "", "error (reason=output): ", true},
+		{nil, 0, "", "", true},
 	} {
 		cmd := exec.Command(bin, tc.args...)
 		cmd.Dir, cmd.Env = tmp, append(os.Environ(), "XDG_STATE_HOME="+state)
@@ -71,10 +71,11 @@ func TestSmoke(t *testing.T) {
 		}
 		for l := range bytes.Lines(b) {
 			var line struct {
-				ExitCode int `json:"exit_code"`
+				ExitCode int    `json:"exit_code"`
+				Outcome  string `json:"outcome"`
 			}
-			if err := json.Unmarshal(l, &line); err != nil {
-				t.Errorf("log line %q does not decode: %v", l, err)
+			if err := json.Unmarshal(l, &line); err != nil || (line.ExitCode == 0) != (line.Outcome == "ok") {
+				t.Errorf("log line %q does not decode to an exit code and its outcome: %v", l, err)
 			}
 			recorded = append(recorded, line.ExitCode)
 		}

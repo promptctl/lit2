@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"syscall"
 	"time"
 
 	"github.com/promptctl/lit2/internal/address"
@@ -36,8 +37,9 @@ type Process struct {
 }
 
 // Run runs one invocation: it mints the trace id, records the parse and the
-// command's body as one event, puts the outcome's error line on Err, writes
-// the event, and returns the outcome's exit status.
+// command's body as one event, puts the outcome's error line on Err before
+// writing the event, so a slow or hung log cannot hold the line back, and
+// returns the outcome's exit status.
 func Run(p Process, args []string) int {
 	var trace command.TraceID
 	if _, err := io.ReadFull(p.Entropy, trace[:]); err != nil {
@@ -45,31 +47,31 @@ func Run(p Process, args []string) int {
 		// crypto/rand itself does when the system's entropy fails.
 		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
 	}
+	verbs, admin := cli.Verbs(), cli.Admin()
 	inv := command.Invocation{Trace: trace, Version: p.Version, Place: p.Place, Agent: p.Agent}
 	event := command.Record(p.Clock, inv, func(_ time.Time, asked func(cli.Summary)) cli.Outcome {
-		cmd, err := cli.Parse(cli.Verbs(), cli.Admin(), args)
+		cmd, err := cli.Parse(verbs, admin, args)
 		if err != nil {
 			return failed(err)
 		}
 		asked(cli.Summarize(cmd))
-		return dispatch(p, cmd)
+		return dispatch(p, verbs, admin, cmd)
 	})
-	stderr := cli.Report(event.Outcome)
-	if err := p.Commands.Write(event); err != nil {
-		stderr += logFailure(err)
-	}
 	// [LAW:no-silent-failure] exception: stderr is where failures are said;
 	// when writing to it fails there is no channel left but the exit status,
 	// which still carries the outcome.
-	_, _ = io.WriteString(p.Err, stderr)
+	_, _ = io.WriteString(p.Err, cli.Report(event.Outcome))
+	if err := p.Commands.Write(event); err != nil {
+		_, _ = io.WriteString(p.Err, logFailure(err))
+	}
 	return cli.ExitCode(event.Outcome)
 }
 
 // dispatch binds each command to its body.
-func dispatch(p Process, cmd cli.Command) cli.Outcome {
+func dispatch(p Process, verbs, admin cli.Table, cmd cli.Command) cli.Outcome {
 	switch cmd.(type) {
 	case cli.Help:
-		return written(io.WriteString(p.Out, cli.HelpText(cli.Verbs(), cli.Admin(), address.FieldTable{})))
+		return written(io.WriteString(p.Out, cli.HelpText(verbs, admin, address.FieldTable{})))
 	case cli.Get:
 		return notBuilt("get", "lit-bootstrap-1f9.7gj")
 	case cli.Set:
@@ -86,10 +88,12 @@ func dispatch(p Process, cmd cli.Command) cli.Outcome {
 	panic(fmt.Sprintf("root: %T is not a Command", cmd))
 }
 
-// written is the outcome of writing the answer to stdout. A failed write is
-// the environment's, stdout closed or full, never a lit2 bug.
+// written is the outcome of writing the answer to stdout. EPIPE is the
+// reader leaving, as `lit2 ... | head` does: lit2 did what was asked, so it
+// is Done, silent and 0, as conventional tools are. Any other failed write
+// is the environment's, stdout closed or full, never a lit2 bug.
 func written(_ int, err error) cli.Outcome {
-	if err != nil {
+	if err != nil && !errors.Is(err, syscall.EPIPE) {
 		return cli.Failed{Failure: output{err: err}}
 	}
 	return cli.Done{}

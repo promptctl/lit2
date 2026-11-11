@@ -20,11 +20,13 @@ import (
 
 // Main is production: it reads the world into a Process, once, and runs the
 // invocation. Every read of the process's world is here
-// `[LAW:effects-at-boundaries]`. It ignores SIGPIPE, which would kill the
+// `[LAW:effects-at-boundaries]`. It takes SIGPIPE, which would kill the
 // process at its first write to a stdout pipe whose reader is gone, so that
-// write returns EPIPE and the invocation keeps its exit status and its record.
+// write returns EPIPE and the invocation keeps its record. A handler, unlike
+// an ignore, is not inherited across exec, so git run by sync gets SIGPIPE
+// as usual. Nothing reads the channel: delivery to a full one is dropped.
 func Main(args []string) int {
-	signal.Ignore(syscall.SIGPIPE)
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 	return Run(Process{
 		Clock:    systemClock{},
 		Entropy:  rand.Reader,
@@ -51,9 +53,15 @@ func here() command.Place {
 	return place(dir)
 }
 
-// place locates the checkout at dir and reads its writer.
+// place locates the checkout at dir and reads its writer. It walks up from
+// the physical directory, as git does: Getwd gives the logical $PWD, from
+// which a cwd reached through a symlink misses its checkout.
 func place(dir string) command.Place {
-	c, err := git.Locate(dir)
+	physical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return command.Unlocatable{Dir: dir, Err: fmt.Errorf("resolving the working directory: %w", err)}
+	}
+	c, err := git.Locate(physical)
 	var none git.NotFound
 	if errors.As(err, &none) {
 		return command.NoCheckout{Dir: dir}
