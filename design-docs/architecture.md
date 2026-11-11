@@ -36,10 +36,10 @@ are, rather than adding a mechanism beside the substrate.
 | capability | what it gives | what it cannot give |
 |---|---|---|
 | append-only, content-addressed events | an immutable record; a history that is the audit log; undo as another event | in-place change: a correction is a new event, a removal is a rewrite |
-| one ref per writing checkout, fast-forward only | writes that never contend; push and fetch that never merge; no locks anywhere | coordination before a write: two offline writers can both do a thing |
+| one ref per writing checkout, replaced only by its writer | writes that never contend; push and fetch that never merge; no locks anywhere; nothing on the remote grows with commands | coordination before a write: two offline writers can both do a thing |
 | a deterministic fold with a total order `(causal-position, writer)` | the same state on every machine from the same events; concurrent contradictions settled identically everywhere | reading a clock, so any "how long ago" question is answered after the fold |
 | read-time evaluation with `now` | labels, expiry, staleness, held, computed on every read, never stored, so they settle as facts change | a stored reaction to a condition, which would outlive the condition |
-| committed configuration files, versioned by git | the model as data a person edits, reviews in a pull request and diffs; every version addressable by blob hash and carried in the event commits that cite it | a model that changes without someone's edit |
+| committed configuration files, versioned by git | the model as data a person edits, reviews in a pull request and diffs; every version addressable by blob hash and carried in the tree of every writer that cites it | a model that changes without someone's edit |
 | rewrites as events | purge, squash, compaction, erasure, converging on every replica | reaching copies that never sync again (charter #7) |
 | a git remote as a dumb replicated store | sync through the channel the code already uses; remote filing from a storeless machine | enforcement by the remote; a server of any kind |
 | a signature slot and opaque prose envelopes on every event | access control later without a schema change | hiding that an item exists (the visible skeleton) |
@@ -242,9 +242,9 @@ the entry point the managed block in `AGENTS.md` names.
 
 A **rewrite** is an event that names the events it drops, the payloads it
 replaces, or the ranges it squashes. The fold applies it on arrival; each
-writer then rebuilds its own ref without the rewritten material, and a
-receiver accepts a non-fast-forward move only when rewrite events account for
-every difference. Purge is the rewrite that drops one item's events; the fold
+writer then re-seals its segments without the rewritten material and
+replaces its ref (§3.15), and a receiver accepts the new tree when the
+events it lacks are the ones rewrite events name. Purge is the rewrite that drops one item's events; the fold
 also drops events on that item that arrive after the purge from writers who
 had not seen it, and counts them on `/integrity` with their writer, so a lost
 comment is named to the one who wrote it. Compaction is the rewrite that
@@ -278,8 +278,8 @@ edit can be tried before it is committed. A repository with no file reads as
 the shipped default profile.
 
 Every event carries `config-ref`, the blob hash of the file its writer read,
-and the commit that carries the event also carries that blob in its tree. So
-every cited version travels with the events that cite it, committed to the
+and the writer's published tree carries one entry per version its events
+cite (§3.15). So every cited version travels with the events that cite it, committed to the
 code repository or not, and the fold's validation engine reads the cited
 version from its own refs and judges the event against it
 (`INV:config-versioned`) with no dependence on the code repository's history.
@@ -291,6 +291,26 @@ concurrent edits to a file.
 Workflows have three layers and nothing else does: shipped in the binary, the
 person's own `$XDG_CONFIG_HOME/lit/config.toml` across every repository, and
 the project's workspace file. Nearest wins per field.
+
+### 3.15 Log, segment and ref
+
+A writer's events are one append-only **log** under the common dir, one
+record per event in the order minted. A command appends to it and touches
+nothing else in the store; a crash mid-append loses at most the record being
+written. Sync seals the log into **segment** blobs of bounded size and
+publishes one commit per writer: its tree holds the writer's segments and
+one entry per workspace-file version its events cite. The ref
+`refs/lit/log/<checkout-id>` is replaced on each push, never advanced,
+because only its writer updates it; the events are the history, the ref has
+none. So the remote holds, per live writer, one commit, one tree, a few
+segment blobs and the cited configuration blobs, and a push sends the delta
+of the open segment. Object count tracks writers and segments; the number of
+events never reaches git. An inbox ref is the same shape with one segment
+and no checkout behind it. The fold reads sealed segments plus the open log,
+and the snapshot remembers, per writer, the segment and offset it has
+consumed, so an incremental fold reads only what was appended. Compaction
+(§3.12) is what bounds a segment set over a project's life: a squash
+re-seals history into fewer, smaller segments on every replica.
 
 ## 4. Functionality, composed
 
@@ -342,28 +362,30 @@ values `[LAW:dataflow-not-control-flow]`. Steps 2 through 5 are pure functions
 of (events, clock, argv, writer); the rest is the hearth
 `[LAW:effects-at-boundaries]`.
 
-1. **Open.** Read every writer ref head; load the cache snapshot keyed by
-   `(fold-version, ref heads)`. A miss or a torn snapshot is one refold; no
-   lock.
+1. **Open.** Read every writer ref head and this checkout's open log; load
+   the cache snapshot keyed by `(fold-version, ref heads, log length)`. A
+   miss or a torn snapshot is one refold; no lock.
 2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.14) into the
    schema value.
-3. **Fold** the events newer than the snapshot, reading each cited
-   configuration version from the object database as needed.
+3. **Fold** the events newer than the snapshot, from the sealed segments
+   and the open log, reading each cited configuration version from the
+   object database as needed.
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with tick and the clock. A write
    computes a description: the intents it would mint, the requirement
    verdicts, the derivations, the echo. Refusal of any path refuses the whole.
-6. **Perform.** Append the intents as one commit to this checkout's ref, or
-   decline because `--dry-run` was given. Update the snapshot by atomic rename.
+6. **Perform.** Append the intents to this checkout's log, or decline
+   because `--dry-run` was given. Update the snapshot by atomic rename.
 7. **Speak.** Print the echo, then the handlers' bodies for the moments
    raised, after the data; under `--json`, one object keyed by path.
 8. **Record** the command event: paths, expansion, verdicts, events, handlers
    fired and suppressed, cache hit or refold, timings, `dry_run`, `written`.
    One record per invocation, local, never synced `[LAW:nothing-unseen]`.
-9. **Sync.** A write schedules a detached `lit2 admin sync` to push this
-   checkout's ref; a read starts the same when the last fetch is older than
-   the debounce. Nothing in the foreground waits on the network.
+9. **Sync.** A write schedules a detached `lit2 admin sync` to seal this
+   checkout's log and publish its commit; a read starts the same when the
+   last fetch is older than the debounce. Nothing in the foreground waits on
+   the network.
 
 ## 6. The parts, downhill
 
@@ -377,11 +399,13 @@ of (events, clock, argv, writer); the rest is the hearth
  tick       clocked derivations: labels, held, expiry, staleness, stage, rollup
  fold       events → state; validation engine; rank; holders; conflicts
  config     .lit/workspace.toml from the working tree, or any cited version
-            from an event commit's tree → one typed schema value
+            from a writer's tree → one typed schema value
  events     record, codec, upcasters, ids, signature slot
- store      objects and refs under the common dir; per-writer and inbox refs;
-            rewrites; snapshot; the background sync process
- git        an in-process, permissively licensed git library
+ store      the append-only log; sealing into segments; one commit and one
+            ref per writer, inbox refs; rewrites; snapshot; the background
+            sync process
+ git        an in-process, permissively licensed git library for objects and
+            refs; transport per decision G
 ```
 
 Beside the stack, passed through by every layer: the command event, and the
@@ -416,6 +440,17 @@ rows marked "later", with the signature slot and envelopes present and inert.
 
 **F. Synthetic container names.** Recommended: `unfiled` and `unassigned`,
 two keys in the default profile.
+
+**G. Transport.** Recommended: the background sync process runs the user's
+own `git` for push and fetch, and the in-process library is used for objects
+and refs only. That is what v1 does today and why its authentication works:
+the git binary runs the credential helpers, honors `~/.ssh/config` and
+`insteadOf`, and speaks every host's dialect; the in-process library does
+some of this and no library does all of it. The charter's reasons for
+forbidding subprocesses, licensing and foreground latency, do not reach a
+background push through the user's git: nothing is linked, and no foreground
+path waits on it. This is an amendment to event-store charter #4 and is
+yours to make.
 
 ## 8. Constraints on later work
 
@@ -461,19 +496,19 @@ walking skeleton.
 1. **Skeleton.** The layout of §6, the composition root, the command event,
    the in-memory store, the harness, `lit2 --help` from the field table.
    (ticket lit-bootstrap-1f9.438)
-2. **Events and fold, first facts.** Items, fields, comments, labels, links;
-   ids; the snapshot; `add /children`, `get`, `set`, `add`, `rm`; real objects
-   under the common dir; `lit2 admin init`.
+2. **Events and fold, first facts.** Items, fields, comments, labels; ids;
+   the local log and the snapshot; `add /children`, `get`, `set`, `add`,
+   `rm`; `lit2 admin init`.
 3. **Config and columns.** `.lit/workspace.toml` from the working tree, its
-   blob in each event commit, the schema parse, `config-ref` on events; levels and
+   blob in the writer's tree, the schema parse, `config-ref` on events; levels and
    synthetic containers; columns, stage, rollup; transitions with the one
    enforcer; the default profile.
 4. **Lanes, rank, claims, next.** Frames and rank intents; lanes; holders and
    expiry; `/lanes`, `/next`, `held`, rules.
 5. **Guidance.** Workflows, handlers, the three layers, moments, the managed
    block, `--dry-run` printing guidance.
-6. **Sync.** Refs on the remote, the background process, inbox refs,
-   staleness, `/integrity`.
+6. **Sync.** Sealing the log into segments, the writer's commit and ref,
+   the background process, inbox refs, staleness, `/integrity`.
 7. **Rewrites.** Purge, squash, sweep, the receiver's rule; the budgets
    harness and the depth corpus.
 8. **Selectors in full, `--json`.**
@@ -508,3 +543,10 @@ One line each, so a reader of the older document knows the position moved.
 - workspace-configuration.md, custom-fields.md: there is no reader of a store
   from outside its checkout (`--at`, `stores --counts`); lit2 runs in a
   checkout.
+- event-store design §store: a command appends to a local log, not a
+  commit; a writer publishes one commit whose tree is its sealed segments and
+  replaces its ref on push; nothing on the remote grows with commands, and
+  the number of events never reaches git. The sweep keeps its purpose with
+  one tree to anchor instead of a chain.
+- event-store charter #4: transport through the user's git in the background
+  process, if decision G is taken.

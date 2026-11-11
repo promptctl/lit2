@@ -10,7 +10,7 @@ invariants and the structural decisions of `event-store/design.md`.
 The charter was written on 2026-08-25 to replace lit v1's Dolt store in
 place. Several of its constraints are about that replacement, not about a
 tracker; they are marked below. Where `architecture.md` has already departed
-from a constraint with your agreement, that is marked too.
+from a constraint, that is marked too.
 
 The entries are grouped by what they govern: where the data lives, how it
 is written, how it is ordered and derived, how it changes, how it performs,
@@ -142,9 +142,12 @@ and what it reserves for later.
   refold, all fetched at adoption. The sweep anchor (D3) adds merge parents
   to the chain. None of what B3 buys needs the chain: atomicity needs one
   ref update, not ancestry; "events since" is a set difference; the rewrite
-  check is a set comparison. **This is a design decision, not a charter
-  constraint, and the one I recommend changing** regardless of what else
-  changes.
+  check is a set comparison. This is a design decision, not a charter
+  constraint, and it fails requirement 4 (`requirements.md`). **Departure
+  made:** `architecture.md` §3.15 replaces it with a local append-only log
+  per writer, sealed into a few segment blobs at sync, published as one
+  commit per writer whose ref is replaced on push. Nothing on the remote
+  grows with commands and the number of events never reaches git.
 
 ### B4. No network on any foreground path.
 *Charter #3 last sentence; design §sync, `INV:no-foreground-network`.*
@@ -171,7 +174,9 @@ and what it reserves for later.
   go-git does some of it. This is the largest practical risk in the
   constraint set and is not addressed in the carried docs. It also means
   pack-file performance, shallow and partial fetch, and gc are whatever the
-  library implements.
+  library implements. **Departure proposed:** `architecture.md` decision G
+  runs the user's git for push and fetch in the background process and
+  keeps the library for objects and refs.
 
 ---
 
@@ -192,7 +197,7 @@ and what it reserves for later.
   is a fold-version bump and a fleet-wide refold.
 - **Departure already made:** the design pins `fold(corpus)` byte-for-byte
   with golden fixtures. `architecture.md` §3.3 tests determinism as state
-  equality between independent folds instead, per your ruling.
+  equality between independent folds instead.
 
 ### C2. Total order is `(causal-position, writer-id)`, with the real Lamport advance rule: next = 1 + max(own last, highest seen).
 *Design §events.*
@@ -234,15 +239,16 @@ and what it reserves for later.
   process can change under running work without a migration (scenarios 7
   and 8); the model is data.
 - **Costs:** every cited version must travel with the events (the
-  architecture's rule that the event commit carries the workspace file blob
-  exists for this). The revocation seam the design leaves OPEN (#6) follows
+  architecture's rule that a writer's tree carries one entry per cited
+  version exists for this; git keeps one copy per distinct version however
+  many events cite it). The revocation seam the design leaves OPEN (#6) follows
   from citing versions: a revoked writer can keep citing the version that
   allowed it.
 - **Departure already made:** the charter and design say a "versioned,
   signed configuration stream" of events. `architecture.md` §3.14 makes it
-  a committed file, `.lit/workspace.toml`, versioned by git, per your
-  ruling. The citation and travel rules are kept; the stream and its
-  quorum-by-events signing are not.
+  a committed file, `.lit/workspace.toml`, versioned by git. The citation
+  and travel rules are kept; the stream and its quorum-by-events signing are
+  not.
 
 ### C5. Ids derive from `(writer, causal-position, content)`; they are opaque; sequential numbering is presentation only.
 *Design §events "Issue identity".*
@@ -301,8 +307,8 @@ and what it reserves for later.
   otherwise linear chains, a liveness proof that only the dead checkout's
   own machine can make instantly, remote ref deletion by CAS, and a rule for
   a swept checkout that wakes up. It exists entirely to bound A4's ref count
-  under B3's chains. If the remote held one object per writer instead of a
-  chain, most of it would not be needed.
+  under B3's chains. With one tree per writer (`architecture.md` §3.15)
+  the anchor is one tree, not a chain, and most of the intricacy goes.
 
 ### D4. No heartbeats, no liveness probes, anywhere.
 *Charter #8; `work-claims.md`.*
@@ -386,29 +392,22 @@ Removing any of these collapses something the others stand on:
 These are choices the charter made that lit2 could make differently
 without touching the above:
 
-- **B3, one commit per command chained forever.** Nothing else depends on
-  the chain. Replacing it with one object per writer (the writer's whole
-  event set as a tree, one commit, the ref replaced on each push) keeps A4's
-  no-contention property, bounds what the remote holds per writer, and removes
-  most of D3's intricacy, since a dead writer's events are one tree to
-  anchor. The receiver's rewrite check (D1) becomes a set comparison.
-- **A4's choice of the code's remote as the transport, with per-writer refs
-  there.** The design's rejected-alternatives list rules out one shared ref
-  for the workspace, because two writers must then agree on it. Per-writer
-  refs can stay (one per live checkout, bounded by D3) while what each one
-  points at changes from a chain to that writer's current set. That is B3
-  changed, not A4.
+- **B3, one commit per command chained forever.** Replaced in
+  `architecture.md` §3.15; see B3 above.
+- **A4, per-writer refs on the code's remote.** Kept. The design's
+  rejected-alternatives list rules out one shared ref for the workspace,
+  because two writers must then agree on it. What each ref points at is
+  now one commit over that writer's segments, replaced on push.
 - **B5, no subprocess.** Buys a static binary; costs owning transport and
-  authentication. Allowing the `git` binary for transport only (push,
-  fetch) while keeping in-process object access would remove the largest
-  practical risk and keep every other constraint intact. The charter
-  forbids it; the reason given is licensing and subprocess latency, neither
-  of which transport-only shelling out offends in practice.
+  authentication, which v1 never had to because it runs the git binary for
+  push and fetch. `architecture.md` decision G proposes the git binary for
+  transport only, in the background process; it is a charter amendment and
+  the owner's to make.
 - **D4, no heartbeats.** A standing ban with its reasons in
   `work-claims.md`; costs only the dead-holder window.
 - **E2, the strangler fig.** Not applicable; drop from lit2's constraint
   set.
-- **F1's signed configuration stream.** Already replaced by a committed
-  file with your agreement; the citation rule survives.
-- **C1's byte-identical golden fixtures.** Already replaced by state
-  equality with your agreement.
+- **F1's signed configuration stream.** Already replaced in
+  `architecture.md` by a committed file; the citation rule survives.
+- **C1's byte-identical golden fixtures.** Already replaced in
+  `architecture.md` by state equality.

@@ -76,9 +76,12 @@ ever, because each of those makes the things around it expensive to replace.
 - a `closed` flag and a `close` command
 
 **share**
-- ▶ one fast-forward ref per writing checkout; a detached background
-  process pushes and fetches; inbox refs for storeless writers; convergence
-  is the fold's determinism, tested as agreement
+- ▶ a local append-only log per writing checkout, sealed into a few
+  segment blobs and published as one commit on a ref only that writer
+  replaces; a detached background process pushes and fetches; inbox refs for
+  storeless writers; convergence is the fold's determinism, tested as
+  agreement
+- one commit per command on a chained ref (grows with every mutation ever)
 - a merged state file on one branch
 
 **tend**
@@ -125,11 +128,13 @@ the field table. One ticket, `lit-bootstrap-1f9.438`.
 
 **Slice 1, the walking skeleton.** Every activity at a depth the next slice
 can build on, and the two risks of the design settled: that one event set
-folds to one state on every machine, and that per-writer refs on a plain
-remote carry it there. Built to full depth here because everything stands
-on them: the store, the event record and codec, the workspace file's
-mechanics (parse, cite by blob, carry the blob), the fold and its total
-order, the path grammar and field table, the verb-to-intent table. Built at
+folds to one state on every machine, and that one commit per writer on a
+plain remote carries it there without the remote growing with commands.
+Built to full depth here because everything stands on them: the log and
+its sealing into segments, the event record and codec, the workspace file's
+mechanics (parse, cite by blob, carry the blob in the writer's tree), the
+fold and its total order, the path grammar and field table, the
+verb-to-intent table. Built at
 working minimum: columns from the default profile with empty requirement
 lists, `stage` and `rollup` in tick, `/next` as the first non-terminal
 ticket in frame order, `lit2 admin sync` run by hand. The slice is done
