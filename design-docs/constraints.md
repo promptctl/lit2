@@ -175,9 +175,9 @@ and access control.
   go-git does some of it. This is the largest practical risk in the
   constraint set and is not addressed in the carried docs. It also means
   pack-file performance, shallow and partial fetch, and gc are whatever the
-  library implements. **Departure proposed:** `architecture.md` decision G
+  library implements. **Departure made:** `architecture.md` decision G
   runs the user's git for push and fetch in the background process and
-  keeps the library for objects and refs.
+  keeps go-git for objects and refs.
 
 ---
 
@@ -239,17 +239,19 @@ and access control.
 - **Buys:** two machines straddling a process change fold identically; the
   process can change under running work without a migration (scenarios 7
   and 8); the model is data.
-- **Costs:** every cited version must travel with the events (the
-  architecture's rule that a writer's tree carries one entry per cited
-  version exists for this; git keeps one copy per distinct version however
-  many events cite it). The revocation seam the design leaves OPEN (#6) follows
+- **Costs:** every cited version must travel with the events, so every
+  version a writer ever ran under, committed or not, is kept forever. The
+  revocation seam the design leaves OPEN (#6) follows
   from citing versions: a revoked writer can keep citing the version that
   allowed it.
 - **Departure already made:** the charter and design say a "versioned,
   signed configuration stream" of events. `architecture.md` §3.14 makes it
-  a committed file, `.lit/workspace.toml`, versioned by git. The citation
-  and travel rules are kept; the stream and its quorum-by-events signing are
-  not.
+  a committed file, `.lit/workspace.toml`, versioned by git. **Departure
+  made:** decision H. The fold reads no configuration; `config-ref` stays
+  on the event as provenance; the one enforcer judges a write under the
+  writer's file at the write, and tick judges stored state under the
+  reader's file at the read. Nothing travels with the events but the hash,
+  and the stream and its quorum-by-events signing are gone.
 
 ### C5. Ids derive from `(writer, causal-position, content)`; they are opaque; sequential numbering is presentation only.
 *Design §events "Issue identity".*
@@ -402,14 +404,14 @@ without touching the above:
   now one commit over that writer's segments, replaced on push.
 - **B5, no subprocess.** Buys a static binary; costs owning transport and
   authentication, which v1 never had to because it runs the git binary for
-  push and fetch. `architecture.md` decision G proposes the git binary for
-  transport only, in the background process; it is a charter amendment and
-  the owner's to make.
+  push and fetch. `architecture.md` decision G takes the git binary for
+  transport only, in the background process; the charter is amended.
 - **D4, no heartbeats.** A standing ban with its reasons in
   `work-claims.md`; costs only the dead-holder window.
 - **E2, the strangler fig.** Not applicable; drop from lit2's constraint
   set.
 - **F1's signed configuration stream.** Already replaced in
-  `architecture.md` by a committed file; the citation rule survives.
+  `architecture.md` by a committed file; `config-ref` survives as
+  provenance and nothing in the fold reads it (decision H).
 - **C1's byte-identical golden fixtures.** Already replaced in
   `architecture.md` by state equality.

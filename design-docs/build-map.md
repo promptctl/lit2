@@ -101,8 +101,7 @@ ever, because each of those makes the things around it expensive to replace.
 **tend**
 - ▶ rewrites as events (purge, squash, sweep, destroy); the snapshot keyed
   by `(fold-version, heads)`; unknown and unverified events carried and
-  counted; `min-reader-version` in the workspace file; one entry per cited
-  workspace-file version in each writer's tree; `/integrity` as a path
+  counted; `min-reader-version` in the workspace file; `/integrity` as a path
 - a `gc` that edits history in place; configuration read from the code's
   own repository
 
@@ -119,7 +118,7 @@ above, and the slice it needs.
 | 4 plan changes after pass | versioned text nodes; verdicts citing a digest | 3 |
 | 5 two worktrees | one store under the common dir; per-checkout refs and claims | 1, 4 |
 | 6 two machines offline | share; conflicts as values; staleness; `/integrity` | 1, 6 |
-| 7 process changes under running work | the workspace file cited by blob; undeclared-column rule | 1, 3 |
+| 7 process changes under running work | `config-ref` as provenance; the enforcer at the write; undeclared-column rule | 1, 3 |
 | 8 epic with its own process | per-epic sections; nearest ancestor per column and handler field | 3, 5 |
 | 9 grooming at scale | selectors in full; `--dry-run` over an expansion | 8 |
 | 10 purge while others write | rewrites; the receiver's rule | 7 |
@@ -148,8 +147,7 @@ every event is signed and verified with no server. Built to full depth here
 because everything stands on them: the log and its sealing into segments,
 the event record and codec with its signature, the principal and the policy
 as events, authorization as a fold rule and at receive, the workspace
-file's mechanics (parse, cite by blob, carry the blob in the writer's
-tree), the fold and its total order, the path grammar and field table, the
+file's mechanics (parse, `config-ref` as provenance), the fold and its total order, the path grammar and field table, the
 verb-to-intent table. Built at working minimum: the default roles with the
 enforcer judging capabilities and empty requirement lists, the default
 tier in plaintext mode with the envelope type in place, `stage` and

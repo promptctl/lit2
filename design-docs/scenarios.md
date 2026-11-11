@@ -246,8 +246,9 @@ how the team works.
    a pull request. The diff is the change.
 2. B, on a branch without it, runs `set b64/status plan`. B's file has no
    such requirement; the write lands, citing the blob hash of B's file.
-3. After both sync events and merge the file, the transition is judged
-   against the file version B cited and stays legal; `b64` is in `plan` with
+3. After both sync events and merge the file, the transition stands: it
+   was judged at B's write under B's file, the event names that file's
+   blob, and the fold applies it as written; `b64` is in `plan` with
    no `points`. A requirement guards a transition, and this one happened
    before the requirement existed anywhere B could see.
 4. Two people edit the file concurrently. They meet in a git merge conflict

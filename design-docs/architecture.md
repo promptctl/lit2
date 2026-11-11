@@ -39,7 +39,7 @@ are, rather than adding a mechanism beside the substrate.
 | one ref per writing checkout, replaced only by its writer | writes that never contend; push and fetch that never merge; no locks anywhere; nothing on the remote grows with commands | coordination before a write: two offline writers can both do a thing |
 | a deterministic fold with a total order `(causal-position, writer)` | the same state on every machine from the same events; concurrent contradictions settled identically everywhere | reading a clock, so any "how long ago" question is answered after the fold |
 | read-time evaluation with `now` | labels, expiry, staleness, held, computed on every read, never stored, so they settle as facts change | a stored reaction to a condition, which would outlive the condition |
-| committed configuration files, versioned by git | the model as data a person edits, reviews in a pull request and diffs; every version addressable by blob hash and carried in the tree of every writer that cites it | a model that changes without someone's edit |
+| committed configuration files, versioned by git | the model as data a person edits, reviews in a pull request and diffs; every version addressable by blob hash in the code repository's history | a model that changes without someone's edit |
 | rewrites as events | purge, squash, compaction, erasure, converging on every replica | reaching copies that never sync again (charter #7) |
 | a git remote as a dumb replicated store | sync through the channel the code already uses; remote filing from a storeless machine | enforcement by the remote; a server of any kind |
 | a signature on every event and opaque prose envelopes | every verifier enforces who may write what, with no server; content hidden from readers without the key; policy as events in the same store | hiding that an item exists (the visible skeleton) |
@@ -105,13 +105,16 @@ writers cannot collide, and a short id resolves by unique suffix.
 
 ### 3.3 Fold and tick
 
-`fold(events, config-at) → state`, where `config-at` resolves a cited blob
-hash to a parsed workspace file: items, fields, comments, labels, links,
+`fold(events) → state`: items, fields, comments, labels, links,
 lanes and their order, frames and their order, lane holders, and every
 unresolved concurrent contradiction as a value on the thing it concerns.
 `tick(state, config, now) → view`: computed labels, `held`, claim
 expiry, staleness, stage, rollup. Every read is `tick(fold(events), now)`;
 every write is evaluated against the same. Neither function performs I/O.
+The fold reads no configuration: an event's legality under the model was
+judged by the one enforcer at its write, under the writer's file, and the
+reader's file is applied by tick, which is where a column or field the
+reader's model no longer declares is reported (§3.5).
 
 Determinism is a behavior: two folds of one event set, in any arrival order,
 from genesis or from a snapshot, yield equal state. It is tested as that
@@ -279,12 +282,12 @@ edit can be tried before it is committed. A repository with no file reads as
 the shipped default profile.
 
 Every event carries `config-ref`, the blob hash of the file its writer read,
-and the writer's published tree carries one entry per version its events
-cite (§3.15). So every cited version travels with the events that cite it, committed to the
-code repository or not, and the fold's validation engine reads the cited
-version from its own refs and judges the event against it
-(`INV:config-versioned`) with no dependence on the code repository's history.
-Git stores one copy per distinct version. The schema parse refuses, at the
+as provenance: it names the version the enforcer judged the write under,
+and it resolves from the code repository's history when that version was
+committed. The fold reads no configuration (§3.3), so nothing but the hash
+travels with the events, and a version tried in the working tree and never
+committed costs nothing and is remembered by nothing but the hash on the
+events written under it. The schema parse refuses, at the
 write, what the designs say it refuses. Two people who edit the file
 concurrently meet in a git merge, which is where people already resolve
 concurrent edits to a file.
@@ -299,12 +302,11 @@ A writer's events are one append-only **log** under the common dir, one
 record per event in the order minted. A command appends to it and touches
 nothing else in the store; a crash mid-append loses at most the record being
 written. Sync seals the log into **segment** blobs of bounded size and
-publishes one commit per writer: its tree holds the writer's segments and
-one entry per workspace-file version its events cite. The ref
+publishes one commit per writer: its tree holds the writer's segments. The ref
 `refs/lit/log/<checkout-id>` is replaced on each push, never advanced,
 because only its writer updates it; the events are the history, the ref has
-none. So the remote holds, per live writer, one commit, one tree, a few
-segment blobs and the cited configuration blobs, and a push sends the delta
+none. So the remote holds, per live writer, one commit, one tree and a few
+segment blobs, and a push sends the delta
 of the open segment. Object count tracks writers and segments; the number of
 events never reaches git. An inbox ref is the same shape with one segment
 and no checkout behind it. The fold reads sealed segments plus the open log,
@@ -315,7 +317,7 @@ re-seals history into fewer, smaller segments on every replica.
 
 ### 3.16 Principal and policy
 
-A **principal** is an Ed25519 key. Its fingerprint is the principal id, the
+A **principal** is a signing key of the crypto suite (§7 E). Its fingerprint is the principal id, the
 only identity form that enters the store; names live in the policy's member
 entry. `lit2 admin init` mints the checkout's principal silently and prints
 one recovery phrase. Every event is signed by its principal over the header
@@ -359,8 +361,8 @@ and, where the writer's own signature suffices, its approval.
 
 ### 3.18 Tier and envelope
 
-Every prose field is an **envelope** `{tier, epoch, nonce, ciphertext,
-commitment}` from its first event, and no layer below the verbs ever sees
+Every prose field is an **envelope** `{suite, tier, epoch, nonce,
+ciphertext, commitment}` from its first event, and no layer below the verbs ever sees
 prose (`INV:opaque-envelope`). A **tier** is a named visibility group with
 an epoch key wrapped to each member's public key in the policy. A workspace
 starts with one tier, encrypted, every member entitled; a project that
@@ -455,8 +457,7 @@ of (events, clock, argv, writer); the rest is the hearth
 2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.14) into the
    schema value.
 3. **Fold** the events newer than the snapshot, from the sealed segments
-   and the open log, verifying each (§3.19) and reading each cited
-   configuration version from the object database as needed.
+   and the open log, verifying each (§3.19).
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with tick and the clock. A write
@@ -486,14 +487,13 @@ of (events, clock, argv, writer); the rest is the hearth
  address    path grammar; selectors; globs; the field table
  tick       clocked derivations: labels, held, expiry, staleness, stage, rollup
  fold       events → state; validation engine; rank; holders; conflicts
- config     .lit/workspace.toml from the working tree, or any cited version
-            from a writer's tree → one typed schema value
+ config     .lit/workspace.toml from the working tree → one typed schema value
  events     record, codec, upcasters, ids, signature, envelope
  store      the append-only log; sealing into segments; one commit and one
             ref per writer, inbox refs; rewrites; snapshot; the background
             sync process
- git        an in-process, permissively licensed git library for objects and
-            refs; transport per decision G
+ git        go-git, in process, for objects and refs; the user's git binary
+            for push and fetch, run only by the background sync process
 ```
 
 Beside the stack, passed through by every layer: the command event, and the
@@ -503,9 +503,40 @@ label are read. Key material lives beside the checkout id in the private
 git dir, never in the store and never behind a prompt. Tests build the same stack over an
 in-memory object store, a fixed clock and a fixed identity.
 
-## 7. Decisions for Brandon
+## 7. Decisions
 
-Each has my recommendation first. Everything not listed is decided above.
+Decided, with the section that carries each. Everything not listed is
+decided in the body.
+
+- **B. Language and git library.** Go, with go-git (Apache-2.0) in process
+  for objects and refs (§6). The first budget run measures go-git's object
+  walk on the depth corpus.
+- **C. `topic`.** Not a field; ids are opaque with the project prefix, and
+  an area of focus is a label (appendix).
+- **D. `archived`.** Not a field; a ticket out of the flow is in a terminal
+  column, one that should not exist is deleted (tombstone) or purged
+  (rewrite) (appendix).
+- **E. Crypto suite.** Go's standard library and its extended crypto
+  packages: Ed25519 for signatures, X25519 for key wrapping,
+  ChaCha20-Poly1305 for envelopes, HKDF for the commitment subkey, with the
+  age file format as the reference design. The suite is replaceable, and
+  §3.18 and §8 make that structural: every signature and envelope names its
+  suite. FIPS-validated modules are a packaging question for the
+  organizations that need them, not a design one.
+- **F. Synthetic container names.** `unfiled` and `unassigned`, two keys in
+  the default profile (§3.4).
+- **G. Transport.** The background sync process runs the user's own `git`
+  for push and fetch; go-git never touches the network. The git binary
+  runs the credential helpers, honors `~/.ssh/config` and `insteadOf`, and
+  speaks every host's dialect, which is what v1 does today and why its
+  authentication works. Event-store charter #4 is amended by this
+  (appendix): its reasons, licensing and foreground latency, do not reach a
+  background push through the user's git, since nothing is linked and no
+  foreground path waits on it.
+- **H. Configuration and the fold.** The fold reads no configuration;
+  `config-ref` is provenance (§3.3, §3.14).
+
+Open:
 
 **A. Lanes live in their epic and rank lives in the frame (§3.4, §3.7), or
 lanes are cross-cutting in one global order ([path-addressed-cli.md](path-addressed-cli.md)).**
@@ -513,37 +544,6 @@ Recommended: in the epic. It makes the epic the unit of commitment and the
 "all of one epic before the next" ordering structural, gives every rank
 intent a frame that exists, and makes `/next` one rule. Cost: a sequence
 across epics is `blocks` edges or a level-2 item, not a lane.
-
-**B. Language and git library.** Recommended: Go, with go-git (Apache-2.0)
-in process. v1 is Go, every design assumes it. The first budget run measures
-go-git's object walk on the depth corpus; gitoxide behind cgo is the fallback.
-
-**C. `topic`.** Recommended: not a field; ids are opaque with the project
-prefix, and an area of focus is a label.
-
-**D. `archived`.** Recommended: not a field; a ticket out of the flow is in a
-terminal column, one that should not exist is deleted (tombstone) or purged
-(rewrite).
-
-**E. Crypto suite.** Recommended: Go's standard library and its extended
-crypto packages, Ed25519 for signatures, X25519 for key wrapping,
-ChaCha20-Poly1305 for envelopes, HKDF for the commitment subkey, with the
-age file format as the reference design. FIPS-validated modules are a
-packaging question for the organizations that need them, not a design one.
-
-**F. Synthetic container names.** Recommended: `unfiled` and `unassigned`,
-two keys in the default profile.
-
-**G. Transport.** Recommended: the background sync process runs the user's
-own `git` for push and fetch, and the in-process library is used for objects
-and refs only. That is what v1 does today and why its authentication works:
-the git binary runs the credential helpers, honors `~/.ssh/config` and
-`insteadOf`, and speaks every host's dialect; the in-process library does
-some of this and no library does all of it. The charter's reasons for
-forbidding subprocesses, licensing and foreground latency, do not reach a
-background push through the user's git: nothing is linked, and no foreground
-path waits on it. This is an amendment to event-store charter #4 and is
-yours to make.
 
 ## 8. Constraints on later work
 
@@ -554,6 +554,10 @@ yours to make.
   binding)`; what cannot be spelled as a path write cannot be authorized,
   and a path write with no capability does not ship.
 - Every prose field is an envelope below the verb layer from its first event.
+- Every signature and every envelope names its crypto suite, and the suite
+  is one value behind one interface in the events layer, so a second suite
+  coexists with the first and a policy version can name the suite new
+  events must use.
 - Everything computed across items reads structural fields only. A
   requirement that reads prose by content is evaluated by its writer, who
   holds the key; a reader without it sees that requirement's verdict as
@@ -597,8 +601,8 @@ walking skeleton.
    and capabilities as path globs in the default profile; the enforcer's
    capability verdict; membership verbs and the owner threshold;
    verification as a fold rule and at receive.
-4. **Config and columns.** `.lit/workspace.toml` from the working tree, its
-   blob in the writer's tree, the schema parse, `config-ref` on events; levels and
+4. **Config and columns.** `.lit/workspace.toml` from the working tree, the
+   schema parse, `config-ref` on events as provenance; levels and
    synthetic containers; columns, stage, rollup; transitions with the one
    enforcer; the default profile.
 5. **Tiers.** Envelopes encrypted under the default tier; content keys and
@@ -652,7 +656,11 @@ One line each, so a reader of the older document knows the position moved.
   the number of events never reaches git. The sweep keeps its purpose with
   one tree to anchor instead of a chain.
 - event-store charter #4: transport through the user's git in the background
-  process, if decision G is taken.
+  process (decision G); go-git touches objects and refs only.
+- event-store design `INV:config-versioned`: the fold reads no
+  configuration; `config-ref` is provenance, the enforcer judges a write
+  under the writer's file and tick judges state under the reader's; a
+  writer's tree carries no configuration (decision H).
 - access-control design: nothing in it is later; the write layer and the
   encrypted default tier are in the first release (requirements.md §1).
   Capabilities name path globs rather than the v1 command table's verbs;
