@@ -92,9 +92,10 @@ same shape:
 | `add x/labels ready` / `rm x/labels/ready` | `label.add` / `label.rm` |
 | `set x/labels '[a, b]'` | one `label.rm` per element removed, one `label.add` per element added |
 | `add x/comments "…"` | `comment.add {item, id, body}` |
-| `add <epic>/lanes/datetime '[dee, b64]'` | `lane.create`, then `lane.place {lane, item, after}` per member |
-| `set <epic>/lanes/datetime '[b64, dee, fw9]'` | one `lane.place` per member whose predecessor changed |
-| `set <lane>/rank 2`, `'{above: y}'`, `'{below: y}'`, `top`, `bottom` | `rank.place {subject, frame, above \| below \| top \| bottom}` |
+| `add <node>/lanes/datetime '[dee, b64]'` | `lane.create`, then `lane.place {lane, item, after}` per member |
+| `set <node>/lanes/datetime '[b64, dee, fw9]'` | one `lane.place` per member whose predecessor changed |
+| `add x/checklist '["…", "…"]'` / `set x/checklist/<id>/state done` | `checklist.add {item, id, text}` / `checklist.set {item, id, state, reason}` |
+| `set <lane>/rank '{above: y}'`, `'{below: y}'`, `top`, `bottom` | `rank.place {lane, above \| below \| top \| bottom}` |
 | `set /columns/impl/entry '[…]'` | no event: an edit to `.lit/workspace.toml` in the working tree, echoed as such |
 | `rm x` | `item.delete {item}`, a reversible tombstone |
 | `rm x --purge` | a rewrite naming the item |
@@ -106,7 +107,7 @@ writers cannot collide, and a short id resolves by unique suffix.
 ### 3.3 Fold and tick
 
 `fold(events) → state`: items, fields, comments, labels, links,
-lanes and their order, frames and their order, lane holders, and every
+lanes, their order and their rank, checklists, lane holders, and every
 unresolved concurrent contradiction as a value on the thing it concerns.
 `tick(state, config, now) → view`: computed labels, `held`, claim
 expiry, staleness, stage, rollup. Every read is `tick(fold(events), now)`;
@@ -121,30 +122,32 @@ from genesis or from a snapshot, yield equal state. It is tested as that
 equality, through the state's own equality and never through a pinned
 serialization `[LAW:behavior-not-structure]`.
 
-### 3.4 Item, level, frame
+### 3.4 Work item, level, tree
 
-An **item** is a node at one of exactly three **levels**; roles are fixed in
-code, names are configuration (`ticket`, `epic`, `initiative` by default).
-Containment is exact: a level-1 item's parent is a level-2 item, a level-2's
-is a level-3. An item created without a parent lands in a synthetic container
-at the level above (`unfiled` at 2, `unassigned` at 3, two keys in the default
-profile), so every item has exactly one place and nothing in the engine
-handles a parentless case.
+A **work item** is a node of the tree at a **level**. The workspace file
+declares the levels, one to five, numbered from 1 at the bottom, each with
+a name; the default profile ships `story`, `feature`, `epic`. Code knows
+numbers and roles, never names. An item at level 1 is a **leaf**: it has a
+stored column, is claimed through its lane, carries a checklist, and is what
+`/next` serves. An item above level 1 is a **node**: it derives `stage` from
+its children (`terminal` when all are, `initial` when all are or it is
+empty, else `active`) and `rollup`, the count of leaves per column, and is
+finished or reopened only through its children. Leaf or node is decided by
+the level, never by whether children exist. A one-level workspace is a flat
+list of leaves under the root.
 
-A **frame** is the node whose children are ranked against each other: the
-root ranks initiatives, an initiative ranks epics, an epic ranks its lanes, a
-lane orders its tickets. Rank is a position in a frame, folded from
-`rank.place` intents, and the frame is always the item's container, so a rank
-intent names a frame that exists and reparenting an item moves it to the
-bottom of its new frame, echoed. An intent whose anchor is no longer in the
-subject's frame when it arrives places the subject at the bottom of its frame
-and is named on `/integrity`. The backlog is the depth-first walk of the
-tree in frame order; `/lanes` at the root is that walk's lanes.
+Containment is exact: a parent is one level up, and the root's children are
+top-level items. Every node level names a synthetic home in the workspace
+file (`unfiled` at level 2, `unassigned` at level 3 in the default profile),
+so an item created without a parent, `add /children '{level: 1, …}'`, lands
+in the home above it and that home in the home above, and every leaf has a
+full ancestry. The homes are shown, never hidden, and nothing in the engine
+handles a parentless case. `add <parent>/children` creates at the level
+below the parent; `add /children` with no level creates at the top.
 
-Only a level-1 item has a stored column. A level-2 or level-3 item derives
-`stage` from its children (`terminal` when all are, `initial` when all are or
-it is empty, else `active`) and `rollup`, the count of children per column.
-Finishing or reopening a container happens only through its children.
+The tree groups, scopes and rolls up. It orders nothing: no item has a rank,
+and a node is a folder. Order is the lane's (§3.7). The backlog is the
+rank order of lanes; `get /lanes` prints it.
 
 ### 3.5 Column and stage
 
@@ -161,8 +164,8 @@ work with no edge list.
 
 A resolved column graph is checked on every write that changes it: one
 `initial`, at least one `terminal`, every `next` target present, no column
-removed while a ticket in the frame holds it. Two concurrent writers can
-still produce a ticket in a column its frame no longer declares; the fold
+removed while a ticket in its subtree holds it. Two concurrent writers can
+still produce a ticket in a column its ancestors no longer declare; the fold
 keeps the transition, tick reports the column as undeclared with stage
 `active`, `/next` passes the lane over naming the reason, `/integrity` lists
 it, and the universal edges always offer a way out. Any node may carry `columns`;
@@ -188,15 +191,26 @@ grow.
 
 ### 3.7 Lane
 
-A **lane** is an ordered list node in an epic, `<epic>/lanes/<name>`; its
-order is sequence, and a member's `blocked_by` derives from the member before
-it. A ticket is in exactly one lane in its own epic; a ticket in no declared
-lane is its own one-member lane, so parallel costs nothing and serial is one
-`add`. A sequence that crosses epics is `blocks` edges. The lane is also the
-unit a checkout holds (§3.8). Its head is its first member whose stage is not
-`terminal`. A lane is identified by its name in its frame; `lane.create` is
-idempotent on that pair, so two offline writers who create the same lane fold
-to one lane whose members are placed in total order, with an advisory.
+A **lane** is an ordered list node, `<node>/lanes/<name>` on any node
+including the root, whose members are leaves from anywhere in the tree; its
+order is sequence, and a member's `blocked_by` derives from the member
+before it. A leaf is in at most one lane and its `lane` field is derived
+from membership; a leaf in no declared lane is its own one-member lane, so
+parallel costs nothing and serial is one `add`. A node worked in sequence is
+a folder holding one lane; a sequence that crosses nodes is a lane whose
+members do.
+
+**Rank is on lanes and on nothing else.** There is one rank order, over
+every lane in the workspace, folded from `rank.place {lane, above | below |
+top | bottom}` intents; a new lane ranks last; reranking a lane moves its
+members together, in order. An intent whose anchor no longer exists when it
+arrives places the subject at the bottom and is named on `/integrity`. A
+lane is identified by its name on its node; `lane.create` is idempotent on
+that pair, so two offline writers who create the same lane fold to one lane
+whose members are placed in total order, with an advisory. The lane is also
+the unit a checkout holds (§3.8). Its head is its first member whose stage
+is not `terminal`. `/next` is the head of the lane this checkout holds, else
+the head of the top-ranked lane (§4).
 
 ### 3.8 Claim
 
@@ -212,15 +226,37 @@ expired claim is no claim and prints as none. A ticket's `claim` reads its
 lane's, so finishing one member hands the checkout the next with no second
 action and no event on the next ticket.
 
-### 3.9 Link
+### 3.9 Checklist
+
+A leaf carries a **checklist**, `x/checklist`: items with a minted id, a
+text, and one of three states, `pending`, `done`, `abandoned` with an
+optional reason. Checklist items are not work items: no level, no lane, no
+claim, no link, no column. `done` and `abandoned` are final and there is no
+delete, so a finished leaf shows six months later exactly what was done and
+what was abandoned and why. `add x/checklist '[…]'` mints items;
+`set x/checklist/<id>/state done` moves one; `set x/checklist '[…]'`
+replaces the list and the verb layer diffs it: items whose text it knows
+keep their id and state, new text is added, vanished text is abandoned,
+which is what lets a harness hook push an agent's whole TODO list on every
+change with no agent effort. The fold merges per item and a final state
+wins over `pending`. No event per check is folded into history beyond the
+item events themselves; the leaf's transitions carry the counts. The
+default profile's terminal columns require `checklist/pending = 0` on
+entry, so finishing a leaf with pending items is refused and names them.
+Item text is prose and an envelope (§3.19); the `set` diff matches on the
+commitment.
+
+### 3.10 Link
 
 A **link** is a typed edge between items. The engine knows two kinds and no
 more: `dependency`, directed and acyclic, read by `/next` and `blocked_by`;
 `relates`, a reference with no scheduling meaning. A workspace declares link
 types under `/links` with a kind and the `[from, to]` level pairs they may
-join, adds one with a new name, and cannot add a kind.
+join, adds one with a new name, and cannot add a kind. The default profile
+joins same-level items with `blocks` and any pair with `relates`; a node's
+stage is derived, so a dependency on a node is a dependency on its leaves.
 
-### 3.10 Rule
+### 3.11 Rule
 
 A **rule** is `{where: <selector>, label: <name>}` in `/rules`. Tick evaluates
 every rule on every read and the matching tickets carry the label, computed,
@@ -228,7 +264,7 @@ never stored, so it is gone the read after its condition stops holding and
 needs no merge. The default profile ships one: `blocked` where a blocker's
 stage is not terminal.
 
-### 3.11 Moment and handler
+### 3.12 Moment and handler
 
 A **moment** is one of six things the engine observes: `enter <column>`,
 `leave <column>`, `in <column>` (a read printed the ticket whole), `refused
@@ -241,35 +277,35 @@ user layer, then the shipped layer, so the smallest override is one field.
 Bare `lit2` is `get /`, and the shipped `orientation` handler on `read /` is
 the entry point the managed block in `AGENTS.md` names.
 
-### 3.12 Rewrite
+### 3.13 Rewrite
 
 A **rewrite** is an event that names the events it drops, the payloads it
 replaces, or the ranges it squashes. The fold applies it on arrival; each
 writer then re-seals its segments without the rewritten material and
-replaces its ref (§3.15), and a receiver accepts the new tree when the
+replaces its ref (§3.16), and a receiver accepts the new tree when the
 events it lacks are the ones rewrite events name. Purge is the rewrite that drops one item's events; the fold
 also drops events on that item that arrive after the purge from writers who
 had not seen it, and counts them on `/integrity` with their writer, so a lost
 comment is named to the one who wrote it. Compaction is the rewrite that
 squashes. Nothing else removes anything.
 
-### 3.13 Identity
+### 3.14 Identity
 
 Every event's attribution is `(checkout, principal, agent)`. The checkout id
 is the 128-bit token in the checkout's private git dir, the thing claims and
-writer refs key on. The principal is the key that signed the event (§3.16),
+writer refs key on. The principal is the key that signed the event (§3.17),
 minted at init and kept beside the checkout id, never in the store. The
 agent label is an optional opaque string the invoking harness supplies,
 shown beside comments and history. No usernames, hostnames or paths enter
 the store; display names come from the policy's member entries. `get /me`
 prints the three and the tiers this principal holds.
 
-### 3.14 The workspace file
+### 3.15 The workspace file
 
 The workspace's model is one committed file, `.lit/workspace.toml`: levels and
 their fields, columns and their requirements, link types, rules, the project
 layer of workflows, `claim_ttl`, the project prefix, `min-reader-version`.
-Per-epic overrides are sections keyed by the epic's id in the same file. A
+Per-node overrides are sections keyed by the node's id in the same file. A
 person edits it in an editor and reviews it in a pull request; git versions
 and merges it. The four verbs still read it as nodes, `get /columns`, and a
 write such as `set /columns/backlog/exit '[…]'` edits the file in the working
@@ -296,7 +332,7 @@ Workflows have three layers and nothing else does: shipped in the binary, the
 person's own `$XDG_CONFIG_HOME/lit/config.toml` across every repository, and
 the project's workspace file. Nearest wins per field.
 
-### 3.15 Log, segment and ref
+### 3.16 Log, segment and ref
 
 A writer's events are one append-only **log** under the common dir, one
 record per event in the order minted. A command appends to it and touches
@@ -312,10 +348,10 @@ events never reaches git. An inbox ref is the same shape with one segment
 and no checkout behind it. The fold reads sealed segments plus the open log,
 and the snapshot remembers, per writer, the segment and offset it has
 consumed, so an incremental fold reads only what was appended. Compaction
-(§3.12) is what bounds a segment set over a project's life: a squash
+(§3.13) is what bounds a segment set over a project's life: a squash
 re-seals history into fewer, smaller segments on every replica.
 
-### 3.16 Principal and policy
+### 3.17 Principal and policy
 
 A **principal** is a signing key of the crypto suite (§7 E). Its fingerprint is the principal id, the
 only identity form that enters the store; names live in the policy's member
@@ -342,7 +378,7 @@ joins a remote already holding an enrollment adopts it and pushes a signed
 membership request; two enrollments meeting on one remote is a
 contradiction the fold reports, and the later one in total order yields.
 
-### 3.17 Capability
+### 3.18 Capability
 
 A capability is `(verb, path glob, binding)`: one of the four verbs, a glob
 over paths, and a binding of `own`, `assignee`, `own-or-assignee` or `all`.
@@ -351,7 +387,7 @@ holding its lane's claim. A role is a named bundle of capabilities, and the
 default profile ships the access-control design's four, observer,
 contributor, editor and owner, spelled as path globs: contributor is
 `add */children`, `set own/*`, `set */status` out of the initial column,
-`add */comments`, `rm own/*` at level 1. The enforcer that judges a
+`add */comments`, `rm own/*` at level 1, the leaf. The enforcer that judges a
 transition also judges, for every intent a command would mint, the writer's
 principal against the policy version in force at the writer's current fold;
 refusal of any path refuses the whole. Membership is paths too:
@@ -359,7 +395,7 @@ refusal of any path refuses the whole. Membership is paths too:
 `rm /members/<id>`, `set /policy/threshold 2`, each compiling to a proposal
 and, where the writer's own signature suffices, its approval.
 
-### 3.18 Tier and envelope
+### 3.19 Tier and envelope
 
 Every prose field is an **envelope** `{suite, tier, epoch, nonce,
 ciphertext, commitment}` from its first event, and no layer below the verbs ever sees
@@ -378,7 +414,7 @@ every member: the backlog lists every item and redacts what the reader
 cannot open. The commitment lets the fold decide that two concurrent
 writes of one prose field are the same text without reading either.
 
-### 3.19 Verification
+### 3.20 Verification
 
 The model is Monero's, as the access-control charter fixes it: validity is
 enforced by every verifier and by no trusted party, a reading key is
@@ -406,11 +442,12 @@ row is that no primitive learned a new case.
 
 | the tracker must | composed from |
 |---|---|
-| file work, alone or in bulk, with defaults | `add <parent>/children '{…}'` or a list of them; the level's template fills absent fields and echoes each as a derivation |
+| file work, alone or in bulk, with defaults | `add <parent>/children '{…}'` or a list of them, at the level below the parent; the level's template fills absent fields and echoes each as a derivation |
 | keep work out of the queue until it is ready | the initial column's `exit` list: a description present, `labels=ready` on the ticket or an ancestor, no blocker; `held` reports it, `/next` reads `held` |
-| say what to work on | `/next`: the heads of the lanes this checkout holds, in frame order; a held head whose own `held` is non-empty is printed with its reasons and passed; then the first lane head in frame order that is not held elsewhere and whose `held` is empty, labeled as outside the commitment; every lane passed over is named with its reason |
+| say what to work on | `/next`: the heads of the lanes this checkout holds, in rank order; a held head whose own `held` is non-empty is printed with its reasons and passed; then the first lane head in rank order that is not held elsewhere and whose `held` is empty, labeled as outside the commitment; every lane passed over is named with its reason |
 | commit a checkout to a unit of work | the claim on the lane, derived from the start transition; `/next` serves the held lane first; leaving is `rm <lane>/claim` |
-| sequence work | a lane; reorder with one `set` on the list |
+| sequence work | a lane, on any node, with members from anywhere; reorder with one `set` on the list; order lanes against each other with `set <lane>/rank` |
+| track the steps inside one ticket | the checklist on the leaf; `checklist/pending = 0` on entry to a terminal column |
 | make work wait on other work | a `blocks` link; `blockers` and `blocked_by` derive from links and lane position together |
 | interrupt for an urgency | `priority: urgent` on a ticket; `/next` serves an urgent head ranked above the held lane |
 | move work through a process | transitions along `next`; requirements on the edges; stage gives start and done |
@@ -418,14 +455,14 @@ row is that no primitive learned a new case.
 | send work back from review | `add x/verdicts '{fail findings:[…]}'`; the ticket stays in `review`; round derives from the count of fails; `merge/entry` requires `verdict=pass` |
 | close without finishing, with a reason | terminal columns `dup`, `superseded`, `obsolete`, `wontfix`, each with an `entry` requirement for `of` or `reason` |
 | park, reopen | a transition into `initial`, reachable from everywhere; the claim ends |
-| finish a container | derived: an epic's stage is terminal when every child's is |
+| finish a container | derived: a node's stage is terminal when every child's is |
 | tell an agent what to do now | the handler bound `in <column>` prints after the ticket on `get x` and on `/next` |
 | nudge without blocking | a requirement with `strength = advise`; a handler |
-| customize the process per project or per epic | sections of `.lit/workspace.toml`, at the root or keyed by an epic's id; nearest ancestor wins per column, per handler field; reviewed in a pull request like any change to how the team works |
+| customize the process per project or per node | sections of `.lit/workspace.toml`, at the root or keyed by a node's id; nearest ancestor wins per column, per handler field; reviewed in a pull request like any change to how the team works |
 | add a field, a level name, a link type | the same file: `[levels.1.fields.points]`, `[levels.2] name`, `[links.tests]`; no code |
 | see why a ticket is where it is | `get x/history`; `get x/held`; a rule's label names the rule |
 | undo | `set` back from the echo, or `get x/body/versions/N | set x/body -`; every version is in the history |
-| find things | selectors over any field, at any depth, across every frame's dialect of a column name |
+| find things | selectors over any field, at any depth, across every node's dialect of a column name |
 | edit many things at once, safely | selectors and globs expand once; `--dry-run` prints the expansion and the diff; a refusal on one path writes nothing |
 | work from several worktrees of one clone | one store under the common dir; each worktree its own checkout, ref and claims |
 | work from several machines, offline | per-writer refs; background push and fetch; the fold settles concurrent edits; conflicts are values; `/integrity` lists advisories |
@@ -454,10 +491,10 @@ of (events, clock, argv, writer); the rest is the hearth
 1. **Open.** Read every writer ref head and this checkout's open log; load
    the cache snapshot keyed by `(fold-version, ref heads, log length)`. A
    miss or a torn snapshot is one refold; no lock.
-2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.14) into the
+2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.15) into the
    schema value.
 3. **Fold** the events newer than the snapshot, from the sealed segments
-   and the open log, verifying each (§3.19).
+   and the open log, verifying each (§3.20).
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with tick and the clock. A write
@@ -473,7 +510,7 @@ of (events, clock, argv, writer); the rest is the hearth
    One record per invocation, local, never synced `[LAW:nothing-unseen]`.
 9. **Sync.** A write schedules a detached `lit2 admin sync` to seal this
    checkout's log and publish its commit, and to fetch and verify the
-   others' (§3.19); a read starts the same when the last fetch is older
+   others' (§3.20); a read starts the same when the last fetch is older
    than the debounce. Nothing in the foreground waits on the network.
 
 ## 6. The parts, downhill
@@ -508,6 +545,13 @@ in-memory object store, a fixed clock and a fixed identity.
 Decided, with the section that carries each. Everything not listed is
 decided in the body.
 
+- **A. Hierarchy and order.** The tree groups and rolls up and orders
+  nothing; levels are configured, one to five, with leaves at level 1;
+  lanes live on any node, take members from anywhere, and are the only
+  thing ranked, in one order (§3.4, §3.7). This is
+  [path-addressed-cli.md](path-addressed-cli.md) §Lanes as written, with the
+  v1 hierarchy epic's three-level cap dropped: that cap existed to keep
+  scheduling frames from nesting, and nothing in the tree schedules.
 - **B. Language and git library.** Go, with go-git (Apache-2.0) in process
   for objects and refs (§6). The first budget run measures go-git's object
   walk on the depth corpus.
@@ -520,11 +564,12 @@ decided in the body.
   packages: Ed25519 for signatures, X25519 for key wrapping,
   ChaCha20-Poly1305 for envelopes, HKDF for the commitment subkey, with the
   age file format as the reference design. The suite is replaceable, and
-  §3.18 and §8 make that structural: every signature and envelope names its
+  §3.19 and §8 make that structural: every signature and envelope names its
   suite. FIPS-validated modules are a packaging question for the
   organizations that need them, not a design one.
-- **F. Synthetic container names.** `unfiled` and `unassigned`, two keys in
-  the default profile (§3.4).
+- **F. Synthetic container names.** One home per node level, named in the
+  workspace file: `unfiled` at level 2 and `unassigned` at level 3 in the
+  default profile (§3.4).
 - **G. Transport.** The background sync process runs the user's own `git`
   for push and fetch; go-git never touches the network. The git binary
   runs the credential helpers, honors `~/.ssh/config` and `insteadOf`, and
@@ -534,16 +579,7 @@ decided in the body.
   background push through the user's git, since nothing is linked and no
   foreground path waits on it.
 - **H. Configuration and the fold.** The fold reads no configuration;
-  `config-ref` is provenance (§3.3, §3.14).
-
-Open:
-
-**A. Lanes live in their epic and rank lives in the frame (§3.4, §3.7), or
-lanes are cross-cutting in one global order ([path-addressed-cli.md](path-addressed-cli.md)).**
-Recommended: in the epic. It makes the epic the unit of commitment and the
-"all of one epic before the next" ordering structural, gives every rank
-intent a frame that exists, and makes `/next` one rule. Cost: a sequence
-across epics is `blocks` edges or a level-2 item, not a lane.
+  `config-ref` is provenance (§3.3, §3.15).
 
 ## 8. Constraints on later work
 
@@ -603,14 +639,14 @@ walking skeleton.
    verification as a fold rule and at receive.
 4. **Config and columns.** `.lit/workspace.toml` from the working tree, the
    schema parse, `config-ref` on events as provenance; levels and
-   synthetic containers; columns, stage, rollup; transitions with the one
-   enforcer; the default profile.
+   synthetic homes; columns, stage, rollup; transitions with the one
+   enforcer; the checklist and its terminal requirement; the default profile.
 5. **Tiers.** Envelopes encrypted under the default tier; content keys and
    wrapped epoch keys; `tier` on items and comments; `set x/tier`; grant
    on admit and rotation on removal; `rm x --destroy`; succession;
    `get /me`.
-6. **Lanes, rank, claims, next.** Frames and rank intents; lanes; holders and
-   expiry; `/lanes`, `/next`, `held`, rules.
+6. **Lanes, rank, claims, next.** Lanes on nodes and the one rank order;
+   rank intents; holders and expiry; `/lanes`, `/next`, `held`, rules.
 7. **Guidance.** Workflows, handlers, the three layers, moments, the managed
    block, `--dry-run` printing guidance.
 8. **Sync.** Sealing the log into segments, the writer's commit and ref,
@@ -634,12 +670,17 @@ One line each, so a reader of the older document knows the position moved.
   the versioning, signing and review the config stream was to provide, and
   events cite the file's blob hash. The access-control policy document, when
   it comes, is read against this.
-- path-addressed-cli.md: lanes live in their epic; rank is per frame; `rank`
-  takes relative forms that are the events' own shape.
-- work-claims.md: the routing steps collapse into the frame walk; the holder
-  set replaces the single claim scalar; everything else stands.
+- path-addressed-cli.md: kept as written for hierarchy, lanes and rank;
+  `rank` takes relative forms that are the events' own shape.
+- work-claims.md: the routing steps collapse into the walk of the lane
+  order; the holder set replaces the single claim scalar; everything else
+  stands.
 - columns-and-phases.md, transition-requirements.md: a verdict carries `of`,
-  the digest it judged.
+  the digest it judged; the checklist's open count is `checklist/pending`.
+- workspace-schema design and the v1 hierarchy epic
+  `promptctl-hierarchy-6cqf`: levels are configured, one to five, not three
+  fixed in code (decision A). Exact containment, the synthetic homes, the
+  checklist and the retirement of `type` stand as that epic records them.
 - custom-fields.md, workspace-schema: `topic` and `type` are not fields;
   `archived` is not a field (decisions C, D).
 - schema-reversibility.md: the two rules survive as `INV:preserve-unknown`

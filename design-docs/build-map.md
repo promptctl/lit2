@@ -63,15 +63,19 @@ ever, because each of those makes the things around it expensive to replace.
   output shapes
 
 **pick**
-- ▶ frames with rank intents (`above`, `below`, `top`, `bottom`); lanes as
-  ordered lists in the epic; the claim derived from the start transition;
-  `/next` as one walk of the frames
+- ▶ lanes on any node with members from anywhere; one rank order over
+  lanes with relative intents (`above`, `below`, `top`, `bottom`); the
+  claim derived from the start transition; `/next` as one walk of the lane
+  order
+- a rank on every item, resolved per container, with the container doubling
+  as the lane
 - a stored `assignee` and a stored claim record, reconciled by hand
 
 **work**
 - ▶ columns in the workspace file; one enforcer on the write reading
   requirement lists and the writer's capabilities; `stage`, `rollup`,
-  `held` and rule labels in tick; verdicts as children on paths
+  `held` and rule labels in tick; verdicts as children on paths; the
+  checklist on the leaf, its final state kept
 - a status enum in code with a switch per transition; permission checks
   scattered per command
 
@@ -151,7 +155,7 @@ file's mechanics (parse, `config-ref` as provenance), the fold and its total ord
 verb-to-intent table. Built at working minimum: the default roles with the
 enforcer judging capabilities and empty requirement lists, the default
 tier in plaintext mode with the envelope type in place, `stage` and
-`rollup` in tick, `/next` as the first non-terminal ticket in frame order,
+`rollup` in tick, `/next` as the head of the top-ranked lane,
 `lit2 admin sync` run by hand. The slice is done when the walk below
 narrates in two clones of one remote:
 
@@ -166,7 +170,7 @@ A: lit2 admin sync; lit2 add /members '{principal: <B>, role: contributor}'
 A: lit2 admin sync
 B: lit2 admin sync; lit2 get /next           → the same ticket, in impl
 B: lit2 set <id>/status done; lit2 admin sync
-B: lit2 rm <epic>                           → refused: needs rm all at level 2
+B: lit2 rm <epic>                           → refused: a node; contributor has rm own/* at level 1
 A: lit2 admin sync; lit2 get <id>/stage      → terminal; A and B fold equal
 ```
 
@@ -176,12 +180,12 @@ grant on admit, rotation on removal; `rm x --destroy`; succession;
 `get /me`; redaction in every view. Scenario 15.
 
 **Slice 3, process.** Requirements and `held`; levels with their fields
-and templates; links and rules; per-epic sections and the nearest-ancestor
+and templates; the checklist and its terminal requirement; links and rules; per-epic sections and the nearest-ancestor
 rule; versioned text nodes, verdicts, terminal columns with reasons;
 history and undo. Scenarios 2, 3, 4, 7, 8.
 
-**Slice 4, commitment.** Frames and rank intents; lanes; claims, expiry
-and release; `/lanes`, `/next` in full, the urgent interrupt; blockers from
+**Slice 4, commitment.** Lanes on nodes and the one rank order; rank
+intents; claims, expiry and release; `/lanes`, `/next` in full, the urgent interrupt; blockers from
 links and lane position. Scenarios 3, 5, 11.
 
 **Slice 5, guidance.** Workflows, handlers and their triggers; the three

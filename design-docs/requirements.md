@@ -17,9 +17,10 @@ control and the workflow features are part of this. Several rows of that
 table are specializations of other rows and are not requirements of their
 own.
 
-Work is grouped and ordered in containers so that a process and an order
-can be scoped. Which containers exist and what they are called is design.
-Configuration is per project; finer scopes are design.
+Work is grouped in containers so that a process can be scoped, and
+sequenced so that an order can be set. Which containers and sequences exist
+and what they are called is design. Configuration is per project; finer
+scopes are design.
 
 All of it works from several worktrees of one clone and from several
 machines, offline, with sync through the code's own remote and no server.

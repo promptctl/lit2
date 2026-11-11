@@ -16,12 +16,12 @@ the contract is the behavior stated under "relies on", never the text.
 | S-2 | 3 | "the reviewer is not the author" compares two paths; no atom says it | not enforced by the engine; the `brief` handler says it; left as data |
 | S-3 | 3, 11 | a held lane whose head is held traps the checkout | `/next` reports the held head and falls through, labeled (architecture §4) |
 | S-4 | 2 | guidance at "an epic finishes" has no moment | a selector may read through `parent`; `(stage=terminal parent/stage=terminal)` on `enter *` |
-| S-5 | 6 | two offline clones create a lane of the same name in one epic | a lane is identified by its name in its frame; `lane.create` is idempotent; members union in total order |
+| S-5 | 6 | two offline clones create a lane of the same name on one node | a lane is identified by its name on its node; `lane.create` is idempotent; members union in total order |
 | S-6 | 7 | a column removed from the workspace file while a ticket, somewhere, holds it | the transition stands; tick reports the column undeclared; `/next` skips; `/integrity` lists it |
 | S-7 | 9 | `add` with different values on different paths is N calls | `add` takes `path value` pairs like `set` |
 | S-8 | 9 | N long bodies in one call need shell substitution | open; low frequency; a file form is a later addition if it bites |
 | S-9 | 10 | a comment written concurrently with a purge vanishes | the fold drops it and counts it on `/integrity` as "events after purge" |
-| S-10 | 13 | a rank intent whose anchor is gone when it arrives | the subject lands at the bottom of its frame; `/integrity` names the intent |
+| S-10 | 13 | a rank intent whose anchor is gone when it arrives | the subject lands at the bottom of the rank order; `/integrity` names the intent |
 | S-11 | 15 | `held` read by a principal without the tier key cannot evaluate a prose test | `held` reports `unknown (tier)` for that requirement; the writer always holds the key |
 
 ## 1. First contact in a fresh repository
@@ -59,10 +59,9 @@ someone grooms it, and then is served in the order the groomer set.
 
 **Walk.**
 
-1. `add /children '{title:"History reads come from one store"}'` with no
-   level given creates a level-2 item (the root's children are level 3 by
-   containment, so a level-2 add at the root lands in `unassigned`; the echo
-   says `⇒ parent = unassigned`). Call it `m2q`.
+1. `add /children '{level: 2, title:"History reads come from one store"}'`
+   creates a feature, a level-2 node, and homes it: the echo says
+   `⇒ parent = unassigned`. Call it `m2q`.
 2. `add m2q/children '[{title:…}, {title:…}, {title:…}]'` mints three tickets
    in `backlog`, each its own one-member lane, each without a body. The
    `capture/created` handler, `wrote */children`, prints once: the description
@@ -82,8 +81,9 @@ someone grooms it, and then is served in the order the groomer set.
    filed without a body is held by `description` alone.
 
 **Relies on.** "Ready to pull" is the initial column's exit list and nothing
-else. A label on the epic grooms the epic. The queue is the frame walk; the
-groomer orders it with `set m2q/rank 1` if the epic should jump the others.
+else. A label on the node grooms the node. The queue is the rank order of
+lanes; the groomer orders it with `set m2q/lanes/history/rank top` if this
+work should jump the others.
 
 **Strain S-4.** guidance.md names "when an epic finishes" as a moment of
 capture, but moments are raised for tickets only. The epic's finish is the
@@ -149,9 +149,9 @@ recommends `/next` print the head and serve nothing else; work-claims.md
 records the owner's ruling of 2026-09-29 that a checkout whose held work is
 all blocked is never trapped and leaving is never silent. The ruling wins:
 `/next` prints the held head with its `held` lines, then falls through the
-frame walk to the next eligible lane and labels it as outside the held lane.
+rank order to the next eligible lane and labels it as outside the held lane.
 Starting it holds a second lane; a checkout may hold several, and `/next`
-serves held lanes in frame order first. Adopted in architecture §4.
+serves held lanes in rank order first. Adopted in architecture §4.
 
 ## 4. The plan changes after it passed
 
@@ -216,8 +216,8 @@ nothing lost and every disagreement visible.
    it as the resolution. No "diverged" state exists.
 3. Both file children under `rin`. Two children, two opaque ids, both
    survive; neither is renumbered because nothing is numbered.
-4. Both rank a different lane to the top of `rin`. Two `rank.place` intents
-   in one frame; the fold applies them in total order; the later stands. The
+4. Both rank a different lane to the top. Two `rank.place` intents in the
+   one order; the fold applies them in total order; the later stands. The
    result is one order on every machine. Neither needed to do this: a claim
    says "I am working this" without touching rank.
 5. Both create `rin/lanes/datetime`, one with `[dee, b64]`, the other with
@@ -226,9 +226,9 @@ nothing lost and every disagreement visible.
 **Relies on.** Every concurrent write is kept; every contradiction is a value
 somebody can read; `/integrity` is the one list of them.
 
-**Strain S-5.** Step 5. A lane's address is its user-chosen name in its
-frame, so two creations collide on the address. A rule the fold can apply
-identically everywhere: `lane.create` is idempotent on `(frame, name)`, and
+**Strain S-5.** Step 5. A lane's address is its user-chosen name on its
+node, so two creations collide on the address. A rule the fold can apply
+identically everywhere: `lane.create` is idempotent on `(node, name)`, and
 members from both creations are placed in total order, so the lane folds to
 `[dee, b64, fw9]` on both machines with an advisory naming both creators.
 This is the same rule as two `label.add` of one label. Adopted.
@@ -260,7 +260,7 @@ how the team works.
 
 **Relies on.** Nothing a writer did legally is undone by a later rule; the
 process is versioned, diffed and reviewed by git; and nothing is hidden:
-`/integrity` lists the ticket in a column its frame no longer declares.
+`/integrity` lists the ticket in a column its ancestors no longer declare.
 
 **Strain S-6.** columns-and-phases.md says a stored column its workflow does
 not define is unrepresentable. With the model in a file that merges
@@ -414,24 +414,23 @@ store that newer clients have written to.
 inside the budgets.
 
 **Walk.** 10,000 items, 200,000 events, 400 lanes. `get '*/title'` is one
-walk of folded state. `/next` is a tree walk in frame order, linear in lanes.
+walk of folded state. `/next` is a walk of the lane order, linear in lanes.
 Tick evaluates each rule's selector over every ticket on every read, linear in
 tickets times rules. A warm read is a snapshot load plus a delta fold. A cold
 refold applies 200,000 events in under a second, which sets the bar for the
 codec and for the fold's data structures, and is measured in the harness
-before anything else is built on them. The snapshot holds each frame's folded
-order, so a new `rank.place` applies to a known order and nothing replays from
-genesis.
+before anything else is built on them. The snapshot holds the folded lane
+order, so a new `rank.place` applies to a known order and nothing replays
+from genesis.
 
 **Relies on.** The budgets in event-store/budgets.md, checked in the harness
 from step 2 of the build order.
 
-**Strain S-10.** A `rank.place {above: y}` arriving after `y` was moved to
-another frame or purged. The fold needs one rule: an intent whose anchor is
-not in the subject's frame places the subject at the bottom of its frame and
+**Strain S-10.** A `rank.place {above: y}` arriving after lane `y` was
+dissolved or purged. The fold needs one rule: an intent whose anchor no
+longer exists places the subject at the bottom of the order and
 `/integrity` names the intent. Deterministic, loses nothing the writer could
-have meant, and closes design.md's OPEN #2 for the case frames-by-containment
-leaves. Adopted.
+have meant, and closes design.md's OPEN #2. Adopted.
 
 ## 14. A human at the terminal
 

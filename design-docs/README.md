@@ -46,5 +46,6 @@ first-class).
   `schema-reversibility.md`, `event-store/`, `access-control/`.
 
 Not carried as files, because they exist only as ticket text in the v1 store:
-the three-level hierarchy model (epic `promptctl-hierarchy-6cqf`) and the plan
-record model (epic `promptctl-plan-record-w3yg`).
+the hierarchy model (epic `promptctl-hierarchy-6cqf`; `architecture.md` §3.4
+and decision A take it with configured levels in place of three) and the
+plan record model (epic `promptctl-plan-record-w3yg`).
