@@ -50,7 +50,7 @@ func Open(me CheckoutID, p Ports, bound SegmentBound) *Store {
 type Appended struct {
 	Records, Bytes int
 	Until          Position
-	Log            LogOpened
+	Log            Made
 }
 
 // Append writes one command's batch to this checkout's log as one frame:
@@ -74,7 +74,7 @@ func (s *Store) Append(b Batch) (Appended, error) {
 // ownLog is the id of the log at p, created with a new id when there is
 // none. The log is read before it is appended to, so bytes are never
 // added to a file that is not a log.
-func (s *Store) ownLog(p Path) (LogID, LogOpened, error) {
+func (s *Store) ownLog(p Path) (LogID, Made, error) {
 	id, err := s.logID(p)
 	if !errors.As(err, new(NotFound)) {
 		return id, Existing, err
@@ -332,14 +332,14 @@ func (s *Store) Swap(tag FoldTag, upto []Mark, payload []byte) (Swapped, error) 
 // SealOwn is this checkout's log sealed into a publication: the prior
 // publication's full segments kept, the rest cut from the prior open
 // segment's start. With no log there is nothing to seal, which is
-// NotFound.
+// NotFound; a log shorter than its own publication is ShorterThanPublished.
 func (s *Store) SealOwn() (Publication, error) {
 	ref := WriterRef{Checkout: s.me}
 	st, err := s.logStream(LogPath(s.me))
 	if err != nil {
 		return Publication{}, err
 	}
-	prior, from, err := s.prior(ref, st.Until.Log)
+	kept, from, prior, err := s.prior(ref, st.Until)
 	if err != nil {
 		return Publication{}, err
 	}
@@ -347,44 +347,93 @@ func (s *Store) SealOwn() (Publication, error) {
 	if err != nil {
 		return Publication{}, err
 	}
-	return NewPublication(ref, st.Until.Log, Seal(prior, Tail{From: from, Bytes: tail}, s.bound))
+	p, err := NewPublication(ref, st.Until.Log, Seal(kept, Tail{From: from, Bytes: tail}, s.bound))
+	if err != nil {
+		return Publication{}, err
+	}
+	p.prior = prior
+	return p, nil
 }
 
-// prior is the full segments of ref's publication of log, and where its
-// open segment starts. A ref holding no publication of this log, absent,
-// torn or of a rewritten log, has none, and sealing starts at 0; the
-// publish that follows replaces the ref (the store's decision 11).
-func (s *Store) prior(ref Ref, log LogID) ([]Kept, Offset, error) {
-	head, ok, err := s.head(ref)
-	if err != nil || !ok {
-		return nil, 0, err
-	}
-	pub, pubLog, err := s.publication(head)
-	if err != nil {
-		return nil, 0, err
-	}
-	if pubLog != log || len(pub.segs) == 0 {
-		return nil, 0, nil
-	}
-	kept := make([]Kept, 0, len(pub.segs)-1)
-	for i, seg := range pub.segs[:len(pub.segs)-1] {
-		kept = append(kept, Kept{Span: Span{From: seg.start, To: pub.segs[i+1].start}, Blob: seg.blob})
-	}
-	return kept, pub.segs[len(pub.segs)-1].start, nil
+// ShorterThanPublished is a log that ends before its own publication of
+// it does. A log only grows, so bytes the ref holds are gone from it, and
+// sealing it would lose them.
+type ShorterThanPublished struct {
+	Ref            Ref
+	Log, Published Offset
 }
 
-// head is the commit ref names, when it names one; a torn ref names none.
-func (s *Store) head(ref Ref) (git.ObjectID, bool, error) {
-	heads, _, err := s.ports.Refs.List(ref.Name())
+func (e ShorterThanPublished) Error() string {
+	return fmt.Sprintf("the log of %s ends at %d, before its publication's end at %d", e.Ref.Name(), e.Log, e.Published)
+}
+
+// prior is the full segments of ref's publication of the log now at
+// until, where its open segment starts, and what was kept. A ref whose
+// publication cannot be kept is resealed from 0, and the publish that
+// follows replaces it (the store's decision 11).
+func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, error) {
+	h, err := s.head(ref)
 	if err != nil {
-		return git.ObjectID{}, false, err
+		return nil, 0, nil, err
+	}
+	switch h := h.(type) {
+	case unnamed:
+		return nil, 0, NoPrior{}, nil
+	case tornRef:
+		return nil, 0, Resealed{Why: h.why}, nil
+	case named:
+		pub, log, err := s.publication(h.commit)
+		switch {
+		case err != nil:
+			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s does not read: %w", h.commit, err)}, nil
+		case log != until.Log:
+			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s", h.commit, log, until.Log)}, nil
+		case pub.end > until.At:
+			return nil, 0, nil, ShorterThanPublished{Ref: ref, Log: until.At, Published: pub.end}
+		case len(pub.segs) == 0:
+			return nil, 0, KeptFrom{Commit: h.commit}, nil
+		}
+		kept := make([]Kept, 0, len(pub.segs)-1)
+		for i, seg := range pub.segs[:len(pub.segs)-1] {
+			kept = append(kept, Kept{Span: Span{From: seg.start, To: pub.segs[i+1].start}, Blob: seg.blob})
+		}
+		return kept, pub.segs[len(pub.segs)-1].start, KeptFrom{Commit: h.commit}, nil
+	}
+	panic(fmt.Sprintf("store: %T is not a refHead", h))
+}
+
+// refHead is what a ref holds: a commit, nothing, or a file that holds no
+// object id.
+//
+//sumtype:decl
+type refHead interface{ refHead() }
+
+type (
+	named   struct{ commit git.ObjectID }
+	unnamed struct{}
+	tornRef struct{ why error }
+)
+
+func (named) refHead()   {}
+func (unnamed) refHead() {}
+func (tornRef) refHead() {}
+
+func (s *Store) head(ref Ref) (refHead, error) {
+	heads, bad, err := s.ports.Refs.List(ref.Name())
+	if err != nil {
+		return nil, err
 	}
 	for _, h := range heads {
 		if h.Name == ref.Name() {
-			return h.Target, true, nil
+			return named{commit: h.Target}, nil
 		}
 	}
-	return git.ObjectID{}, false, nil
+	for _, b := range bad {
+		if b.Name == ref.Name() {
+			return tornRef{why: b.Why}, nil
+		}
+	}
+	return unnamed{}, nil
 }
 
 // RefMove is what a publish did to its ref.
@@ -395,7 +444,7 @@ type RefMove interface{ move() }
 // RefUnchanged is a ref that already named the commit: nothing to send.
 type RefUnchanged struct{}
 
-// RefCreated is a ref that named nothing before.
+// RefCreated is a ref that named no commit before: absent, or torn.
 type RefCreated struct{}
 
 // RefReplaced is a ref replaced from Previous, never advanced: the commit
@@ -407,24 +456,25 @@ func (RefCreated) move()   {}
 func (RefReplaced) move()  {}
 
 // Published is what a publish did: the commit its ref now names, the
-// ref's move, the objects it added and their blob bytes, and how many
-// segments it kept and sealed. RefUnchanged with no new objects is a
-// publish with nothing to send.
+// ref's move, the objects it added and their blob bytes, how many
+// segments it kept and sealed, and what it kept of the publication before
+// it. RefUnchanged with no new objects is a publish with nothing to send.
 type Published struct {
 	Commit       git.ObjectID
 	Move         RefMove
 	New          []git.ObjectID
 	NewBytes     uint64
 	Kept, Sealed int
+	Prior        Prior
 }
 
 // Publish makes p the head of its ref as one parentless commit: its fresh
 // segments stored as blobs, one tree of every segment named by its start
-// offset, one commit whose message names the log, and the ref replaced.
-// The commit is a pure function of the tree, so racing publishes of one
-// log converge on one id.
+// offset, one commit whose message names the log, and the ref replaced
+// unless it names that commit already. The commit is a pure function of
+// the tree, so racing publishes of one log converge on one id.
 func (s *Store) Publish(p Publication) (Published, error) {
-	out := Published{New: []git.ObjectID{}}
+	out := Published{New: []git.ObjectID{}, Prior: p.prior}
 	entries := make([]git.Entry, 0, len(p.segs))
 	for _, seg := range p.segs {
 		blob, err := s.store(seg, &out)
@@ -443,14 +493,33 @@ func (s *Store) Publish(p Publication) (Published, error) {
 		return Published{}, err
 	}
 	out.added(commit, stored, 0)
-	if out.Move, err = s.move(p.ref, commit); err != nil {
+	h, err := s.head(p.ref)
+	if err != nil {
 		return Published{}, err
 	}
-	if err := s.ports.Refs.Replace(p.ref.Name(), commit); err != nil {
-		return Published{}, err
+	out.Commit, out.Move = commit, moved(h, commit)
+	switch out.Move.(type) {
+	case RefUnchanged:
+	case RefCreated, RefReplaced:
+		if err := s.ports.Refs.Replace(p.ref.Name(), commit); err != nil {
+			return Published{}, err
+		}
 	}
-	out.Commit = commit
 	return out, nil
+}
+
+// moved is what pointing a ref holding h at to does to it.
+func moved(h refHead, to git.ObjectID) RefMove {
+	switch h := h.(type) {
+	case named:
+		if h.commit == to {
+			return RefUnchanged{}
+		}
+		return RefReplaced{Previous: h.commit}
+	case unnamed, tornRef:
+		return RefCreated{}
+	}
+	panic(fmt.Sprintf("store: %T is not a refHead", h))
 }
 
 // store is a segment's blob: a kept one's id, or a fresh one's bytes put.
@@ -477,19 +546,5 @@ func (out *Published) added(id git.ObjectID, stored git.Stored, bytes int) {
 		out.New = append(out.New, id)
 		out.NewBytes += uint64(bytes)
 	case git.Existing:
-	}
-}
-
-func (s *Store) move(ref Ref, to git.ObjectID) (RefMove, error) {
-	head, ok, err := s.head(ref)
-	switch {
-	case err != nil:
-		return nil, err
-	case !ok:
-		return RefCreated{}, nil
-	case head == to:
-		return RefUnchanged{}, nil
-	default:
-		return RefReplaced{Previous: head}, nil
 	}
 }

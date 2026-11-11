@@ -88,6 +88,9 @@ type (
 		RefMove        string `json:"ref_move"`
 		Previous       string `json:"previous,omitempty"`
 		Commit         string `json:"commit"`
+		Prior          string `json:"prior"`
+		PriorCommit    string `json:"prior_commit,omitempty"`
+		PriorWhy       string `json:"prior_why,omitempty"`
 	}
 )
 
@@ -120,6 +123,7 @@ func storeBlock(f StoreFacts) *storeLine {
 	for _, p := range f.Publishes {
 		pl := publishLine{SegmentsKept: p.Kept, SegmentsSealed: p.Sealed, ObjectsNew: len(p.New), BytesNew: p.NewBytes, Commit: p.Commit.String()}
 		pl.RefMove, pl.Previous = refMove(p.Move)
+		pl.Prior, pl.PriorCommit, pl.PriorWhy = prior(p.Prior)
 		l.Publish = append(l.Publish, pl)
 	}
 	return l
@@ -182,14 +186,14 @@ func refold(m store.Miss) planLine {
 	panic(fmt.Sprintf("command: %T is not a Miss", m))
 }
 
-func created(o store.LogOpened) bool {
+func created(o store.Made) bool {
 	switch o {
 	case store.Created:
 		return true
 	case store.Existing:
 		return false
 	}
-	panic(fmt.Sprintf("command: %d is not a LogOpened", uint8(o)))
+	panic(fmt.Sprintf("command: %d is not a Made", uint8(o)))
 }
 
 func refMove(m store.RefMove) (move, previous string) {
@@ -202,4 +206,18 @@ func refMove(m store.RefMove) (move, previous string) {
 		return "replaced", m.Previous.String()
 	}
 	panic(fmt.Sprintf("command: %T is not a RefMove", m))
+}
+
+// prior is what a publish kept of the publication before it: kept, none,
+// or resealed from 0 and why.
+func prior(p store.Prior) (kept, commit, why string) {
+	switch p := p.(type) {
+	case store.KeptFrom:
+		return "kept", p.Commit.String(), ""
+	case store.NoPrior:
+		return "none", "", ""
+	case store.Resealed:
+		return "resealed", "", p.Why.Error()
+	}
+	panic(fmt.Sprintf("command: %T is not a Prior", p))
 }

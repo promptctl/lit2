@@ -1,6 +1,7 @@
 package command
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -74,10 +75,12 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	hit := store.Plan(store.FoldTag("v1"), h, must[store.SnapshotFile](t)(s.Snapshot()))
 	published := must[store.Published](t)(s.Publish(must[store.Publication](t)(s.SealOwn())))
 	idle := must[store.Published](t)(s.Publish(must[store.Publication](t)(s.SealOwn())))
+	resealed := store.Published{Commit: published.Commit, Move: store.RefCreated{}, New: []git.ObjectID{},
+		Prior: store.Resealed{Why: errors.New("its publication does not read")}}
 	block := storeBlockOf(t, StoreFacts{
 		Heads: []store.Heads{h}, Reads: []Read{{Range: store.Range{Stream: h.Streams[0], From: 0}, Scan: scan}},
 		Plans: []store.Resume{hit}, Swaps: []store.Swapped{swapped}, Appends: []store.Appended{appended},
-		Publishes: []store.Published{published, idle},
+		Publishes: []store.Published{published, idle, resealed},
 	})
 	if a := first(t, block, "append"); a["records"] != 1.0 || a["log_created"] != true || a["log_until"] != float64(appended.Until.At) {
 		t.Errorf("the append is %v; want one record, the log created, its end", a)
@@ -92,15 +95,19 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 		t.Errorf("the swap is %v; want its bytes", sw)
 	}
 	list, _ := block["publish"].([]any)
-	if len(list) != 2 {
-		t.Fatalf("the block holds %d publishes; want 2", len(list))
+	if len(list) != 3 {
+		t.Fatalf("the block holds %d publishes; want 3", len(list))
 	}
-	made, again := list[0].(map[string]any), list[1].(map[string]any)
-	if made["ref_move"] != "created" || made["objects_new"] != 3.0 || made["commit"] != published.Commit.String() {
-		t.Errorf("the first publish is %v; want a created ref, a segment, a tree and a commit new", made)
+	made, again, anew := list[0].(map[string]any), list[1].(map[string]any), list[2].(map[string]any)
+	if made["ref_move"] != "created" || made["objects_new"] != 3.0 || made["commit"] != published.Commit.String() || made["prior"] != "none" {
+		t.Errorf("the first publish is %v; want a created ref, a segment, a tree and a commit new, no prior", made)
 	}
-	if again["ref_move"] != "unchanged" || again["objects_new"] != 0.0 || again["bytes_new"] != 0.0 {
-		t.Errorf("an idle publish is %v; want the ref unchanged and nothing new", again)
+	if again["ref_move"] != "unchanged" || again["objects_new"] != 0.0 || again["bytes_new"] != 0.0 ||
+		again["prior"] != "kept" || again["prior_commit"] != published.Commit.String() {
+		t.Errorf("an idle publish is %v; want the ref unchanged, nothing new, the first publish kept", again)
+	}
+	if anew["prior"] != "resealed" || anew["prior_why"] != "its publication does not read" {
+		t.Errorf("a resealed publish is %v; want resealed and its reason", anew)
 	}
 }
 

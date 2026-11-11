@@ -27,9 +27,10 @@ type Files interface {
 	// NotFound.
 	Append(p Path, b []byte) (end uint64, err error)
 	// CreateOnce creates the file holding b unless it exists: b is written
-	// to a temporary file linked into place, so exactly one creation wins
-	// and the file is never seen partly written.
-	CreateOnce(p Path, b []byte) (LogOpened, error)
+	// to a temporary file, fsynced and linked into place, so exactly one
+	// creation wins and the file is never seen, nor left by a crash,
+	// partly written.
+	CreateOnce(p Path, b []byte) (Made, error)
 	// ReadAt reads up to n bytes at off, fewer at the end of the file.
 	ReadAt(p Path, off, n uint64) ([]byte, error)
 	Size(p Path) (uint64, error)
@@ -40,12 +41,13 @@ type Files interface {
 	List(dir Path) ([]Path, error)
 }
 
-// LogOpened says whether an open found the file there or created it.
-type LogOpened uint8
+// Made is the outcome of a create-once: the file was created, or found
+// there already.
+type Made uint8
 
 // The two answers of CreateOnce.
 const (
-	Existing LogOpened = iota + 1
+	Existing Made = iota + 1
 	Created
 )
 
@@ -88,14 +90,19 @@ func (o OSFiles) Append(p Path, b []byte) (end uint64, err error) {
 	return uint64(at), err
 }
 
-func (o OSFiles) CreateOnce(p Path, b []byte) (opened LogOpened, err error) {
+func (o OSFiles) CreateOnce(p Path, b []byte) (made Made, err error) {
 	dir := filepath.Dir(o.file(p))
-	tmp, err := o.temp(dir, b)
+	f, err := o.temp(dir, b)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { err = errors.Join(err, os.Remove(tmp)) }()
-	err = os.Link(tmp, o.file(p))
+	defer func() { err = errors.Join(err, os.Remove(f.Name())) }()
+	// the bytes are on disk before their name is, so a power loss leaves no
+	// file or a whole one, never an empty one every append then refuses
+	if err := errors.Join(f.Sync(), f.Close()); err != nil {
+		return 0, err
+	}
+	err = os.Link(f.Name(), o.file(p))
 	if errors.Is(err, fs.ErrExist) {
 		return Existing, nil
 	}
@@ -116,20 +123,23 @@ func syncDir(dir string) (err error) {
 }
 
 // temp writes b to a new temporary file in dir, creating dir, and returns
-// its path. Its name starts with ., which List never reports.
-func (o OSFiles) temp(dir string, b []byte) (string, error) {
+// it open. Its name starts with ., which List never reports. Every file
+// the store makes is 0644 in a 0755 directory, as go-git makes lit's
+// objects, so whoever can read a clone's objects can read its logs and
+// snapshot too.
+func (o OSFiles) temp(dir string, b []byte) (*os.File, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return nil, err
 	}
 	f, err := os.CreateTemp(dir, ".tmp-")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	_, werr := f.Write(b)
-	if err := errors.Join(werr, f.Close()); err != nil {
-		return "", errors.Join(err, os.Remove(f.Name()))
+	if err := errors.Join(werr, f.Chmod(0o644)); err != nil {
+		return nil, errors.Join(err, f.Close(), os.Remove(f.Name()))
 	}
-	return f.Name(), nil
+	return f, nil
 }
 
 func (o OSFiles) ReadAt(p Path, off, n uint64) (b []byte, err error) {
@@ -150,12 +160,15 @@ func (o OSFiles) Size(p Path) (uint64, error) {
 }
 
 func (o OSFiles) Replace(p Path, b []byte) error {
-	tmp, err := o.temp(filepath.Dir(o.file(p)), b)
+	f, err := o.temp(filepath.Dir(o.file(p)), b)
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, o.file(p)); err != nil {
-		return errors.Join(err, os.Remove(tmp))
+	if err := f.Close(); err != nil {
+		return errors.Join(err, os.Remove(f.Name()))
+	}
+	if err := os.Rename(f.Name(), o.file(p)); err != nil {
+		return errors.Join(err, os.Remove(f.Name()))
 	}
 	return nil
 }
@@ -198,7 +211,7 @@ func (m *MemoryFiles) Append(p Path, b []byte) (uint64, error) {
 	return uint64(len(m.files[p])), nil
 }
 
-func (m *MemoryFiles) CreateOnce(p Path, b []byte) (LogOpened, error) {
+func (m *MemoryFiles) CreateOnce(p Path, b []byte) (Made, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.files[p]; ok {

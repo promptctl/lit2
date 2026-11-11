@@ -1,7 +1,6 @@
 package git
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -35,8 +34,8 @@ func NewMemory() *Memory {
 // List is every ref under prefix, sorted by name. A ref in memory always
 // holds an object id, so none is bad.
 func (m *Memory) List(prefix RefName) ([]RefHead, []BadRef, error) {
-	if !strings.HasPrefix(string(prefix), "refs/") {
-		return nil, nil, fmt.Errorf("%q is not a prefix under refs/", prefix)
+	if err := checkPrefix(prefix); err != nil {
+		return nil, nil, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -51,8 +50,8 @@ func (m *Memory) List(prefix RefName) ([]RefHead, []BadRef, error) {
 
 // Replace points name at to.
 func (m *Memory) Replace(name RefName, to ObjectID) error {
-	if !strings.HasPrefix(string(name), "refs/") {
-		return fmt.Errorf("%q is not a refname under refs/", name)
+	if err := checkRefName(name); err != nil {
+		return err
 	}
 	if _, err := to.hash(); err != nil {
 		return err

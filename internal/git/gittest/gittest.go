@@ -170,6 +170,17 @@ func Refs(t *testing.T, fresh func(*testing.T) git.Refs) {
 			}
 		}
 	})
+	t.Run("a name outside refs/, unclean or with a dot component is refused", func(t *testing.T) {
+		refs := fresh(t)
+		for _, name := range []git.RefName{"HEAD", "lit/log/w", "refs/lit/../w", "refs/lit//w", "refs/lit/w/", "refs/lit/.w", "refs/lit/.ref-1"} {
+			if err := refs.Replace(name, a); err == nil {
+				t.Errorf("Replace(%q) = nil; want a refusal", name)
+			}
+		}
+		if heads := list(t, refs, "refs/"); len(heads) != 0 {
+			t.Errorf("after refused replaces the refs are %v", heads)
+		}
+	})
 	t.Run("a list is sorted and holds only its prefix", func(t *testing.T) {
 		refs := fresh(t)
 		for _, name := range []git.RefName{"refs/lit/log/b", "refs/lit/inbox/c", "refs/lit/log/a", "refs/other/d"} {

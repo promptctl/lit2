@@ -8,10 +8,10 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/cache"
@@ -28,30 +28,55 @@ import (
 type Repository struct {
 	objectDB
 	dir string
+	db  *storage
+}
+
+// storage is a repository's one go-git storage, built once the repository
+// exists and shared by every copy of its Repository, and the lock every
+// object operation holds while it uses it.
+type storage struct {
+	mu sync.Mutex
+	fs *filesystem.Storage
 }
 
 // RepositoryAt is lit's repository at dir, which need not exist yet.
 func RepositoryAt(dir string) Repository {
-	r := Repository{dir: dir}
+	r := Repository{dir: dir, db: &storage{}}
 	r.objectDB = objectDB{reach: r.reach}
 	return r
 }
 
-// reach opens the repository's object storer. A repository not yet created
-// holds no objects, which an empty storer says exactly.
+// reach hands over the repository's storer, locked until released.
 func (r Repository) reach(create bool) (storer.EncodedObjectStorer, func(), error) {
+	r.db.mu.Lock()
+	s, err := r.storer(create)
+	if err != nil {
+		r.db.mu.Unlock()
+		return nil, nil, err
+	}
+	return s, r.db.mu.Unlock, nil
+}
+
+// storer is the repository's storage, built the first time the repository
+// exists. A repository not yet created holds no objects, which an empty
+// storer says exactly, and nothing is kept of it.
+func (r Repository) storer(create bool) (storer.EncodedObjectStorer, error) {
+	if r.db.fs != nil {
+		return r.db.fs, nil
+	}
 	exists, err := r.exists()
 	switch {
 	case err != nil:
-		return nil, nil, err
+		return nil, err
 	case !exists && !create:
-		return memory.NewStorage(), func() {}, nil
+		return memory.NewStorage(), nil
 	case !exists:
 		if err := r.create(); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
-	return filesystem.NewStorage(osfs.New(r.dir), cache.NewObjectLRUDefault()), func() {}, nil
+	r.db.fs = filesystem.NewStorage(osfs.New(r.dir), cache.NewObjectLRUDefault())
+	return r.db.fs, nil
 }
 
 func (r Repository) exists() (bool, error) {
@@ -112,8 +137,8 @@ func bare(dir string) error {
 // List reads the refs under prefix from packed-refs and from the loose ref
 // files, a loose ref winning over its packed copy, as git reads them.
 func (r Repository) List(prefix RefName) ([]RefHead, []BadRef, error) {
-	if !strings.HasPrefix(string(prefix), "refs/") {
-		return nil, nil, fmt.Errorf("%q is not a prefix under refs/", prefix)
+	if err := checkPrefix(prefix); err != nil {
+		return nil, nil, err
 	}
 	found := map[RefName]refFile{}
 	if err := r.packed(prefix, found); err != nil {
@@ -208,8 +233,8 @@ func (r Repository) loose(prefix RefName, found map[RefName]refFile) error {
 // one whole, never an empty file, and no lock is taken (the store's
 // decision 6). It creates the repository first, as every write does.
 func (r Repository) Replace(name RefName, to ObjectID) error {
-	if !strings.HasPrefix(string(name), "refs/") || path.Clean(string(name)) != string(name) {
-		return fmt.Errorf("%q is not a refname under refs/", name)
+	if err := checkRefName(name); err != nil {
+		return err
 	}
 	if _, err := to.hash(); err != nil {
 		return err
@@ -226,7 +251,8 @@ func (r Repository) Replace(name RefName, to ObjectID) error {
 		return err
 	}
 	_, werr := tmp.WriteString(to.String() + "\n")
-	if err := errors.Join(werr, tmp.Close()); err != nil {
+	// 0644, as go-git writes the objects the ref names
+	if err := errors.Join(werr, tmp.Chmod(0o644), tmp.Close()); err != nil {
 		return errors.Join(err, os.Remove(tmp.Name()))
 	}
 	if err := os.Rename(tmp.Name(), file); err != nil {

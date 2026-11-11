@@ -44,13 +44,15 @@ func span(s Segment) Span {
 // no overlap. A writer's publication, an inbox's and a rewrite are all one
 // Publication with different values `[LAW:one-type-per-behavior]`.
 type Publication struct {
-	ref  Ref
-	log  LogID
-	segs []Segment
+	ref   Ref
+	log   LogID
+	segs  []Segment
+	prior Prior
 }
 
 // NewPublication is the publication of segs on ref for log, refusing
-// segments that leave a gap, overlap, or hold no bytes.
+// segments that leave a gap, overlap, or hold no bytes. Its caller built
+// every segment, so it read no prior publication.
 func NewPublication(ref Ref, log LogID, segs []Segment) (Publication, error) {
 	var at Offset
 	for i, s := range segs {
@@ -63,8 +65,31 @@ func NewPublication(ref Ref, log LogID, segs []Segment) (Publication, error) {
 		}
 		at = sp.To
 	}
-	return Publication{ref: ref, log: log, segs: segs}, nil
+	return Publication{ref: ref, log: log, segs: segs, prior: NoPrior{}}, nil
 }
+
+// Prior is what a publication kept of the one its ref held before it.
+//
+//sumtype:decl
+type Prior interface{ prior() }
+
+// KeptFrom is a prior publication of the same log, whose full segments
+// were kept.
+type KeptFrom struct{ Commit git.ObjectID }
+
+// NoPrior is no prior publication read: the ref named none, or the caller
+// built every segment.
+type NoPrior struct{}
+
+// Resealed is a ref whose publication could not be kept, torn, unreadable
+// or of another log, so sealing started at 0: the log derives it again
+// (the store's decision 11), and Why says why
+// `[LAW:nothing-unseen]`.
+type Resealed struct{ Why error }
+
+func (KeptFrom) prior() {}
+func (NoPrior) prior()  {}
+func (Resealed) prior() {}
 
 // SegmentBound is the most bytes a sealed segment holds, unless one frame
 // alone is larger. It bounds what a publish re-sends; it is not a wire

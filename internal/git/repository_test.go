@@ -3,7 +3,6 @@ package git_test
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -31,37 +30,6 @@ func TestRefsContract(t *testing.T) {
 	})
 }
 
-// run runs the git binary, the oracle these tests hold lit to, in dir, with
-// no user or system config. lit's code never runs it; a machine without it
-// fails these tests rather than skipping them.
-func run(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	bin, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatalf("these tests need the git binary as their oracle: %v", err)
-	}
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
-	}
-	return strings.TrimRight(string(out), "\n")
-}
-
-// physical is a temporary directory by its physical path, as Locate and
-// git both report it.
-func physical(t *testing.T) string {
-	t.Helper()
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
 // agrees holds Locate from dir to what git rev-parse says of it.
 func agrees(t *testing.T, dir string) {
 	t.Helper()
@@ -69,21 +37,21 @@ func agrees(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatalf("Locate(%s): %v", dir, err)
 	}
-	want := strings.Split(run(t, dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"), "\n")
+	want := strings.Split(gittest.Git(t, dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"), "\n")
 	if have := []string{got.WorkTree, got.GitDir, got.CommonDir}; !slices.Equal(have, want) {
 		t.Errorf("Locate(%s) = %v; git says %v", dir, have, want)
 	}
 }
 
 func TestLocateAgreesWithGit(t *testing.T) {
-	root := physical(t)
+	root := gittest.Physical(t)
 	main, linked, sub := filepath.Join(root, "main"), filepath.Join(root, "linked"), filepath.Join(root, "sub")
-	run(t, root, "init", "-q", "-b", "main", main)
-	run(t, main, "commit", "-q", "--allow-empty", "-m", "first")
-	run(t, main, "worktree", "add", "-q", linked)
-	run(t, root, "init", "-q", "-b", "main", sub)
-	run(t, sub, "commit", "-q", "--allow-empty", "-m", "first")
-	run(t, main, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub")
+	gittest.Git(t, root, "init", "-q", "-b", "main", main)
+	gittest.Git(t, main, "commit", "-q", "--allow-empty", "-m", "first")
+	gittest.Git(t, main, "worktree", "add", "-q", linked)
+	gittest.Git(t, root, "init", "-q", "-b", "main", sub)
+	gittest.Git(t, sub, "commit", "-q", "--allow-empty", "-m", "first")
+	gittest.Git(t, main, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub")
 	for _, dir := range []string{main, linked, filepath.Join(main, "sub")} {
 		agrees(t, dir)
 	}
@@ -91,21 +59,21 @@ func TestLocateAgreesWithGit(t *testing.T) {
 
 func TestReadObjectFormatAgreesWithGit(t *testing.T) {
 	for _, format := range []git.ObjectFormat{git.SHA1, git.SHA256} {
-		dir := physical(t)
-		run(t, dir, "init", "-q", "--object-format="+format.String())
+		dir := gittest.Physical(t)
+		gittest.Git(t, dir, "init", "-q", "--object-format="+format.String())
 		c, err := git.Locate(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
 		got, err := git.ReadObjectFormat(c.CommonDir)
-		if want := run(t, dir, "rev-parse", "--show-object-format"); err != nil || got.String() != want || got != format {
+		if want := gittest.Git(t, dir, "rev-parse", "--show-object-format"); err != nil || got.String() != want || got != format {
 			t.Errorf("ReadObjectFormat in a %s repository = %v, %v; git says %s", format, got, err, want)
 		}
 	}
 }
 
 func TestRepositoryListsPackedAndLooseRefs(t *testing.T) {
-	dir := filepath.Join(physical(t), "repo")
+	dir := filepath.Join(gittest.Physical(t), "repo")
 	repo := git.RepositoryAt(dir)
 	blob, _, err := repo.PutBlob([]byte("hello\n"))
 	if err != nil {
@@ -115,9 +83,9 @@ func TestRepositoryListsPackedAndLooseRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run(t, dir, "update-ref", "refs/lit/log/packed", blob.String())
-	run(t, dir, "update-ref", "refs/lit/log/both", blob.String())
-	run(t, dir, "pack-refs", "--all")
+	gittest.Git(t, dir, "update-ref", "refs/lit/log/packed", blob.String())
+	gittest.Git(t, dir, "update-ref", "refs/lit/log/both", blob.String())
+	gittest.Git(t, dir, "pack-refs", "--all")
 	if err := repo.Replace("refs/lit/log/both", other); err != nil {
 		t.Fatal(err)
 	}
@@ -129,13 +97,13 @@ func TestRepositoryListsPackedAndLooseRefs(t *testing.T) {
 	if err != nil || len(bad) != 0 || !slices.Equal(heads, want) {
 		t.Errorf("List = %v, %v, %v; want %v, the loose ref over its packed copy", heads, bad, err, want)
 	}
-	if got := run(t, dir, "rev-parse", "refs/lit/log/both"); got != other.String() {
+	if got := gittest.Git(t, dir, "rev-parse", "refs/lit/log/both"); got != other.String() {
 		t.Errorf("git reads the replaced ref as %s; want %s", got, other)
 	}
 }
 
 func TestATornRefIsBadAndTheRestRead(t *testing.T) {
-	dir := filepath.Join(physical(t), "repo")
+	dir := filepath.Join(gittest.Physical(t), "repo")
 	repo := git.RepositoryAt(dir)
 	blob, _, err := repo.PutBlob([]byte("x"))
 	if err != nil {
@@ -155,7 +123,7 @@ func TestATornRefIsBadAndTheRestRead(t *testing.T) {
 }
 
 func TestReadingCreatesNoRepository(t *testing.T) {
-	dir := filepath.Join(physical(t), "repo")
+	dir := filepath.Join(gittest.Physical(t), "repo")
 	repo := git.RepositoryAt(dir)
 	if _, err := repo.Blob(gittest.ID(t, "ce013625030ba8dba906f756967f9e9ca394464a")); !errors.As(err, new(git.MissingObject)) {
 		t.Errorf("reading an absent repository failed with %v; want MissingObject", err)

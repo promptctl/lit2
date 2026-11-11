@@ -3,6 +3,8 @@ package git
 import (
 	"encoding/hex"
 	"fmt"
+	"path"
+	"strings"
 )
 
 // ObjectFormat is the hash function a repository names its objects by.
@@ -125,6 +127,31 @@ type Refs interface {
 	// and every such ref that does not hold an object id.
 	List(prefix RefName) ([]RefHead, []BadRef, error)
 	Replace(name RefName, to ObjectID) error
+}
+
+// checkRefName is the one check both of lit's repositories make of a
+// name they write, so the one on disk and its twin take the same names
+// `[LAW:single-enforcer]`: a clean path under refs/, no component
+// starting with ., which refnames forbid and which marks a replace's
+// temporary file.
+func checkRefName(n RefName) error {
+	s := string(n)
+	bad := checkPrefix(n) != nil || path.Clean(s) != s
+	for _, c := range strings.Split(s, "/") {
+		bad = bad || strings.HasPrefix(c, ".")
+	}
+	if bad {
+		return fmt.Errorf("%q is not a refname under refs/", n)
+	}
+	return nil
+}
+
+// checkPrefix refuses a list prefix outside refs/.
+func checkPrefix(p RefName) error {
+	if !strings.HasPrefix(string(p), "refs/") {
+		return fmt.Errorf("%q is not a prefix under refs/", p)
+	}
+	return nil
 }
 
 // MissingObject is an id the object database does not hold.
