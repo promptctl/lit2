@@ -11,6 +11,8 @@ it strained. Where `architecture.md` and another document here disagree,
 - `architecture.md`: the unified architecture and build order.
 - `scenarios.md`: paper walk-throughs of sixteen common situations, with the
   strains they found and how each was resolved.
+- `build-map.md`: the capability map the backlog is a view of; the slices,
+  the walking skeleton first.
 - `columns-and-phases.md`: column, phase and workflow state are one concept; the
   column is the one stored fact, labels are computed; rework is verdicts inside
   review. Owns the column graph at `/columns`.
