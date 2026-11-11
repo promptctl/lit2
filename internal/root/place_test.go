@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 // checkout makes a main worktree in a temporary directory, its id file
@@ -40,14 +39,9 @@ func writerAt(t *testing.T, dir string) command.Writer {
 }
 
 func TestTheIDFileGivesTheWriter(t *testing.T) {
-	const hex = "7a1e0f7b112d4c889e015a6b3c2f4099\n"
-	dir, _ := checkout(t, hex)
-	want, err := store.ParseCheckoutID(strings.TrimSpace(hex))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := writerAt(t, dir); got != (command.Minted{ID: want}) {
-		t.Errorf("the writer is %#v; want Minted %s", got, want)
+	dir, _ := checkout(t, string(twinID.FileText()))
+	if got := writerAt(t, dir); got != (command.Minted{ID: twinID}) {
+		t.Errorf("the writer is %#v; want Minted %s", got, twinID)
 	}
 }
 
@@ -89,18 +83,37 @@ func TestAnUnwritableLogIsSaidAndTheStatusStands(t *testing.T) {
 }
 
 func TestAnUnremovableOldDayFileStillLeavesTheRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes files from a directory whatever its mode")
+	}
 	dir := t.TempDir()
-	// a directory with something in it is a day file os.Remove cannot remove
-	if err := os.MkdirAll(filepath.Join(dir, "2026-09-01.jsonl", "held"), 0o700); err != nil {
+	// a directory named as a day file is not one, so pruning passes it by;
+	// something in it would make its removal fail
+	if err := os.MkdirAll(filepath.Join(dir, "2026-09-02.jsonl", "held"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	twin := NewTwin()
 	twin.Process.Commands = command.NewLog(dir)
+	if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.Len() != 0 {
+		t.Fatalf("--help beside a directory named as an old day file: status %d, stderr %q", status, twin.Err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "2026-09-01.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// today's file takes the append; the old one cannot be removed
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Error(err)
+		}
+	})
 	if status := Run(twin.Process, []string{"--help"}); status != 0 || !strings.HasPrefix(twin.Err.String(), "lit2: command log: pruning failed: ") {
 		t.Errorf("--help with an unremovable old day file: status %d, stderr %q", status, twin.Err)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "2026-11-11.jsonl")); err != nil || strings.Count(string(b), "\n") != 1 {
-		t.Errorf("the log holds %q, %v; want the one new line", b, err)
+	if b, err := os.ReadFile(filepath.Join(dir, "2026-11-11.jsonl")); err != nil || strings.Count(string(b), "\n") != 2 {
+		t.Errorf("the log holds %q, %v; want both lines", b, err)
 	}
 }
 

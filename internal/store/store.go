@@ -9,6 +9,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 )
@@ -30,3 +31,16 @@ func ParseCheckoutID(s string) (CheckoutID, error) {
 
 // String writes the id as 32 lowercase hex digits.
 func (id CheckoutID) String() string { return hex.EncodeToString(id[:]) }
+
+// ReadCheckoutIDFile reads the id file's form (D11), exactly: the id's 32
+// lowercase hex digits and one newline. It is FileText's inverse.
+func ReadCheckoutIDFile(b []byte) (CheckoutID, error) {
+	text, ok := bytes.CutSuffix(b, []byte("\n"))
+	if !ok {
+		return CheckoutID{}, fmt.Errorf("checkout id file %q does not end in a newline", b)
+	}
+	return ParseCheckoutID(string(text))
+}
+
+// FileText is the id in the id file's form, which ReadCheckoutIDFile reads.
+func (id CheckoutID) FileText() []byte { return []byte(id.String() + "\n") }

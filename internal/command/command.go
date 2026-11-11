@@ -117,13 +117,14 @@ func (Internal) Reason() string { return "internal" }
 
 // Record runs work as one invocation and returns its event on every path.
 // The first clock reading is now, handed to work and recorded as Started;
-// the second is only the duration. Work says what was asked through asked
-// as soon as it knows, before its body runs, so the event keeps the last
-// summary given even when the body panics `[LAW:nothing-unseen]`; the
-// panic becomes an Internal outcome carrying its value and stack.
+// the second is only the duration. What was asked is Unparsed until work
+// says otherwise through asked, as soon as it knows, before its body runs,
+// so the event keeps the last summary given even when the body panics
+// `[LAW:nothing-unseen]`; the panic becomes an Internal outcome carrying
+// its value and stack.
 func Record(c Clock, inv Invocation, work func(now time.Time, asked func(cli.Summary)) cli.Outcome) Event {
 	started := c.Now()
-	var summary cli.Summary
+	summary := cli.Summary{Name: cli.Unparsed}
 	outcome := recovered(func() cli.Outcome { return work(started, func(s cli.Summary) { summary = s }) })
 	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Outcome: outcome}
 }

@@ -27,15 +27,20 @@ func TestSmoke(t *testing.T) {
 		args         []string
 		status       int
 		stdout, errs string
+		brokenPipe   bool
 	}{
-		{nil, 0, "admin sync", ""},
-		{[]string{"--help"}, 0, "admin init", ""},
-		{[]string{"frobnicate"}, 64, "", "error (reason=unknown_verb): "},
+		{nil, 0, "admin sync", "", false},
+		{[]string{"--help"}, 0, "admin init", "", false},
+		{[]string{"frobnicate"}, 64, "", "error (reason=unknown_verb): ", false},
+		{nil, 78, "", "error (reason=output): ", true},
 	} {
 		cmd := exec.Command(bin, tc.args...)
 		cmd.Dir, cmd.Env = tmp, append(os.Environ(), "XDG_STATE_HOME="+state)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if tc.brokenPipe {
+			cmd.Stdout = brokenPipe(t)
+		}
 		status := 0
 		var exit *exec.ExitError
 		if err := cmd.Run(); errors.As(err, &exit) {
@@ -82,4 +87,23 @@ func TestSmoke(t *testing.T) {
 			t.Errorf("run %d exited %d and its line records %d", i, statuses[i], recorded[i])
 		}
 	}
+}
+
+// brokenPipe is the write end of a pipe whose reader closed before lit2
+// started, so lit2's first write to it gets EPIPE, with no timing involved.
+func brokenPipe(t *testing.T) *os.File {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := w.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return w
 }

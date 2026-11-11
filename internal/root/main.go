@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
-	"strings"
+	"syscall"
 	"time"
 
 	"github.com/promptctl/lit2/internal/command"
@@ -19,8 +20,11 @@ import (
 
 // Main is production: it reads the world into a Process, once, and runs the
 // invocation. Every read of the process's world is here
-// `[LAW:effects-at-boundaries]`.
+// `[LAW:effects-at-boundaries]`. It ignores SIGPIPE, which would kill the
+// process at its first write to a stdout pipe whose reader is gone, so that
+// write returns EPIPE and the invocation keeps its exit status and its record.
 func Main(args []string) int {
+	signal.Ignore(syscall.SIGPIPE)
 	return Run(Process{
 		Clock:    systemClock{},
 		Entropy:  rand.Reader,
@@ -60,9 +64,8 @@ func place(dir string) command.Place {
 	return command.InCheckout{Checkout: c, Writer: writer(filepath.Join(c.PrivateDir(), "id"))}
 }
 
-// writer reads the checkout id file at path (D11): 32 lowercase hex digits
-// and a newline. No file is Unminted; a file that is not an id is
-// Unreadable, a different fact.
+// writer reads the checkout id file at path. No file is Unminted; a file
+// that is not an id is Unreadable, a different fact.
 func writer(path string) command.Writer {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -71,7 +74,7 @@ func writer(path string) command.Writer {
 	if err != nil {
 		return command.Unreadable{Path: path, Err: err}
 	}
-	id, err := store.ParseCheckoutID(strings.TrimSuffix(string(b), "\n"))
+	id, err := store.ReadCheckoutIDFile(b)
 	if err != nil {
 		return command.Unreadable{Path: path, Err: err}
 	}

@@ -68,7 +68,9 @@ func Locate(dir string) (Checkout, error) {
 
 // readGitdirFile reads a .git file, as git worktree add and submodules write
 // it: one gitdir: line naming the git dir, relative to the file's directory
-// or absolute.
+// or absolute. The git dir it names must be a directory: a pruned or copied
+// worktree's .git file names one that is gone, and that is no checkout
+// `[LAW:parse-dont-validate]`.
 func readGitdirFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -78,7 +80,15 @@ func readGitdirFile(path string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("%s: no gitdir: line", path)
 	}
-	return resolve(filepath.Dir(path), named), nil
+	gitDir := resolve(filepath.Dir(path), named)
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		return "", fmt.Errorf("%s names a git dir that cannot be read: %w", path, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s names %s, which is not a directory", path, gitDir)
+	}
+	return gitDir, nil
 }
 
 // readCommondir reads <git-dir>/commondir, which a linked worktree's git dir

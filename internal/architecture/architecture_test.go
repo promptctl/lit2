@@ -120,15 +120,20 @@ func checkCode(tree fs.FS, mod string, rank map[string]int, declared map[string]
 		return nil, err
 	}
 	for _, u := range units {
-		if _, ok := rank[u.Name()]; !ok || !u.IsDir() {
+		if _, ok := rank[u.Name()]; !ignored(u.Name()) && (!ok || !u.IsDir()) {
 			vs = append(vs, violation{"internal/" + u.Name(), unlisted})
 		}
 	}
 	fset := token.NewFileSet()
 	for _, top := range []string{"cmd", "internal"} {
 		err := fs.WalkDir(tree, top, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
+			switch {
+			case err != nil:
 				return err
+			case d.IsDir() && ignored(d.Name()):
+				return fs.SkipDir
+			case d.IsDir() || ignored(d.Name()) || !strings.HasSuffix(path, ".go"):
+				return nil
 			}
 			src, err := fs.ReadFile(tree, path)
 			if err != nil {
@@ -152,12 +157,22 @@ func checkCode(tree fs.FS, mod string, rank map[string]int, declared map[string]
 	return vs, nil
 }
 
+// ignored is whether the go tool passes a file or directory by, as it does
+// testdata and any name starting with . or _, so it is no part of the tree.
+func ignored(name string) bool {
+	return name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
+}
+
 func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int, declared map[string]string) []violation {
 	var vs []violation
+	test := strings.HasSuffix(path, "_test.go")
 	imported := map[string]string{} // the name a file uses for an import → its path
 	for _, imp := range f.Imports {
 		ip := strings.Trim(imp.Path.Value, "`\"")
 		imported[localName(imp, ip)] = ip
+		if imp.Name != nil && imp.Name.Name == "." && world[ip] != nil && !test && owner != "root" {
+			vs = append(vs, violation{path + ": import . " + ip, ambient})
+		}
 		at := violation{path + ": import " + ip, ""}
 		if rest, ok := strings.CutPrefix(ip, mod+"/internal/"); ok {
 			unit := strings.Split(rest, "/")[0]
@@ -176,7 +191,6 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 			vs = append(vs, at)
 		}
 	}
-	test := strings.HasSuffix(path, "_test.go")
 	ast.Inspect(f, func(n ast.Node) bool {
 		sel, ok := n.(*ast.SelectorExpr)
 		if !ok {
@@ -194,7 +208,7 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 		switch {
 		case ip == "os" && name == "Exit" && owner != "cmd":
 			vs = append(vs, violation{path + ": os.Exit", exits})
-		case !test && owner != "root" && reads(ip, name) && (owner != "cmd" || ip+"."+name != "os.Args"):
+		case !test && owner != "root" && world[ip] != nil && world[ip](name) && (owner != "cmd" || ip+"."+name != "os.Args"):
 			vs = append(vs, violation{path + ": " + ip + "." + name, ambient})
 		}
 		return true
@@ -224,27 +238,34 @@ func declaredFor(declared map[string]string, ip, owner string) bool {
 	return false
 }
 
-// reads is whether ip.name reads the process's world: its clock and
-// timers, its environment, host and directories, its arguments and
-// streams, its entropy, the standard logger, or the shared source behind
-// math/rand's top-level functions.
-func reads(ip, name string) bool {
-	switch ip {
-	case "time":
-		return slices.Contains([]string{"Now", "Since", "Until", "After", "Tick", "Sleep", "NewTimer", "NewTicker", "AfterFunc"}, name)
-	case "os":
-		return slices.Contains([]string{"Getenv", "LookupEnv", "Environ", "Getwd", "Args", "Stdin", "Stdout", "Stderr",
-			"Hostname", "UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir", "Executable"}, name)
-	case "crypto/rand":
-		return slices.Contains([]string{"Reader", "Read", "Text"}, name)
-	case "fmt":
-		return slices.Contains([]string{"Print", "Printf", "Println"}, name)
-	case "log":
-		return true // the standard logger writes stderr, and log.Fatal* calls os.Exit
-	case "math/rand", "math/rand/v2":
-		return !slices.Contains([]string{"New", "NewSource", "NewPCG", "NewChaCha8", "NewZipf", "Rand", "Source", "Source64", "PCG", "ChaCha8", "Zipf"}, name)
-	}
-	return false
+// world is each package that can read the process's world, with which of
+// its names do: its clock and timers, its environment, host, process, user
+// and directories, its arguments and streams, its entropy, the standard
+// logger, or the shared source behind math/rand's top-level functions. A
+// dot import of one hides its names from the selector check, so the import
+// is itself a read.
+var world = map[string]func(name string) bool{
+	"time": oneOf("Now", "Since", "Until", "After", "Tick", "Sleep", "NewTimer", "NewTicker", "AfterFunc"),
+	"os": oneOf("Getenv", "LookupEnv", "Environ", "ExpandEnv", "Getwd", "Args", "Stdin", "Stdout", "Stderr",
+		"Hostname", "Getpid", "Getuid", "UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir", "Executable"),
+	"crypto/rand":  oneOf("Reader", "Read", "Text"),
+	"fmt":          oneOf("Print", "Printf", "Println"),
+	"log":          everyName, // the standard logger writes stderr, and log.Fatal* calls os.Exit
+	"os/user":      everyName,
+	"math/rand":    sharedSource,
+	"math/rand/v2": sharedSource,
+}
+
+func oneOf(names ...string) func(string) bool {
+	return func(name string) bool { return slices.Contains(names, name) }
+}
+
+func everyName(string) bool { return true }
+
+// sharedSource is every math/rand name but the constructors and types,
+// which draw from a source the caller gives.
+func sharedSource(name string) bool {
+	return !slices.Contains([]string{"New", "NewSource", "NewPCG", "NewChaCha8", "NewZipf", "Rand", "Source", "Source64", "PCG", "ChaCha8", "Zipf"}, name)
 }
 
 var (
@@ -385,6 +406,9 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"a timer outside root", "internal/cli/cli.go", "package cli\n\nimport \"time\"\n\nfunc Wait() { time.Sleep(time.Second) }\n", ambient},
 		{"the standard logger outside root", "internal/cli/cli.go", "package cli\n\nimport \"log\"\n\nfunc Say() { log.Printf(\"hi\") }\n", ambient},
 		{"the host outside root", "internal/git/git.go", "package git\n\nimport \"os\"\n\nvar H, _ = os.Hostname()\n", ambient},
+		{"a dot import of time outside root", "internal/cli/cli.go", "package cli\n\nimport . \"time\"\n\nvar At = Now()\n", ambient},
+		{"os/user outside root", "internal/git/git.go", "package git\n\nimport \"os/user\"\n\nvar U, _ = user.Current()\n", ambient},
+		{"a file under internal/", "internal/README", "notes\n", unlisted},
 		{"os.Exit outside cmd/lit2", "internal/root/exit.go", "package root\n\nimport \"os\"\n\nfunc init() { os.Exit(0) }\n", exits},
 		{"a §3 heading with no row", "design-docs/architecture.md", strings.Replace(design, "## 5.", "### 3.2 Event and intent\n\n## 5.", 1), missingRow},
 		{"a §5 step with no row", "design-docs/architecture.md", strings.Replace(design, "## 6.", "2. **Parse** the file.\n\n## 6.", 1), missingRow},
@@ -401,5 +425,15 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		if !slices.ContainsFunc(vs, func(v violation) bool { return v.rule == tc.want }) {
 			t.Errorf("%s: the checker names %v; want a violation that %s", tc.name, vs, tc.want)
 		}
+	}
+}
+
+func TestTheCheckerPassesByWhatTheGoToolIgnores(t *testing.T) {
+	tree := synthetic()
+	tree["internal/.DS_Store"] = file("\x00\x00\x00\x01Bud1")
+	tree["internal/_scratch/scratch.go"] = file("not go")
+	tree["internal/cli/testdata/bad.go"] = file("package bad\n\nfunc {\n")
+	if vs, err := check(tree); err != nil || len(vs) != 0 {
+		t.Errorf("the checker names %v, %v; want nothing for what the go tool ignores", vs, err)
 	}
 }

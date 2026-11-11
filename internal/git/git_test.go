@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,11 +76,18 @@ func TestLocateWithNoGitIsNotFound(t *testing.T) {
 }
 
 func TestLocateStopsAtAGitFileThatNamesNoGitDir(t *testing.T) {
-	dir := t.TempDir()
-	write(t, filepath.Join(dir, ".git"), "not a gitdir line\n")
-	_, err := Locate(dir)
-	var none NotFound
-	if err == nil || errors.As(err, &none) {
-		t.Errorf("Locate(%s) failed with %v; want the error that stopped the walk", dir, err)
+	for name, content := range map[string]string{
+		"no gitdir: line":          "not a gitdir line\n",
+		"a pruned worktree":        "gitdir: ../main/.git/worktrees/gone\n",
+		"a git dir that is a file": "gitdir: notes.txt\n",
+	} {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "notes.txt"), "")
+		write(t, filepath.Join(dir, ".git"), content)
+		_, err := Locate(dir)
+		var none NotFound
+		if err == nil || errors.As(err, &none) || !strings.Contains(err.Error(), filepath.Join(dir, ".git")) {
+			t.Errorf("%s: Locate(%s) failed with %v; want the error that stopped the walk, naming the .git file", name, dir, err)
+		}
 	}
 }

@@ -19,9 +19,7 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
-	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 // Process is what every invocation reads from the world, read once by Main
@@ -35,13 +33,6 @@ type Process struct {
 	Commands command.Sink
 	In       io.Reader
 	Out, Err io.Writer
-}
-
-// Workspace is an opened checkout with a minted writer; Writer is an id,
-// so a workspace without one cannot be made.
-type Workspace struct {
-	Checkout git.Checkout
-	Writer   store.CheckoutID
 }
 
 // Run runs one invocation: it mints the trace id, records the parse and the
@@ -58,7 +49,6 @@ func Run(p Process, args []string) int {
 	event := command.Record(p.Clock, inv, func(_ time.Time, asked func(cli.Summary)) cli.Outcome {
 		cmd, err := cli.Parse(cli.Verbs(), cli.Admin(), args)
 		if err != nil {
-			asked(cli.Summary{Name: cli.Unparsed})
 			return failed(err)
 		}
 		asked(cli.Summarize(cmd))

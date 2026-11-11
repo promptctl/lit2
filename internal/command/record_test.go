@@ -67,6 +67,13 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 	}
 }
 
+func TestWorkThatPanicsBeforeAskingIsUnparsed(t *testing.T) {
+	e := Record(&FixedClock{At: t0}, inv, func(time.Time, func(cli.Summary)) cli.Outcome { panic("the parse broke") })
+	if e.Command.Name != cli.Unparsed || cli.ExitCode(e.Outcome) != 70 {
+		t.Errorf("a panic before asked recorded %#v, exit %d; want unparsed, exit 70", e.Command, cli.ExitCode(e.Outcome))
+	}
+}
+
 func TestRecordHandsNowToWorkAndTimesIt(t *testing.T) {
 	clock := &FixedClock{At: t0}
 	var handed time.Time

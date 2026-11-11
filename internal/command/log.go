@@ -59,8 +59,9 @@ func (l commandLog) Write(e Event) error {
 	return nil
 }
 
-// prune removes every day file dated before cutoff. A file another
-// invocation removed first is gone, which is what pruning asks for.
+// prune removes every day file dated before cutoff. A day file is a
+// regular file so named. A file another invocation removed first is gone,
+// which is what pruning asks for.
 func (l commandLog) prune(cutoff time.Time) error {
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
@@ -68,7 +69,7 @@ func (l commandLog) prune(cutoff time.Time) error {
 	}
 	for _, entry := range entries {
 		day, err := time.Parse(time.DateOnly+".jsonl", entry.Name())
-		if err != nil || !day.Before(cutoff) {
+		if err != nil || !entry.Type().IsRegular() || !day.Before(cutoff) {
 			continue // not a day file, or not yet 30 days old
 		}
 		if err := os.Remove(filepath.Join(l.dir, entry.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
