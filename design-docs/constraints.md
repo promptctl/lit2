@@ -14,7 +14,7 @@ from a constraint, that is marked too.
 
 The entries are grouped by what they govern: where the data lives, how it
 is written, how it is ordered and derived, how it changes, how it performs,
-and what it reserves for later.
+and access control.
 
 ---
 
@@ -120,7 +120,8 @@ and what it reserves for later.
 
 - **Implies:** the shape is fixed at the first shipped event. The signature
   survives a payload rewrite (D1), so provenance outlives erasure.
-- **Buys:** access control later changes policy, not schema (F1). A rewrite
+- **Buys:** access control is a policy over this shape, never a schema
+  change (F1). A rewrite
   never invalidates anyone's signature. `config-ref` lets two machines
   straddling a configuration change fold identically (C4).
 - **Costs:** every event carries fields nothing reads yet. The salt and
