@@ -124,7 +124,7 @@ func TestAnErrorThatIsNotAFailureIsInternal(t *testing.T) {
 func TestTheEventIsInTheTwinsCheckoutAsItsWriter(t *testing.T) {
 	twin := NewTwin()
 	_, e := run(t, twin, "--help")
-	want := command.InCheckout{Checkout: twinCheckout, Writer: command.Minted{ID: twinID}}
+	want := command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}}
 	if e.Place != want {
 		t.Errorf("the event's place is %#v; want %#v", e.Place, want)
 	}

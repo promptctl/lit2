@@ -37,7 +37,7 @@ are, rather than adding a mechanism beside the substrate.
 |---|---|---|
 | append-only, content-addressed events | an immutable record; a history that is the audit log; undo as another event | in-place change: a correction is a new event, a removal is a rewrite |
 | one ref per writing checkout, replaced only by its writer | writes that never contend; push and fetch that never merge; no locks anywhere; nothing on the remote grows with commands | coordination before a write: two offline writers can both do a thing |
-| a deterministic fold with a total order `(causal-position, writer)` | the same state on every machine from the same events; concurrent contradictions settled identically everywhere | reading a clock, so any "how long ago" question is answered after the fold |
+| a deterministic fold with a total order `(causal-position, writer, event id)` | the same state on every machine from the same events; concurrent contradictions settled identically everywhere | reading a clock, so any "how long ago" question is answered after the fold |
 | read-time evaluation with `now` | labels, expiry, staleness, held, computed on every read, never stored, so they settle as facts change | a stored reaction to a condition, which would outlive the condition |
 | committed configuration files, versioned by git | the model as data a person edits, reviews in a pull request and diffs; every version addressable by blob hash in the code repository's history | a model that changes without someone's edit |
 | rewrites as events | purge, squash, compaction, erasure, converging on every replica | reaching copies that never sync again (charter #7) |
@@ -80,8 +80,10 @@ of an epic. `set` and `add` both take `path value` pairs; a list value on
 ### 3.2 Event and intent
 
 An event is `(type, schema-version, subject, payload, attribution, config-ref,
-causal-position, recorded-at, signature-slot)` as the event-store design
-defines it. The verb layer compiles every write into intent events; the four
+policy-version, causal-position, recorded-at, signature-slot)` as the
+event-store design defines it; the signature covers the header, which holds
+a salted hash of the payload, so a rewrite replaces or drops the payload and
+the signature, the event id and every name stay. The verb layer compiles every write into intent events; the four
 verbs are the interface, the events are the memory, and the two are not the
 same shape:
 
@@ -101,8 +103,13 @@ same shape:
 | `rm x --purge` | a rewrite naming the item |
 
 Ids are opaque: the project prefix from the workspace file, then a hash of
-`(writer, causal-position)`, children as `<parent>.<hash>`. Two offline
-writers cannot collide, and a short id resolves by unique suffix.
+`(writer, causal-position, payload hash)`, children as `<parent>.<hash>`,
+each segment as wide as its namespace's fill needs. Two offline writers
+cannot mint from one input, nor two commands of one checkout, which can
+share a frontier and so a position; a writer never mints a name it has
+folded, and a short id resolves by unique suffix. The total order is
+`(causal-position, writer, event id)`: the event id settles two events of
+one writer at one position.
 
 ### 3.3 Fold and tick
 

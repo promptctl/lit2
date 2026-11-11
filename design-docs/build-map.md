@@ -49,7 +49,7 @@ ever, because each of those makes the things around it expensive to replace.
 
 **file**
 - ▶ four verbs on typed addresses, each write compiled to signed intents by
-  one table; ids from `(writer, causal-position)`; templates and defaults
+  one table; ids from `(writer, causal-position, payload hash)`; templates and defaults
   as derivations the echo reports; bulk as a list value
 - a `new` subcommand with one flag per field
 - a `create` that stores a record as given

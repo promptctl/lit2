@@ -200,7 +200,7 @@ and access control.
   with golden fixtures. `architecture.md` §3.3 tests determinism as state
   equality between independent folds instead.
 
-### C2. Total order is `(causal-position, writer-id)`, with the real Lamport advance rule: next = 1 + max(own last, highest seen).
+### C2. Total order is `(causal-position, writer-id, event-id)`, with the real Lamport advance rule: next = 1 + max(own last, highest seen).
 *Design §events.*
 
 - **Implies:** every writer must fold before it mints, so that an intent made

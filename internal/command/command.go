@@ -17,7 +17,6 @@ import (
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 // Clock is the one source of time; the root reads it, never the core
@@ -60,10 +59,10 @@ type Event struct {
 //sumtype:decl
 type Place interface{ place() }
 
-// InCheckout is an invocation inside a git checkout, with its writer.
+// InCheckout is an invocation inside a git checkout, with its identity.
 type InCheckout struct {
 	Checkout git.Checkout
-	Writer   Writer
+	Identity Identity
 }
 
 // NoCheckout is an invocation whose walk reached / with no .git.
@@ -79,28 +78,6 @@ type Unlocatable struct {
 func (InCheckout) place()  {}
 func (NoCheckout) place()  {}
 func (Unlocatable) place() {}
-
-// Writer is a checkout's writer identity, read from its id file.
-//
-//sumtype:decl
-type Writer interface{ writer() }
-
-// Minted is a checkout whose id file holds its id.
-type Minted struct{ ID store.CheckoutID }
-
-// Unminted is a checkout with no id file: lit2 admin init has not run.
-type Unminted struct{ Path string }
-
-// Unreadable is an id file that is present and cannot be read as an id,
-// which is not the same fact as no id file.
-type Unreadable struct {
-	Path string
-	Err  error
-}
-
-func (Minted) writer()     {}
-func (Unminted) writer()   {}
-func (Unreadable) writer() {}
 
 // Internal is lit2 failing: an error that answers no class, a panic, a row
 // whose body is not built. Stack is the panic's stack, empty otherwise.

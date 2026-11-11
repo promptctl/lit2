@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/git"
 )
 
 // Sink is where command events go: the one export edge (D13).
@@ -167,7 +168,7 @@ func placeLine(p Place) any {
 	switch p := p.(type) {
 	case InCheckout:
 		c := p.Checkout
-		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, Writer: writerLine(p.Writer)}}
+		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, Identity: identityLine(p.Identity, c)}}
 	case NoCheckout:
 		return noCheckoutLine{dirLine(p)}
 	case Unlocatable:
@@ -176,20 +177,28 @@ func placeLine(p Place) any {
 	panic(fmt.Sprintf("command: %T is not a Place", p))
 }
 
-func writerLine(w Writer) any {
-	switch w := w.(type) {
+// identityLine is the writer and its principal as did:key, or the paths
+// missing, or the path that does not read and why; never the key's seed,
+// which no Key prints.
+func identityLine(id Identity, c git.Checkout) any {
+	switch id := id.(type) {
 	case Minted:
-		return mintedLine{w.ID.String()}
+		return mintedLine{Checkout: id.Checkout.String(), Principal: id.Key.Principal().String()}
 	case Unminted:
-		return unmintedLine{pathLine(w)}
+		paths := []string{}
+		for _, f := range id.Files() {
+			paths = append(paths, PathOf(f, c))
+		}
+		return unmintedLine{paths}
 	case Unreadable:
-		return unreadableLine{pathErrorLine{w.Path, w.Err.Error()}}
+		return unreadableLine{pathErrorLine{PathOf(id.File, c), id.Err.Error()}}
 	}
-	panic(fmt.Sprintf("command: %T is not a Writer", w))
+	panic(fmt.Sprintf("command: %T is not an Identity", id))
 }
 
-// The place and the writer as the line spells them: one struct per variant,
-// keyed by the variant's wire name, so the shape has one typed source.
+// The place and the identity as the line spells them: one struct per
+// variant, keyed by the variant's wire name, so the shape has one typed
+// source.
 type (
 	inCheckoutLine struct {
 		Checkout checkoutLine `json:"checkout"`
@@ -201,10 +210,11 @@ type (
 		Unlocatable dirErrorLine `json:"unlocatable"`
 	}
 	mintedLine struct {
-		ID string `json:"id"`
+		Checkout  string `json:"checkout"`
+		Principal string `json:"principal"`
 	}
 	unmintedLine struct {
-		Unminted pathLine `json:"unminted"`
+		Unminted []string `json:"unminted"`
 	}
 	unreadableLine struct {
 		Unreadable pathErrorLine `json:"unreadable"`
@@ -214,7 +224,7 @@ type (
 		WorkTree  string `json:"work_tree"`
 		GitDir    string `json:"git_dir"`
 		CommonDir string `json:"common_dir"`
-		Writer    any    `json:"writer"`
+		Identity  any    `json:"identity"`
 	}
 	dirLine struct {
 		Dir string `json:"dir"`
@@ -222,9 +232,6 @@ type (
 	dirErrorLine struct {
 		Dir   string `json:"dir"`
 		Error string `json:"error"`
-	}
-	pathLine struct {
-		Path string `json:"path"`
 	}
 	pathErrorLine struct {
 		Path  string `json:"path"`

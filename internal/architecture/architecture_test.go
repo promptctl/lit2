@@ -32,7 +32,14 @@ const (
 	rowUnit    rule = "has a concern row naming no unit, or one not in the layers block"
 	drawing    rule = "is not the layers block's order from cli to git"
 	noBlock    rule = "is missing from ARCHITECTURE.md"
+	opened     rule = "opens an envelope below the verbs, which no layer there may read (INV:opaque-envelope)"
 )
+
+// readers is the units that may open an envelope or build the keyring
+// that does: the root, which reads the keys, the verbs, which seal and
+// open prose, and cli, which renders it (§3.19). This test is
+// INV:opaque-envelope's one enforcer `[LAW:single-enforcer]`.
+var readers = []string{"root", "verbs", "cli"}
 
 type violation struct {
 	where string
@@ -174,6 +181,10 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 		if imp.Name != nil && imp.Name.Name == "." && world[ip] != nil && !test && owner != "root" {
 			vs = append(vs, violation{path + ": import . " + ip, ambient})
 		}
+		// a dot import hides events.Open from the selector check below
+		if imp.Name != nil && imp.Name.Name == "." && ip == mod+"/internal/events" && !slices.Contains(readers, owner) {
+			vs = append(vs, violation{path + ": import . " + ip, opened})
+		}
 		if ip == "net" || strings.HasPrefix(ip, "net/") || ip == "crypto/tls" {
 			vs = append(vs, violation{path + ": import " + ip, network})
 		}
@@ -214,6 +225,8 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 			vs = append(vs, violation{path + ": os.Exit", exits})
 		case !test && owner != "root" && world[ip] != nil && world[ip](name) && (owner != "cmd" || ip+"."+name != "os.Args"):
 			vs = append(vs, violation{path + ": " + ip + "." + name, ambient})
+		case ip == mod+"/internal/events" && (name == "Open" || name == "NewKeyring") && !slices.Contains(readers, owner):
+			vs = append(vs, violation{path + ": events." + name, opened})
 		}
 		return true
 	})
@@ -425,6 +438,9 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"a row naming an unlisted unit", "ARCHITECTURE.md", strings.Replace(note, "`git` |", "`gitt` |", 1), rowUnit},
 		{"a §6 drawing out of the layers order", "design-docs/architecture.md", strings.Replace(design, " cli        argv\n git", " git        argv\n cli", 1), drawing},
 		{"no layers block", "ARCHITECTURE.md", strings.Replace(note, "```layers", "```", 1), noBlock},
+		{"an envelope opened in fold", "internal/fold/fold.go", "package fold\n\nimport \"example.com/m/internal/events\"\n\nvar Read = events.Open\n", opened},
+		{"a keyring built in fold's test", "internal/fold/fold_test.go", "package fold\n\nimport \"example.com/m/internal/events\"\n\nvar K = events.NewKeyring()\n", opened},
+		{"events dot-imported in fold", "internal/fold/fold.go", "package fold\n\nimport . \"example.com/m/internal/events\"\n\nvar Read = Open\n", opened},
 	} {
 		tree := synthetic()
 		tree[tc.path] = file(tc.text)
@@ -435,6 +451,15 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		if !slices.ContainsFunc(vs, func(v violation) bool { return v.rule == tc.want }) {
 			t.Errorf("%s: the checker names %v; want a violation that %s", tc.name, vs, tc.want)
 		}
+	}
+}
+
+func TestTheReadersOpenEnvelopes(t *testing.T) {
+	tree := synthetic()
+	tree["internal/cli/render.go"] = file("package cli\n\nimport \"example.com/m/internal/events\"\n\nvar Read = events.Open\n")
+	tree["internal/root/keys.go"] = file("package root\n\nimport \"example.com/m/internal/events\"\n\nvar K = events.NewKeyring()\n")
+	if vs, err := check(tree); err != nil || len(vs) != 0 {
+		t.Errorf("cli opening an envelope and root building the keyring break %v, %v; want nothing", vs, err)
 	}
 }
 

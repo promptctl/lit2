@@ -9,61 +9,82 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/git"
 )
 
-// checkout makes a main worktree in a temporary directory, its physical
-// path, its id file holding id, or no id file when id is empty.
-func checkout(t *testing.T, id string) (dir, idPath string) {
+// minted is the twin's identity, as its two files hold it.
+var minted = map[command.File]string{command.IDFile{}: string(twinID.FileText()), command.PrincipalFile{}: string(twinKey().FileText())}
+
+// checkout makes a main worktree in a temporary directory, at its physical
+// path, holding each identity file given with its text and no other.
+func checkout(t *testing.T, files map[command.File]string) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	private := filepath.Join(dir, ".git", "lit", "checkout")
-	if err := os.MkdirAll(private, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	idPath = filepath.Join(private, "id")
-	if id != "" {
-		if err := os.WriteFile(idPath, []byte(id), 0o600); err != nil {
+	c := git.Checkout{WorkTree: dir, GitDir: filepath.Join(dir, ".git"), CommonDir: filepath.Join(dir, ".git")}
+	for f, text := range files {
+		path := command.PathOf(f, c)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return dir, idPath
+	return dir
 }
 
-func writerAt(t *testing.T, dir string) command.Writer {
+func identityAt(t *testing.T, dir string) command.Identity {
 	t.Helper()
 	in, ok := place(dir).(command.InCheckout)
 	if !ok {
 		t.Fatalf("%s is not in a checkout: %#v", dir, place(dir))
 	}
-	return in.Writer
+	return in.Identity
 }
 
-func TestTheIDFileGivesTheWriter(t *testing.T) {
-	dir, _ := checkout(t, string(twinID.FileText()))
-	if got := writerAt(t, dir); got != (command.Minted{ID: twinID}) {
-		t.Errorf("the writer is %#v; want Minted %s", got, twinID)
+func TestTheIdentityFilesGiveTheWriterAndItsKey(t *testing.T) {
+	got, ok := identityAt(t, checkout(t, minted)).(command.Minted)
+	if !ok || got.Checkout != twinID || got.Key.Principal() != twinKey().Principal() {
+		t.Errorf("the identity is %#v; want Minted %s, signing as %s", got, twinID, twinKey())
 	}
 }
 
-func TestNoIDFileIsUnmintedAndGarbageIsUnreadable(t *testing.T) {
-	dir, idPath := checkout(t, "")
-	if got := writerAt(t, dir); got != (command.Unminted{Path: idPath}) {
-		t.Errorf("with no id file the writer is %#v; want Unminted at %s", got, idPath)
-	}
-	dir, idPath = checkout(t, "not an id\n")
-	if got, ok := writerAt(t, dir).(command.Unreadable); !ok || got.Path != idPath {
-		t.Errorf("with a garbage id file the writer is %#v; want Unreadable at %s", got, idPath)
+func TestAMissingFileIsUnmintedAndGarbageIsUnreadable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		files map[command.File]string
+		want  command.Identity
+	}{
+		"no files":        {nil, command.Unminted{Missing: command.Both{}}},
+		"no id file":      {map[command.File]string{command.PrincipalFile{}: minted[command.PrincipalFile{}]}, command.Unminted{Missing: command.Only{File: command.IDFile{}}}},
+		"no key file":     {map[command.File]string{command.IDFile{}: minted[command.IDFile{}]}, command.Unminted{Missing: command.Only{File: command.PrincipalFile{}}}},
+		"a garbage id":    {map[command.File]string{command.IDFile{}: "not an id\n"}, command.Unreadable{File: command.IDFile{}}},
+		"a damaged key":   {map[command.File]string{command.IDFile{}: minted[command.IDFile{}], command.PrincipalFile{}: "ed25519 short\n"}, command.Unreadable{File: command.PrincipalFile{}}},
+		"both unreadable": {map[command.File]string{command.IDFile{}: "x", command.PrincipalFile{}: "y"}, command.Unreadable{File: command.IDFile{}}},
+	} {
+		got := identityAt(t, checkout(t, tc.files))
+		if u, ok := got.(command.Unreadable); ok {
+			if want, ok := tc.want.(command.Unreadable); !ok || u.File != want.File || u.Err == nil {
+				t.Errorf("%s: the identity is %#v; want %#v and why", name, got, tc.want)
+			}
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: the identity is %#v; want %#v", name, got, tc.want)
+		}
 	}
 }
 
 func TestACwdReachedThroughASymlinkFindsItsCheckout(t *testing.T) {
-	dir, _ := checkout(t, "")
+	dir := checkout(t, nil)
 	sub, link := filepath.Join(dir, "sub"), filepath.Join(t.TempDir(), "link")
 	if err := os.Mkdir(sub, 0o700); err != nil {
 		t.Fatal(err)

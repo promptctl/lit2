@@ -30,6 +30,9 @@ func TestFilesContract(t *testing.T) {
 	t.Run("disk", func(t *testing.T) {
 		storetest.Files(t, func(t *testing.T) store.Files { return store.FilesAt(filepath.Join(t.TempDir(), "store")) })
 	})
+	t.Run("disk, a secret's mode", func(t *testing.T) {
+		storetest.Files(t, func(t *testing.T) store.Files { return store.FilesAtMode(filepath.Join(t.TempDir(), "lit"), 0o600) })
+	})
 	t.Run("memory", func(t *testing.T) {
 		storetest.Files(t, func(*testing.T) store.Files { return store.NewMemoryFiles() })
 	})

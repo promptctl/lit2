@@ -58,11 +58,21 @@ type NotFound struct{ Path Path }
 
 func (n NotFound) Error() string { return fmt.Sprintf("%s does not exist in the store", n.Path) }
 
-// OSFiles is Files on disk, under the directory root.
-type OSFiles struct{ root string }
+// OSFiles is Files on disk, under the directory root, every file it makes
+// in one mode.
+type OSFiles struct {
+	root string
+	mode fs.FileMode
+}
 
-// FilesAt is the store's files under root, which need not exist yet.
-func FilesAt(root string) OSFiles { return OSFiles{root: root} }
+// FilesAt is the store's files under root, which need not exist yet. Every
+// file it makes is 0644, as go-git makes lit's objects, so whoever can read
+// a clone's objects can read its logs and snapshot too.
+func FilesAt(root string) OSFiles { return FilesAtMode(root, 0o644) }
+
+// FilesAtMode is files under root, each made in mode: the identity files,
+// a secret among them, are 0600 through this same port.
+func FilesAtMode(root string, mode fs.FileMode) OSFiles { return OSFiles{root: root, mode: mode} }
 
 func (o OSFiles) file(p Path) string { return filepath.Join(o.root, filepath.FromSlash(string(p))) }
 
@@ -125,10 +135,8 @@ func syncDir(dir string) (err error) {
 }
 
 // temp writes b to a new temporary file in dir, creating dir, and returns
-// it open. Its name starts with ., which List never reports. Every file
-// the store makes is 0644 in a 0755 directory, as go-git makes lit's
-// objects, so whoever can read a clone's objects can read its logs and
-// snapshot too.
+// it open, in the instance's mode, in a 0755 directory. Its name starts
+// with ., which List never reports.
 func (o OSFiles) temp(dir string, b []byte) (*os.File, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -138,7 +146,7 @@ func (o OSFiles) temp(dir string, b []byte) (*os.File, error) {
 		return nil, err
 	}
 	_, werr := f.Write(b)
-	if err := errors.Join(werr, f.Chmod(0o644)); err != nil {
+	if err := errors.Join(werr, f.Chmod(o.mode)); err != nil {
 		return nil, errors.Join(err, f.Close(), os.Remove(f.Name()))
 	}
 	return f, nil

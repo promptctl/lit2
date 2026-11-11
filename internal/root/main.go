@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -72,24 +72,7 @@ func place(dir string) command.Place {
 	if err != nil {
 		return command.Unlocatable{Dir: dir, Err: err}
 	}
-	return command.InCheckout{Checkout: c, Writer: writer(filepath.Join(c.PrivateDir(), "id"))}
-}
-
-// writer reads the checkout id file at path. No file is Unminted; a file
-// that is not an id is Unreadable, a different fact.
-func writer(path string) command.Writer {
-	b, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return command.Unminted{Path: path}
-	}
-	if err != nil {
-		return command.Unreadable{Path: path, Err: err}
-	}
-	id, err := store.ReadCheckoutIDFile(b)
-	if err != nil {
-		return command.Unreadable{Path: path, Err: err}
-	}
-	return command.Minted{ID: id}
+	return command.InCheckout{Checkout: c, Identity: readIdentity(identityFiles(c))}
 }
 
 // opening opens the store of a minted checkout, the one place a store is
@@ -109,19 +92,23 @@ func opening(p command.Place, entropy io.Reader) command.Opening {
 }
 
 func openingIn(in command.InCheckout, entropy io.Reader) command.Opening {
-	switch w := in.Writer.(type) {
+	switch id := in.Identity.(type) {
 	case command.Minted:
 		format, err := git.ReadObjectFormat(in.Checkout.CommonDir)
 		if err != nil {
 			return command.Unopened{Why: fmt.Errorf("reading the object format: %w", err)}
 		}
-		return command.Opened{Store: store.Open(w.ID, store.DiskPorts(in.Checkout, entropy), store.DefaultSegmentBound), Format: format}
+		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(in.Checkout, entropy), store.DefaultSegmentBound), Format: format}
 	case command.Unminted:
-		return command.Unopened{Why: fmt.Errorf("this checkout has no id at %s: lit2 admin init mints it", w.Path)}
+		var paths []string
+		for _, f := range id.Files() {
+			paths = append(paths, command.PathOf(f, in.Checkout))
+		}
+		return command.Unopened{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(paths, " and "))}
 	case command.Unreadable:
-		return command.Unopened{Why: fmt.Errorf("reading the checkout id: %w", w.Err)}
+		return command.Unopened{Why: fmt.Errorf("reading %s: %w", command.PathOf(id.File, in.Checkout), id.Err)}
 	}
-	panic(fmt.Sprintf("root: %T is not a Writer", in.Writer))
+	panic(fmt.Sprintf("root: %T is not an Identity", in.Identity))
 }
 
 // commandLog is this machine's command log, $XDG_STATE_HOME/lit/commands,

@@ -14,15 +14,20 @@ import (
 )
 
 var (
-	t0  = time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
+	t0       = time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
+	checkout = git.Checkout{WorkTree: "/w", GitDir: "/w/.git", CommonDir: "/w/.git"}
+	key      = func() events.Key {
+		k, err := events.NewKey(strings.NewReader(strings.Repeat("k", 32)))
+		if err != nil {
+			panic(err)
+		}
+		return k
+	}()
 	inv = Invocation{
 		Trace:   TraceID{1, 2, 3},
 		Version: "test",
-		Place: InCheckout{
-			Checkout: git.Checkout{WorkTree: "/w", GitDir: "/w/.git", CommonDir: "/w/.git"},
-			Writer:   Minted{ID: store.CheckoutID{9}},
-		},
-		Agent: events.Unlabeled{},
+		Place:   InCheckout{Checkout: checkout, Identity: Minted{Checkout: store.CheckoutID{9}, Key: key}},
+		Agent:   events.Unlabeled{},
 	}
 )
 

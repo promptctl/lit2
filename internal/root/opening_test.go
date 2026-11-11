@@ -47,7 +47,7 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 		"[core]\n\trepositoryformatversion = 0\n":                                        git.SHA1,
 		"[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectFormat = sha256\n": git.SHA256,
 	} {
-		dir, _ := checkout(t, string(twinID.FileText()))
+		dir := checkout(t, minted)
 		if config != "" {
 			if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte(config), 0o600); err != nil {
 				t.Fatal(err)
@@ -67,12 +67,12 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 }
 
 func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
-	unminted, _ := checkout(t, "")
+	unminted := checkout(t, nil)
 	for name, p := range map[string]command.Place{
 		"outside a checkout": place(t.TempDir()),
 		"an unminted one":    place(unminted),
 		"a config that does not parse": place(func() string {
-			d, _ := checkout(t, string(twinID.FileText()))
+			d := checkout(t, minted)
 			if err := os.WriteFile(filepath.Join(d, ".git", "config"), []byte("[core\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}

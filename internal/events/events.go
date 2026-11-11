@@ -3,8 +3,14 @@
 // Its layer in architecture.md §6: record, codec, upcasters, ids,
 // signature, envelope (§3.2, §3.14, §3.17, §3.19); every signature and
 // envelope names its crypto suite, one value behind one interface here (§8).
-// Here it holds the agent label, the third part of every event's
-// attribution (checkout, principal, agent).
+// Decode turns one record of the log into an Event, keeping every field it
+// does not know (INV:preserve-unknown); Mint signs a command's drafts as
+// events at the next causal positions and names what they create; Compare
+// is the total order the fold sorts by. Envelope holds one prose value,
+// opaque below the verbs; Suites judges a signature against its principal;
+// Key is a principal's private key in its file form and its recovery
+// phrase. Every function here is pure: entropy and the clock arrive as
+// values from the root `[LAW:effects-at-boundaries]`.
 package events
 
 // Agent is the label the invoking harness supplies, or its absence.

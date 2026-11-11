@@ -81,8 +81,10 @@ deliberate override sorting before the event it overrides, discarded
 identically everywhere. Within a command's batched commit the counter still
 advances **per event** — a command minting k events occupies k strictly
 increasing positions — so the total order never leans on payload iteration
-order. Combined with the writer id as tiebreak, the pair gives the fold a
-total order without wall clocks. The signature slot is
+order. Combined with the writer id, then the event id, as tiebreaks, the
+position gives the fold a total order without wall clocks; the event id is
+needed because two commands of one checkout can fold one frontier and so
+mint one `(writer, position)`. The signature slot is
 structural from v1: before the access-control
 write layer ships, events are self-signed by their checkout identity; the slot
 exists so that shipping verification later changes policy, not schema.
@@ -130,7 +132,9 @@ event that embeds a derived value forks truth into two homes:
 **Issue identity.** Ids are minted with no coordination, so they must be
 collision-proof by construction: an issue id derives from the creating event's
 `(writer-id, causal-position, content)` — opaque, and impossible for two
-offline checkouts to collide on. The current store mints every id, a child's
+offline checkouts, or two commands of one checkout, to mint from one input.
+The content is the event's salted payload hash, so two commands that fold
+one frontier and take one position still hash apart. The current store mints every id, a child's
 as `<parent>.<hash>`, from a truncated hash checked for uniqueness against the
 local store only (`newIssueID` in `internal/store/issue_ids.go`; its inputs
 are `issueid.Content`). Two offline checkouts are unlikely to collide but can,
@@ -283,7 +287,7 @@ happened to have nothing.
 ## §fold — one function owns derivation
 status: destination
 
-`fold(events) → state`. Events are ordered by `(causal-position, writer-id)` —
+`fold(events) → state`. Events are ordered by `(causal-position, writer-id, event-id)` —
 a total order every machine computes identically — and applied by pure
 per-type rules. Two properties are the whole contract
 (`INV:deterministic-fold`):
