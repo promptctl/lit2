@@ -142,9 +142,13 @@ func All(bs []store.Batch) []string {
 // PublishOwn seals the store's own log and publishes it.
 func PublishOwn(t *testing.T, s *store.Store) store.Published {
 	t.Helper()
-	p, err := s.SealOwn()
+	sealed, err := s.SealOwn()
 	if err != nil {
 		t.Fatal(err)
+	}
+	p, ok := sealed.(store.Publication)
+	if !ok {
+		t.Fatalf("sealing the own log made %#v; want a publication", sealed)
 	}
 	out, err := s.Publish(p)
 	if err != nil {
@@ -314,6 +318,33 @@ func Store(t *testing.T, fresh Fresh) {
 		idle := PublishOwn(t, s)
 		if idle.Move != (store.RefUnchanged{}) || len(idle.New) != 0 || idle.NewBytes != 0 || idle.Commit != second.Commit {
 			t.Errorf("an idle publish was %+v; want the ref unchanged and nothing new", idle)
+		}
+	})
+
+	t.Run("a log with no whole frame has nothing to publish, and makes no ref", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		AppendAll(t, s, batch(t, "one"))
+		size, err := p.Files.Size(store.LogPath(a))
+		if err != nil {
+			t.Fatal(err)
+		}
+		header, err := p.Files.ReadAt(store.LogPath(a), 0, size-uint64(len(store.Encode(batch(t, "one")))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// the header and half a frame: what a crash in the first append leaves
+		half := store.Encode(batch(t, "half"))
+		if err := p.Files.Replace(store.LogPath(a), append(header, half[:len(half)/2]...)); err != nil {
+			t.Fatal(err)
+		}
+		sealed, err := s.SealOwn()
+		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
+			t.Errorf("sealing a log with no whole frame made %#v, %v; want %#v", sealed, err, want)
+		}
+		if refs, bad, err := p.Refs.List("refs/lit/"); err != nil || len(refs)+len(bad) != 0 {
+			t.Errorf("with nothing to publish the refs are %v, %v, %v; want none", refs, bad, err)
 		}
 	})
 

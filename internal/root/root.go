@@ -20,9 +20,7 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
-	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 // Process is what every invocation reads from the world, read once by Main
@@ -32,35 +30,15 @@ type Process struct {
 	Entropy  io.Reader
 	Agent    events.Agent
 	Place    command.Place
-	Store    Opening
+	Store    command.Opening
 	Version  string
 	Commands command.Sink
 	In       io.Reader
 	Out, Err io.Writer
 }
 
-// Opening is the store an invocation's checkout opened, once, or why it has
-// none.
-//
-//sumtype:decl
-type Opening interface{ opening() }
-
-// Opened is a minted checkout's store, and its code repository's object
-// format, read once beside it for the workspace file's config-ref.
-type Opened struct {
-	Store  *store.Store
-	Format git.ObjectFormat
-}
-
-// Unopened is a place with no store: outside a checkout, in one not yet
-// minted, or one whose writer or object format cannot be read.
-type Unopened struct{ Why error }
-
-func (Opened) opening()   {}
-func (Unopened) opening() {}
-
-// Run runs one invocation: it mints the trace id, records the parse and the
-// command's body as one event, puts the outcome's error line on Err before
+// Run runs one invocation: it mints the trace id, records the store's
+// opening, the parse and the command's body as one event, puts the outcome's error line on Err before
 // writing the event, so a slow or hung log cannot hold the line back, and
 // returns the outcome's exit status.
 func Run(p Process, args []string) int {
@@ -72,7 +50,8 @@ func Run(p Process, args []string) int {
 	}
 	verbs, admin := cli.Verbs(), cli.Admin()
 	inv := command.Invocation{Trace: trace, Version: p.Version, Place: p.Place, Agent: p.Agent}
-	event := command.Record(p.Clock, inv, func(_ time.Time, asked func(cli.Summary), _ *command.StoreFacts) cli.Outcome {
+	event := command.Record(p.Clock, inv, func(_ time.Time, asked func(cli.Summary), stored *command.StoreFacts) cli.Outcome {
+		stored.Opening = p.Store
 		cmd, err := cli.Parse(verbs, admin, args)
 		if err != nil {
 			return failed(err)

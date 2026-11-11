@@ -73,14 +73,15 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	scan := must[store.Scan](t)(s.Read(store.Range{Stream: h.Streams[0], From: 0}))
 	swapped := must[store.Swapped](t)(s.Swap(store.FoldTag("v1"), []store.Mark{{Ref: h.Streams[0].Ref, Upto: h.Streams[0].Until}}, []byte("state")))
 	hit := store.Plan(store.FoldTag("v1"), h, must[store.SnapshotFile](t)(s.Snapshot()))
-	published := must[store.Published](t)(s.Publish(must[store.Publication](t)(s.SealOwn())))
-	idle := must[store.Published](t)(s.Publish(must[store.Publication](t)(s.SealOwn())))
+	published := must[store.Published](t)(s.Publish(must[store.Sealing](t)(s.SealOwn()).(store.Publication)))
+	idle := must[store.Published](t)(s.Publish(must[store.Sealing](t)(s.SealOwn()).(store.Publication)))
+	nothing := store.NothingToPublish{Ref: h.Streams[0].Ref, Log: h.Streams[0].Until.Log}
 	resealed := store.Published{Commit: published.Commit, Move: store.RefCreated{}, New: []git.ObjectID{},
 		Prior: store.Resealed{Why: errors.New("its publication does not read")}}
 	block := storeBlockOf(t, StoreFacts{
 		Heads: []store.Heads{h}, Reads: []Read{{Range: store.Range{Stream: h.Streams[0], From: 0}, Scan: scan}},
 		Plans: []store.Resume{hit}, Swaps: []store.Swapped{swapped}, Appends: []store.Appended{appended},
-		Publishes: []store.Published{published, idle, resealed},
+		Publishes: []store.Publishing{published, idle, resealed, nothing},
 	})
 	if a := first(t, block, "append"); a["records"] != 1.0 || a["log_created"] != true || a["log_until"] != float64(appended.Until.At) {
 		t.Errorf("the append is %v; want one record, the log created, its end", a)
@@ -95,11 +96,14 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 		t.Errorf("the swap is %v; want its bytes", sw)
 	}
 	list, _ := block["publish"].([]any)
-	if len(list) != 3 {
-		t.Fatalf("the block holds %d publishes; want 3", len(list))
+	if len(list) != 4 {
+		t.Fatalf("the block holds %d publishes; want 4", len(list))
 	}
-	made, again, anew := list[0].(map[string]any), list[1].(map[string]any), list[2].(map[string]any)
-	if made["ref_move"] != "created" || made["objects_new"] != 3.0 || made["commit"] != published.Commit.String() || made["prior"] != "none" {
+	made, again, anew, none := list[0].(map[string]any), list[1].(map[string]any), list[2].(map[string]any), list[3].(map[string]any)
+	if none["outcome"] != "nothing_to_publish" || none["ref_move"] != "untouched" || none["objects_new"] != 0.0 || none["commit"] != nil {
+		t.Errorf("a publish with nothing to publish is %v; want it said, the ref untouched, nothing new, no commit", none)
+	}
+	if made["outcome"] != "published" || made["ref_move"] != "created" || made["objects_new"] != 3.0 || made["commit"] != published.Commit.String() || made["prior"] != "none" {
 		t.Errorf("the first publish is %v; want a created ref, a segment, a tree and a commit new, no prior", made)
 	}
 	if again["ref_move"] != "unchanged" || again["objects_new"] != 0.0 || again["bytes_new"] != 0.0 ||
@@ -119,5 +123,16 @@ func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 	})
 	if len(e.Store.Appends) != 1 || e.Store.Appends[0] != appended || cli.ExitCode(e.Outcome) != 70 {
 		t.Errorf("a panic after an append recorded %+v, exit %d; want the append kept, exit 70", e.Store, cli.ExitCode(e.Outcome))
+	}
+}
+
+func TestTheOpeningSaysOpenedAndItsFormatOrWhyNot(t *testing.T) {
+	opened := storeBlockOf(t, StoreFacts{Opening: Opened{Store: memoryStore(), Format: git.SHA256}})
+	if o, _ := opened["open"].(map[string]any); o["state"] != "opened" || o["object_format"] != "sha256" || o["why"] != nil {
+		t.Errorf("an opened store's line is %v; want opened, sha256", o)
+	}
+	unopened := storeBlockOf(t, StoreFacts{Opening: Unopened{Why: errors.New("this checkout has no id")}})
+	if o, _ := unopened["open"].(map[string]any); o["state"] != "unopened" || o["why"] != "this checkout has no id" || o["object_format"] != nil {
+		t.Errorf("an unopened store's line is %v; want unopened, and why", o)
 	}
 }

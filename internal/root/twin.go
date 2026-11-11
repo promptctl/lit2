@@ -30,16 +30,19 @@ var (
 // NewTwin is a twin whose checkout is minted, so its writer is known.
 func NewTwin() Twin {
 	out, errOut, commands := &bytes.Buffer{}, &bytes.Buffer{}, &command.Memory{}
+	// the store draws from its own source, so a log it creates moves no
+	// trace id the twin mints
 	entropy := rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 't', 'w', 'i', 'n'})
+	stored := rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 's', 't', 'o', 'r', 'e'})
 	repo := git.NewMemory()
-	ports := store.Ports{Files: store.NewMemoryFiles(), Objects: repo, Refs: repo, Entropy: entropy}
+	ports := store.Ports{Files: store.NewMemoryFiles(), Objects: repo, Refs: repo, Entropy: stored}
 	return Twin{
 		Process: Process{
 			Clock:    &command.FixedClock{At: time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)},
 			Entropy:  entropy,
 			Agent:    events.Unlabeled{},
 			Place:    command.InCheckout{Checkout: twinCheckout, Writer: command.Minted{ID: twinID}},
-			Store:    Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
+			Store:    command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
 			Version:  "twin",
 			Commands: commands,
 			In:       strings.NewReader(""),

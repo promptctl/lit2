@@ -39,34 +39,52 @@ func spans(segs []Segment) []Span {
 	return ss
 }
 
+// kept is every segment of a publication as Kept, the open one last.
+func kept(segs []Segment) []Kept {
+	ks := make([]Kept, len(segs))
+	for i, s := range segs {
+		ks[i] = Kept{Span: span(s), Blob: git.ObjectID{}}
+	}
+	return ks
+}
+
+// A prior publication sealed under one bound, resumed under the same bound
+// or a lower one, seals what sealing from scratch under the new bound does.
 func TestSealingFromAPriorPublicationEqualsSealingFromScratch(t *testing.T) {
 	rng := rand.New(rand.NewPCG(3, 4))
 	for trial := range 300 {
 		log := randomLog(t, rng)
-		bound := SegmentBound(1 + rng.IntN(2000))
-		cut := rng.IntN(len(log) + 1)
-		first := Seal(nil, Tail{From: 0, Bytes: log[:cut]}, bound)
-		var prior []Kept
-		from := Offset(0)
-		if len(first) > 0 {
-			for _, s := range first[:len(first)-1] {
-				prior = append(prior, Kept{Span: span(s), Blob: git.ObjectID{}})
-			}
-			from = span(first[len(first)-1]).From
+		was := SegmentBound(1 + rng.IntN(2000))
+		bound := was
+		if trial%2 == 1 {
+			bound = SegmentBound(1 + rng.IntN(int(was)))
 		}
+		cut := rng.IntN(len(log) + 1)
+		prior, from := keepWithin(kept(Seal(nil, Tail{From: 0, Bytes: log[:cut]}, was)), bound)
 		incremental := Seal(prior, Tail{From: from, Bytes: log[from:]}, bound)
 		scratch := Seal(nil, Tail{From: 0, Bytes: log}, bound)
 		if fmt.Sprint(spans(incremental)) != fmt.Sprint(spans(scratch)) {
-			t.Fatalf("trial %d, bound %d, cut %d: incremental %v, scratch %v", trial, bound, cut, spans(incremental), spans(scratch))
+			t.Fatalf("trial %d, bound %d then %d, cut %d: incremental %v, scratch %v", trial, was, bound, cut, spans(incremental), spans(scratch))
 		}
 		for i, s := range scratch {
 			if f, ok := incremental[i].(Fresh); ok && !bytes.Equal(f.Bytes, s.(Fresh).Bytes) {
 				t.Fatalf("trial %d: segment %d holds other bytes when sealed from a prior publication", trial, i)
 			}
 		}
-		if _, err := NewPublication(WriterRef{}, LogID{}, scratch); err != nil {
+		if _, err := NewPublication(WriterRef{}, LogID{}, scratch); len(scratch) > 0 && err != nil {
 			t.Fatalf("trial %d: the sealed segments do not tile the stream: %v", trial, err)
 		}
+	}
+}
+
+// A raised bound keeps every full segment cut by the lower one; only new
+// bytes are cut by it.
+func TestARaisedBoundKeepsTheSmallerSegments(t *testing.T) {
+	log := bytes.Repeat(Encode(mustBatch(t, "a record of some length")), 20)
+	prior := kept(Seal(nil, Tail{From: 0, Bytes: log}, 100))
+	full, from := keepWithin(prior, 1000)
+	if len(full) != len(prior)-1 || from != prior[len(prior)-1].Span.From {
+		t.Errorf("under a raised bound %d of %d segments are kept, resuming at %d; want every full one", len(full), len(prior), from)
 	}
 }
 
@@ -98,5 +116,12 @@ func TestAPublicationHasNoGapAndNoOverlap(t *testing.T) {
 	}
 	if _, err := NewPublication(InboxRef{}, LogID{}, []Segment{Kept{Span: Span{From: 0, To: 2}}, Fresh{Start: 2, Bytes: []byte("c")}}); err != nil {
 		t.Errorf("a tiling publication was refused: %v", err)
+	}
+}
+
+// A zero Published, as an error path holds one, formats without failing.
+func TestAZeroPublishedFormats(t *testing.T) {
+	if got := fmt.Sprintf("%+v", Published{}); got == "" {
+		t.Errorf("a zero Published formats as nothing")
 	}
 }

@@ -3,6 +3,7 @@ package git
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -11,10 +12,15 @@ import (
 
 // ReadObjectFormat reads the code repository's object format from the
 // config in its common dir: extensions.objectFormat, SHA-1 when unset, as
-// git reads it. It reads the code repository and never writes it.
+// git reads it. No config is every default, as git reads that too; a config
+// that does not parse is an error. It reads the code repository and never
+// writes it.
 func ReadObjectFormat(commonDir string) (f ObjectFormat, err error) {
 	path := filepath.Join(commonDir, "config")
 	file, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return SHA1, nil
+	}
 	if err != nil {
 		return 0, err
 	}

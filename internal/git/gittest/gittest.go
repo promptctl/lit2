@@ -125,18 +125,23 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 			t.Errorf("two messages made one commit %s", id)
 		}
 	})
-	t.Run("an id of another format names nothing in it", func(t *testing.T) {
+	t.Run("an id of another format, or the zero id, names nothing in it", func(t *testing.T) {
 		db := fresh(t)
-		foreign, err := git.ParseObjectID(git.SHA256, "6c19f8bd0d8a2b5a6c0b2e8e3c3a0f9e2d1c7b6a5f4e3d2c1b0a9f8e7d6c5b4a")
+		sha256, err := git.ParseObjectID(git.SHA256, "6c19f8bd0d8a2b5a6c0b2e8e3c3a0f9e2d1c7b6a5f4e3d2c1b0a9f8e7d6c5b4a")
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, errBlob := db.Blob(foreign)
-		_, _, errTree := db.PutTree([]git.Entry{{Name: "a", Blob: foreign}})
-		_, _, errCommit := db.PutCommit(git.Commit{Tree: foreign})
-		for _, err := range []error{errBlob, errTree, errCommit} {
-			if !errors.As(err, new(git.ForeignFormat)) {
-				t.Errorf("a sha256 id was taken with %v; want ForeignFormat", err)
+		for _, foreign := range []git.ObjectID{sha256, {}} {
+			_, errBlob := db.Blob(foreign)
+			_, errSize := db.BlobSize(foreign)
+			_, errTree := db.Tree(foreign)
+			_, errCommit := db.Commit(foreign)
+			_, _, errPutTree := db.PutTree([]git.Entry{{Name: "a", Blob: foreign}})
+			_, _, errPutCommit := db.PutCommit(git.Commit{Tree: foreign})
+			for _, err := range []error{errBlob, errSize, errTree, errCommit, errPutTree, errPutCommit} {
+				if !errors.As(err, new(git.ForeignFormat)) || err.Error() == "" {
+					t.Errorf("the %s id %s was taken with %v; want ForeignFormat", foreign.Format(), foreign, err)
+				}
 			}
 		}
 	})
@@ -170,9 +175,9 @@ func Refs(t *testing.T, fresh func(*testing.T) git.Refs) {
 			}
 		}
 	})
-	t.Run("a name outside refs/, unclean or with a dot component is refused", func(t *testing.T) {
+	t.Run("a name outside refs/, unclean, or with a component a lock or temporary file takes is refused", func(t *testing.T) {
 		refs := fresh(t)
-		for _, name := range []git.RefName{"HEAD", "lit/log/w", "refs/lit/../w", "refs/lit//w", "refs/lit/w/", "refs/lit/.w", "refs/lit/.ref-1"} {
+		for _, name := range []git.RefName{"HEAD", "lit/log/w", "refs/lit/../w", "refs/lit//w", "refs/lit/w/", "refs/lit/.w", "refs/lit/.ref-1", "refs/lit/w.lock"} {
 			if err := refs.Replace(name, a); err == nil {
 				t.Errorf("Replace(%q) = nil; want a refusal", name)
 			}
@@ -220,13 +225,15 @@ func Refs(t *testing.T, fresh func(*testing.T) git.Refs) {
 		}
 		wg.Wait()
 	})
-	t.Run("an id of another format cannot be a target", func(t *testing.T) {
+	t.Run("an id of another format, or the zero id, cannot be a target", func(t *testing.T) {
 		foreign, err := git.ParseObjectID(git.SHA256, "6c19f8bd0d8a2b5a6c0b2e8e3c3a0f9e2d1c7b6a5f4e3d2c1b0a9f8e7d6c5b4a")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := fresh(t).Replace("refs/lit/log/w", foreign); !errors.As(err, new(git.ForeignFormat)) {
-			t.Errorf("Replace to a sha256 id failed with %v; want ForeignFormat", err)
+		for _, to := range []git.ObjectID{foreign, {}} {
+			if err := fresh(t).Replace("refs/lit/log/w", to); !errors.As(err, new(git.ForeignFormat)) {
+				t.Errorf("Replace to the %s id %s failed with %v; want ForeignFormat", to.Format(), to, err)
+			}
 		}
 	})
 }

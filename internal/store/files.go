@@ -29,7 +29,9 @@ type Files interface {
 	// CreateOnce creates the file holding b unless it exists: b is written
 	// to a temporary file, fsynced and linked into place, so exactly one
 	// creation wins and the file is never seen, nor left by a crash,
-	// partly written.
+	// partly written. On disk this needs hard links, since link(2) is the
+	// one call that both refuses an existing name and puts whole bytes
+	// under it; a filesystem without them fails the first append, saying so.
 	CreateOnce(p Path, b []byte) (Made, error)
 	// ReadAt reads up to n bytes at off, fewer at the end of the file.
 	ReadAt(p Path, off, n uint64) ([]byte, error)

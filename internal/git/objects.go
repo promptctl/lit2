@@ -16,6 +16,9 @@ const (
 	SHA256
 )
 
+// String names the format; any other value, the zero one an id holds
+// before it names an object above all, prints as the illegal value it is,
+// since formatting an error must not fail.
 func (f ObjectFormat) String() string {
 	switch f {
 	case SHA1:
@@ -23,7 +26,7 @@ func (f ObjectFormat) String() string {
 	case SHA256:
 		return "sha256"
 	}
-	panic(fmt.Sprintf("git: %d is not an ObjectFormat", uint8(f)))
+	return fmt.Sprintf("no format (%d)", uint8(f))
 }
 
 // size is the length of an object id in the format, in bytes.
@@ -49,6 +52,11 @@ type ObjectID struct {
 // ParseObjectID reads an object id written as git writes one: the format's
 // length in lowercase hex digits.
 func ParseObjectID(f ObjectFormat, s string) (ObjectID, error) {
+	switch f {
+	case SHA1, SHA256:
+	default:
+		return ObjectID{}, fmt.Errorf("%q cannot be read as an id of %s", s, f)
+	}
 	b, err := hex.DecodeString(s)
 	if err != nil || len(b) != f.size() || hex.EncodeToString(b) != s {
 		return ObjectID{}, fmt.Errorf("%q is not a %s object id", s, f)
@@ -61,8 +69,15 @@ func ParseObjectID(f ObjectFormat, s string) (ObjectID, error) {
 // Format is the hash function the id was computed with.
 func (id ObjectID) Format() ObjectFormat { return id.format }
 
-// String is the id in lowercase hex, as git prints it.
-func (id ObjectID) String() string { return hex.EncodeToString(id.sum[:id.format.size()]) }
+// String is the id in lowercase hex, as git prints it. The zero id names
+// no object and prints as such.
+func (id ObjectID) String() string {
+	switch id.format {
+	case SHA1, SHA256:
+		return hex.EncodeToString(id.sum[:id.format.size()])
+	}
+	return "(no object id)"
+}
 
 // Stored says whether a Put added the object or found it already there.
 type Stored uint8
@@ -132,13 +147,13 @@ type Refs interface {
 // checkRefName is the one check both of lit's repositories make of a
 // name they write, so the one on disk and its twin take the same names
 // `[LAW:single-enforcer]`: a clean path under refs/, no component
-// starting with ., which refnames forbid and which marks a replace's
-// temporary file.
+// starting with . or ending in .lock, which refnames forbid and which
+// mark a replace's temporary file and a git command's lock.
 func checkRefName(n RefName) error {
 	s := string(n)
 	bad := checkPrefix(n) != nil || path.Clean(s) != s
 	for _, c := range strings.Split(s, "/") {
-		bad = bad || strings.HasPrefix(c, ".")
+		bad = bad || strings.HasPrefix(c, ".") || strings.HasSuffix(c, ".lock")
 	}
 	if bad {
 		return fmt.Errorf("%q is not a refname under refs/", n)
@@ -161,7 +176,8 @@ func (m MissingObject) Error() string {
 	return fmt.Sprintf("object %s is not in lit's repository", m.ID)
 }
 
-// ForeignFormat is an id of a format lit's repository does not use.
+// ForeignFormat is an id of a format lit's repository does not use, the
+// zero id's included.
 type ForeignFormat struct{ ID ObjectID }
 
 func (f ForeignFormat) Error() string {

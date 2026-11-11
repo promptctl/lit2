@@ -221,8 +221,9 @@ func (s *Store) logStream(p Path) (Stream, error) {
 }
 
 // publication reads the publication a commit holds: its log, from the
-// message, and its segments, from the tree's names, the last one's end
-// from its blob's header.
+// message, and its segments, from the tree's names, each one's span
+// checked against its blob's size: segments that do not tile the stream
+// from 0 make no publication.
 func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 	c, err := s.ports.Objects.Commit(commit)
 	if err != nil {
@@ -242,18 +243,19 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 		if err != nil {
 			return published{}, LogID{}, fmt.Errorf("tree %s: %w", c.Tree, err)
 		}
-		if i == 0 && at != 0 {
-			return published{}, LogID{}, fmt.Errorf("tree %s starts its stream at %d, not 0", c.Tree, at)
+		if at != pub.end {
+			return published{}, LogID{}, fmt.Errorf("tree %s: segment %s starts at %d, not at %d where the stream before it ends", c.Tree, e.Name, at, pub.end)
+		}
+		// the header alone, so reading heads inflates no segment
+		size, err := s.ports.Objects.BlobSize(e.Blob)
+		if err != nil {
+			return published{}, LogID{}, fmt.Errorf("tree %s: segment %s: %w", c.Tree, e.Name, err)
+		}
+		if size == 0 {
+			return published{}, LogID{}, fmt.Errorf("tree %s: segment %s holds no bytes", c.Tree, e.Name)
 		}
 		pub.segs[i] = placed{start: at, blob: e.Blob}
-	}
-	if len(es) > 0 {
-		last := pub.segs[len(es)-1]
-		size, err := s.ports.Objects.BlobSize(last.blob)
-		if err != nil {
-			return published{}, LogID{}, err
-		}
-		pub.end = last.start + Offset(size)
+		pub.end = at + Offset(size)
 	}
 	return pub, log, nil
 }
@@ -329,27 +331,56 @@ func (s *Store) Swap(tag FoldTag, upto []Mark, payload []byte) (Swapped, error) 
 	return Swapped{Bytes: len(b)}, nil
 }
 
-// SealOwn is this checkout's log sealed into a publication: the prior
-// publication's full segments kept, the rest cut from the prior open
-// segment's start. With no log there is nothing to seal, which is
-// NotFound; a log shorter than its own publication is ShorterThanPublished.
-func (s *Store) SealOwn() (Publication, error) {
+// Sealing is what sealing a checkout's own log made: a publication, or
+// nothing to publish.
+//
+//sumtype:decl
+type Sealing interface{ sealing() }
+
+// Publishing is what an own publish did: published, or found nothing to
+// publish.
+//
+//sumtype:decl
+type Publishing interface{ publishing() }
+
+// NothingToPublish is a log that holds no whole frame yet. Its publish
+// would be an empty tree, so it makes no tree, no commit and no ref, and
+// an idle publish writes nothing from the first.
+type NothingToPublish struct {
+	Ref Ref
+	Log LogID
+}
+
+func (Publication) sealing()         {}
+func (NothingToPublish) sealing()    {}
+func (Published) publishing()        {}
+func (NothingToPublish) publishing() {}
+
+// SealOwn is this checkout's log sealed into a publication: what
+// keepWithin keeps of the prior publication, the rest cut from where it
+// resumes. With no log there is nothing to seal, which is NotFound; a log
+// shorter than its own publication is ShorterThanPublished.
+func (s *Store) SealOwn() (Sealing, error) {
 	ref := WriterRef{Checkout: s.me}
 	st, err := s.logStream(LogPath(s.me))
 	if err != nil {
-		return Publication{}, err
+		return nil, err
 	}
 	kept, from, prior, err := s.prior(ref, st.Until)
 	if err != nil {
-		return Publication{}, err
+		return nil, err
 	}
 	tail, err := s.ports.Files.ReadAt(LogPath(s.me), headerSize+uint64(from), uint64(st.Until.At-from))
 	if err != nil {
-		return Publication{}, err
+		return nil, err
 	}
-	p, err := NewPublication(ref, st.Until.Log, Seal(kept, Tail{From: from, Bytes: tail}, s.bound))
+	segs := Seal(kept, Tail{From: from, Bytes: tail}, s.bound)
+	if len(segs) == 0 {
+		return NothingToPublish{Ref: ref, Log: st.Until.Log}, nil
+	}
+	p, err := NewPublication(ref, st.Until.Log, segs)
 	if err != nil {
-		return Publication{}, err
+		return nil, err
 	}
 	p.prior = prior
 	return p, nil
@@ -367,8 +398,8 @@ func (e ShorterThanPublished) Error() string {
 	return fmt.Sprintf("the log of %s ends at %d, before its publication's end at %d", e.Ref.Name(), e.Log, e.Published)
 }
 
-// prior is the full segments of ref's publication of the log now at
-// until, where its open segment starts, and what was kept. A ref whose
+// prior is what keepWithin keeps of ref's publication of the log now at
+// until, where sealing resumes, and what was kept. A ref whose
 // publication cannot be kept is resealed from 0, and the publish that
 // follows replaces it (the store's decision 11).
 func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, error) {
@@ -390,14 +421,17 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, error) {
 			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s", h.commit, log, until.Log)}, nil
 		case pub.end > until.At:
 			return nil, 0, nil, ShorterThanPublished{Ref: ref, Log: until.At, Published: pub.end}
-		case len(pub.segs) == 0:
-			return nil, 0, KeptFrom{Commit: h.commit}, nil
 		}
-		kept := make([]Kept, 0, len(pub.segs)-1)
-		for i, seg := range pub.segs[:len(pub.segs)-1] {
-			kept = append(kept, Kept{Span: Span{From: seg.start, To: pub.segs[i+1].start}, Blob: seg.blob})
+		segs := make([]Kept, len(pub.segs))
+		for i, seg := range pub.segs {
+			to := pub.end
+			if i+1 < len(pub.segs) {
+				to = pub.segs[i+1].start
+			}
+			segs[i] = Kept{Span: Span{From: seg.start, To: to}, Blob: seg.blob}
 		}
-		return kept, pub.segs[len(pub.segs)-1].start, KeptFrom{Commit: h.commit}, nil
+		kept, from := keepWithin(segs, s.bound)
+		return kept, from, KeptFrom{Commit: h.commit}, nil
 	}
 	panic(fmt.Sprintf("store: %T is not a refHead", h))
 }

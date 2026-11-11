@@ -51,9 +51,13 @@ type Publication struct {
 }
 
 // NewPublication is the publication of segs on ref for log, refusing
-// segments that leave a gap, overlap, or hold no bytes. Its caller built
-// every segment, so it read no prior publication.
+// segments that leave a gap, overlap, or hold no bytes, and no segment at
+// all, which would publish an empty tree. Its caller built every segment,
+// so it read no prior publication.
 func NewPublication(ref Ref, log LogID, segs []Segment) (Publication, error) {
+	if len(segs) == 0 {
+		return Publication{}, fmt.Errorf("a publication of %s holds no segment", ref.Name())
+	}
 	var at Offset
 	for i, s := range segs {
 		sp := span(s)
@@ -93,14 +97,15 @@ func (Resealed) prior() {}
 
 // SegmentBound is the most bytes a sealed segment holds, unless one frame
 // alone is larger. It bounds what a publish re-sends; it is not a wire
-// format, so a changed bound re-seals once (the store's decision 9).
+// format (the store's decision 9). A lowered bound reseals, once, every
+// segment from the first one longer than it; a raised bound keeps the
+// smaller segments already published and cuts only new bytes by it.
 type SegmentBound uint32
 
 // DefaultSegmentBound is 1 MiB, the bound the composition root passes.
 const DefaultSegmentBound SegmentBound = 1 << 20
 
-// Tail is a log's bytes from the start of its prior publication's open
-// segment, the last one, which sealing cuts again.
+// Tail is a log's bytes from where sealing resumes, which keepWithin says.
 type Tail struct {
 	From  Offset
 	Bytes []byte
@@ -109,9 +114,10 @@ type Tail struct {
 // Seal cuts a stream into segments: the prior publication's full segments
 // as they are, then the tail's whole frames and torn spans, greedily, each
 // segment taking units while it stays within bound, a unit over the bound
-// alone. Cuts depend only on the log's bytes, so sealing from a prior
-// publication equals sealing from scratch, and the last segment is the
-// open one. The tail's incomplete end is not sealed.
+// alone. Cuts depend only on the log's bytes, so sealing from what
+// keepWithin keeps of a prior publication equals sealing from scratch
+// under a bound no higher than the prior one's, and the last segment is
+// the open one. The tail's incomplete end is not sealed.
 func Seal(prior []Kept, tail Tail, bound SegmentBound) []Segment {
 	segs := make([]Segment, 0, len(prior)+1)
 	for _, k := range prior {
@@ -132,6 +138,24 @@ func Seal(prior []Kept, tail Tail, bound SegmentBound) []Segment {
 		segs = append(segs, fresh(Span{From: cut, To: scan.End}))
 	}
 	return segs
+}
+
+// keepWithin is what sealing under bound keeps of a prior publication's
+// segments, in order: its full segments up to the first one longer than
+// bound, and the offset sealing resumes from, that segment's start or the
+// open segment's. Under the bound they were cut by, or a lower one, the
+// kept segments are the ones sealing from scratch would cut.
+func keepWithin(prior []Kept, bound SegmentBound) ([]Kept, Offset) {
+	if len(prior) == 0 {
+		return nil, 0
+	}
+	full := prior[:len(prior)-1]
+	for i, k := range full {
+		if k.Span.Len() > uint64(bound) {
+			return full[:i], k.Span.From
+		}
+	}
+	return full, prior[len(prior)-1].Span.From
 }
 
 // units is the scan's whole frames and torn spans in stream order, which

@@ -2,6 +2,7 @@ package git_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -58,16 +59,24 @@ func TestLocateAgreesWithGit(t *testing.T) {
 }
 
 func TestReadObjectFormatAgreesWithGit(t *testing.T) {
-	for _, format := range []git.ObjectFormat{git.SHA1, git.SHA256} {
+	for _, tc := range []struct {
+		format   git.ObjectFormat
+		noConfig bool
+	}{{git.SHA1, false}, {git.SHA256, false}, {git.SHA1, true}} {
 		dir := gittest.Physical(t)
-		gittest.Git(t, dir, "init", "-q", "--object-format="+format.String())
+		gittest.Git(t, dir, "init", "-q", "--object-format="+tc.format.String())
 		c, err := git.Locate(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if tc.noConfig {
+			if err := os.Remove(filepath.Join(c.CommonDir, "config")); err != nil {
+				t.Fatal(err)
+			}
+		}
 		got, err := git.ReadObjectFormat(c.CommonDir)
-		if want := gittest.Git(t, dir, "rev-parse", "--show-object-format"); err != nil || got.String() != want || got != format {
-			t.Errorf("ReadObjectFormat in a %s repository = %v, %v; git says %s", format, got, err, want)
+		if want := gittest.Git(t, dir, "rev-parse", "--show-object-format"); err != nil || got.String() != want || got != tc.format {
+			t.Errorf("ReadObjectFormat in a %s repository (config removed: %v) = %v, %v; git says %s", tc.format, tc.noConfig, got, err, want)
 		}
 	}
 }
@@ -116,9 +125,13 @@ func TestATornRefIsBadAndTheRestRead(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "refs", "lit", "log", "torn"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// a git command updating a ref holds its lock, half written, beside it
+	if err := os.WriteFile(filepath.Join(dir, "refs", "lit", "log", "good.lock"), []byte("ce01"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	heads, bad, err := repo.List("refs/lit/")
 	if err != nil || !slices.Equal(heads, []git.RefHead{{Name: "refs/lit/log/good", Target: blob}}) || len(bad) != 1 || bad[0].Name != "refs/lit/log/torn" {
-		t.Errorf("List = %v, %v, %v; want the good ref and the torn one bad", heads, bad, err)
+		t.Errorf("List = %v, %v, %v; want the good ref, the torn one bad, and no lock", heads, bad, err)
 	}
 }
 
@@ -149,5 +162,15 @@ func TestTwoIDsOfOneSumInTwoFormatsDiffer(t *testing.T) {
 	short, err := git.ParseObjectID(git.SHA256, sum)
 	if sha1 == sha256 || err == nil || short == sha1 {
 		t.Errorf("a sha1 id and a sha256 id compare equal, or a sha1 sum reads as a sha256 id")
+	}
+}
+
+// The zero id names no object: it prints as such, and no format reads one.
+func TestTheZeroIDPrintsAsNoIDAndNoFormatReadsOne(t *testing.T) {
+	if got := fmt.Sprintf("%v %+v", git.ObjectID{}, git.ObjectID{}.Format()); got != "(no object id) no format (0)" {
+		t.Errorf("the zero id prints as %q", got)
+	}
+	if _, err := git.ParseObjectID(0, "ce013625030ba8dba906f756967f9e9ca394464a"); err == nil {
+		t.Errorf("an id read in no format was taken")
 	}
 }

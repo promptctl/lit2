@@ -191,9 +191,10 @@ func (r Repository) packed(prefix RefName, found map[RefName]refFile) error {
 	return lines.Err()
 }
 
-// loose reads the loose ref files under prefix. A name starting with . is
-// no ref, as git's refnames allow none, so the temporary file of a replace
-// in flight is never read as one.
+// loose reads the loose ref files under prefix. A name starting with . or
+// ending in .lock is no ref, as git's refnames allow neither, so neither the
+// temporary file of a replace in flight nor the lock of a git command
+// updating a ref is read as one, as git's own iteration skips them.
 func (r Repository) loose(prefix RefName, found map[RefName]refFile) error {
 	dir := string(prefix[:strings.LastIndexByte(string(prefix), '/')])
 	root := filepath.Join(r.dir, filepath.FromSlash(dir))
@@ -204,7 +205,7 @@ func (r Repository) loose(prefix RefName, found map[RefName]refFile) error {
 		if err != nil {
 			return err
 		}
-		if strings.HasPrefix(d.Name(), ".") || d.IsDir() {
+		if strings.HasPrefix(d.Name(), ".") || strings.HasSuffix(d.Name(), ".lock") || d.IsDir() {
 			return nil
 		}
 		rel, err := filepath.Rel(r.dir, p)

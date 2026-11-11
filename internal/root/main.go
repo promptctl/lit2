@@ -96,30 +96,30 @@ func writer(path string) command.Writer {
 // opened: over its clone's common dir on disk, beside the code
 // repository's object format, read once. Any other place has no store and
 // says why.
-func opening(p command.Place, entropy io.Reader) Opening {
+func opening(p command.Place, entropy io.Reader) command.Opening {
 	switch p := p.(type) {
 	case command.InCheckout:
 		return openingIn(p, entropy)
 	case command.NoCheckout:
-		return Unopened{Why: fmt.Errorf("no git checkout at or above %s", p.Dir)}
+		return command.Unopened{Why: fmt.Errorf("no git checkout at or above %s", p.Dir)}
 	case command.Unlocatable:
-		return Unopened{Why: p.Err}
+		return command.Unopened{Why: p.Err}
 	}
 	panic(fmt.Sprintf("root: %T is not a Place", p))
 }
 
-func openingIn(in command.InCheckout, entropy io.Reader) Opening {
+func openingIn(in command.InCheckout, entropy io.Reader) command.Opening {
 	switch w := in.Writer.(type) {
 	case command.Minted:
 		format, err := git.ReadObjectFormat(in.Checkout.CommonDir)
 		if err != nil {
-			return Unopened{Why: fmt.Errorf("reading the object format: %w", err)}
+			return command.Unopened{Why: fmt.Errorf("reading the object format: %w", err)}
 		}
-		return Opened{Store: store.Open(w.ID, store.DiskPorts(in.Checkout, entropy), store.DefaultSegmentBound), Format: format}
+		return command.Opened{Store: store.Open(w.ID, store.DiskPorts(in.Checkout, entropy), store.DefaultSegmentBound), Format: format}
 	case command.Unminted:
-		return Unopened{Why: fmt.Errorf("this checkout has no id at %s: lit2 admin init mints it", w.Path)}
+		return command.Unopened{Why: fmt.Errorf("this checkout has no id at %s: lit2 admin init mints it", w.Path)}
 	case command.Unreadable:
-		return Unopened{Why: fmt.Errorf("reading the checkout id: %w", w.Err)}
+		return command.Unopened{Why: fmt.Errorf("reading the checkout id: %w", w.Err)}
 	}
 	panic(fmt.Sprintf("root: %T is not a Writer", in.Writer))
 }

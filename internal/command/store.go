@@ -5,22 +5,25 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
 
 // StoreFacts is what the store's steps returned during one invocation, in
 // the order they ran. The store emits nothing itself: its results carry
 // their facts, and the body that called it hands them here, so the event
-// keeps one emitter `[LAW:single-enforcer]`. A step that did not run left
-// nothing, so an invocation that never used its store has no store block,
-// and a fresh store's heads are a block of zeros `[LAW:nothing-unseen]`.
+// keeps one emitter `[LAW:single-enforcer]`. The root records the store's
+// opening for every invocation, opened or why not; any other step that did
+// not run left nothing, and a fresh store's heads are a block of zeros
+// `[LAW:nothing-unseen]`.
 type StoreFacts struct {
+	Opening   Opening
 	Heads     []store.Heads
 	Reads     []Read
 	Plans     []store.Resume
 	Swaps     []store.Swapped
 	Appends   []store.Appended
-	Publishes []store.Published
+	Publishes []store.Publishing
 }
 
 // Read is one range a fold read and what the scan found in it.
@@ -29,20 +32,46 @@ type Read struct {
 	Scan  store.Scan
 }
 
+// Opening is the store an invocation's checkout opened, once, or why it has
+// none.
+//
+//sumtype:decl
+type Opening interface{ opening() }
+
+// Opened is a minted checkout's store, and its code repository's object
+// format, read once beside it for the workspace file's config-ref.
+type Opened struct {
+	Store  *store.Store
+	Format git.ObjectFormat
+}
+
+// Unopened is a place with no store: outside a checkout, in one not yet
+// minted, or one whose writer or object format cannot be read.
+type Unopened struct{ Why error }
+
+func (Opened) opening()   {}
+func (Unopened) opening() {}
+
 func (f StoreFacts) empty() bool {
-	return len(f.Heads)+len(f.Reads)+len(f.Plans)+len(f.Swaps)+len(f.Appends)+len(f.Publishes) == 0
+	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Plans)+len(f.Swaps)+len(f.Appends)+len(f.Publishes) == 0
 }
 
 // The store block as the line spells it: one object per step that ran,
 // and the reads summed over the delta, with torn bytes per ref.
 type (
 	storeLine struct {
+		Open    *openLine     `json:"open,omitempty"`
 		Heads   []headsLine   `json:"heads,omitempty"`
 		Read    *readLine     `json:"read,omitempty"`
 		Plan    []planLine    `json:"plan,omitempty"`
 		Swap    []swapLine    `json:"swap,omitempty"`
 		Append  []appendLine  `json:"append,omitempty"`
 		Publish []publishLine `json:"publish,omitempty"`
+	}
+	openLine struct {
+		State        string `json:"state"`
+		ObjectFormat string `json:"object_format,omitempty"`
+		Why          string `json:"why,omitempty"`
 	}
 	headsLine struct {
 		RefsRead   int             `json:"refs_read"`
@@ -81,13 +110,14 @@ type (
 		LogCreated bool   `json:"log_created"`
 	}
 	publishLine struct {
+		Outcome        string `json:"outcome"`
 		SegmentsKept   int    `json:"segments_kept"`
 		SegmentsSealed int    `json:"segments_sealed"`
 		ObjectsNew     int    `json:"objects_new"`
 		BytesNew       uint64 `json:"bytes_new"`
 		RefMove        string `json:"ref_move"`
 		Previous       string `json:"previous,omitempty"`
-		Commit         string `json:"commit"`
+		Commit         string `json:"commit,omitempty"`
 		Prior          string `json:"prior"`
 		PriorCommit    string `json:"prior_commit,omitempty"`
 		PriorWhy       string `json:"prior_why,omitempty"`
@@ -100,7 +130,7 @@ func storeBlock(f StoreFacts) *storeLine {
 	if f.empty() {
 		return nil
 	}
-	l := &storeLine{}
+	l := &storeLine{Open: open(f.Opening)}
 	for _, h := range f.Heads {
 		hl := headsLine{RefsRead: h.RefsRead, LogsRead: h.LogsRead, Streams: len(h.Streams), Unreadable: []badStreamLine{}}
 		for _, u := range h.Unreadable {
@@ -121,12 +151,24 @@ func storeBlock(f StoreFacts) *storeLine {
 		l.Append = append(l.Append, appendLine{Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), LogCreated: created(a.Log)})
 	}
 	for _, p := range f.Publishes {
-		pl := publishLine{SegmentsKept: p.Kept, SegmentsSealed: p.Sealed, ObjectsNew: len(p.New), BytesNew: p.NewBytes, Commit: p.Commit.String()}
-		pl.RefMove, pl.Previous = refMove(p.Move)
-		pl.Prior, pl.PriorCommit, pl.PriorWhy = prior(p.Prior)
-		l.Publish = append(l.Publish, pl)
+		l.Publish = append(l.Publish, publish(p))
 	}
 	return l
+}
+
+// publish is a publish as the line spells it. Nothing to publish touched no
+// ref and kept nothing before it.
+func publish(p store.Publishing) publishLine {
+	switch p := p.(type) {
+	case store.Published:
+		pl := publishLine{Outcome: "published", SegmentsKept: p.Kept, SegmentsSealed: p.Sealed, ObjectsNew: len(p.New), BytesNew: p.NewBytes, Commit: p.Commit.String()}
+		pl.RefMove, pl.Previous = refMove(p.Move)
+		pl.Prior, pl.PriorCommit, pl.PriorWhy = prior(p.Prior)
+		return pl
+	case store.NothingToPublish:
+		return publishLine{Outcome: "nothing_to_publish", RefMove: "untouched", Prior: "none"}
+	}
+	panic(fmt.Sprintf("command: %T is not a Publishing", p))
 }
 
 func reads(rs []Read) *readLine {
@@ -220,4 +262,17 @@ func prior(p store.Prior) (kept, commit, why string) {
 		return "resealed", "", p.Why.Error()
 	}
 	panic(fmt.Sprintf("command: %T is not a Prior", p))
+}
+
+// open is the opening as the line spells it, absent when none was recorded.
+func open(o Opening) *openLine {
+	switch o := o.(type) {
+	case nil:
+		return nil
+	case Opened:
+		return &openLine{State: "opened", ObjectFormat: o.Format.String()}
+	case Unopened:
+		return &openLine{State: "unopened", Why: o.Why.Error()}
+	}
+	panic(fmt.Sprintf("command: %T is not an Opening", o))
 }

@@ -208,7 +208,7 @@ func sha1ID(h plumbing.Hash) ObjectID {
 }
 
 // hash is the id as go-git names it: lit's repository is SHA-1, so an id of
-// another format names nothing in it.
+// another format, or the zero id, names nothing in it.
 func (id ObjectID) hash() (plumbing.Hash, error) {
 	switch id.format {
 	case SHA1:
@@ -216,7 +216,6 @@ func (id ObjectID) hash() (plumbing.Hash, error) {
 		copy(h[:], id.sum[:len(h)])
 		return h, nil
 	case SHA256:
-		return plumbing.Hash{}, ForeignFormat{ID: id}
 	}
-	panic(fmt.Sprintf("git: %d is not an ObjectFormat", uint8(id.format)))
+	return plumbing.Hash{}, ForeignFormat{ID: id}
 }
