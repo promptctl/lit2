@@ -1,0 +1,16 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - exhaustive
+    - gochecksumtype
+  settings:
+    gochecksumtype:
+      # A default case does not stand in for a variant: every variant of a
+      # sealed union is listed in every switch over it.
+      default-signifies-exhaustive: false
+
+formatters:
+  enable:
+    - gofmt

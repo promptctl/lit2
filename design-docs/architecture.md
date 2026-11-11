@@ -294,9 +294,9 @@ squashes. Nothing else removes anything.
 Every event's attribution is `(checkout, principal, agent)`. The checkout id
 is the 128-bit token in the checkout's private git dir, the thing claims and
 writer refs key on. The principal is the key that signed the event (§3.17),
-minted at init and kept beside the checkout id, never in the store. The
-agent label is an optional opaque string the invoking harness supplies,
-shown beside comments and history. No usernames, hostnames or paths enter
+minted at init and kept once per clone in the common dir, beside the store
+and never in it (§6). The agent label is an optional opaque string the
+invoking harness supplies, shown beside comments and history. No usernames, hostnames or paths enter
 the store; display names come from the policy's member entries. `get /me`
 prints the three and the tiers this principal holds.
 
@@ -515,7 +515,10 @@ of (events, clock, argv, writer); the rest is the hearth
 
 ## 6. The parts, downhill
 
-`[LAW:one-way-deps]` Each layer depends only on the layers below it.
+`[LAW:one-way-deps]` Each layer depends only on the layers below it. The
+order the architecture test enforces on every import is the `layers` block
+of [ARCHITECTURE.md](../ARCHITECTURE.md); this drawing follows it, and the
+same test fails when the two disagree.
 
 ```
  cli        argv → typed command; rendering; exit codes; --json
@@ -523,8 +526,9 @@ of (events, clock, argv, writer); the rest is the hearth
  verbs      get/set/add/rm on typed addresses; requirements; verb → intents; echo
  address    path grammar; selectors; globs; the field table
  tick       clocked derivations: labels, held, expiry, staleness, stage, rollup
- fold       events → state; validation engine; rank; holders; conflicts
  config     .lit/workspace.toml from the working tree → one typed schema value
+ field      field kinds and their value parsers; the built-in fields; the atom
+ fold       events → state; validation engine; rank; holders; conflicts
  events     record, codec, upcasters, ids, signature, envelope
  store      the append-only log; sealing into segments; one commit and one
             ref per writer, inbox refs; rewrites; snapshot; the background
@@ -536,8 +540,11 @@ of (events, clock, argv, writer); the rest is the hearth
 Beside the stack, passed through by every layer: the command event, and the
 composition root, the one place a store is opened and the clock, the writer
 identity, the principal's key with its wrapped tier keys, and the agent
-label are read. Key material lives beside the checkout id in the private
-git dir, never in the store and never behind a prompt. Tests build the same stack over an
+label are read. The checkout id lives in the checkout's private git dir,
+`<git-dir>/lit/checkout/id`; key material lives once per clone at
+`<git-common-dir>/lit/principal`, beside the store's root
+`<git-common-dir>/lit/store/` and outside it, never in the store and never
+behind a prompt. Tests build the same stack over an
 in-memory object store, a fixed clock and a fixed identity.
 
 ## 7. Decisions
@@ -627,7 +634,7 @@ Each step leaves every layer below it in its final shape; step 2 is the
 walking skeleton.
 
 1. **Skeleton.** The layout of §6, the composition root, the command event,
-   the in-memory store, the harness, `lit2 --help` from the field table.
+   the harness, `lit2 --help` from the field table.
    (ticket lit-bootstrap-1f9.438)
 2. **Events, principal and fold, first facts.** Items, fields, comments,
    labels; ids; the principal minted at init and every event signed; the
