@@ -87,8 +87,8 @@ ever, because each of those makes the things around it expensive to replace.
 **tend**
 - ▶ rewrites as events (purge, squash, sweep); the snapshot keyed by
   `(fold-version, heads)`; unknown events carried and counted;
-  `min-reader-version` in the workspace file; the workspace file's blob in
-  every event commit; `/integrity` as a path
+  `min-reader-version` in the workspace file; one entry per cited
+  workspace-file version in each writer's tree; `/integrity` as a path
 - a `gc` that edits history in place; configuration read from the code's
   own repository
 
