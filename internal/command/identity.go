@@ -24,23 +24,33 @@ type PrincipalFile struct{}
 func (IDFile) file()        {}
 func (PrincipalFile) file() {}
 
-// FileOf is where f lives for checkout c: the directory a Files is rooted
-// at for it, and its name there, which is f's alone. It is the one place
-// each identity path is built.
-func FileOf(f File, c git.Checkout) (dir string, name store.Path) {
+// NameOf is f's name in its directory, which is f's alone, the same in
+// every checkout.
+func NameOf(f File) store.Path {
 	switch f.(type) {
 	case IDFile:
-		return c.PrivateDir(), "id"
+		return "id"
 	case PrincipalFile:
-		return c.SharedDir(), "principal"
+		return "principal"
+	}
+	panic(fmt.Sprintf("command: %T is not a File", f))
+}
+
+// DirOf is the directory f lives in for checkout c, the one a Files is
+// rooted at for it.
+func DirOf(f File, c git.Checkout) string {
+	switch f.(type) {
+	case IDFile:
+		return c.PrivateDir()
+	case PrincipalFile:
+		return c.SharedDir()
 	}
 	panic(fmt.Sprintf("command: %T is not a File", f))
 }
 
 // PathOf is f's path for c, as the command event names it.
 func PathOf(f File, c git.Checkout) string {
-	dir, name := FileOf(f, c)
-	return filepath.Join(dir, filepath.FromSlash(string(name)))
+	return filepath.Join(DirOf(f, c), filepath.FromSlash(string(NameOf(f))))
 }
 
 // Identity is a checkout's writer identity, read from its two files: the

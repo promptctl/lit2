@@ -135,6 +135,10 @@ func (e Envelope) wire() []byte {
 		s.Keep(f.unknown)
 		w.Bytes(envelopeSealed, s.Encoded())
 	case unknownForm:
+	default:
+		// [LAW:no-silent-failure] the zero Envelope would read back as a
+		// newer binary's form, hiding a payload field never set
+		panic(fmt.Sprintf("events: %T is not an envelope's form", e.form))
 	}
 	w.Bytes(envelopeCommitment, e.commitment[:])
 	w.Keep(e.unknown)

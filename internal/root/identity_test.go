@@ -113,7 +113,7 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 			t.Errorf("a worktree with no id file reads as %#v; want its id file missing", got)
 		}
 		damaged := fresh(t)
-		if _, err := damaged.shared.CreateOnce(nameOf(command.PrincipalFile{}), []byte("ed25519 cut short\n")); err != nil {
+		if _, err := damaged.shared.CreateOnce(command.NameOf(command.PrincipalFile{}), []byte("ed25519 cut short\n")); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := MintIdentity(damaged.shared, damaged.worktree[0], entropy(1)); err == nil {

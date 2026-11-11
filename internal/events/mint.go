@@ -127,6 +127,12 @@ type Minted struct {
 // never a payload field, so it outlives the payload. Its error is the salt
 // read failing, or the events being more than one frame of the log holds.
 func Mint(c Context, ds Drafts, s Signer, salts io.Reader) (Minted, error) {
+	if c.Now.IsZero() {
+		// [LAW:no-silent-failure] the zero time is past UnixNano's range and
+		// would be signed as a recorded-at in 1754; the root reads one clock
+		// for every command, so a Context without it is a caller's bug
+		panic("events: Mint under a Context with no clock reading")
+	}
 	var m Minted
 	var records []store.Record
 	mine := map[Namespace]map[Segment]struct{}{}

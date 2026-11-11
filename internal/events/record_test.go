@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/promptctl/lit2/internal/events/wire"
 	"github.com/promptctl/lit2/internal/store"
@@ -268,5 +269,28 @@ func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 	}
 	if _, ok := Decode(here, store.Record(futureField(recordHeader, string(e.raw)))).(Malformed); !ok {
 		t.Error("a record with no signature decodes; want it malformed")
+	}
+}
+
+func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
+	at := context(1, Frontier{}, Names{})
+	noClock := at
+	noClock.Now = time.Time{}
+	for name, tc := range map[string]struct {
+		c Context
+		d Draft
+	}{
+		"an act about nothing":       {at, Act{Payload: note{Text: text("x")}}},
+		"a payload's unset envelope": {at, Act{About: Root{}, Payload: note{}}},
+		"no clock reading":           {noClock, Act{About: Root{}, Payload: note{Text: text("x")}}},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Mint with %s did not panic", name)
+				}
+			}()
+			_, _ = Mint(tc.c, NewDrafts(tc.d), keyOf(1).Signer(), salts(1))
+		}()
 	}
 }

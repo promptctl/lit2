@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -68,6 +69,10 @@ func ParseObjectID(f ObjectFormat, s string) (ObjectID, error) {
 
 // Format is the hash function the id was computed with.
 func (id ObjectID) Format() ObjectFormat { return id.format }
+
+// Sum is the id's hash, the format's length in bytes. The zero id has no
+// format and no sum, and asking for one panics.
+func (id ObjectID) Sum() []byte { return slices.Clone(id.sum[:id.format.size()]) }
 
 // String is the id in lowercase hex, as git prints it. The zero id names
 // no object and prints as such.

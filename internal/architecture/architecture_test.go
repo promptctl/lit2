@@ -35,10 +35,10 @@ const (
 	opened     rule = "opens an envelope below the verbs, which no layer there may read (INV:opaque-envelope)"
 )
 
-// readers is the units that may open an envelope or build the keyring
-// that does: the root, which reads the keys, the verbs, which seal and
-// open prose, and cli, which renders it (§3.19). This test is
-// INV:opaque-envelope's one enforcer `[LAW:single-enforcer]`.
+// readers is the units that may open an envelope or name the keyring that
+// does, its type or its constructor: the root, which reads the keys, the
+// verbs, which seal and open prose, and cli, which renders it (§3.19).
+// This test is INV:opaque-envelope's one enforcer `[LAW:single-enforcer]`.
 var readers = []string{"root", "verbs", "cli"}
 
 type violation struct {
@@ -225,7 +225,7 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 			vs = append(vs, violation{path + ": os.Exit", exits})
 		case !test && owner != "root" && world[ip] != nil && world[ip](name) && (owner != "cmd" || ip+"."+name != "os.Args"):
 			vs = append(vs, violation{path + ": " + ip + "." + name, ambient})
-		case ip == mod+"/internal/events" && (name == "Open" || name == "NewKeyring") && !slices.Contains(readers, owner):
+		case ip == mod+"/internal/events" && (name == "Open" || name == "NewKeyring" || name == "Keyring") && !slices.Contains(readers, owner):
 			vs = append(vs, violation{path + ": events." + name, opened})
 		}
 		return true
@@ -440,6 +440,7 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"no layers block", "ARCHITECTURE.md", strings.Replace(note, "```layers", "```", 1), noBlock},
 		{"an envelope opened in fold", "internal/fold/fold.go", "package fold\n\nimport \"example.com/m/internal/events\"\n\nvar Read = events.Open\n", opened},
 		{"a keyring built in fold's test", "internal/fold/fold_test.go", "package fold\n\nimport \"example.com/m/internal/events\"\n\nvar K = events.NewKeyring()\n", opened},
+		{"a keyring literal in fold", "internal/fold/fold.go", "package fold\n\nimport \"example.com/m/internal/events\"\n\nvar K = events.Keyring{}\n", opened},
 		{"events dot-imported in fold", "internal/fold/fold.go", "package fold\n\nimport . \"example.com/m/internal/events\"\n\nvar Read = Open\n", opened},
 	} {
 		tree := synthetic()

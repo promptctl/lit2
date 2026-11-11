@@ -383,6 +383,10 @@ func aboutWire(a About) []byte {
 	case Element:
 		w.Bytes(1, []byte(a.Of.s))
 		w.Bytes(2, []byte(a.Name.s))
+	default:
+		// [LAW:no-silent-failure] an empty subject reads as the root, so a
+		// draft naming nothing would mint a signed event about the root
+		panic(fmt.Sprintf("events: %T is not an About", a))
 	}
 	return w.Encoded()
 }
@@ -403,8 +407,7 @@ func attributionWire(a Attribution) []byte {
 
 // configRefWire is the id's format and bytes.
 func configRefWire(id git.ObjectID) []byte {
-	sum, err := hex.DecodeString(id.String())
-	if err != nil {
+	if id.Format() == 0 {
 		// [LAW:types-are-the-program] exception: git.ObjectID's zero value
 		// names no object, yet every event names its config-ref; a Context
 		// holds a parsed id, so this is a caller's bug.
@@ -412,7 +415,7 @@ func configRefWire(id git.ObjectID) []byte {
 	}
 	var w wire.Writer
 	w.Uvarint(1, uint64(id.Format()))
-	w.Bytes(2, sum)
+	w.Bytes(2, id.Sum())
 	return w.Encoded()
 }
 

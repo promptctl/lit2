@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -193,6 +194,12 @@ func TestTwoIDsOfOneSumInTwoFormatsDiffer(t *testing.T) {
 	short, err := git.ParseObjectID(git.SHA256, sum)
 	if sha1 == sha256 || err == nil || short == sha1 {
 		t.Errorf("a sha1 id and a sha256 id compare equal, or a sha1 sum reads as a sha256 id")
+	}
+	if got := hex.EncodeToString(sha1.Sum()); got != sum {
+		t.Errorf("a sha1 id's sum is %s; want %s", got, sum)
+	}
+	if got := hex.EncodeToString(sha256.Sum()); got != sum+"000000000000000000000000" {
+		t.Errorf("a sha256 id's sum is %s; want its 32 bytes", got)
 	}
 }
 

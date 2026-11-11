@@ -15,15 +15,7 @@ import (
 // store's one create-once port, each file 0600: the principal's key is a
 // secret, and the checkout id is no one else's.
 func identityFiles(c git.Checkout) (shared, private store.Files) {
-	sharedDir, _ := command.FileOf(command.PrincipalFile{}, c)
-	privateDir, _ := command.FileOf(command.IDFile{}, c)
-	return store.FilesAtMode(sharedDir, 0o600), store.FilesAtMode(privateDir, 0o600)
-}
-
-// nameOf is f's name in its directory, which is f's alone.
-func nameOf(f command.File) store.Path {
-	_, name := command.FileOf(f, git.Checkout{})
-	return name
+	return store.FilesAtMode(command.DirOf(command.PrincipalFile{}, c), 0o600), store.FilesAtMode(command.DirOf(command.IDFile{}, c), 0o600)
 }
 
 // Fresh is what MintIdentity did to each file: created it, or found it
@@ -44,10 +36,10 @@ func MintIdentity(shared, private store.Files, entropy io.Reader) (command.Minte
 		return command.Minted{}, Fresh{}, err
 	}
 	var fresh Fresh
-	if fresh.Checkout, err = private.CreateOnce(nameOf(command.IDFile{}), id.FileText()); err != nil {
+	if fresh.Checkout, err = private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()); err != nil {
 		return command.Minted{}, Fresh{}, fmt.Errorf("creating the checkout id file: %w", err)
 	}
-	if fresh.Key, err = shared.CreateOnce(nameOf(command.PrincipalFile{}), key.FileText()); err != nil {
+	if fresh.Key, err = shared.CreateOnce(command.NameOf(command.PrincipalFile{}), key.FileText()); err != nil {
 		return command.Minted{}, Fresh{}, fmt.Errorf("creating the key file: %w", err)
 	}
 	switch got := readIdentity(shared, private).(type) {
@@ -65,8 +57,8 @@ func MintIdentity(shared, private store.Files, entropy io.Reader) (command.Minte
 // does not parse is Unreadable, the id file's first, since it is a louder
 // fact than one missing; otherwise any missing makes the identity Unminted.
 func readIdentity(shared, private store.Files) command.Identity {
-	id, idErr := read(private, nameOf(command.IDFile{}), store.ReadCheckoutIDFile)
-	key, keyErr := read(shared, nameOf(command.PrincipalFile{}), events.ParseKeyFile)
+	id, idErr := read(private, command.NameOf(command.IDFile{}), store.ReadCheckoutIDFile)
+	key, keyErr := read(shared, command.NameOf(command.PrincipalFile{}), events.ParseKeyFile)
 	var none store.NotFound
 	idMissing, keyMissing := errors.As(idErr, &none), errors.As(keyErr, &none)
 	switch {

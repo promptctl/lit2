@@ -149,21 +149,30 @@ func TestTheKeyComesBackFromItsFileAndItsPhrase(t *testing.T) {
 	}
 }
 
-func TestAKeyPrintsItsPrincipalNeverItsSeed(t *testing.T) {
+func TestAKeyAndItsSignerPrintTheirPrincipalNeverTheSeed(t *testing.T) {
 	k := keyOf(3)
 	secrets := []string{hex.EncodeToString(k.seed[:]), base64.RawURLEncoding.EncodeToString(k.seed[:]), string(k.seed[:])}
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%X", "%q", "%d"} {
-		got := fmt.Sprintf(verb, k)
-		if !strings.Contains(got, k.Principal().String()) {
-			t.Errorf("%s prints %q; want the principal", verb, got)
-		}
-		for _, s := range secrets {
-			if strings.Contains(got, s) {
-				t.Errorf("%s prints the seed: %q", verb, got)
+	for name, v := range map[string]any{"a key": k, "its signer": k.Signer()} {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%X", "%q", "%d"} {
+			got := fmt.Sprintf(verb, v)
+			if !strings.Contains(got, k.Principal().String()) {
+				t.Errorf("%s under %s prints %q; want the principal", name, verb, got)
+			}
+			for _, s := range secrets {
+				if strings.Contains(got, s) {
+					t.Errorf("%s under %s prints the seed: %q", name, verb, got)
+				}
 			}
 		}
 	}
-	if got := fmt.Sprintf("%v", struct{ K Key }{k}); !strings.Contains(got, k.Principal().String()) {
-		t.Errorf("a struct holding a key prints %q; want the principal", got)
+	held := struct {
+		K Key
+		S Signer
+	}{k, k.Signer()}
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		got := fmt.Sprintf(verb, held)
+		if strings.Count(got, k.Principal().String()) != 2 || strings.Contains(got, hex.EncodeToString(k.seed[:])) {
+			t.Errorf("a struct holding a key and its signer prints %q under %s; want the principal twice, never the seed", got, verb)
+		}
 	}
 }
