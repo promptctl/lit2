@@ -88,7 +88,7 @@ row; the architecture test fails on one without.
 | exit classes and statuses | `reason`, `cli` | the four classes in reason; each layer's failure names its own reasons; statuses in cli |
 | checkout discovery | `git` | the work tree, private git dir and common dir |
 | the one enforcer and the in-use check | `verbs` | requirements and capabilities judged once, at the write |
-| the snapshot | `store`, `fold` | its bytes in store; its content and key in fold |
+| the snapshot | `store`, `fold` | its file, its marks and the resume plan in store, keyed by the fold's tag; its payload in fold: the folded state, and the verdicts carried as the marks plus the fold's exceptions |
 | `/next`, `/lanes`, `/integrity`, `/me` | `fold`, `tick`, `address`, `cli` | computed by fold and tick, named by address, rendered by cli |
 | the managed block in AGENTS.md | `guidance`, `root` | its text in guidance; written by init in root |
 | liveness of a worktree | `git`, `tick` | read by git; decided by tick |

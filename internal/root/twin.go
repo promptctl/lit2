@@ -54,6 +54,7 @@ func NewTwin() Twin {
 			Agent:    events.Unlabeled{},
 			Place:    command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}},
 			Store:    command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
+			Fold:     foldEnv(2),
 			Version:  "twin",
 			Commands: commands,
 			In:       strings.NewReader(""),

@@ -28,8 +28,8 @@ type note struct {
 func (note) Kind() Kind            { return "test.note" }
 func (note) Schema() SchemaVersion { return 1 }
 
-func (n note) appendTo(w *wire.Writer) {
-	w.Bytes(1, n.Text.wire())
+func (n note) AppendTo(w *wire.Writer) {
+	w.Bytes(1, n.Text.Wire())
 	for _, t := range n.Tags {
 		w.Bytes(2, []byte(t))
 	}
@@ -42,7 +42,7 @@ func readNote(r *wire.Reader) (Versioned, error) {
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		switch tag {
 		case 1:
-			n.Text, err = readEnvelope(r.Bytes())
+			n.Text, err = ReadEnvelope(r.Bytes())
 		case 2:
 			n.Tags = append(n.Tags, string(r.Bytes()))
 		}
@@ -62,8 +62,8 @@ type newerNote struct {
 func (newerNote) Kind() Kind            { return "test.note" }
 func (newerNote) Schema() SchemaVersion { return 1 }
 
-func (n newerNote) appendTo(w *wire.Writer) {
-	w.Bytes(1, n.Text.wire())
+func (n newerNote) AppendTo(w *wire.Writer) {
+	w.Bytes(1, n.Text.Wire())
 	for _, t := range n.Tags {
 		w.Bytes(2, []byte(t))
 	}
@@ -77,7 +77,7 @@ func readNewerNote(r *wire.Reader) (Versioned, error) {
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		switch tag {
 		case 1:
-			n.Text, err = readEnvelope(r.Bytes())
+			n.Text, err = ReadEnvelope(r.Bytes())
 		case 2:
 			n.Tags = append(n.Tags, string(r.Bytes()))
 		case 3:
@@ -93,14 +93,14 @@ type made struct{ Title Envelope }
 
 func (made) Kind() Kind                { return "test.made" }
 func (made) Schema() SchemaVersion     { return 1 }
-func (m made) appendTo(w *wire.Writer) { w.Bytes(1, m.Title.wire()) }
+func (m made) AppendTo(w *wire.Writer) { w.Bytes(1, m.Title.Wire()) }
 
 func readMade(r *wire.Reader) (Versioned, error) {
 	var m made
 	var err error
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		if tag == 1 {
-			m.Title, err = readEnvelope(r.Bytes())
+			m.Title, err = ReadEnvelope(r.Bytes())
 		}
 	}
 	return m, errors.Join(err, r.Err())
@@ -111,7 +111,7 @@ type newer struct{}
 
 func (newer) Kind() Kind                        { return "test.newer" }
 func (newer) Schema() SchemaVersion             { return 1 }
-func (newer) appendTo(*wire.Writer)             {}
+func (newer) AppendTo(*wire.Writer)             {}
 func readNewer(*wire.Reader) (Versioned, error) { return newer{}, nil }
 
 // pastNote is test.note's version 1 as the later binary keeps it, frozen.
@@ -126,7 +126,7 @@ func readPastNote(r *wire.Reader) (Versioned, error) {
 	var err error
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		if tag == 1 {
-			p.Text, err = readEnvelope(r.Bytes())
+			p.Text, err = ReadEnvelope(r.Bytes())
 		}
 	}
 	return p, errors.Join(err, r.Err())
@@ -141,8 +141,8 @@ type laterNote struct {
 func (laterNote) Kind() Kind            { return "test.note" }
 func (laterNote) Schema() SchemaVersion { return 2 }
 
-func (n laterNote) appendTo(w *wire.Writer) {
-	w.Bytes(1, n.Text.wire())
+func (n laterNote) AppendTo(w *wire.Writer) {
+	w.Bytes(1, n.Text.Wire())
 	if n.Pinned {
 		w.Uvarint(3, 1)
 	}
@@ -154,7 +154,7 @@ func readLaterNote(r *wire.Reader) (Versioned, error) {
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		switch tag {
 		case 1:
-			n.Text, err = readEnvelope(r.Bytes())
+			n.Text, err = ReadEnvelope(r.Bytes())
 		case 3:
 			n.Pinned = r.Uvarint() == 1
 		}
@@ -167,7 +167,7 @@ type garbled struct{}
 
 func (garbled) Kind() Kind              { return "test.note" }
 func (garbled) Schema() SchemaVersion   { return 1 }
-func (garbled) appendTo(w *wire.Writer) { w.Uvarint(1, 7) }
+func (garbled) AppendTo(w *wire.Writer) { w.Uvarint(1, 7) }
 
 var (
 	here  = NewKinds(Row[note](readNote), Row[made](readMade))

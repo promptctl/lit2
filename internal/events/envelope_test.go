@@ -9,7 +9,7 @@ import (
 
 func envelopeOf(t *testing.T, b []byte) Envelope {
 	t.Helper()
-	e, err := readEnvelope(b)
+	e, err := ReadEnvelope(b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,16 +36,16 @@ func TestAnEnvelopeOpensByItsForm(t *testing.T) {
 		"plain":       {SealPlain("the text"), Text{Text: "the text"}},
 		"sealed":      {envelopeOf(t, w.Encoded()), Locked{Tier: "team"}},
 		"a new form":  {envelopeOf(t, future.Encoded()), Unopenable{}},
-		"plain again": {envelopeOf(t, SealPlain("read back").wire()), Text{Text: "read back"}},
+		"plain again": {envelopeOf(t, SealPlain("read back").Wire()), Text{Text: "read back"}},
 	} {
 		if got := Open(tc.e, NewKeyring()); got != tc.want {
 			t.Errorf("%s opens %#v; want %#v", name, got, tc.want)
 		}
 	}
-	if kept := envelopeOf(t, future.Encoded()); !bytes.Equal(kept.wire(), future.Encoded()) {
+	if kept := envelopeOf(t, future.Encoded()); !bytes.Equal(kept.Wire(), future.Encoded()) {
 		t.Error("a form this binary does not know is not written back whole")
 	}
-	if sealedAgain := envelopeOf(t, w.Encoded()); !bytes.Equal(sealedAgain.wire(), w.Encoded()) {
+	if sealedAgain := envelopeOf(t, w.Encoded()); !bytes.Equal(sealedAgain.Wire(), w.Encoded()) {
 		t.Error("a sealed envelope is not written back whole")
 	}
 }
@@ -57,7 +57,7 @@ func TestEqualTextsCommitEqual(t *testing.T) {
 	if SealPlain("one").Commitment() == SealPlain("two").Commitment() {
 		t.Error("two texts commit alike")
 	}
-	if envelopeOf(t, SealPlain("one").wire()).Commitment() != SealPlain("one").Commitment() {
+	if envelopeOf(t, SealPlain("one").Wire()).Commitment() != SealPlain("one").Commitment() {
 		t.Error("an envelope read back commits differently")
 	}
 }
@@ -68,7 +68,7 @@ func TestAnEnvelopeThatLiesOrIsAmbiguousIsRefused(t *testing.T) {
 	p.Bytes(1, []byte("the text"))
 	lying.Bytes(envelopePlain, p.Encoded())
 	lying.Bytes(envelopeCommitment, bytes.Repeat([]byte{1}, 32))
-	both := append(SealPlain("a").wire(), lying.Encoded()...)
+	both := append(SealPlain("a").Wire(), lying.Encoded()...)
 	for name, b := range map[string][]byte{
 		"a plaintext whose commitment is not its text's": lying.Encoded(),
 		"two forms":           both,
@@ -76,7 +76,7 @@ func TestAnEnvelopeThatLiesOrIsAmbiguousIsRefused(t *testing.T) {
 		"a short commitment":  futureField(envelopeCommitment, "short"),
 		"bytes that are none": {0xff},
 	} {
-		if e, err := readEnvelope(b); err == nil {
+		if e, err := ReadEnvelope(b); err == nil {
 			t.Errorf("%s reads as %#v; want it refused", name, e)
 		}
 	}

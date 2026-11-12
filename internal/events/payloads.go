@@ -1,0 +1,423 @@
+package events
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/promptctl/lit2/internal/events/wire"
+)
+
+// Name is a field's, a set's or a list's name: one path segment,
+// [a-z][a-z0-9_-]*. Only ParseName makes one, so a name that is not a
+// segment is unrepresentable `[LAW:parse-dont-validate]`.
+type Name struct{ s string }
+
+// ParseName reads a name.
+func ParseName(s string) (Name, error) {
+	if s == "" || s[0] < 'a' || s[0] > 'z' || strings.TrimLeft(s, "abcdefghijklmnopqrstuvwxyz0123456789_-") != "" {
+		return Name{}, fmt.Errorf("%q is not a name: a lowercase letter, then lowercase letters, digits, _ or -", s)
+	}
+	return Name{s: s}, nil
+}
+
+func (n Name) String() string { return n.s }
+
+// Label is one label of an item: a name, an open set the workspace
+// chooses. zc7's rule labels and ef4's label kind are this type.
+type Label struct{ name Name }
+
+// ParseLabel reads a label.
+func ParseLabel(s string) (Label, error) {
+	n, err := ParseName(s)
+	if err != nil {
+		return Label{}, fmt.Errorf("a label: %w", err)
+	}
+	return Label{name: n}, nil
+}
+
+func (l Label) String() string { return l.name.s }
+
+// Name is the label as a member of an item's labels.
+func (l Label) Name() Name { return l.name }
+
+// Level is a work item's level, 1 at the bottom (a leaf) to 5 (§3.4).
+type Level struct{ n uint8 }
+
+// The levels a workspace may declare.
+const (
+	leafLevel = 1
+	topLevel  = 5
+)
+
+// ParseLevel reads a level, 1 to 5.
+func ParseLevel(n int) (Level, error) {
+	if n < leafLevel || n > topLevel {
+		return Level{}, fmt.Errorf("level %d is not a level: 1 to 5", n)
+	}
+	return Level{n: uint8(n)}, nil
+}
+
+// Number is the level's number, 1 for a leaf.
+func (l Level) Number() int { return int(l.n) }
+
+// Below is the level one down, the level of this level's children; a
+// leaf has none.
+func (l Level) Below() (Level, bool) {
+	if l.n <= leafLevel {
+		return Level{}, false
+	}
+	return Level{n: l.n - 1}, true
+}
+
+// Placement is where a created item sits in the tree: a top-level id
+// states its level, and a child's level is its parent's one down, so a
+// child never states one (§3.4) `[LAW:one-source-of-truth]`.
+//
+//sumtype:decl
+type Placement interface{ placement() }
+
+// AtLevel is a top-level item at Level, in the synthetic home of that
+// level.
+type AtLevel struct{ Level Level }
+
+// BelowParent is a child, under the item its id names.
+type BelowParent struct{}
+
+func (AtLevel) placement()     {}
+func (BelowParent) placement() {}
+
+// Value is a field's value by its form, never a bare string: prose, which
+// concurrent writers may each hold, or a structural value the fold
+// settles (charter #5).
+//
+//sumtype:decl
+type Value interface {
+	value()
+	// Wire is the value as it is stored. ReadValue reads it.
+	Wire() []byte
+}
+
+// Prose is a prose value, opaque below the verbs.
+type Prose struct{ Body Envelope }
+
+// Plain is a structural value in its canonical text, as the field's kind
+// parsed it at the write.
+type Plain struct{ Canonical string }
+
+func (Prose) value() {}
+func (Plain) value() {}
+
+// The value's wire fields: 1:prose (an envelope) | 2:plain (its text).
+const (
+	valueProse = 1
+	valuePlain = 2
+)
+
+// Wire is the value as it is stored: its envelope.
+func (p Prose) Wire() []byte {
+	var w wire.Writer
+	w.Bytes(valueProse, p.Body.Wire())
+	return w.Encoded()
+}
+
+// Wire is the value as it is stored: its canonical text.
+func (p Plain) Wire() []byte {
+	var w wire.Writer
+	w.Bytes(valuePlain, []byte(p.Canonical))
+	return w.Encoded()
+}
+
+// ReadValue reads a value's stored form: exactly one of the two forms.
+func ReadValue(b []byte) (Value, error) {
+	var vs []Value
+	var err error
+	r := wire.NewReader(b)
+	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+		switch tag {
+		case valueProse:
+			var e Envelope
+			e, err = ReadEnvelope(r.Bytes())
+			vs = append(vs, Prose{Body: e})
+		case valuePlain:
+			vs = append(vs, Plain{Canonical: string(r.Bytes())})
+		}
+	}
+	switch {
+	case err != nil || r.Err() != nil:
+		return nil, fmt.Errorf("a value: %w", errors.Join(err, r.Err()))
+	case len(vs) != 1:
+		return nil, fmt.Errorf("a value is prose or plain; this one is %d of them", len(vs))
+	}
+	return vs[0], nil
+}
+
+// ItemCreate is item.create: About is the item it creates.
+type ItemCreate struct {
+	Place   Placement
+	unknown wire.Unknown
+}
+
+// ItemDelete is item.delete: About is the item, tombstoned, reversibly
+// (§3.2).
+type ItemDelete struct{ unknown wire.Unknown }
+
+// FieldSet is field.set: About is the item or element whose field is
+// written. Over is the writes the writer read for this field, which this
+// one replaces: a write that names none is concurrent with every other.
+type FieldSet struct {
+	Field   Name
+	Value   Value
+	Over    []EventID
+	unknown wire.Unknown
+}
+
+// LabelAdd is label.add: About is the item.
+type LabelAdd struct {
+	Label   Label
+	unknown wire.Unknown
+}
+
+// LabelRm is label.rm: About is the item; Observed is the label.add events
+// the writer saw, which it removes, so an add it did not see survives.
+type LabelRm struct {
+	Label    Label
+	Observed []EventID
+	unknown  wire.Unknown
+}
+
+// CommentAdd is comment.add: About is the element it creates, its name
+// minted in the item's elements.
+type CommentAdd struct {
+	Body    Envelope
+	unknown wire.Unknown
+}
+
+func (ItemCreate) Kind() Kind { return "item.create" }
+func (ItemDelete) Kind() Kind { return "item.delete" }
+func (FieldSet) Kind() Kind   { return "field.set" }
+func (LabelAdd) Kind() Kind   { return "label.add" }
+func (LabelRm) Kind() Kind    { return "label.rm" }
+func (CommentAdd) Kind() Kind { return "comment.add" }
+
+func (ItemCreate) Schema() SchemaVersion { return 1 }
+func (ItemDelete) Schema() SchemaVersion { return 1 }
+func (FieldSet) Schema() SchemaVersion   { return 1 }
+func (LabelAdd) Schema() SchemaVersion   { return 1 }
+func (LabelRm) Schema() SchemaVersion    { return 1 }
+func (CommentAdd) Schema() SchemaVersion { return 1 }
+
+// The placement's wire fields: 1:at-level (the level) | 2:below-parent.
+const (
+	placeAtLevel     = 1
+	placeBelowParent = 2
+)
+
+// item.create = 1:placement · unknown….
+func (p ItemCreate) AppendTo(w *wire.Writer) {
+	var pl wire.Writer
+	switch at := p.Place.(type) {
+	case AtLevel:
+		pl.Uvarint(placeAtLevel, uint64(at.Level.n))
+	case BelowParent:
+		pl.Bytes(placeBelowParent, nil)
+	default:
+		// [LAW:no-silent-failure] a create placed nowhere would be signed
+		// as a create with no level and no parent
+		panic(fmt.Sprintf("events: %T is not a Placement", p.Place))
+	}
+	w.Bytes(1, pl.Encoded())
+	w.Keep(p.unknown)
+}
+
+// ReadItemCreate reads item.create at version 1.
+func ReadItemCreate(r *wire.Reader) (Versioned, error) {
+	var p ItemCreate
+	var err error
+	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+		if tag == 1 {
+			p.Place, err = readPlacement(r.Bytes())
+		}
+	}
+	p.unknown = r.Rest()
+	switch {
+	case err != nil || r.Err() != nil:
+		return nil, errors.Join(err, r.Err())
+	case p.Place == nil:
+		return nil, errors.New("an item.create has no placement")
+	}
+	return p, nil
+}
+
+func readPlacement(b []byte) (Placement, error) {
+	var at []Placement
+	var err error
+	r := wire.NewReader(b)
+	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+		switch tag {
+		case placeAtLevel:
+			var l Level
+			l, err = ParseLevel(int(min(r.Uvarint(), topLevel+1)))
+			at = append(at, AtLevel{Level: l})
+		case placeBelowParent:
+			r.Bytes()
+			at = append(at, BelowParent{})
+		}
+	}
+	switch {
+	case err != nil || r.Err() != nil:
+		return nil, fmt.Errorf("a placement: %w", errors.Join(err, r.Err()))
+	case len(at) != 1:
+		return nil, fmt.Errorf("a placement is a level or below its parent; this one is %d of them", len(at))
+	}
+	return at[0], nil
+}
+
+// item.delete = unknown….
+func (p ItemDelete) AppendTo(w *wire.Writer) { w.Keep(p.unknown) }
+
+// ReadItemDelete reads item.delete at version 1.
+func ReadItemDelete(r *wire.Reader) (Versioned, error) {
+	for _, ok := r.Next(); ok; _, ok = r.Next() {
+	}
+	return ItemDelete{unknown: r.Rest()}, r.Err()
+}
+
+// field.set = 1:field 2:value 3:over (an event id, repeated) · unknown….
+func (p FieldSet) AppendTo(w *wire.Writer) {
+	w.Bytes(1, []byte(p.Field.s))
+	w.Bytes(2, p.Value.Wire())
+	ids(w, 3, p.Over)
+	w.Keep(p.unknown)
+}
+
+// ReadFieldSet reads field.set at version 1.
+func ReadFieldSet(r *wire.Reader) (Versioned, error) {
+	var p FieldSet
+	var field []byte
+	var hasField bool
+	var err error
+	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+		switch tag {
+		case 1:
+			field, hasField = r.Bytes(), true
+		case 2:
+			p.Value, err = ReadValue(r.Bytes())
+		case 3:
+			var id EventID
+			id, err = ReadEventID(r.Bytes())
+			p.Over = append(p.Over, id)
+		}
+	}
+	p.unknown = r.Rest()
+	switch {
+	case err != nil || r.Err() != nil:
+		return nil, errors.Join(err, r.Err())
+	case !hasField:
+		return nil, errors.New("a field.set names no field")
+	case p.Value == nil:
+		return nil, errors.New("a field.set has no value")
+	}
+	if p.Field, err = ParseName(string(field)); err != nil {
+		return nil, fmt.Errorf("a field.set's field: %w", err)
+	}
+	return p, nil
+}
+
+// label.add = 1:label · unknown….
+func (p LabelAdd) AppendTo(w *wire.Writer) {
+	w.Bytes(1, []byte(p.Label.name.s))
+	w.Keep(p.unknown)
+}
+
+// ReadLabelAdd reads label.add at version 1.
+func ReadLabelAdd(r *wire.Reader) (Versioned, error) {
+	var p LabelAdd
+	label, err := readLabel(r, func(*wire.Reader, uint32) error { return nil })
+	p.Label, p.unknown = label, r.Rest()
+	if err != nil {
+		return nil, fmt.Errorf("a label.add: %w", err)
+	}
+	return p, nil
+}
+
+// label.rm = 1:label 2:observed (an event id, repeated) · unknown….
+func (p LabelRm) AppendTo(w *wire.Writer) {
+	w.Bytes(1, []byte(p.Label.name.s))
+	ids(w, 2, p.Observed)
+	w.Keep(p.unknown)
+}
+
+// ReadLabelRm reads label.rm at version 1.
+func ReadLabelRm(r *wire.Reader) (Versioned, error) {
+	var p LabelRm
+	label, err := readLabel(r, func(r *wire.Reader, tag uint32) error {
+		if tag != 2 {
+			return nil
+		}
+		id, err := ReadEventID(r.Bytes())
+		p.Observed = append(p.Observed, id)
+		return err
+	})
+	p.Label, p.unknown = label, r.Rest()
+	if err != nil {
+		return nil, fmt.Errorf("a label.rm: %w", err)
+	}
+	return p, nil
+}
+
+// readLabel reads a message whose field 1 is a label, handing every other
+// field to more.
+func readLabel(r *wire.Reader, more func(*wire.Reader, uint32) error) (Label, error) {
+	var label []byte
+	var hasLabel bool
+	var err error
+	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+		if tag == 1 {
+			label, hasLabel = r.Bytes(), true
+			continue
+		}
+		err = more(r, tag)
+	}
+	switch {
+	case err != nil || r.Err() != nil:
+		return Label{}, errors.Join(err, r.Err())
+	case !hasLabel:
+		return Label{}, errors.New("it names no label")
+	}
+	return ParseLabel(string(label))
+}
+
+// comment.add = 1:body (an envelope) · unknown….
+func (p CommentAdd) AppendTo(w *wire.Writer) {
+	w.Bytes(1, p.Body.Wire())
+	w.Keep(p.unknown)
+}
+
+// ReadCommentAdd reads comment.add at version 1.
+func ReadCommentAdd(r *wire.Reader) (Versioned, error) {
+	var p CommentAdd
+	var hasBody bool
+	var err error
+	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+		if tag == 1 {
+			p.Body, err = ReadEnvelope(r.Bytes())
+			hasBody = true
+		}
+	}
+	p.unknown = r.Rest()
+	switch {
+	case err != nil || r.Err() != nil:
+		return nil, fmt.Errorf("a comment.add: %w", errors.Join(err, r.Err()))
+	case !hasBody:
+		return nil, errors.New("a comment.add has no body")
+	}
+	return p, nil
+}
+
+// ids writes each id as field tag, in order.
+func ids(w *wire.Writer, tag uint32, ids []EventID) {
+	for _, id := range ids {
+		w.Bytes(tag, id[:])
+	}
+}

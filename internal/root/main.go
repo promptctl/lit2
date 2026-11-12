@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -35,6 +36,7 @@ func Main(args []string) int {
 		Agent:    events.AgentFrom(os.Getenv("LIT_AGENT")),
 		Place:    place,
 		Store:    opening(place, rand.Reader),
+		Fold:     foldEnv(runtime.GOMAXPROCS(0)),
 		Version:  version(),
 		Commands: commandLog(),
 		In:       os.Stdin,

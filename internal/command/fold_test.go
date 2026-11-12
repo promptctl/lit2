@@ -1,0 +1,88 @@
+package command
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/promptctl/lit2/internal/cli"
+	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/fold"
+	"github.com/promptctl/lit2/internal/store"
+)
+
+func foldBlockOf(t *testing.T, f fold.FoldFacts) map[string]any {
+	t.Helper()
+	m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "get"}, Started: t0, Store: StoreFacts{Folds: []fold.FoldFacts{f}}, Outcome: cli.Done{}})
+	list, _ := m["fold"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("the line's fold block is %v; want one fold", m["fold"])
+	}
+	return list[0].(map[string]any)
+}
+
+var nothing = fold.Env{Registry: fold.NewRegistry(fold.FirstFacts()...), Suites: events.NewSuites(events.Ed25519()), Workers: 1}
+
+func TestAFoldOfNothingIsEveryCountZeroAndPresent(t *testing.T) {
+	block := foldBlockOf(t, fold.Genesis(nothing, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, nil).Facts)
+	if block["base"] != "genesis:absent" {
+		t.Errorf("a fold with no snapshot is based %v", block["base"])
+	}
+	for _, k := range []string{"records", "torn", "duplicates", "late", "checked", "trusted", "exceptions", "applied"} {
+		if block[k] != 0.0 {
+			t.Errorf("a fold of nothing has %s %v; want 0, present", k, block[k])
+		}
+	}
+	zeros := map[string][]string{
+		"decoded":   {"readable", "erased", "uncommitted", "malformed"},
+		"verdicts":  {"valid", "invalid", "unknown_suite"},
+		"counts":    {"items", "tombstoned", "comments", "labels", "prose_conflicts", "overruled", "mixed_forms", "collisions", "uncreated"},
+		"carried":   {"bad_signature", "unknown_suite"},
+		"unapplied": {"unread", "erased", "uncommitted", "misaddressed"},
+	}
+	for obj, keys := range zeros {
+		m, ok := block[obj].(map[string]any)
+		if !ok {
+			t.Errorf("the fold block has no %s: %v", obj, block)
+			continue
+		}
+		for _, k := range keys {
+			if m[k] != 0.0 {
+				t.Errorf("a fold of nothing has %s.%s %v; want 0, present", obj, k, m[k])
+			}
+		}
+	}
+	// unread is keyed by kind and reason, an open set: none read is an
+	// empty object, present
+	if unread, ok := block["decoded"].(map[string]any)["unread"].(map[string]any); !ok || len(unread) != 0 {
+		t.Errorf("a fold of nothing has decoded.unread %v; want {}", block["decoded"])
+	}
+}
+
+func TestTheFoldSaysWhereItStartedAndWhy(t *testing.T) {
+	bad := errors.New("the fold's payload is not its two sections")
+	ref := store.WriterRef{Checkout: store.CheckoutID{3}}
+	for _, c := range []struct {
+		base      fold.BaseFact
+		name, why string
+		ref       any
+	}{
+		{fold.Extended{}, "extended", "", nil},
+		{fold.Refolded{Why: fold.Missed{Miss: store.TagChanged{}}}, "genesis:tag_changed", "", nil},
+		{fold.Refolded{Why: fold.Missed{Miss: store.Rewritten{Ref: ref}}}, "genesis:rewritten", "", string(ref.Name())},
+		{fold.Refolded{Why: fold.PayloadUnreadable{Err: bad}}, "genesis:payload_unreadable", bad.Error(), nil},
+	} {
+		f := fold.Genesis(nothing, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, nil).Facts
+		f.Base = c.base
+		block := foldBlockOf(t, f)
+		why, _ := block["why"].(string)
+		if block["base"] != c.name || why != c.why || block["ref"] != c.ref {
+			t.Errorf("a fold based %#v says %v, ref %v, why %q", c.base, block["base"], block["ref"], why)
+		}
+	}
+}
+
+func TestAnEventThatNeverFoldedHasNoFoldBlock(t *testing.T) {
+	if m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "help"}, Started: t0, Outcome: cli.Done{}}); m["fold"] != nil {
+		t.Errorf("an event that never reached step 3 carries %v", m["fold"])
+	}
+}

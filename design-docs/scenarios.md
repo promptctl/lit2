@@ -211,9 +211,10 @@ nothing lost and every disagreement visible.
    visible after the first fetch on each side.
 2. Both edit `rin.2ae/body`. The fold holds both candidates on the field;
    `get rin.2ae/body` prints both, each with writer and time; `set
-   rin.2ae/body -` by either side mints a `field.set` whose causal position
-   follows both (the writer folded both before writing), and the fold reads
-   it as the resolution. No "diverged" state exists.
+   rin.2ae/body -` by either side mints a `field.set` that names both
+   candidates in its `over` (the writer folded both before writing), and the
+   fold reads it as the resolution. A write that sorts after both but names
+   neither is a third candidate. No "diverged" state exists.
 3. Both file children under `rin`. Two children, two opaque ids, both
    survive; neither is renumbered because nothing is numbered.
 4. Both rank a different lane to the top. Two `rank.place` intents in the

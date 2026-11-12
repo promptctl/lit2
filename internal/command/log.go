@@ -116,6 +116,7 @@ type line struct {
 	Command    commandFacts `json:"command"`
 	Counts     counts       `json:"counts"`
 	Store      *storeLine   `json:"store,omitempty"`
+	Fold       []foldLine   `json:"fold,omitempty"`
 	Place      any          `json:"place"`
 	Agent      string       `json:"agent,omitempty"`
 }
@@ -141,6 +142,7 @@ func encode(e Event) ([]byte, error) {
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
 		Store:      storeBlock(e.Store),
+		Fold:       foldBlock(e.Store.Folds),
 		Place:      placeLine(e.Place),
 	}
 	switch o := e.Outcome.(type) {

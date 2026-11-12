@@ -23,6 +23,20 @@ type Frontier struct{ highest uint64 }
 // observes verified events only, so no forged position moves the clock.
 func (f Frontier) Observe(h Header) Frontier { return Frontier{highest: max(f.highest, h.position.n)} }
 
+// Wire is the frontier as it is stored: its highest position, 0 before any
+// event. ReadFrontier reads it, a third constructor beside Observe for the
+// snapshot reader, which reads only what this binary's fold wrote.
+func (f Frontier) Wire() []byte { return binary.AppendUvarint(nil, f.highest) }
+
+// ReadFrontier reads a frontier's stored form.
+func ReadFrontier(b []byte) (Frontier, error) {
+	n, size := binary.Uvarint(b)
+	if size <= 0 || size != len(b) {
+		return Frontier{}, errors.New("a frontier is one varint")
+	}
+	return Frontier{highest: n}, nil
+}
+
 // Names is the names created in each namespace, read-only to Mint.
 type Names struct {
 	taken map[Namespace]map[Segment]struct{}
@@ -214,7 +228,7 @@ const maxDraws = 64
 
 func payloadWire(p Payload) []byte {
 	var w wire.Writer
-	p.appendTo(&w)
+	p.AppendTo(&w)
 	return w.Encoded()
 }
 

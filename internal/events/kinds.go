@@ -25,7 +25,7 @@ type Versioned interface {
 // binary decodes, changes and encodes keeps a newer binary's fields.
 type Payload interface {
 	Versioned
-	appendTo(w *wire.Writer)
+	AppendTo(w *wire.Writer)
 }
 
 // Past is a frozen version of a kind. Up is its one upcaster, to the next

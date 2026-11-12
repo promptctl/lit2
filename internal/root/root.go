@@ -20,6 +20,7 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/reason"
 )
 
@@ -31,6 +32,7 @@ type Process struct {
 	Agent    events.Agent
 	Place    command.Place
 	Store    command.Opening
+	Fold     fold.Env
 	Version  string
 	Commands command.Sink
 	In       io.Reader
@@ -57,7 +59,7 @@ func Run(p Process, args []string) int {
 			return failed(err)
 		}
 		asked(cli.Summarize(cmd))
-		return dispatch(p, verbs, admin, cmd)
+		return dispatch(p, verbs, admin, cmd, stored)
 	})
 	// [LAW:no-silent-failure] exception: stderr is where failures are said;
 	// when writing to it fails there is no channel left but the exit status,
@@ -69,19 +71,20 @@ func Run(p Process, args []string) int {
 	return cli.ExitCode(event.Outcome)
 }
 
-// dispatch binds each command to its body.
-func dispatch(p Process, verbs, admin cli.Table, cmd cli.Command) cli.Outcome {
+// dispatch binds each command to its body. Every verb runs the steps of §5
+// in order on every call: open and fold, then its own body.
+func dispatch(p Process, verbs, admin cli.Table, cmd cli.Command, stored *command.StoreFacts) cli.Outcome {
 	switch cmd.(type) {
 	case cli.Help:
 		return written(io.WriteString(p.Out, cli.HelpText(verbs, admin, address.FieldTable{})))
 	case cli.Get:
-		return notBuilt("get", "lit-bootstrap-1f9.7gj")
+		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("get", "lit-bootstrap-1f9.7gj") })
 	case cli.Set:
-		return notBuilt("set", "lit-bootstrap-1f9.7gj")
+		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("set", "lit-bootstrap-1f9.7gj") })
 	case cli.Add:
-		return notBuilt("add", "lit-bootstrap-1f9.7gj")
+		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("add", "lit-bootstrap-1f9.7gj") })
 	case cli.Rm:
-		return notBuilt("rm", "lit-bootstrap-1f9.7gj")
+		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("rm", "lit-bootstrap-1f9.7gj") })
 	case cli.AdminInit:
 		return notBuilt("admin init", "lit-bootstrap-1f9.zc7, lit-bootstrap-1f9.m1y and lit-bootstrap-1f9.1s0")
 	case cli.AdminSync:

@@ -137,7 +137,7 @@ func TestANewerRecordKeepsTheFieldsThisBinaryDoesNotKnow(t *testing.T) {
 	// the newer binary writes a payload with a field this one lacks, an
 	// envelope with a field this one lacks, and a header field this one
 	// lacks, all signed
-	future, err := readEnvelope(append(text("prose").wire(), futureField(9, "envelope's")...))
+	future, err := ReadEnvelope(append(text("prose").Wire(), futureField(9, "envelope's")...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestANewerRecordKeepsTheFieldsThisBinaryDoesNotKnow(t *testing.T) {
 		t.Fatal("the payload written back does not read in the newer binary")
 	}
 	got := theirsAgain.Payload.(newerNote)
-	if got.Mood != "keen" || !slices.Equal(got.Tags, []string{"b", "a", "c", "d"}) || !bytes.Equal(got.Text.wire(), future.wire()) {
+	if got.Mood != "keen" || !slices.Equal(got.Tags, []string{"b", "a", "c", "d"}) || !bytes.Equal(got.Text.Wire(), future.Wire()) {
 		t.Errorf("the newer binary reads back %+v; want its mood, the tags in order and its envelope's field intact", got)
 	}
 }

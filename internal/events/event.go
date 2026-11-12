@@ -367,7 +367,7 @@ func (h Header) wire() []byte {
 	w.Bytes(headerKind, []byte(h.kind))
 	w.Uvarint(headerSchema, uint64(h.schema))
 	w.Bytes(headerSubject, aboutWire(h.about))
-	w.Bytes(headerAttribution, attributionWire(h.by))
+	w.Bytes(headerAttribution, h.by.Wire())
 	w.Bytes(headerConfigRef, configRefWire(h.configRef))
 	w.Uvarint(headerPolicy, uint64(h.policy))
 	w.Uvarint(headerPosition, h.position.n)
@@ -393,12 +393,11 @@ func aboutWire(a About) []byte {
 	return w.Encoded()
 }
 
-func attributionWire(a Attribution) []byte {
-	var w, p wire.Writer
+// Wire is the attribution as it is stored. ReadAttribution reads it.
+func (a Attribution) Wire() []byte {
+	var w wire.Writer
 	w.Bytes(1, a.Checkout[:])
-	p.Uvarint(1, uint64(a.Principal.suite))
-	p.Bytes(2, []byte(a.Principal.key))
-	w.Bytes(2, p.Encoded())
+	w.Bytes(2, a.Principal.Wire())
 	switch agent := a.Agent.(type) {
 	case Labeled:
 		w.Bytes(3, []byte(agent.label))
@@ -465,7 +464,7 @@ func readHeader(b []byte) (Header, error) {
 		case headerSubject:
 			h.about, err = readAbout(r.Bytes())
 		case headerAttribution:
-			h.by, err = readAttribution(r.Bytes())
+			h.by, err = ReadAttribution(r.Bytes())
 		case headerConfigRef:
 			h.configRef, err = readConfigRef(r.Bytes())
 		case headerPolicy:
@@ -545,7 +544,8 @@ func readAbout(b []byte) (About, error) {
 	return Element{Of: id, Name: s}, nil
 }
 
-func readAttribution(b []byte) (Attribution, error) {
+// ReadAttribution reads an attribution's stored form.
+func ReadAttribution(b []byte) (Attribution, error) {
 	a := Attribution{Agent: Unlabeled{}}
 	var hasCheckout, hasPrincipal bool
 	r := wire.NewReader(b)
@@ -557,7 +557,7 @@ func readAttribution(b []byte) (Attribution, error) {
 			hasCheckout = len(c) == len(a.Checkout)
 			copy(a.Checkout[:], c)
 		case 2:
-			a.Principal, err = readPrincipal(r.Bytes())
+			a.Principal, err = ReadPrincipalID(r.Bytes())
 			hasPrincipal = true
 		case 3:
 			a.Agent = AgentFrom(string(r.Bytes()))
@@ -576,7 +576,17 @@ func readAttribution(b []byte) (Attribution, error) {
 	return a, nil
 }
 
-func readPrincipal(b []byte) (PrincipalID, error) {
+// Wire is the principal as it is stored: its suite and its key.
+// ReadPrincipalID reads it.
+func (p PrincipalID) Wire() []byte {
+	var w wire.Writer
+	w.Uvarint(1, uint64(p.suite))
+	w.Bytes(2, []byte(p.key))
+	return w.Encoded()
+}
+
+// ReadPrincipalID reads a principal's stored form.
+func ReadPrincipalID(b []byte) (PrincipalID, error) {
 	var p PrincipalID
 	var hasSuite bool
 	r := wire.NewReader(b)

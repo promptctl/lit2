@@ -89,9 +89,9 @@ same shape:
 
 | on the command line | events minted |
 |---|---|
-| `set x/title "…"` | `field.set {item, field, value}` |
+| `set x/title "…"` | `field.set {item, field, value, over}`, `over` the candidates the writer saw and replaces |
 | `set x/status review` | `transition {item, from, to}` |
-| `add x/labels ready` / `rm x/labels/ready` | `label.add` / `label.rm` |
+| `add x/labels ready` / `rm x/labels/ready` | `label.add {item, label}` / `label.rm {item, label, observed}`, `observed` the adds the writer saw |
 | `set x/labels '[a, b]'` | one `label.rm` per element removed, one `label.add` per element added |
 | `add x/comments "…"` | `comment.add {item, id, body}` |
 | `add <node>/lanes/datetime '[dee, b64]'` | `lane.create`, then `lane.place {lane, item, after}` per member |

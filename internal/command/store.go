@@ -5,22 +5,25 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// StoreFacts is what the store's steps returned during one invocation, in
-// the order they ran. The store emits nothing itself: its results carry
-// their facts, and the body that called it hands them here, so the event
-// keeps one emitter `[LAW:single-enforcer]`. The root records the store's
-// opening for every invocation, opened or why not; any other step that did
-// not run left nothing, and a fresh store's heads are a block of zeros
+// StoreFacts is what the store's steps, and the folds over what they read,
+// returned during one invocation, in the order they ran. Neither the store
+// nor the fold emits anything itself: their results carry their facts, and
+// the body that called them hands them here, so the event keeps one
+// emitter `[LAW:single-enforcer]`. The root records the store's opening
+// for every invocation, opened or why not; any other step that did not run
+// left nothing, and a fresh store's heads are a block of zeros
 // `[LAW:nothing-unseen]`.
 type StoreFacts struct {
 	Opening   Opening
 	Heads     []store.Heads
 	Reads     []Read
 	Plans     []store.Resume
+	Folds     []fold.FoldFacts
 	Swaps     []store.Swapped
 	Appends   []store.Appended
 	Publishes []store.Publishing
@@ -53,7 +56,7 @@ func (Opened) opening()   {}
 func (Unopened) opening() {}
 
 func (f StoreFacts) empty() bool {
-	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Plans)+len(f.Swaps)+len(f.Appends)+len(f.Publishes) == 0
+	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Plans)+len(f.Folds)+len(f.Swaps)+len(f.Appends)+len(f.Publishes) == 0
 }
 
 // The store block as the line spells it: one object per step that ran,
