@@ -231,7 +231,7 @@ listed so nobody carries them across by habit.
 | Background mirror: beacon, single-flight lock, clone, push from clone | ~1,950 | fire-and-forget `git push refs/lit/*` |
 | Locks: workspace, commit, holder | 1,659 | nothing (charter constraint 2) |
 | Vendored driver and two forks | 1,670 plus 7 patches | nothing |
-| Background receive: ask, clone, land | ~1,560 | `git fetch` and a refold |
+| Background receive: ask, clone, land | ~1,560 | `git fetch` and a replay |
 | Foreground push with compaction and cache prune | ~1,250 | idempotent push |
 | Upgrade installer and manifest resolver | 1,136 | `scripts/install.sh` plus a min-reader stamp on the log |
 | Filesystem snapshots (four kinds, four retention budgets) | 1,223 | nothing |

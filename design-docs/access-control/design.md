@@ -648,8 +648,7 @@ one-command repair (re-push from any replica), not as silent divergence.
 5. The joiner-request flow's abuse surface (an unauthenticated ref push as a
    membership request is a spam channel; probably fine, needs a look).
 6. Verification cost at receive time on long histories (adoption clones the
-   full archive — F§4; incremental verification from last-verified-head
-   should make steady-state cheap; the first adopt is the expensive one).
+   full archive — F§4; the first adopt is the expensive one).
 7. `tier.set` mechanics in both directions. Position: **narrowing** is
    future-only — existing history stays under the old tier, stated plainly,
    consistent with forward-only everything. **Widening** mints a fresh

@@ -43,7 +43,7 @@ and access control.
 - **Costs:** no coordination before a write, ever. Two offline writers can
   both do a thing, and the design must make that harmless (C2, C3). Anything
   a server would do cheaply (sequence numbers, locks, a single current
-  snapshot) has to be replaced by client-side construction.
+  state) has to be replaced by client-side construction.
 
 ### A3. lit adds nothing to the code repo's refs or objects, locally; on the remote its data lives under its own refs; no developer git operation changes in behavior, output or speed.
 *Event-store charter #10 (owner amendment 2026-10-09); budgets row "change to any git operation the developer runs: none".*
@@ -112,8 +112,7 @@ and access control.
   copying objects, which git does natively; content-addressing makes
   duplicates and tampering detectable.
 - **Costs:** the event set only grows, so reading is a fold over everything
-  (C1) and the fold's cost grows with history unless cached (E2) and
-  compacted (D1). Removing anything is a rewrite (D1), never a delete.
+  (C1) and the fold's cost grows with history unless compacted (D1). Removing anything is a rewrite (D1), never a delete.
 
 ### B2. The event is `(type, schema-version, subject, payload, attribution, config-ref, causal-position, recorded-at, signature-slot)`, with the signature over the header and a salted hash of the payload, not the payload.
 *Design §events; charter #6 birth requirements.*
@@ -134,15 +133,14 @@ and access control.
 
 - **Implies:** one commit, one tree and the event blobs per command, chained
   forever on the writer's ref. The chain is what the remote holds (A3, A4).
-  A refold from genesis walks the chain.
-- **Buys:** atomicity per command (one ref update); an incremental fold can
-  take "events since my last head" as "commits since my last head"; the
+  A replay walks the chain.
+- **Buys:** atomicity per command (one ref update); the
   receiver's rewrite check (D1) can compare chains.
 - **Costs:** this is the unbounded growth. Tens of thousands of commits and
   trees per writer over a project's life, all on the remote, all walked on a
-  refold, all fetched at adoption. The sweep anchor (D3) adds merge parents
+  replay, all fetched at adoption. The sweep anchor (D3) adds merge parents
   to the chain. None of what B3 buys needs the chain: atomicity needs one
-  ref update, not ancestry; "events since" is a set difference; the rewrite
+  ref update, not ancestry; the rewrite
   check is a set comparison. This is a design decision, not a charter
   constraint, and it fails requirement 4 (`requirements.md`). **Departure
   made:** `architecture.md` §3.15 replaces it with a local append-only log
@@ -187,15 +185,13 @@ and access control.
 *Charter #2; design §fold, `INV:deterministic-fold`.*
 
 - **Implies:** no clock, no map-iteration order, no filesystem input in the
-  fold. A fold-version constant bumps with any rule change and invalidates
-  caches.
+  fold. A fold-version constant bumps with any rule change.
 - **Buys:** every machine with the same events shows the same backlog, which
-  is the whole promise; arrival order is irrelevant, so sync needs no merge;
-  the cache is disposable (E2) because it can always be recomputed.
+  is the whole promise; arrival order is irrelevant, so sync needs no merge.
 - **Costs:** a nondeterministic fold is, in the design's words, "the one bug
   with no crime scene". Every derivation must be sorted into fold (pure) or
   tick (clocked), and some wanted behaviors split in two. Every rule change
-  is a fold-version bump and a fleet-wide refold.
+  is a fold-version bump.
 - **Departure already made:** the design pins `fold(corpus)` byte-for-byte
   with golden fixtures. `architecture.md` §3.3 tests determinism as state
   equality between independent folds instead.
@@ -291,15 +287,6 @@ and access control.
   replicas that sync, so true erasure of stale copies needs encryption (F2);
   the remote keeps unreachable objects until its host collects.
 
-### D2. The cache is scaffolding: derived local state keyed by `(fold-version, ref heads)`, deletable at any moment, never locked, atomic-rename only.
-*Charter #2 last sentence; design §cache, `INV:disposable-cache`.*
-
-- **Buys:** no shared mutable state anywhere but the event log; no lock
-  anywhere; a torn or stale cache costs one refold.
-- **Costs:** the refold must meet the budget (E1) from a cold start, which
-  drives the codec and snapshot design from day one; two worktrees racing on
-  the cache waste a fold.
-
 ### D3. Dead checkouts' refs are swept: a live checkout appends a sweep event with the dead head as a second parent, then deletes the dead ref locally and remotely by compare-and-swap.
 *Design §store "Ref hygiene".*
 
@@ -326,25 +313,20 @@ and access control.
 
 ## E. How it performs
 
-### E1. Every command under one second at ten times current fleet scale, on both axes, with the figures in budgets.md.
-*Charter #3; budgets.md command and storage tables.*
+### E1. The design is not wasteful: sensible algorithms and data structures, no quadratic work where linear will do, no needless I/O.
+*Charter #3.*
 
-- **Implies:** warm cache under 300 ms, cold under 1 s, full refold from
-  genesis under 1 s, staleness check under 20 ms, background work bounded
-  per occasion and machine-wide.
-- **Buys:** a tool an agent can call in a loop; the design decisions that
-  follow (snapshot from day one, codec chosen by measurement, no inline
-  fetch) are forced rather than argued.
-- **Costs:** a harness and a corpus that do not yet exist and must be built
-  before the first release can be gated; the in-process library (B5) must
-  meet the walk budgets, which is unmeasured.
+- **Buys:** a tool an agent can call in a loop, without machinery added
+  for speed before there is a reason for it.
+- **Costs:** every read replays every event and checks every signature, so
+  its cost grows with history; compaction (D1) is what bounds it.
 
 ### E2. The migration is a strangler fig with Dolt as the oracle.
 *Charter #9.*
 
 - **Does not apply to lit2.** It governs replacing v1's store in place.
   lit2 is a clean implementation with no Dolt and no oracle. The design's
-  §migration, OPEN #7, and every mention of S0–S3 gates are v1 material.
+  §migration, OPEN #5, and every mention of S0–S3 gates are v1 material.
 
 ---
 
@@ -366,7 +348,7 @@ and access control.
 ### F2. Layers below the CLI boundary treat prose as opaque bytes.
 *Design `INV:opaque-envelope`.*
 
-- **Buys:** encryption touches only the CLI boundary; the fold, cache,
+- **Buys:** encryption touches only the CLI boundary; the fold,
   codec and sync never see prose.
 - **Costs:** nothing computed across items may read prose. Requirements and
   selectors on prose by content are evaluated only by the writer; a reader
@@ -391,7 +373,6 @@ Removing any of these collapses something the others stand on:
 - A2 (no server) with B1 and C1: the whole reason the fold exists.
 - C1 with C2: without a total order the fold is not deterministic.
 - C3: without intents, concurrent writes cannot converge.
-- D2: with a locked or trusted cache, A2's "no locks" is gone.
 
 These are choices the charter made that lit2 could make differently
 without touching the above:

@@ -47,15 +47,13 @@ These are settled. Do not reopen them in the design.
 2. **Writes are appends; state is a fold.** Every mutation is a content-addressed
    event, changed afterward only by a rewrite (#7). Current state is a deterministic pure function of
    the event set — same events, same backlog, on every machine, every time. No
-   locks, no write engines, no merge/reconcile machinery. The only shared
-   mutable state permitted outside the event log is a cache that any process
-   may delete at any time.
-3. **Every command under one second.** The perf target is <1s wall time for
-   every lit command, met at 10x current fleet scale on both axes (10x history
-   per store × 10x stores per machine), with the baselines and budgets recorded
-   in [budgets.md](budgets.md). Network transfer is excluded only where
-   physics demands (first-clone download); network never sits on a command's
-   foreground path.
+   locks, no write engines, no merge/reconcile machinery. There is no shared
+   mutable state outside the event log.
+3. **No wasted work.** Every lit command uses sensible algorithms and data
+   structures, with no quadratic work where linear will do and no needless
+   I/O, at 10x current fleet scale on both axes (10x history per store × 10x
+   stores per machine). Network never sits on a command's foreground path,
+   except the first-clone download.
 4. **Permissive licensing only; no subprocesses.** No copyleft dependencies;
    linked libraries must be permissive. lit reads and writes git objects and
    refs in-process through such a library and never runs the `git` binary or

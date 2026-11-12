@@ -125,7 +125,7 @@ reader's file is applied by tick, which is where a column or field the
 reader's model no longer declares is reported (§3.5).
 
 Determinism is a behavior: two folds of one event set, in any arrival order,
-from genesis or from a snapshot, yield equal state. It is tested as that
+yield equal state. It is tested as that
 equality, through the state's own equality and never through a pinned
 serialization `[LAW:behavior-not-structure]`.
 
@@ -352,9 +352,8 @@ none. So the remote holds, per live writer, one commit, one tree and a few
 segment blobs, and a push sends the delta
 of the open segment. Object count tracks writers and segments; the number of
 events never reaches git. An inbox ref is the same shape with one segment
-and no checkout behind it. The fold reads sealed segments plus the open log,
-and the snapshot remembers, per writer, the segment and offset it has
-consumed, so an incremental fold reads only what was appended. Compaction
+and no checkout behind it. The fold reads sealed segments plus the open log.
+Compaction
 (§3.13) is what bounds a segment set over a project's life: a squash
 re-seals history into fewer, smaller segments on every replica.
 
@@ -476,7 +475,7 @@ row is that no primitive learned a new case.
 | know the view is stale or the push failed | tick compares local refs to remote-tracking refs and reads the last push outcome; one advisory line on read and write |
 | file a bug with no clone | mint events, push to `refs/lit/inbox/<id>`; any clone's receive folds and anchors them |
 | erase content | `rm x --purge`, a rewrite; every replica converges; `gc` reclaims |
-| keep the store small and fast | the cache snapshot; compaction as a rewrite; budgets as gates |
+| keep the store small | compaction as a rewrite; budgets as gates |
 | survive a binary that is too old | `INV:preserve-unknown`: unknown events carried and counted; mutations on their subjects refused; `min-reader-version` in the workspace file |
 | say who may do what | the principal on every event; capabilities `(verb, path glob, binding)` in the policy; the one enforcer refuses at the write; every receiver verifies before accepting |
 | hide content from some readers | tiers; every prose field an envelope from its first event; `set x/tier internal`; structure stays visible |
@@ -496,13 +495,11 @@ of (events, clock, argv, writer); the rest is the hearth
 `[LAW:effects-at-boundaries]`.
 
 1. **Open.** Read every writer ref head and every open log under the
-   common dir, this checkout's and its sibling worktrees'; load the cache
-   snapshot keyed by `(fold-version, ref heads, log lengths)`. A miss or a
-   torn snapshot is one refold; no lock.
+   common dir, this checkout's and its sibling worktrees'; no lock.
 2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.15) into the
    schema value.
-3. **Fold** the events newer than the snapshot, from the sealed segments
-   and the open log, verifying each (§3.20).
+3. **Fold** every event, from the sealed segments and the open log,
+   verifying each (§3.20).
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with tick and the clock. A write
@@ -510,11 +507,11 @@ of (events, clock, argv, writer); the rest is the hearth
    capability verdicts, the derivations, the echo. Refusal of any path
    refuses the whole.
 6. **Perform.** Sign and append the intents to this checkout's log, or
-   decline because `--dry-run` was given. Update the snapshot by atomic rename.
+   decline because `--dry-run` was given.
 7. **Speak.** Print the echo, then the handlers' bodies for the moments
    raised, after the data; under `--json`, one object keyed by path.
 8. **Record** the command event: paths, expansion, verdicts, events, handlers
-   fired and suppressed, cache hit or refold, timings, `dry_run`, `written`.
+   fired and suppressed, timings, `dry_run`, `written`.
    One record per invocation, local, never synced `[LAW:nothing-unseen]`.
 9. **Sync.** A write schedules a detached `lit2 admin sync` to seal this
    checkout's log and publish its commit, and to fetch and verify the
@@ -539,7 +536,7 @@ same test fails when the two disagree.
  fold       events → state; validation engine; rank; holders; conflicts
  events     record, codec, upcasters, ids, signature, envelope
  store      the append-only log; sealing into segments; one commit and one
-            ref per writer, inbox refs; rewrites; snapshot; the background
+            ref per writer, inbox refs; rewrites; the background
             sync process
  git        go-git, in process, for objects and refs; the user's git binary
             for push and fetch, run only by the background sync process
@@ -615,7 +612,7 @@ decided in the body.
   `unknown (tier)`, a third value of the verdict type, never a guess.
 - The fold reads no clock; tick reads one. A derivation that wants both is
   two derivations.
-- No network on a foreground path; no lock on the cache.
+- No network on a foreground path.
 - A handler produces text and nothing else.
 
 ## 9. Testing
@@ -646,7 +643,7 @@ walking skeleton.
    (ticket lit-bootstrap-1f9.438)
 2. **Events, principal and fold, first facts.** Items, fields, comments,
    labels; ids; the principal minted at init and every event signed; the
-   local log and the snapshot; `add /children`, `get`, `set`, `add`, `rm`;
+   local log; `add /children`, `get`, `set`, `add`, `rm`;
    `lit2 admin init`.
 3. **Policy.** Enrollment at init; the policy document as events; roles
    and capabilities as path globs in the default profile; the enforcer's

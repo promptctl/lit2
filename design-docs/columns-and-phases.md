@@ -39,8 +39,7 @@ no rule to evaluate.
 
 **What tick computes.** Everything custom-columns.md computes except position:
 labels, readiness, stage, claim expiry, the rollup of a level-2 or
-level-3 item. `labels = tick(fold(events), config, now)`, writing nothing, cached if
-wanted, never the source of truth. The rule type survives with one action:
+level-3 item. `labels = tick(fold(events), config, now)`, writing nothing. The rule type survives with one action:
 a rule is `when <condition> [in <column>] then label`. There is no `place`, and
 there is no `guidance` action either: conditional guidance is a handler with a
 selector ([workflows.md](workflows.md)), so one mechanism prints after a ticket.

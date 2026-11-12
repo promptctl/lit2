@@ -1,8 +1,6 @@
 # Event store: the design
 
-Status: draft, first pass. Answers [charter.md](charter.md); budget figures
-live in [budgets.md](budgets.md) and prose here cites them without restating
-them. Written 2026-08-25. Sections marked **OPEN** are decisions a later
+Status: draft, first pass. Answers [charter.md](charter.md). Written 2026-08-25. Sections marked **OPEN** are decisions a later
 session must close; everything else is a position this draft commits to.
 
 Every system section carries a status line: `destination` (designed, not shipped),
@@ -27,8 +25,8 @@ shipped state must still say so somewhere a reader will look.
 Every lit mutation is an immutable, signed-slot, content-addressed **event**
 appended to the writing checkout's own git ref inside lit's own object
 database under the git common dir. Nothing is ever modified or merged: state is a deterministic
-**fold** over the union of all writers' events, computed locally, cached
-disposably, and identical on every machine that holds the same events. Sync is
+**fold** over the union of all writers' events, computed locally on every
+read, and identical on every machine that holds the same events. Sync is
 `git fetch`/`git push` of per-writer refs against the code repo's ordinary
 remote — appending to a ref only you write contends with nothing, so
 concurrency has nothing to manage. Remote bug-filing is the same write path
@@ -49,7 +47,6 @@ Tokens are stable; cite them from code comments, tickets, and reviews as
 | `INV:single-writer-ref` | each ref has exactly one writing checkout; all cross-writer coordination is read-side |
 | `INV:preserve-unknown` | an event a reader cannot interpret is carried and surfaced, never discarded |
 | `INV:no-foreground-network` | no lit command's foreground path waits on a network operation |
-| `INV:disposable-cache` | derived local state may always be deleted and refolded; nothing behaves as if the cache were truth |
 | `INV:opaque-envelope` | layers below the CLI boundary treat prose payloads as opaque bytes |
 | `INV:config-versioned` | every event names the config version it was authored under; validation judges it against that version |
 | `INV:wall-time-is-data` | every event carries a wall-clock time; durations read it, order never does |
@@ -176,9 +173,9 @@ failure-to-read as absence:
 A `min-reader-version` stamp in the config stream lets a workspace gate
 too-old writers entirely, so a fleet is never half-blind for long.
 
-**Codec — OPEN.** The framing must let the fold meet the refold budget in
-[budgets.md](budgets.md) (a compact self-describing binary encoding is the
-lean; the harness decides). The codec choice is invisible above the event
+**Codec — OPEN.** The framing must let a replay read every event without
+waste (a compact self-describing binary encoding is the lean; the harness
+decides). The codec choice is invisible above the event
 package boundary.
 
 ## §store — git as the substrate
@@ -303,8 +300,7 @@ compute different backlogs, and every individual read looks healthy — the
 divergence surfaces weeks later as two agents confidently working two
 realities. Determinism is enforced, not hoped: golden-fixture tests pin
 `fold(corpus)` byte-for-byte, and the **fold version** — an explicit constant
-— bumps with any rule change, invalidating snapshots (§cache) so no machine
-mixes two folds' outputs.
+— bumps with any rule change.
 
 **Time enters at the edges.** The fold reads each event's `recorded-at` as
 input, like any payload field, and never reads the clock. A question whose
@@ -317,8 +313,8 @@ writer's largest `recorded-at`, and the same evaluation compares those to
 window T is surfaced as an advisory naming that writer and the reader's own checkout, because a
 fast writer and a slow reader look identical from here: on a slow machine
 every active writer appears ahead, and the advisory is the one place that
-machine learns its own clock is behind. The fold's output stays cacheable
-because nothing in it depends on when it was computed.
+machine learns its own clock is behind. Nothing in the fold's output depends
+on when it was computed.
 
 **Validation is a fold-time engine, not scattered rules.** The config stream
 (§security-and-config) defines what a valid ticket is — today the built-in
@@ -343,7 +339,7 @@ has a "diverged" state, only a field with two live candidates.
 status: destination
 
 Rank is the most contended object in the system — one shared total order the
-whole fleet reorders constantly — and the hottest fold path (see budgets).
+whole fleet reorders constantly — and the hottest fold path.
 Rank events are **relative intents**: `place X above Y`, `place X at
 top/bottom of frame F`. The fold applies intents in the global total order,
 and supersession is scoped honestly to what the order can promise. For
@@ -366,34 +362,7 @@ lie the moment anyone else moves. (This is §events' WRONG/RIGHT pair operating
 at scale — rank is why that rule exists.)
 
 **OPEN:** frame semantics under reparenting (an intent naming a frame that a
-concurrent event dissolved), and the compaction rule that keeps the intent
-replay incremental from a snapshot rather than from genesis. The budget in
-budgets.md is the constraint any answer must meet.
-
-## §cache — scaffolding, never structure
-status: destination
-
-Reads come from a local materialized state under the common dir, keyed by
-`(fold-version, set-of-ref-heads)`, rebuilt incrementally by folding only
-events newer than its snapshot. It is **scaffolding, never structure**
-(`INV:disposable-cache`): any process may delete it at any moment and the only
-cost is one refold. Correctness never depends on it; every command's staleness
-check reads the writer refs' heads (cheap, local) and folds the delta.
-
-This is where concurrency tries to reenter the design. Two worktree processes
-will race on the cache file, and the temptation will be reflexive: *"I'll add
-a small flock around the cache write."* Stop — that lock is the first cell of
-the disease this design exists to cure. The cache needs no winner: writes are
-atomic-rename, a loser's work is discarded, a corrupt or torn cache fails its
-checksum and is deleted and refolded. Losing a race costs a refold; adding a
-lock costs the design.
-
-"Premature optimization" does not apply to snapshots, and the objection should
-be met on its own turf: the proverb correctly bans speculative machinery for
-unmeasured problems. The refold ceiling in budgets.md is not speculative — it
-descends directly from the charter's hard constraint 3, and a fold that only
-meets it warm is a fold that misses it on every fold-version bump. Snapshots
-are load-bearing from the first shipped version.
+concurrent event dissolved).
 
 ## §sync — refs out, refs in, nothing in front
 status: destination
@@ -402,9 +371,8 @@ status: destination
 mirrors and receive fetches run in background processes; a command reads and
 writes local objects only. The temptation is always modest: *"one quick fetch
 inline here — it's fast and the data's fresher."* That exact reasoning, made
-policy, is how `lit backlog` came to overshoot the per-command directive by an
-order of magnitude under the current store (budgets.md's pre-#414 baseline
-row; fixed only by PR #414 after the fact). The current architecture had an
+policy, is how `lit backlog` came to wait on the network under the current
+store (fixed only by PR #414 after the fact). The current architecture had an
 excuse: embedded Dolt permits one read-write engine, so background sync would
 break foreground commands, and inline was the least-bad seat for the fetch.
 This design removes the excuse — appends and folds cannot conflict with a
@@ -416,8 +384,8 @@ write cannot conflict (`INV:single-writer-ref`); the remote is only ever asked
 to fast-forward.
 
 **In:** a background receive fetches peers' refs on a debounce. Arrival needs
-no merge — new events simply exist locally, and the next command's staleness
-check folds them (`INV:deterministic-fold` makes arrival order irrelevant).
+no merge — new events simply exist locally, and the next command's replay
+folds them (`INV:deterministic-fold` makes arrival order irrelevant).
 The current design's degradation surfaces carry over with less to say: there
 is no "diverged" state to report, only "N events not yet pushed" and "peers
 last fetched T ago," plus the owner-notification hook for push failures.
@@ -432,9 +400,7 @@ destructive take/combine choice the current store forces does not arise from
 histories (there is no shared spine to diverge). Identity cannot collide
 (§events derives ids from writer and position), so what a union surfaces is
 *semantic* duplication — two issues describing one bug — held as a fold
-advisory for an agent to settle by closing one. **OPEN:** whether adoption may trust a signed snapshot to
-defer full-history verification, and what that concedes — the
-verification-cost budget in budgets.md forces this decision.
+advisory for an agent to settle by closing one.
 
 ## §security-and-config — the slots the future stands on
 status: destination
@@ -451,7 +417,7 @@ remains the normative home for the layers themselves.
   so every surviving signature is original forever.
 - **Envelopes.** Prose payload fields are defined as opaque byte strings end
   to end (`INV:opaque-envelope`); plaintext is an encoding those bytes happen
-  to use before the read layer ships. The fold, cache, codec, and sync never
+  to use before the read layer ships. The fold, codec, and sync never
   inspect prose, so tiered encryption changes what the CLI boundary does, not
   what the store does.
 - **Config stream.** Workspace configuration — policy document, hierarchy and
@@ -476,7 +442,7 @@ remains the normative home for the layers themselves.
   permissive version it saw — the revocation bypass the access-control
   enforcement section exists to prevent. Any fix must stay deterministic (a
   rule keyed to what a receiver happens to know would fold differently on
-  different machines); see OPEN #6.
+  different machines); see OPEN #4.
 - **Erasure has two reaches.** A rewrite (charter #7, §store) removes
   content from every replica that syncs. Copies that never sync again — a
   stale clone, a host that has not collected garbage, a backup — are reached
@@ -622,30 +588,24 @@ Recorded so they are not re-proposed from scratch; each was weighed in the
   rank, claims, and epic derivation wholesale; the access-control design's
   visible-skeleton rule is adopted unchanged.
 - **Compaction that truncates history**: violates the audit-completeness
-  constraint (charter #7) and the signature chain; snapshots accelerate, they
-  never replace.
+  constraint (charter #7) and the signature chain.
 - **Heartbeat/liveness signals for writer refs**: banned mechanism-wide by
   standing owner directive; ref hygiene keys off the dead-checkout evidence
   the claims design already derives.
 
 ## OPEN questions
 
-1. Event codec (§events) — decided by the harness against the refold budget.
-2. Rank frame semantics under concurrent reparenting, and the incremental
-   intent-replay scheme (§rank).
-3. Adoption verification: full-history verify vs signed-snapshot trust
-   trade (§sync); budgets.md's verification ceiling forces the choice.
-4. Snapshot sharing: purely local, or a shared snapshot ref to accelerate
-   adoption — and what trust that implies (couples to 3).
-5. Config-stream bootstrap: how the first config version is established in a
+1. Event codec (§events) — decided by the harness.
+2. Rank frame semantics under concurrent reparenting (§rank).
+3. Config-stream bootstrap: how the first config version is established in a
    fresh workspace and how the current `.lit/config.toml` maps in.
-6. Config-version currency at enforcement time — the revocation-bypass seam
+4. Config-version currency at enforcement time — the revocation-bypass seam
    (§security-and-config): a deterministic rule that rejects a revoked
    principal's post-revocation events. Candidate shape: validity judged
    against the config version in force at the event's causal position, plus
    per-ref causal-position monotonicity so positions cannot be backdated.
    Owned jointly with the access-control write layer.
-7. Chunked read flipping (§migration), for whoever pulls the read-flip work
+5. Chunked read flipping (§migration), for whoever pulls the read-flip work
    to investigate. Not decided. The idea: S0 shipped `internal/storage` as a
    contract and the read flip routes reads through it to the fold; instead of
    one flag that flips every read, group the contract's read methods into four

@@ -103,8 +103,7 @@ ever, because each of those makes the things around it expensive to replace.
   checks
 
 **tend**
-- ▶ rewrites as events (purge, squash, sweep, destroy); the snapshot keyed
-  by `(fold-version, heads)`; unknown and unverified events carried and
+- ▶ rewrites as events (purge, squash, sweep, destroy); unknown and unverified events carried and
   counted; `min-reader-version` in the workspace file; `/integrity` as a path
 - a `gc` that edits history in place; configuration read from the code's
   own repository
@@ -128,10 +127,10 @@ above, and the slice it needs.
 | 10 purge while others write | rewrites; the receiver's rule | 7 |
 | 11 dead worktree holding a lane | claim expiry in tick; `rm <lane>/claim` | 4 |
 | 12 old binary meets newer events | unknown events preserved; `min-reader-version` | 1 (codec), 7 |
-| 13 scale | snapshot; budgets harness; the depth corpus | 1, 7 |
+| 13 scale | budgets harness; the depth corpus | 1, 7 |
 | 14 a human at the terminal | rendering; the field table as help | 1 |
 | 15 access control | admit at marked depth; verification in share; capabilities in work's enforcer; tiers in look and file | 1, 2 |
-| 16 fold-version bump | snapshot keyed by fold-version | 1, 7 |
+| 16 fold-version bump | the fold version; replay | 1, 7 |
 
 ## Slices
 
