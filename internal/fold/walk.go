@@ -1,21 +1,12 @@
 package fold
 
 import (
-	"cmp"
 	"fmt"
 	"slices"
 
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/store"
 )
-
-// Tag is the fold's version, which keys the snapshot: raised with any
-// change to a rule, a shape or the snapshot's codec, so no snapshot an
-// older fold wrote is resumed. Verification is a fold rule (§3.20), so a
-// binary that adds a signature suite raises it too, and its genesis judges
-// again every event an older binary carried as UnknownSuite: an exception
-// is always checked again.
-func Tag() store.FoldTag { return store.FoldTag("lit2 fold 1") }
 
 // Env is what every fold runs with, built once at the root by NewEnv: the
 // registry, the suites signatures are judged by, and the goroutines that
@@ -50,102 +41,23 @@ type Scanned struct {
 	Scan  store.Scan
 }
 
-// Folded is a fold's state, what the root saves, and the fold's facts for
-// the command event.
+// Folded is a fold's state and the fold's facts for the command event.
 type Folded struct {
 	State State
-	Save  Save
 	Facts FoldFacts
 }
 
-// Save is what the root does with the snapshot after a fold: keep the one
-// it resumed from, which is current, or write the next.
-//
-//sumtype:decl
-type Save interface{ save() }
-
-// Current is a snapshot extended by nothing: the store planned no range,
-// so the snapshot resumed from is the snapshot, and rewriting it would
-// write the same state again.
-type Current struct{}
-
-// Written is the next snapshot: the marks for the store to save, and the
-// fold's payload.
-type Written struct {
-	Marks   []store.Mark
-	Payload []byte
-}
-
-func (Current) save() {}
-func (Written) save() {}
-
-// Trust is the verdicts a snapshot carries: below each mark, under the
-// same log, every event was folded and so checked, and Valid unless it is
-// one of the Exceptions, whose verdict was not.
-type Trust struct {
-	Marks      []store.Mark
-	Exceptions []events.EventID
-}
-
-// Snapshot is a snapshot's payload, read: the exceptions, the last event
-// folded, and the state.
-type Snapshot struct {
-	Exceptions []events.EventID
-	Through    Through
-	State      State
-}
-
-// Through is the last event a snapshot folded, in total order.
-//
-//sumtype:decl
-type Through interface{ through() }
-
-// Nothing is a fold of no event.
-type Nothing struct{}
-
-// Upto is a fold whose last event in total order is Key.
-type Upto struct{ Key events.OrderKey }
-
-func (Nothing) through() {}
-func (Upto) through()    {}
-
-// Genesis folds scans, every stream from 0, from the zero State. It trusts
-// the verdicts below held, the marks the store's plan judged still hold,
-// and reads from file only its exceptions, under any fold version: a
-// fold-version bump checks no signature that once verified, and a stream
-// the store found rewritten is checked whole.
-func Genesis(e Env, why store.Miss, held []store.Mark, file store.SnapshotFile, scans []Scanned) Folded {
-	return walk(e, State{}, Nothing{}, nil, nil, trustOf(held, file), Refolded{Why: why}, scans)
-}
-
-// Extend folds scans, the streams past marks, onto a snapshot. Every shape
-// merges in any order, so a delta that interleaves the snapshot's events
-// extends it as a genesis of the union would fold it.
-func Extend(e Env, s Snapshot, marks []store.Mark, scans []Scanned) Folded {
-	return walk(e, s.State, s.Through, marks, s.Exceptions, Trust{Marks: marks, Exceptions: s.Exceptions}, Extended{}, scans)
-}
-
-// trustOf is the verdicts held carries with file's exceptions: none from no
-// file, a torn one, or a payload whose exceptions do not read, since a mark
-// trusted without them would trust what failed.
-func trustOf(held []store.Mark, file store.SnapshotFile) Trust {
-	switch f := file.(type) {
-	case store.Saved:
-		ex, err := readExceptions(f.Payload)
-		if err != nil {
-			return Trust{}
-		}
-		return Trust{Marks: held, Exceptions: ex}
-	case store.NoSnapshot, store.TornSnapshot:
-		return Trust{}
-	}
-	panic(fmt.Sprintf("fold: %T is not a SnapshotFile", file))
+// Genesis folds scans, every stream from 0, from the zero State, checking
+// every signature.
+func Genesis(e Env, scans []Scanned) Folded {
+	return walk(e, scans)
 }
 
 // walk is the one walk: decode every record, keep one of each event, sort
 // by the total order, check, and step each in order onto s.
-func walk(e Env, s State, through Through, marks []store.Mark, exceptions []events.EventID, t Trust, base BaseFact, scans []Scanned) Folded {
-	facts := newFacts(base)
+func walk(e Env, scans []Scanned) Folded {
+	facts := newFacts()
+	s := State{}
 	kinds := e.registry.Kinds()
 	var located []Located
 	seen := map[events.EventID]int{}
@@ -179,61 +91,16 @@ func walk(e Env, s State, through Through, marks []store.Mark, exceptions []even
 		}
 	}
 	slices.SortFunc(located, func(a, b Located) int { return events.Compare(a.Event.Order(), b.Event.Order()) })
-	checked, trusted := check(e, located, t)
-	facts.Checked, facts.Trusted = len(checked)-trusted, trusted
-	// Through and Late move over verified events only, as the frontier
-	// does: a carried event's position is the forger's to choose
-	was := through
-	var excepted []events.EventID
+	checked := Check(e, located)
+	facts.Checked = len(checked)
 	for _, c := range checked {
 		facts.Verdicts.count(c.verdict)
-		switch c.verdict {
-		case events.Valid:
-			if before(c.event.Order(), was) {
-				facts.Late++
-			}
-			through = later(through, c.event.Order())
-		case events.Invalid, events.UnknownSuite:
-			excepted = append(excepted, c.event.ID())
-		}
 		var out outcome
 		s, out = e.registry.step(s, c)
 		facts.count(out)
 	}
-	exceptions = withIDs(exceptions, excepted)
-	snap := Snapshot{Exceptions: exceptions, Through: through, State: s}
-	facts.Exceptions, facts.Counts = len(exceptions), countsOf(s)
-	return Folded{State: s, Save: saved(base, marks, scans, snap), Facts: facts}
-}
-
-// saved is the save after a walk from base over scans: an extension that
-// moved no mark leaves the snapshot current, and every other walk writes
-// one.
-func saved(base BaseFact, marks []store.Mark, scans []Scanned, snap Snapshot) Save {
-	switch base.(type) {
-	case Extended:
-		if !moved(marks, scans) {
-			return Current{}
-		}
-	case Refolded:
-	}
-	return Written{Marks: advanced(marks, scans), Payload: snap.encode()}
-}
-
-// moved is whether a scan read a stream past its mark, or one with none. A
-// stream whose log ends in a torn tail is planned a range on every command
-// and its scan ends at the mark, so it moves nothing.
-func moved(marks []store.Mark, scans []Scanned) bool {
-	at := map[store.Ref]store.Offset{}
-	for _, m := range marks {
-		at[m.Ref] = m.Upto.At
-	}
-	for _, sc := range scans {
-		if mark, ok := at[sc.Range.Stream.Ref]; !ok || mark != sc.Scan.End {
-			return true
-		}
-	}
-	return false
+	facts.Counts = countsOf(s)
+	return Folded{State: s, Facts: facts}
 }
 
 // rank orders the bodies the copies of one event can carry, by how much of
@@ -257,77 +124,17 @@ func rank(b events.Body) int {
 	panic(fmt.Sprintf("fold: %T is not a Body", b))
 }
 
-// before is whether k sorts before where t stopped.
-func before(k events.OrderKey, t Through) bool {
-	switch t := t.(type) {
-	case Nothing:
-		return false
-	case Upto:
-		return events.Compare(k, t.Key) < 0
-	}
-	panic(fmt.Sprintf("fold: %T is not a Through", t))
-}
-
-func later(t Through, k events.OrderKey) Through {
-	switch t := t.(type) {
-	case Nothing:
-		return Upto{Key: k}
-	case Upto:
-		if events.Compare(k, t.Key) > 0 {
-			return Upto{Key: k}
-		}
-		return t
-	}
-	panic(fmt.Sprintf("fold: %T is not a Through", t))
-}
-
-// advanced is marks with each scanned stream's mark at its last whole
-// frame, by ref name: the incomplete tail is read again next time.
-func advanced(marks []store.Mark, scans []Scanned) []store.Mark {
-	by := map[store.Ref]store.Mark{}
-	for _, m := range marks {
-		by[m.Ref] = m
-	}
-	for _, sc := range scans {
-		ref := sc.Range.Stream.Ref
-		by[ref] = store.Mark{Ref: ref, Upto: store.Position{Log: sc.Range.Stream.Until.Log, At: sc.Scan.End}}
-	}
-	out := make([]store.Mark, 0, len(by))
-	for _, m := range by {
-		out = append(out, m)
-	}
-	slices.SortFunc(out, func(a, b store.Mark) int { return cmp.Compare(a.Ref.Name(), b.Ref.Name()) })
-	return out
-}
-
-// BaseFact is where a fold started.
-//
-//sumtype:decl
-type BaseFact interface{ baseFact() }
-
-// Extended is a fold resumed from the snapshot.
-type Extended struct{}
-
-// Refolded is a fold from genesis, and why the store did not resume.
-type Refolded struct{ Why store.Miss }
-
-func (Extended) baseFact() {}
-func (Refolded) baseFact() {}
-
 // FoldFacts is what one fold did, for the command event: every count is
 // present and zero when zero, so a fold of nothing reads records=0 and no
 // fold leaves no facts `[LAW:nothing-unseen]`.
 type FoldFacts struct {
-	Base BaseFact
 	// Records is the records read; Torn the torn spans skipped; Duplicates
-	// the records of an event read twice; Late the events that sort before
-	// the snapshot's last.
-	Records, Torn, Duplicates, Late int
-	Decoded                         DecodeCounts
-	// Checked is the signatures verified; Trusted the verdicts a snapshot
-	// carried; Exceptions the events saved as not Valid.
-	Checked, Trusted, Exceptions int
-	Verdicts                     VerdictCounts
+	// the records of an event read twice.
+	Records, Torn, Duplicates int
+	Decoded                   DecodeCounts
+	// Checked is the signatures verified.
+	Checked  int
+	Verdicts VerdictCounts
 	// Applied is the events whose rules applied; Carried and Unapplied
 	// count the others by reason.
 	Applied            int
@@ -352,8 +159,8 @@ type StateCounts struct {
 	ProseConflicts, Overruled, MixedForms, Collisions, Uncreated int
 }
 
-func newFacts(base BaseFact) FoldFacts {
-	f := FoldFacts{Base: base, Decoded: DecodeCounts{Unread: map[string]int{}}, Carried: map[string]int{}, Unapplied: map[string]int{}}
+func newFacts() FoldFacts {
+	f := FoldFacts{Decoded: DecodeCounts{Unread: map[string]int{}}, Carried: map[string]int{}, Unapplied: map[string]int{}}
 	for _, r := range []Reason{BadSignature{}, UnknownSuite{}} {
 		f.Carried[ReasonName(r)] = 0
 	}

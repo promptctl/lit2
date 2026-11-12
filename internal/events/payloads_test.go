@@ -116,19 +116,19 @@ func TestTheFirstFactsKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 
 func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	var twoForms wire.Writer
-	twoForms.Bytes(valueProse, text("a").Wire())
+	twoForms.Bytes(valueProse, text("a").wire())
 	twoForms.Bytes(valuePlain, []byte("b"))
-	if _, err := ReadValue(twoForms.Encoded()); err == nil {
+	if _, err := readValue(twoForms.Encoded()); err == nil {
 		t.Error("a value in both forms reads")
 	}
-	if _, err := ReadValue(nil); err == nil {
+	if _, err := readValue(nil); err == nil {
 		t.Error("a value in neither form reads")
 	}
 	var noValue wire.Writer
 	noValue.Bytes(1, []byte("title"))
 	var badField wire.Writer
 	badField.Bytes(1, []byte("Title"))
-	badField.Bytes(2, Plain{Canonical: "x"}.Wire())
+	badField.Bytes(2, Plain{Canonical: "x"}.wire())
 	var levelSix, bothPlaces wire.Writer
 	levelSix.Uvarint(placeAtLevel, 6)
 	bothPlaces.Uvarint(placeAtLevel, 1)

@@ -30,53 +30,29 @@ func (c Checked) Event() events.Event { return c.event }
 // Verdict is its signature's verdict.
 func (c Checked) Verdict() events.SignatureVerdict { return c.verdict }
 
-// Check judges each event's signature, in order: Valid when t trusts it,
-// below a mark of its stream under the same log and not excepted, and
-// otherwise by e.Suites(), on e.Workers() goroutines. A verdict reads only the
-// event's bytes, so the result does not depend on the schedule.
-func Check(e Env, evs []Located, t Trust) []Checked {
-	cs, _ := check(e, evs, t)
-	return cs
-}
-
-// check is Check and how many verdicts it trusted.
-func check(e Env, evs []Located, t Trust) ([]Checked, int) {
-	marks := map[store.Ref]store.Position{}
-	for _, m := range t.Marks {
-		marks[m.Ref] = m.Upto
-	}
-	excepted := map[events.EventID]bool{}
-	for _, id := range t.Exceptions {
-		excepted[id] = true
-	}
+// Check judges each event's signature, in order, by e.Suites(), on
+// e.Workers() goroutines. A verdict reads only the event's bytes, so the
+// result does not depend on the schedule.
+func Check(e Env, evs []Located) []Checked {
 	cs := make([]Checked, len(evs))
-	var verify []int
 	for i, l := range evs {
 		cs[i].event = l.Event
-		m, marked := marks[l.Ref]
-		// a held mark's stream is wholly under its log: the store judged it
-		if marked && l.At.At < m.At && !excepted[l.Event.ID()] {
-			cs[i].verdict = events.Valid
-			continue
-		}
-		verify = append(verify, i)
 	}
+	per := (len(cs) + e.workers - 1) / e.workers
 	var wg sync.WaitGroup
-	per := (len(verify) + e.workers - 1) / e.workers
-	for chunk := range slices.Chunk(verify, max(per, 1)) {
+	for chunk := range slices.Chunk(cs, max(per, 1)) {
 		wg.Go(func() {
-			for _, i := range chunk {
-				ev := cs[i].event
-				cs[i].verdict = e.suites.Check(ev.Header().Attribution().Principal, ev.SignedBytes(), ev.Signature())
+			for i := range chunk {
+				ev := chunk[i].event
+				chunk[i].verdict = e.suites.Check(ev.Header().Attribution().Principal, ev.SignedBytes(), ev.Signature())
 			}
 		})
 	}
 	wg.Wait()
-	return cs, len(evs) - len(verify)
+	return cs
 }
 
-// Step folds one checked event into s: the one walk, which Genesis, Extend
-// and every later reader of events share `[LAW:single-enforcer]`. An event
+// Step folds one checked event into s: the one walk, which Genesis and every later reader of events share `[LAW:single-enforcer]`. An event
 // whose signature does not verify is carried and never applied, and moves
 // neither the frontier nor the names; a verified one is observed, then
 // applied by its kind's rule, or left unapplied with why.
@@ -173,18 +149,6 @@ func containerOf(id events.ItemID, p events.Placement) (Container, bool) {
 		return Under{Parent: parent.ID}, ok
 	}
 	panic(fmt.Sprintf("fold: %T is not a Parent", id.Parent()))
-}
-
-// placementOf is the placement a container was made from: containerOf
-// read backwards, for the snapshot.
-func placementOf(c Container) events.Placement {
-	switch c := c.(type) {
-	case Home:
-		return events.AtLevel{Level: c.Holds}
-	case Under:
-		return events.BelowParent{}
-	}
-	panic(fmt.Sprintf("fold: %T is not a Container", c))
 }
 
 func misplaced(id events.ItemID) Misaddressed {

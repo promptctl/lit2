@@ -24,31 +24,10 @@ type StoreFacts struct {
 	Reads     []Read
 	Plans     []store.Resume
 	Folds     []fold.FoldFacts
-	Swaps     []Swap
+	Swaps     []store.Swapped
 	Appends   []store.Appended
 	Publishes []store.Publishing
 }
-
-// Swap is what became of the snapshot after a fold: written, kept as the
-// current one, or not written. The snapshot is a disposable cache, so a
-// swap that fails fails nothing else; the next command refolds what it
-// misses.
-//
-//sumtype:decl
-type Swap interface{ swap() }
-
-// Swapped is a snapshot the store wrote.
-type Swapped struct{ Swapped store.Swapped }
-
-// Kept is a snapshot the fold extended by nothing, left as it was.
-type Kept struct{}
-
-// SwapFailed is a snapshot the store could not write, and why.
-type SwapFailed struct{ Why error }
-
-func (Swapped) swap()    {}
-func (Kept) swap()       {}
-func (SwapFailed) swap() {}
 
 // Read is one range a fold read and what the scan found in it.
 type Read struct {
@@ -125,9 +104,7 @@ type (
 		Delta    int    `json:"delta"`
 	}
 	swapLine struct {
-		Snapshot      string `json:"snapshot"`
-		SnapshotBytes int    `json:"snapshot_bytes"`
-		Why           string `json:"why,omitempty"`
+		SnapshotBytes int `json:"snapshot_bytes"`
 	}
 	appendLine struct {
 		Records    int    `json:"records"`
@@ -171,7 +148,7 @@ func storeBlock(f StoreFacts) *storeLine {
 		l.Plan = append(l.Plan, plan(r))
 	}
 	for _, s := range f.Swaps {
-		l.Swap = append(l.Swap, swap(s))
+		l.Swap = append(l.Swap, swapLine{SnapshotBytes: s.Bytes})
 	}
 	for _, a := range f.Appends {
 		l.Append = append(l.Append, appendLine{Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), LogCreated: created(a.Log)})
@@ -301,16 +278,4 @@ func open(o Opening) *openLine {
 		return &openLine{State: "unopened", Why: o.Why.Error()}
 	}
 	panic(fmt.Sprintf("command: %T is not an Opening", o))
-}
-
-func swap(s Swap) swapLine {
-	switch s := s.(type) {
-	case Swapped:
-		return swapLine{Snapshot: "swapped", SnapshotBytes: s.Swapped.Bytes}
-	case Kept:
-		return swapLine{Snapshot: "kept"}
-	case SwapFailed:
-		return swapLine{Snapshot: "failed", Why: s.Why.Error()}
-	}
-	panic(fmt.Sprintf("command: %T is not a Swap", s))
 }

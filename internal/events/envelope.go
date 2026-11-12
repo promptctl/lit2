@@ -119,8 +119,8 @@ const (
 	envelopeCommitment = 3
 )
 
-// Wire is the envelope as a wire message, which ReadEnvelope reads.
-func (e Envelope) Wire() []byte {
+// Wire is the envelope as a wire message, which readEnvelope reads.
+func (e Envelope) wire() []byte {
 	var w wire.Writer
 	switch f := e.form.(type) {
 	case plain:
@@ -148,10 +148,10 @@ func (e Envelope) Wire() []byte {
 	return w.Encoded()
 }
 
-// ReadEnvelope reads an envelope's wire message. One holding neither form
+// readEnvelope reads an envelope's wire message. One holding neither form
 // this binary knows is an unknownForm, its fields kept; one holding both,
 // or a plaintext whose commitment is not its text's, is refused.
-func ReadEnvelope(b []byte) (Envelope, error) {
+func readEnvelope(b []byte) (Envelope, error) {
 	var e Envelope
 	forms, committed := 0, false
 	r := wire.NewReader(b)

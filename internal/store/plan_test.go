@@ -30,39 +30,33 @@ func mark(ref Ref, log LogID, upto Offset) Mark {
 
 func TestPlanResumesExtendsOrRefolds(t *testing.T) {
 	now := headsOf(at(w1, logA, 100), at(w2, logB, 50), at(inbox, logB, 10))
-	gone := WriterRef{Checkout: CheckoutID{9}}
 	for _, tc := range []struct {
 		name  string
 		file  SnapshotFile
 		base  Base
-		held  []Mark
 		delta map[Ref]Offset
 	}{
-		{"no snapshot is genesis, every stream from 0", NoSnapshot{}, Genesis{Why: Absent{}}, []Mark{}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
-		{"a torn snapshot is genesis", TornSnapshot{Why: errors.New("crc")}, Genesis{Why: Torn{Why: errors.New("crc")}}, []Mark{}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
-		{"another fold version is genesis, keeping the marks that hold",
-			Saved{Tag: FoldTag("v0"), Marks: []Mark{mark(w1, logA, 60), mark(w2, logB, 70)}}, Genesis{Why: TagChanged{}}, []Mark{mark(w1, logA, 60)}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
+		{"no snapshot is genesis, every stream from 0", NoSnapshot{}, Genesis{Why: Absent{}}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
+		{"a torn snapshot is genesis", TornSnapshot{Why: errors.New("crc")}, Genesis{Why: Torn{Why: errors.New("crc")}}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
+		{"another fold version is genesis", Saved{Tag: FoldTag("v0")}, Genesis{Why: TagChanged{}}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
 		{"a snapshot at every head is a hit",
-			saved(mark(w1, logA, 100), mark(w2, logB, 50), mark(inbox, logB, 10)), FromSaved{Payload: []byte("state")},
-			[]Mark{mark(w1, logA, 100), mark(w2, logB, 50), mark(inbox, logB, 10)}, map[Ref]Offset{}},
+			saved(mark(w1, logA, 100), mark(w2, logB, 50), mark(inbox, logB, 10)), FromSaved{Payload: []byte("state")}, map[Ref]Offset{}},
 		{"grown and new streams are read from where the snapshot stopped",
-			saved(mark(w1, logA, 60), mark(w2, logB, 50)), FromSaved{Payload: []byte("state")}, []Mark{mark(w1, logA, 60), mark(w2, logB, 50)}, map[Ref]Offset{w1: 60, inbox: 0}},
+			saved(mark(w1, logA, 60), mark(w2, logB, 50)), FromSaved{Payload: []byte("state")}, map[Ref]Offset{w1: 60, inbox: 0}},
 		{"a stream of another log was rewritten",
-			saved(mark(w1, logB, 60), mark(w2, logB, 50)), Genesis{Why: Rewritten{Ref: w1}}, []Mark{mark(w2, logB, 50)}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
+			saved(mark(w1, logB, 60)), Genesis{Why: Rewritten{Ref: w1}}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
 		{"a stream shorter than the snapshot read was rewritten",
-			saved(mark(w2, logB, 70), mark(inbox, logB, 10)), Genesis{Why: Rewritten{Ref: w2}}, []Mark{mark(inbox, logB, 10)}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
+			saved(mark(w2, logB, 70)), Genesis{Why: Rewritten{Ref: w2}}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
 		{"a stream that is gone was withdrawn",
-			saved(mark(gone, logA, 5), mark(w1, logA, 100)), Genesis{Why: Withdrawn{Ref: gone}}, []Mark{mark(w1, logA, 100)}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
-		{"every mark is judged, the first miss named",
-			saved(mark(w1, logB, 60), mark(gone, logA, 5), mark(inbox, logB, 10)), Genesis{Why: Rewritten{Ref: w1}}, []Mark{mark(inbox, logB, 10)}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
+			saved(mark(WriterRef{Checkout: CheckoutID{9}}, logA, 5)), Genesis{Why: Withdrawn{Ref: WriterRef{Checkout: CheckoutID{9}}}}, map[Ref]Offset{w1: 0, w2: 0, inbox: 0}},
 	} {
 		r := Plan(v1, now, tc.file)
 		delta := map[Ref]Offset{}
 		for _, d := range r.Delta {
 			delta[d.Stream.Ref] = d.From
 		}
-		if !reflect.DeepEqual(r.Base, tc.base) || !reflect.DeepEqual(delta, tc.delta) || !reflect.DeepEqual(r.Held, tc.held) {
-			t.Errorf("%s: Plan = %#v holding %v from %v; want %#v holding %v from %v", tc.name, r.Base, r.Held, delta, tc.base, tc.held, tc.delta)
+		if !reflect.DeepEqual(r.Base, tc.base) || !reflect.DeepEqual(delta, tc.delta) {
+			t.Errorf("%s: Plan = %#v from %v; want %#v from %v", tc.name, r.Base, delta, tc.base, tc.delta)
 		}
 	}
 }

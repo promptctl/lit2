@@ -139,19 +139,9 @@ func (wd *world) scans() []fold.Scanned {
 	return out
 }
 
-// wrote is the snapshot f saves, failing tb when f keeps the current one.
-func wrote(tb testing.TB, f fold.Folded) fold.Written {
-	tb.Helper()
-	w, ok := f.Save.(fold.Written)
-	if !ok {
-		tb.Fatalf("the fold saves %#v; want a snapshot written", f.Save)
-	}
-	return w
-}
-
 // genesis folds every stream from nothing.
 func (wd *world) genesis() fold.Folded {
-	return fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, wd.scans())
+	return fold.Genesis(env, wd.scans())
 }
 
 // view is the fold of each stream's first upto[ref] batches, and every
@@ -166,28 +156,7 @@ func (wd *world) view(upto map[store.Ref]int) fold.State {
 		}
 		scans = append(scans, wd.span(ref, 0, n))
 	}
-	return fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, scans).State
-}
-
-// heads is every stream at its head, as the store reads them.
-func (wd *world) heads() store.Heads {
-	var h store.Heads
-	for _, ref := range wd.order {
-		h.Streams = append(h.Streams, wd.span(ref, 0, wd.head(ref)).Range.Stream)
-	}
-	return h
-}
-
-// refold is the genesis the root runs over every stream when file is the
-// snapshot: the store's plan says why, and which of file's marks hold.
-func (wd *world) refold(file store.SnapshotFile) fold.Folded {
-	wd.t.Helper()
-	r := store.Plan(fold.Tag(), wd.heads(), file)
-	g, ok := r.Base.(store.Genesis)
-	if !ok {
-		wd.t.Fatalf("the store resumes %#v; want a genesis", r.Base)
-	}
-	return fold.Genesis(env, g.Why, r.Held, file, wd.scans())
+	return fold.Genesis(env, scans).State
 }
 
 // state is the genesis's state.

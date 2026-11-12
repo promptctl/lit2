@@ -7,7 +7,6 @@ import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 func TestAViewDerivesFromTheStateItIsOf(t *testing.T) {
@@ -15,7 +14,7 @@ func TestAViewDerivesFromTheStateItIsOf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, nil).State
+	s := fold.Genesis(env, nil).State
 	v := Of(s, config.Schema{}, time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC))
 	if !v.State().Equal(s) {
 		t.Error("a view's state is not the state it is of")

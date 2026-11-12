@@ -1,28 +1,19 @@
 package command
 
 import (
-	"fmt"
-
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 // The fold block as the line spells it, one object per fold that ran:
-// where it started and why, what it read, checked and applied, and the
+// what it read, checked and applied, and the
 // state it left, every count present and zero when zero.
 type (
 	foldLine struct {
-		Base       string         `json:"base"`
-		Ref        string         `json:"ref,omitempty"`
-		Why        string         `json:"why,omitempty"`
 		Records    int            `json:"records"`
 		Torn       int            `json:"torn"`
 		Duplicates int            `json:"duplicates"`
-		Late       int            `json:"late"`
 		Decoded    decodedLine    `json:"decoded"`
 		Checked    int            `json:"checked"`
-		Trusted    int            `json:"trusted"`
-		Exceptions int            `json:"exceptions"`
 		Verdicts   verdictsLine   `json:"verdicts"`
 		Applied    int            `json:"applied"`
 		Carried    map[string]int `json:"carried"`
@@ -58,9 +49,9 @@ func foldBlock(fs []fold.FoldFacts) []foldLine {
 	var out []foldLine
 	for _, f := range fs {
 		l := foldLine{
-			Records: f.Records, Torn: f.Torn, Duplicates: f.Duplicates, Late: f.Late,
-			Decoded: decodedLine{Readable: f.Decoded.Readable, Unread: f.Decoded.Unread, Erased: f.Decoded.Erased, Uncommitted: f.Decoded.Uncommitted, Malformed: f.Decoded.Malformed},
-			Checked: f.Checked, Trusted: f.Trusted, Exceptions: f.Exceptions,
+			Records: f.Records, Torn: f.Torn, Duplicates: f.Duplicates,
+			Decoded:  decodedLine{Readable: f.Decoded.Readable, Unread: f.Decoded.Unread, Erased: f.Decoded.Erased, Uncommitted: f.Decoded.Uncommitted, Malformed: f.Decoded.Malformed},
+			Checked:  f.Checked,
 			Verdicts: verdictsLine{Valid: f.Verdicts.Valid, Invalid: f.Verdicts.Invalid, UnknownSuite: f.Verdicts.UnknownSuite},
 			Applied:  f.Applied, Carried: f.Carried, Unapplied: f.Unapplied,
 			Counts: stateLine{
@@ -69,36 +60,7 @@ func foldBlock(fs []fold.FoldFacts) []foldLine {
 				Collisions: f.Counts.Collisions, Uncreated: f.Counts.Uncreated,
 			},
 		}
-		l.Base, l.Ref, l.Why = base(f.Base)
 		out = append(out, l)
 	}
 	return out
-}
-
-// base is where a fold started: extended, or genesis and why, with the
-// stream or the error the why names.
-func base(b fold.BaseFact) (name, ref, why string) {
-	switch b := b.(type) {
-	case fold.Extended:
-		return "extended", "", ""
-	case fold.Refolded:
-		return genesis(b.Why)
-	}
-	panic(fmt.Sprintf("command: %T is not a BaseFact", b))
-}
-
-func genesis(m store.Miss) (name, ref, why string) {
-	switch m := m.(type) {
-	case store.Absent:
-		return "genesis:absent", "", ""
-	case store.Torn:
-		return "genesis:torn", "", m.Why.Error()
-	case store.TagChanged:
-		return "genesis:tag_changed", "", ""
-	case store.Rewritten:
-		return "genesis:rewritten", string(m.Ref.Name()), ""
-	case store.Withdrawn:
-		return "genesis:withdrawn", string(m.Ref.Name()), ""
-	}
-	panic(fmt.Sprintf("command: %T is not a Miss", m))
 }

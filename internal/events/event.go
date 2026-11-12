@@ -369,8 +369,8 @@ func (h Header) wire() []byte {
 	var w wire.Writer
 	w.Bytes(headerKind, []byte(h.kind))
 	w.Uvarint(headerSchema, uint64(h.schema))
-	w.Bytes(headerSubject, AboutWire(h.about))
-	w.Bytes(headerAttribution, h.by.Wire())
+	w.Bytes(headerSubject, aboutWire(h.about))
+	w.Bytes(headerAttribution, h.by.wire())
 	w.Bytes(headerConfigRef, configRefWire(h.configRef))
 	w.Uvarint(headerPolicy, uint64(h.policy))
 	w.Uvarint(headerPosition, h.position.n)
@@ -379,8 +379,8 @@ func (h Header) wire() []byte {
 	return w.Encoded()
 }
 
-// AboutWire is a subject as it is stored. ReadAbout reads it.
-func AboutWire(a About) []byte {
+// aboutWire is a subject as it is stored. readAbout reads it.
+func aboutWire(a About) []byte {
 	var w wire.Writer
 	switch a := a.(type) {
 	case Root:
@@ -397,11 +397,11 @@ func AboutWire(a About) []byte {
 	return w.Encoded()
 }
 
-// Wire is the attribution as it is stored. ReadAttribution reads it.
-func (a Attribution) Wire() []byte {
+// Wire is the attribution as it is stored. readAttribution reads it.
+func (a Attribution) wire() []byte {
 	var w wire.Writer
 	w.Bytes(1, a.Checkout[:])
-	w.Bytes(2, a.Principal.Wire())
+	w.Bytes(2, a.Principal.wire())
 	switch agent := a.Agent.(type) {
 	case Labeled:
 		w.Bytes(3, []byte(agent.label))
@@ -466,9 +466,9 @@ func readHeader(b []byte) (Header, error) {
 		case headerSchema:
 			h.schema = SchemaVersion(r.Uvarint())
 		case headerSubject:
-			h.about, err = ReadAbout(r.Bytes())
+			h.about, err = readAbout(r.Bytes())
 		case headerAttribution:
-			h.by, err = ReadAttribution(r.Bytes())
+			h.by, err = readAttribution(r.Bytes())
 		case headerConfigRef:
 			h.configRef, err = readConfigRef(r.Bytes())
 		case headerPolicy:
@@ -511,8 +511,8 @@ func readHeader(b []byte) (Header, error) {
 	return h, nil
 }
 
-// ReadAbout reads a subject's stored form.
-func ReadAbout(b []byte) (About, error) {
+// readAbout reads a subject's stored form.
+func readAbout(b []byte) (About, error) {
 	var node, name []byte
 	var hasNode, hasName bool
 	r := wire.NewReader(b)
@@ -548,8 +548,8 @@ func ReadAbout(b []byte) (About, error) {
 	return Element{Of: id, Name: s}, nil
 }
 
-// ReadAttribution reads an attribution's stored form.
-func ReadAttribution(b []byte) (Attribution, error) {
+// readAttribution reads an attribution's stored form.
+func readAttribution(b []byte) (Attribution, error) {
 	a := Attribution{Agent: Unlabeled{}}
 	var hasCheckout, hasPrincipal bool
 	r := wire.NewReader(b)
@@ -561,7 +561,7 @@ func ReadAttribution(b []byte) (Attribution, error) {
 			hasCheckout = len(c) == len(a.Checkout)
 			copy(a.Checkout[:], c)
 		case 2:
-			a.Principal, err = ReadPrincipalID(r.Bytes())
+			a.Principal, err = readPrincipal(r.Bytes())
 			hasPrincipal = true
 		case 3:
 			a.Agent = AgentFrom(string(r.Bytes()))
@@ -580,16 +580,16 @@ func ReadAttribution(b []byte) (Attribution, error) {
 }
 
 // Wire is the principal as it is stored: its suite and its key.
-// ReadPrincipalID reads it.
-func (p PrincipalID) Wire() []byte {
+// readPrincipal reads it.
+func (p PrincipalID) wire() []byte {
 	var w wire.Writer
 	w.Uvarint(1, uint64(p.suite))
 	w.Bytes(2, []byte(p.key))
 	return w.Encoded()
 }
 
-// ReadPrincipalID reads a principal's stored form.
-func ReadPrincipalID(b []byte) (PrincipalID, error) {
+// readPrincipal reads a principal's stored form.
+func readPrincipal(b []byte) (PrincipalID, error) {
 	var p PrincipalID
 	var hasSuite bool
 	r := wire.NewReader(b)

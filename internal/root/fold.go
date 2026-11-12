@@ -39,26 +39,18 @@ func verb(p Process, stored *command.StoreFacts, body func(fold.Folded) cli.Outc
 	panic(fmt.Sprintf("root: %T is not an Opening", p.Store))
 }
 
-// open reads every head and the snapshot, folds what is past it, and saves
-// the snapshot by rename, no lock; each step's result lands on stored as it
-// returns, so a failing step leaves the steps before it on the event. The
-// snapshot is a disposable cache, so what became of it is a fact on the
-// event and never a failure of the verb: the next command refolds what a
-// failed swap missed.
+// open reads every head and every stream from 0, and folds what it read;
+// each step's result lands on stored as it returns, so a failing step
+// leaves the steps before it on the event.
 func open(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Folded, error) {
 	heads, err := s.Heads()
 	if err != nil {
 		return fold.Folded{}, err
 	}
 	stored.Heads = append(stored.Heads, heads)
-	file, err := s.Snapshot()
-	if err != nil {
-		return fold.Folded{}, err
-	}
-	resume, start := begin(env, heads, file)
-	stored.Plans = append(stored.Plans, resume)
-	scans := make([]fold.Scanned, 0, len(resume.Delta))
-	for _, r := range resume.Delta {
+	scans := make([]fold.Scanned, 0, len(heads.Streams))
+	for _, st := range heads.Streams {
+		r := store.Range{Stream: st, From: 0}
 		scan, err := s.Read(r)
 		if err != nil {
 			return fold.Folded{}, err
@@ -66,50 +58,9 @@ func open(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Folded
 		stored.Reads = append(stored.Reads, command.Read{Range: r, Scan: scan})
 		scans = append(scans, fold.Scanned{Range: r, Scan: scan})
 	}
-	folded := start(scans)
+	folded := fold.Genesis(env, scans)
 	stored.Folds = append(stored.Folds, folded.Facts)
-	stored.Swaps = append(stored.Swaps, save(s, folded.Save))
 	return folded, nil
-}
-
-// save is what became of the snapshot: kept when the fold extended it by
-// nothing, else written, or not written and why.
-func save(s *store.Store, sv fold.Save) command.Swap {
-	switch sv := sv.(type) {
-	case fold.Current:
-		return command.Kept{}
-	case fold.Written:
-		swapped, err := s.Swap(fold.Tag(), sv.Marks, sv.Payload)
-		if err != nil {
-			return command.SwapFailed{Why: err}
-		}
-		return command.Swapped{Swapped: swapped}
-	}
-	panic(fmt.Sprintf("root: %T is not a Save", sv))
-}
-
-// begin is the plan the fold follows and how it starts, a pure decision:
-// the store's delta onto a snapshot whose payload reads, or, when it does
-// not, the plan of no snapshot, every stream from 0; and a genesis for the
-// store's own reason. A genesis trusts the verdicts below the marks the
-// store's plan held, with the file's exceptions.
-func begin(env fold.Env, heads store.Heads, file store.SnapshotFile) (store.Resume, func([]fold.Scanned) fold.Folded) {
-	resume := store.Plan(fold.Tag(), heads, file)
-	switch b := resume.Base.(type) {
-	case store.FromSaved:
-		snap, err := fold.ReadSnapshot(b.Payload)
-		if err != nil {
-			// a payload that does not read is a snapshot that does not:
-			// the store plans it as torn, every stream from 0, trusting none
-			return begin(env, heads, store.TornSnapshot{Why: err})
-		}
-		return resume, func(scans []fold.Scanned) fold.Folded { return fold.Extend(env, snap, resume.Held, scans) }
-	case store.Genesis:
-		return resume, func(scans []fold.Scanned) fold.Folded {
-			return fold.Genesis(env, b.Why, resume.Held, file, scans)
-		}
-	}
-	panic(fmt.Sprintf("root: %T is not a Base", resume.Base))
 }
 
 // storeFailure is a verb that has no store to read, or whose store failed

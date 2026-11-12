@@ -6,7 +6,6 @@ import (
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/events/wire"
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 // flag is test.flag, a kind no package declares: a payload, its decoder,
@@ -37,7 +36,7 @@ func TestANewKindTouchesNothing(t *testing.T) {
 	}, readFlag))...), env.Suites(), 1))
 	w, id := item(t)
 	w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: flag{Flag: name("blocked")}})
-	s := fold.Genesis(withFlags, store.Absent{}, nil, store.NoSnapshot{}, w.scans()).State
+	s := fold.Genesis(withFlags, w.scans()).State
 	got := found(t, s, id).Facts.Members(flags)
 	if len(got) != 1 || got[0].Name != name("blocked") || len(s.Integrity().Unapplied) != 0 {
 		t.Errorf("test.flag folds to %#v, unapplied %#v; want the flag blocked", got, s.Integrity().Unapplied)

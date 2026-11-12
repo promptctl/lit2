@@ -73,9 +73,9 @@ func TestTheCopiesOfOneEventFoldAlikeInEitherArrivalOrder(t *testing.T) {
 		w.append(a.ref(), must(store.NewBatch(copies[c.first])))
 		w.append(b.ref(), must(store.NewBatch(copies[c.second])))
 		scans := w.scans()
-		one := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, scans)
+		one := fold.Genesis(env, scans)
 		slices.Reverse(scans)
-		other := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, scans)
+		other := fold.Genesis(env, scans)
 		if !one.State.Equal(other.State) {
 			t.Errorf("%s then %s folds otherwise than the reverse", c.first, c.second)
 		}
@@ -109,31 +109,6 @@ func unappliedFor(why fold.UnappliedWhy) func(fold.State) bool {
 	}
 }
 
-func TestAnExtendThatReadsNothingKeepsTheSnapshot(t *testing.T) {
-	w, _ := item(t)
-	first := w.genesis()
-	snap, err := fold.ReadSnapshot(wrote(t, first).Payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kept := fold.Extend(env, snap, wrote(t, first).Marks, nil)
-	if kept.Save != fold.Save(fold.Current{}) || kept.Facts.Records != 0 || !kept.State.Equal(first.State) {
-		t.Errorf("an extend of nothing saves %#v with %d records; want the snapshot kept, records=0", kept.Save, kept.Facts.Records)
-	}
-	// a range read to its end is still a read: its marks are written
-	if empty := fold.Extend(env, snap, wrote(t, first).Marks, []fold.Scanned{w.span(a.ref(), 1, 1)}); !isWritten(empty.Save) {
-		t.Errorf("an extend over an empty range saves %#v; want a snapshot written", empty.Save)
-	}
-	if again := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, nil); !isWritten(again.Save) {
-		t.Errorf("a genesis of nothing saves %#v; want a snapshot written", again.Save)
-	}
-}
-
-func isWritten(s fold.Save) bool {
-	_, ok := s.(fold.Written)
-	return ok
-}
-
 // unsigned signs nothing: its signature is zeros under suite, so a test
 // makes many events without paying for a signature each.
 type unsigned struct {
@@ -148,9 +123,8 @@ func (u unsigned) Sign([]byte) events.Signature {
 func TestTheIntegrityRecordGrowsLinearly(t *testing.T) {
 	const n, per = 25_000, 1_000
 	w := newWorld(t)
-	trusted := writer{checkout: checkoutA, signer: unsigned{Signer: keyA.Signer(), suite: events.SuiteEd25519}}
 	strange := writer{checkout: checkoutB, signer: unsigned{Signer: keyB.Signer(), suite: 9}}
-	for _, wr := range []writer{trusted, strange} {
+	for _, wr := range []writer{a, strange} {
 		for range n / per {
 			ds := make([]events.Draft, per)
 			for i := range ds {
@@ -164,21 +138,14 @@ func TestTheIntegrityRecordGrowsLinearly(t *testing.T) {
 		junk[i] = store.Record([]byte{0xff, byte(i), byte(i >> 8)})
 	}
 	w.append(b.ref(), must(store.NewBatch(junk...)))
-	// A's stream is below a mark, so its zero signatures are trusted and
-	// its unknown kinds unapplied; B's suite is unknown, so its are carried
-	at := w.span(a.ref(), 0, w.head(a.ref())).Range.Stream
-	file := store.Saved{Tag: fold.Tag(), Marks: []store.Mark{{Ref: at.Ref, Upto: at.Until}},
-		Payload: wrote(t, fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, nil)).Payload}
-	got := fold.Genesis(env, store.TagChanged{}, file.Marks, file, w.scans())
+	// A signs, so its unknown kinds are unapplied; B's suite is unknown, so
+	// its are carried
+	got := fold.Genesis(env, w.scans())
 	in := got.State.Integrity()
 	if len(in.Unapplied) != n || len(in.Carried) != n || len(in.Malformed) != n {
 		t.Fatalf("the fold holds %d unapplied, %d carried, %d malformed; want %d each", len(in.Unapplied), len(in.Carried), len(in.Malformed), n)
 	}
 	if !slices.IsSortedFunc(in.Unapplied, func(x, y fold.Unapplied) int { return events.Compare(x.Stamp.Order, y.Stamp.Order) }) {
 		t.Error("the unapplied events are not in total order")
-	}
-	snap, err := fold.ReadSnapshot(wrote(t, got).Payload)
-	if err != nil || !snap.State.Equal(got.State) || len(snap.Exceptions) != n {
-		t.Errorf("the snapshot of %d carried reads back with %d exceptions, %v", n, len(snap.Exceptions), err)
 	}
 }

@@ -51,101 +51,45 @@ func folded(t *testing.T, e command.Event) fold.FoldFacts {
 	return e.Store.Folds[0]
 }
 
-func TestASecondOpenFoldsNothing(t *testing.T) {
+func TestEveryOpenFoldsEveryRecord(t *testing.T) {
 	twin := NewTwin()
 	three(t, twin, 1)
 	_, first := run(t, twin, "get", "lit-abc/title")
-	f := folded(t, first)
-	if f.Records != 3 || f.Checked != 3 || f.Counts.Items != 3 || f.Base != (fold.Refolded{Why: store.Absent{}}) {
-		t.Errorf("the first open folds %+v; want the 3 records from genesis, absent", f)
-	}
-	if !swapped(first) {
-		t.Errorf("the first open saves %v; want a snapshot swapped", first.Store.Swaps)
+	if f := folded(t, first); f.Records != 3 || f.Checked != 3 || f.Counts.Items != 3 {
+		t.Errorf("the first open folds %+v; want the 3 records, each checked", f)
 	}
 	twin.Commands.Events = nil
 	_, second := run(t, twin, "get", "lit-abc/title")
-	if g := folded(t, second); g.Records != 0 || g.Checked != 0 || g.Counts.Items != 3 || g.Base != (fold.Extended{}) {
-		t.Errorf("the second open folds %+v; want records=0, extended, the 3 items kept", g)
+	if g := folded(t, second); g.Records != 3 || g.Checked != 3 || g.Counts.Items != 3 {
+		t.Errorf("the second open folds %+v; want the same 3 records read and checked again", g)
 	}
-	if len(second.Store.Swaps) != 1 || second.Store.Swaps[0] != command.Swap(command.Kept{}) {
-		t.Errorf("the second open saves %v; want the snapshot kept, unwritten", second.Store.Swaps)
-	}
-	// a write moves the head past the snapshot's mark, so the next open
-	// reads it and swaps again
 	three(t, twin, 2)
 	twin.Commands.Events = nil
 	_, third := run(t, twin, "get", "lit-abc/title")
-	if g := folded(t, third); g.Records != 3 || g.Counts.Items != 6 || !swapped(third) {
-		t.Errorf("the open after a write folds %+v and saves %v; want its 3 records and a swap", g, third.Store.Swaps)
+	if g := folded(t, third); g.Records != 6 || g.Checked != 6 || g.Counts.Items != 6 {
+		t.Errorf("the open after a write folds %+v; want all 6 records", g)
 	}
 }
 
-func TestATornTailIsReadAndKeepsTheSnapshot(t *testing.T) {
+func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 	twin := NewTwin()
 	repo := git.NewMemory()
 	files := store.NewMemoryFiles()
 	ports := store.Ports{Files: files, Objects: repo, Refs: repo, Entropy: rand.NewChaCha8([32]byte{5})}
 	twin.Process.Store = command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1}
 	three(t, twin, 1)
-	// a write that died part way: bytes past the last whole frame
+	// a write that died part way, then one that finished after it
 	if _, err := files.Append(store.LogPath(twinID), []byte("half a frame")); err != nil {
 		t.Fatal(err)
 	}
-	_, first := run(t, twin, "get", "lit-abc/title")
-	if f := folded(t, first); f.Records != 3 || f.Torn != 1 || !swapped(first) {
-		t.Fatalf("the first open folds %+v and saves %v; want the 3 records, one torn span, a swap", f, first.Store.Swaps)
-	}
-	twin.Commands.Events = nil
-	_, second := run(t, twin, "get", "lit-abc/title")
-	if len(second.Store.Plans) != 1 || len(second.Store.Plans[0].Delta) != 1 {
-		t.Fatalf("the second open plans %+v; want the torn tail's range", second.Store.Plans)
-	}
-	if g := folded(t, second); g.Records != 0 || g.Base != (fold.Extended{}) {
-		t.Errorf("the second open folds %+v; want no records, extended", g)
-	}
-	if len(second.Store.Swaps) != 1 || second.Store.Swaps[0] != command.Swap(command.Kept{}) {
-		t.Errorf("the second open saves %v; want the snapshot kept, no mark moved", second.Store.Swaps)
-	}
-}
-
-// swapped is whether e's one save wrote a snapshot.
-func swapped(e command.Event) bool {
-	if len(e.Store.Swaps) != 1 {
-		return false
-	}
-	_, ok := e.Store.Swaps[0].(command.Swapped)
-	return ok
-}
-
-// readOnly is a store root whose snapshot cannot be written, as a full
-// or read-only cache directory refuses it.
-type readOnly struct{ *store.MemoryFiles }
-
-var errReadOnly = errors.New("the cache directory is read-only")
-
-func (r readOnly) Replace(p store.Path, b []byte) error {
-	if p == store.SnapshotPath {
-		return errReadOnly
-	}
-	return r.MemoryFiles.Replace(p, b)
-}
-
-func TestASnapshotThatCannotBeWrittenFailsNothing(t *testing.T) {
-	twin := NewTwin()
-	repo := git.NewMemory()
-	ports := store.Ports{Files: readOnly{store.NewMemoryFiles()}, Objects: repo, Refs: repo, Entropy: rand.NewChaCha8([32]byte{4})}
-	twin.Process.Store = command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1}
-	three(t, twin, 1)
+	three(t, twin, 2)
 	_, e := run(t, twin, "get", "lit-abc/title")
-	if len(e.Store.Swaps) != 1 || e.Store.Swaps[0] != command.Swap(command.SwapFailed{Why: errReadOnly}) {
-		t.Errorf("a refused swap is recorded as %v; want it failed, and why", e.Store.Swaps)
+	if f := folded(t, e); f.Records != 6 || f.Torn != 1 || f.Counts.Items != 6 {
+		t.Errorf("an open over a torn span folds %+v; want the 6 records and one torn span", f)
 	}
 	// the body ran: get is not built, which only its body says
 	if failed, ok := e.Outcome.(cli.Failed); !ok || failed.Failure.Reason() == "store" || !strings.Contains(failed.Failure.Error(), "not built") {
-		t.Errorf("a verb whose swap failed ends %#v; want its body's outcome", e.Outcome)
-	}
-	if strings.Contains(twin.Err.String(), errReadOnly.Error()) {
-		t.Errorf("the refused swap reached stderr: %q", twin.Err.String())
+		t.Errorf("a verb over a torn span ends %#v; want its body's outcome", e.Outcome)
 	}
 }
 
@@ -156,40 +100,5 @@ func TestAVerbWithNoStoreFailsAsTheEnvironments(t *testing.T) {
 	failed, ok := e.Outcome.(cli.Failed)
 	if !ok || failed.Failure.Reason() != "store" || failed.Failure.Class() != reason.ClassEnvironment || len(e.Store.Folds) != 0 {
 		t.Errorf("a verb with no store ends %#v with folds %v; want it failed as the store's, no fold", e.Outcome, e.Store.Folds)
-	}
-}
-
-func TestAnUnreadablePayloadIsATornSnapshot(t *testing.T) {
-	twin := NewTwin()
-	three(t, twin, 1)
-	s := twin.Process.Store.(command.Opened).Store
-	heads, err := s.Heads()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var marks []store.Mark
-	for _, st := range heads.Streams {
-		marks = append(marks, store.Mark{Ref: st.Ref, Upto: st.Until})
-	}
-	// a snapshot under this fold's tag, at the heads, whose payload no fold wrote
-	if _, err := s.Swap(fold.Tag(), marks, []byte("not a fold's payload")); err != nil {
-		t.Fatal(err)
-	}
-	_, unreadable := fold.ReadSnapshot([]byte("not a fold's payload"))
-	// torn is whether m is the store's torn miss for the payload's error
-	torn := func(m store.Miss) bool {
-		tm, ok := m.(store.Torn)
-		return ok && tm.Why.Error() == unreadable.Error()
-	}
-	_, e := run(t, twin, "get", "lit-abc/title")
-	f := folded(t, e)
-	if base, ok := f.Base.(fold.Refolded); !ok || !torn(base.Why) || f.Records != 3 || f.Trusted != 0 {
-		t.Fatalf("an unreadable payload folds %+v; want a genesis of the 3 records, torn for %q, trusting none", f, unreadable)
-	}
-	if len(e.Store.Plans) != 1 || len(e.Store.Plans[0].Delta) != 1 || e.Store.Plans[0].Delta[0].From != 0 || len(e.Store.Plans[0].Held) != 0 {
-		t.Errorf("the event records the plan %+v; want the torn one followed, every stream from 0, nothing held", e.Store.Plans)
-	}
-	if g, ok := e.Store.Plans[0].Base.(store.Genesis); !ok || !torn(g.Why) {
-		t.Errorf("the recorded plan resumes from %#v; want a genesis for the torn snapshot", e.Store.Plans[0].Base)
 	}
 }

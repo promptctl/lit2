@@ -84,41 +84,7 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 			if now.State.Equal(was.State) || was.State.Equal(now.State) {
 				t.Errorf("a state with %s is Equal to one without", c.name)
 			}
-			for _, f := range []fold.Folded{was, now} {
-				snap, err := fold.ReadSnapshot(wrote(t, f).Payload)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !snap.State.Equal(f.State) {
-					t.Errorf("the codec does not round-trip a state with %s", c.name)
-				}
-			}
 		})
-	}
-}
-
-func TestTheSnapshotCarriesWhereItStopped(t *testing.T) {
-	empty, err := fold.ReadSnapshot(wrote(t, fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, nil)).Payload)
-	if err != nil || empty.Through != (fold.Nothing{}) || !empty.State.Equal(fold.State{}) {
-		t.Errorf("a fold of nothing saves %#v, %v", empty, err)
-	}
-	w, _, _, _ := base(t)
-	evs := sortedEvents(w)
-	snap, err := fold.ReadSnapshot(wrote(t, w.genesis()).Payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// the base world's forged event sorts last and moves nothing: the last
-	// verified event is where the snapshot stops
-	valid := func(e events.Event) bool {
-		return env.Suites().Check(e.Header().Attribution().Principal, e.SignedBytes(), e.Signature()) == events.Valid
-	}
-	last := len(evs) - 1
-	for !valid(evs[last]) {
-		last--
-	}
-	if snap.Through != (fold.Upto{Key: evs[last].Order()}) || last == len(evs)-1 {
-		t.Errorf("the snapshot stops at %#v; want the last verified event in total order, before the forged one", snap.Through)
 	}
 }
 
@@ -139,26 +105,10 @@ func TestGenesisIsStepsOverTheSortedEvents(t *testing.T) {
 	}
 	slices.SortFunc(located, func(x, y fold.Located) int { return events.Compare(x.Event.Order(), y.Event.Order()) })
 	var s fold.State
-	for _, c := range fold.Check(env, located, fold.Trust{}) {
+	for _, c := range fold.Check(env, located) {
 		s = fold.Step(env.Registry(), s, c)
 	}
 	if !s.Equal(w.state()) {
 		t.Errorf("stepping the sorted events disagrees with Genesis")
 	}
-}
-
-// sortedEvents is every event of w, sorted by the total order.
-func sortedEvents(w *world) []events.Event {
-	var es []events.Event
-	for _, sc := range w.scans() {
-		for _, fr := range sc.Scan.Frames {
-			for _, rec := range fr.Batch.Records() {
-				if e, ok := events.Decode(env.Registry().Kinds(), rec).(events.Event); ok {
-					es = append(es, e)
-				}
-			}
-		}
-	}
-	slices.SortFunc(es, func(x, y events.Event) int { return events.Compare(x.Order(), y.Order()) })
-	return es
 }

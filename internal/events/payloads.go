@@ -94,8 +94,8 @@ func (BelowParent) placement() {}
 //sumtype:decl
 type Value interface {
 	value()
-	// Wire is the value as it is stored. ReadValue reads it.
-	Wire() []byte
+	// wire is the value as it is stored. readValue reads it.
+	wire() []byte
 }
 
 // Prose is a prose value, opaque below the verbs.
@@ -115,27 +115,27 @@ const (
 )
 
 // Wire is the value as it is stored: its envelope.
-func (p Prose) Wire() []byte {
+func (p Prose) wire() []byte {
 	var w wire.Writer
-	w.Bytes(valueProse, p.Body.Wire())
+	w.Bytes(valueProse, p.Body.wire())
 	return w.Encoded()
 }
 
 // Wire is the value as it is stored: its canonical text.
-func (p Plain) Wire() []byte {
+func (p Plain) wire() []byte {
 	var w wire.Writer
 	w.Bytes(valuePlain, []byte(p.Canonical))
 	return w.Encoded()
 }
 
-// ReadValue reads a value's stored form: exactly one of the two forms.
-func ReadValue(b []byte) (Value, error) {
+// readValue reads a value's stored form: exactly one of the two forms.
+func readValue(b []byte) (Value, error) {
 	var vs []Value
 	r := wire.NewReader(b)
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case valueProse:
-			e, err := ReadEnvelope(r.Bytes())
+			e, err := readEnvelope(r.Bytes())
 			vs = append(vs, Prose{Body: e})
 			return err
 		case valuePlain:
@@ -293,7 +293,7 @@ func ReadItemDelete(r *wire.Reader) (Versioned, error) {
 // field.set = 1:field 2:value 3:over (an event id, repeated) · unknown….
 func (p FieldSet) AppendTo(w *wire.Writer) {
 	w.Bytes(1, []byte(p.Field.s))
-	w.Bytes(2, p.Value.Wire())
+	w.Bytes(2, p.Value.wire())
 	WriteIDs(w, 3, p.Over)
 	w.Keep(p.unknown)
 }
@@ -309,7 +309,7 @@ func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 		case 1:
 			field, hasField = r.Bytes(), true
 		case 2:
-			p.Value, err = ReadValue(r.Bytes())
+			p.Value, err = readValue(r.Bytes())
 		case 3:
 			var id EventID
 			id, err = ReadEventID(r.Bytes())
@@ -397,7 +397,7 @@ func readLabel(r *wire.Reader, more func(*wire.Reader, uint32) error) (Label, er
 
 // comment.add = 1:body (an envelope) · unknown….
 func (p CommentAdd) AppendTo(w *wire.Writer) {
-	w.Bytes(1, p.Body.Wire())
+	w.Bytes(1, p.Body.wire())
 	w.Keep(p.unknown)
 }
 
@@ -408,7 +408,7 @@ func ReadCommentAdd(r *wire.Reader) (Versioned, error) {
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		if tag == 1 {
-			p.Body, err = ReadEnvelope(r.Bytes())
+			p.Body, err = readEnvelope(r.Bytes())
 			hasBody = true
 		}
 		return err

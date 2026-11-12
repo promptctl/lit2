@@ -141,76 +141,34 @@ func stampIDs(ss []fold.Stamp) []events.EventID {
 func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 	// reached counts the cases the histories reach, so the property cannot
 	// pass by generating only easy ones
-	var reached struct{ late, duplicates, carried, unapplied, conflicts, overruled, mixed int }
+	var reached struct{ duplicates, carried, unapplied, conflicts, overruled, mixed int }
 	for seed := range uint64(40) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			w := generate(t, seed, 30)
 			want := w.genesis()
-			r := rand.New(rand.NewPCG(seed, 2))
-
-			// Genesis, in an arrival order
-			scans := w.scans()
-			r.Shuffle(len(scans), func(i, j int) { scans[i], scans[j] = scans[j], scans[i] })
-			if got := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, scans).State; !got.Equal(want.State) {
-				t.Errorf("Genesis in another arrival order disagrees")
-			}
-
-			// Extend, from a snapshot of a prefix of every stream
-			prefix := map[store.Ref]int{}
-			var before, delta []fold.Scanned
-			for _, ref := range w.order {
-				prefix[ref] = r.IntN(w.head(ref) + 1)
-				before = append(before, w.span(ref, 0, prefix[ref]))
-				delta = append(delta, w.span(ref, prefix[ref], w.head(ref)))
-			}
-			r.Shuffle(len(delta), func(i, j int) { delta[i], delta[j] = delta[j], delta[i] })
-			saved := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, before)
-			snap, err := fold.ReadSnapshot(wrote(t, saved).Payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			extended := fold.Extend(env, snap, wrote(t, saved).Marks, delta)
-			reached.late += extended.Facts.Late
 			reached.duplicates += want.Facts.Duplicates
 			reached.carried += len(want.State.Integrity().Carried)
 			reached.unapplied += len(want.State.Integrity().Unapplied)
 			reached.conflicts += want.Facts.Counts.ProseConflicts
 			reached.overruled += want.Facts.Counts.Overruled
 			reached.mixed += want.Facts.Counts.MixedForms
-			if !extended.State.Equal(want.State) {
-				t.Errorf("Extend from a snapshot of %v disagrees", prefix)
-			}
-			if !sameMarks(wrote(t, extended).Marks, wrote(t, want).Marks) {
-				t.Errorf("Extend saves marks %v; Genesis %v", wrote(t, extended).Marks, wrote(t, want).Marks)
-			}
-
-			// Genesis after the fold's tag changed, trusting the verdicts
-			bumped := w.refold(store.Saved{Tag: store.FoldTag("lit2 fold 0"), Marks: wrote(t, want).Marks, Payload: wrote(t, want).Payload})
-			if !bumped.State.Equal(want.State) {
-				t.Errorf("Genesis after a tag change disagrees")
-			}
-			if bumped.Facts.Checked != want.Facts.Exceptions {
-				t.Errorf("Genesis after a tag change checked %d; want the %d exceptions", bumped.Facts.Checked, want.Facts.Exceptions)
+			r := rand.New(rand.NewPCG(seed, 2))
+			for range 4 {
+				// every stream arrives in two pieces, split anywhere, the
+				// pieces of all streams in any order
+				var scans []fold.Scanned
+				for _, ref := range w.order {
+					at := r.IntN(w.head(ref) + 1)
+					scans = append(scans, w.span(ref, 0, at), w.span(ref, at, w.head(ref)))
+				}
+				r.Shuffle(len(scans), func(i, j int) { scans[i], scans[j] = scans[j], scans[i] })
+				if got := fold.Genesis(env, scans).State; !got.Equal(want.State) {
+					t.Errorf("Genesis in another arrival order disagrees")
+				}
 			}
 		})
 	}
-	if reached.late == 0 || reached.duplicates == 0 || reached.carried == 0 || reached.unapplied == 0 || reached.conflicts == 0 || reached.overruled == 0 || reached.mixed == 0 {
+	if reached.duplicates == 0 || reached.carried == 0 || reached.unapplied == 0 || reached.conflicts == 0 || reached.overruled == 0 || reached.mixed == 0 {
 		t.Errorf("the histories reached %+v; every case should occur", reached)
 	}
-}
-
-func sameMarks(a, b []store.Mark) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	at := map[store.Ref]store.Position{}
-	for _, m := range a {
-		at[m.Ref] = m.Upto
-	}
-	for _, m := range b {
-		if at[m.Ref] != m.Upto {
-			return false
-		}
-	}
-	return true
 }

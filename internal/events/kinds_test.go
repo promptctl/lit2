@@ -29,7 +29,7 @@ func (note) Kind() Kind            { return "test.note" }
 func (note) Schema() SchemaVersion { return 1 }
 
 func (n note) AppendTo(w *wire.Writer) {
-	w.Bytes(1, n.Text.Wire())
+	w.Bytes(1, n.Text.wire())
 	for _, t := range n.Tags {
 		w.Bytes(2, []byte(t))
 	}
@@ -42,7 +42,7 @@ func readNote(r *wire.Reader) (Versioned, error) {
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		switch tag {
 		case 1:
-			n.Text, err = ReadEnvelope(r.Bytes())
+			n.Text, err = readEnvelope(r.Bytes())
 		case 2:
 			n.Tags = append(n.Tags, string(r.Bytes()))
 		}
@@ -63,7 +63,7 @@ func (newerNote) Kind() Kind            { return "test.note" }
 func (newerNote) Schema() SchemaVersion { return 1 }
 
 func (n newerNote) AppendTo(w *wire.Writer) {
-	w.Bytes(1, n.Text.Wire())
+	w.Bytes(1, n.Text.wire())
 	for _, t := range n.Tags {
 		w.Bytes(2, []byte(t))
 	}
@@ -77,7 +77,7 @@ func readNewerNote(r *wire.Reader) (Versioned, error) {
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		switch tag {
 		case 1:
-			n.Text, err = ReadEnvelope(r.Bytes())
+			n.Text, err = readEnvelope(r.Bytes())
 		case 2:
 			n.Tags = append(n.Tags, string(r.Bytes()))
 		case 3:
@@ -93,14 +93,14 @@ type made struct{ Title Envelope }
 
 func (made) Kind() Kind                { return "test.made" }
 func (made) Schema() SchemaVersion     { return 1 }
-func (m made) AppendTo(w *wire.Writer) { w.Bytes(1, m.Title.Wire()) }
+func (m made) AppendTo(w *wire.Writer) { w.Bytes(1, m.Title.wire()) }
 
 func readMade(r *wire.Reader) (Versioned, error) {
 	var m made
 	var err error
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		if tag == 1 {
-			m.Title, err = ReadEnvelope(r.Bytes())
+			m.Title, err = readEnvelope(r.Bytes())
 		}
 	}
 	return m, errors.Join(err, r.Err())
@@ -126,7 +126,7 @@ func readPastNote(r *wire.Reader) (Versioned, error) {
 	var err error
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		if tag == 1 {
-			p.Text, err = ReadEnvelope(r.Bytes())
+			p.Text, err = readEnvelope(r.Bytes())
 		}
 	}
 	return p, errors.Join(err, r.Err())
@@ -142,7 +142,7 @@ func (laterNote) Kind() Kind            { return "test.note" }
 func (laterNote) Schema() SchemaVersion { return 2 }
 
 func (n laterNote) AppendTo(w *wire.Writer) {
-	w.Bytes(1, n.Text.Wire())
+	w.Bytes(1, n.Text.wire())
 	if n.Pinned {
 		w.Uvarint(3, 1)
 	}
@@ -154,7 +154,7 @@ func readLaterNote(r *wire.Reader) (Versioned, error) {
 	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
 		switch tag {
 		case 1:
-			n.Text, err = ReadEnvelope(r.Bytes())
+			n.Text, err = readEnvelope(r.Bytes())
 		case 3:
 			n.Pinned = r.Uvarint() == 1
 		}

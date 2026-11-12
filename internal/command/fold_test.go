@@ -1,13 +1,11 @@
 package command
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 func foldBlockOf(t *testing.T, f fold.FoldFacts) map[string]any {
@@ -29,11 +27,8 @@ var nothing = func() fold.Env {
 }()
 
 func TestAFoldOfNothingIsEveryCountZeroAndPresent(t *testing.T) {
-	block := foldBlockOf(t, fold.Genesis(nothing, store.Absent{}, nil, store.NoSnapshot{}, nil).Facts)
-	if block["base"] != "genesis:absent" {
-		t.Errorf("a fold with no snapshot is based %v", block["base"])
-	}
-	for _, k := range []string{"records", "torn", "duplicates", "late", "checked", "trusted", "exceptions", "applied"} {
+	block := foldBlockOf(t, fold.Genesis(nothing, nil).Facts)
+	for _, k := range []string{"records", "torn", "duplicates", "checked", "applied"} {
 		if block[k] != 0.0 {
 			t.Errorf("a fold of nothing has %s %v; want 0, present", k, block[k])
 		}
@@ -61,29 +56,6 @@ func TestAFoldOfNothingIsEveryCountZeroAndPresent(t *testing.T) {
 	// empty object, present
 	if unread, ok := block["decoded"].(map[string]any)["unread"].(map[string]any); !ok || len(unread) != 0 {
 		t.Errorf("a fold of nothing has decoded.unread %v; want {}", block["decoded"])
-	}
-}
-
-func TestTheFoldSaysWhereItStartedAndWhy(t *testing.T) {
-	bad := errors.New("the fold's payload is not its two sections")
-	ref := store.WriterRef{Checkout: store.CheckoutID{3}}
-	for _, c := range []struct {
-		base      fold.BaseFact
-		name, why string
-		ref       any
-	}{
-		{fold.Extended{}, "extended", "", nil},
-		{fold.Refolded{Why: store.TagChanged{}}, "genesis:tag_changed", "", nil},
-		{fold.Refolded{Why: store.Rewritten{Ref: ref}}, "genesis:rewritten", "", string(ref.Name())},
-		{fold.Refolded{Why: store.Torn{Why: bad}}, "genesis:torn", bad.Error(), nil},
-	} {
-		f := fold.Genesis(nothing, store.Absent{}, nil, store.NoSnapshot{}, nil).Facts
-		f.Base = c.base
-		block := foldBlockOf(t, f)
-		why, _ := block["why"].(string)
-		if block["base"] != c.name || why != c.why || block["ref"] != c.ref {
-			t.Errorf("a fold based %#v says %v, ref %v, why %q", c.base, block["base"], block["ref"], why)
-		}
 	}
 }
 

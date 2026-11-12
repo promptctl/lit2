@@ -2,7 +2,6 @@ package command
 
 import (
 	"errors"
-	"maps"
 	"testing"
 	"time"
 
@@ -81,7 +80,7 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 		Prior: store.Resealed{Why: errors.New("its publication does not read")}}
 	block := storeBlockOf(t, StoreFacts{
 		Heads: []store.Heads{h}, Reads: []Read{{Range: store.Range{Stream: h.Streams[0], From: 0}, Scan: scan}},
-		Plans: []store.Resume{hit}, Swaps: []Swap{Swapped{Swapped: swapped}, Kept{}, SwapFailed{Why: errors.New("the cache is read-only")}}, Appends: []store.Appended{appended},
+		Plans: []store.Resume{hit}, Swaps: []store.Swapped{swapped}, Appends: []store.Appended{appended},
 		Publishes: []store.Publishing{published, idle, resealed, nothing},
 	})
 	if a := first(t, block, "append"); a["records"] != 1.0 || a["log_created"] != true || a["log_until"] != float64(appended.Until.At) {
@@ -93,19 +92,8 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	if p := first(t, block, "plan"); p["snapshot"] != "hit" {
 		t.Errorf("a plan at the snapshot's heads is %v; want hit", p)
 	}
-	swaps, _ := block["swap"].([]any)
-	if len(swaps) != 3 {
-		t.Fatalf("the block holds %d swaps; want 3", len(swaps))
-	}
-	for i, want := range []map[string]any{
-		{"snapshot": "swapped", "snapshot_bytes": float64(swapped.Bytes)},
-		{"snapshot": "kept", "snapshot_bytes": 0.0},
-		{"snapshot": "failed", "snapshot_bytes": 0.0, "why": "the cache is read-only"},
-	} {
-		sw, _ := swaps[i].(map[string]any)
-		if !maps.Equal(sw, want) || swapped.Bytes == 0 {
-			t.Errorf("swap %d is %v; want %v", i, sw, want)
-		}
+	if sw := first(t, block, "swap"); sw["snapshot_bytes"] != float64(swapped.Bytes) || swapped.Bytes == 0 {
+		t.Errorf("the swap is %v; want its bytes", sw)
 	}
 	list, _ := block["publish"].([]any)
 	if len(list) != 4 {
