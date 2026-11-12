@@ -16,22 +16,18 @@ import (
 func TestASnapshotIsDisposable(t *testing.T) {
 	w := generate(t, 7, 30)
 	want := w.genesis()
-	garbage := []byte("not a fold's payload")
-	_, unreadable := fold.ReadSnapshot(garbage)
-	if unreadable == nil {
+	if _, err := fold.ReadSnapshot([]byte("not a fold's payload")); err == nil {
 		t.Fatal("ReadSnapshot read bytes no fold wrote")
 	}
 	torn := errors.New("the snapshot's checksum fails")
 	for _, c := range []struct {
-		why  fold.Refold
-		held []store.Mark
+		why  store.Miss
 		file store.SnapshotFile
 	}{
-		{fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}},
-		{fold.Missed{Miss: store.Torn{Why: torn}}, nil, store.TornSnapshot{Why: torn}},
-		{fold.PayloadUnreadable{Err: unreadable}, wrote(t, want).Marks, store.Saved{Tag: fold.Tag(), Marks: wrote(t, want).Marks, Payload: garbage}},
+		{store.Absent{}, store.NoSnapshot{}},
+		{store.Torn{Why: torn}, store.TornSnapshot{Why: torn}},
 	} {
-		got := fold.Genesis(env, c.why, c.held, c.file, w.scans())
+		got := fold.Genesis(env, c.why, nil, c.file, w.scans())
 		if !got.State.Equal(want.State) {
 			t.Errorf("a refold for %#v disagrees with the genesis", c.why)
 		}
@@ -77,7 +73,7 @@ func TestAFoldVersionBumpChecksOnlyTheExceptions(t *testing.T) {
 	if c := bumped.State.Integrity().Carried; len(c) != 1 || c[0].Event != forged.ID() || c[0].Reason != (fold.BadSignature{}) {
 		t.Errorf("after a tag change the forged event is %#v; want it still carried", c)
 	}
-	if again := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, w.scans()); again.Facts.Checked != n {
+	if again := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, w.scans()); again.Facts.Checked != n {
 		t.Errorf("with the snapshot deleted Genesis checked %d; want %d", again.Facts.Checked, n)
 	}
 }
@@ -88,7 +84,7 @@ func TestAStreamUnderANewLogIsCheckedWhole(t *testing.T) {
 	// B's stream is rewritten: the same records under a new log
 	w.streams[b.ref()].log = store.LogID{0xee}
 	got := w.refold(store.Saved{Tag: fold.Tag(), Marks: wrote(t, first).Marks, Payload: wrote(t, first).Payload})
-	if got.Facts.Base != (fold.Refolded{Why: fold.Missed{Miss: store.Rewritten{Ref: b.ref()}}}) {
+	if got.Facts.Base != (fold.Refolded{Why: store.Rewritten{Ref: b.ref()}}) {
 		t.Fatalf("the store plans %#v; want B's stream rewritten", got.Facts.Base)
 	}
 	// B's four events, and the forged one as an exception
@@ -180,7 +176,7 @@ func TestAGenesisAfterAStreamShortensChecksThatStreamWhole(t *testing.T) {
 	bs := w.streams[b.ref()]
 	bs.batches = bs.batches[:len(bs.batches)-1]
 	got := w.refold(store.Saved{Tag: fold.Tag(), Marks: wrote(t, first).Marks, Payload: wrote(t, first).Payload})
-	if got.Facts.Base != (fold.Refolded{Why: fold.Missed{Miss: store.Rewritten{Ref: b.ref()}}}) {
+	if got.Facts.Base != (fold.Refolded{Why: store.Rewritten{Ref: b.ref()}}) {
 		t.Fatalf("a shortened stream plans %#v; want it rewritten", got.Facts.Base)
 	}
 	// B's 3 remaining events checked, A's 5 trusted but its forged one,
@@ -208,6 +204,11 @@ func TestASnapshotRecordMissingItsKeyDoesNotRead(t *testing.T) {
 		{"ref", 1, []uint32{2, 7}},
 		{"digest", 3, []uint32{2, 7}},
 		{"name", 1, []uint32{2, 4, 5}},
+		{"kind name", 2, []uint32{2, 4, 5, 2}},
+		{"field name", 1, []uint32{2, 4, 4, 1}},
+		{"set name", 1, []uint32{2, 4, 4, 2}},
+		{"member name", 1, []uint32{2, 4, 4, 2, 2}},
+		{"placement", 2, []uint32{2, 4, 2}},
 	} {
 		dropped, ok := without(t, payload, c.drop, c.path...)
 		if !ok {

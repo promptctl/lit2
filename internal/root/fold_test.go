@@ -56,7 +56,7 @@ func TestASecondOpenFoldsNothing(t *testing.T) {
 	three(t, twin, 1)
 	_, first := run(t, twin, "get", "lit-abc/title")
 	f := folded(t, first)
-	if f.Records != 3 || f.Checked != 3 || f.Counts.Items != 3 || f.Base != (fold.Refolded{Why: fold.Missed{Miss: store.Absent{}}}) {
+	if f.Records != 3 || f.Checked != 3 || f.Counts.Items != 3 || f.Base != (fold.Refolded{Why: store.Absent{}}) {
 		t.Errorf("the first open folds %+v; want the 3 records from genesis, absent", f)
 	}
 	if !swapped(first) {
@@ -77,6 +77,34 @@ func TestASecondOpenFoldsNothing(t *testing.T) {
 	_, third := run(t, twin, "get", "lit-abc/title")
 	if g := folded(t, third); g.Records != 3 || g.Counts.Items != 6 || !swapped(third) {
 		t.Errorf("the open after a write folds %+v and saves %v; want its 3 records and a swap", g, third.Store.Swaps)
+	}
+}
+
+func TestATornTailIsReadAndKeepsTheSnapshot(t *testing.T) {
+	twin := NewTwin()
+	repo := git.NewMemory()
+	files := store.NewMemoryFiles()
+	ports := store.Ports{Files: files, Objects: repo, Refs: repo, Entropy: rand.NewChaCha8([32]byte{5})}
+	twin.Process.Store = command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1}
+	three(t, twin, 1)
+	// a write that died part way: bytes past the last whole frame
+	if _, err := files.Append(store.LogPath(twinID), []byte("half a frame")); err != nil {
+		t.Fatal(err)
+	}
+	_, first := run(t, twin, "get", "lit-abc/title")
+	if f := folded(t, first); f.Records != 3 || f.Torn != 1 || !swapped(first) {
+		t.Fatalf("the first open folds %+v and saves %v; want the 3 records, one torn span, a swap", f, first.Store.Swaps)
+	}
+	twin.Commands.Events = nil
+	_, second := run(t, twin, "get", "lit-abc/title")
+	if len(second.Store.Plans) != 1 || len(second.Store.Plans[0].Delta) != 1 {
+		t.Fatalf("the second open plans %+v; want the torn tail's range", second.Store.Plans)
+	}
+	if g := folded(t, second); g.Records != 0 || g.Base != (fold.Extended{}) {
+		t.Errorf("the second open folds %+v; want no records, extended", g)
+	}
+	if len(second.Store.Swaps) != 1 || second.Store.Swaps[0] != command.Swap(command.Kept{}) {
+		t.Errorf("the second open saves %v; want the snapshot kept, no mark moved", second.Store.Swaps)
 	}
 }
 
@@ -131,7 +159,7 @@ func TestAVerbWithNoStoreFailsAsTheEnvironments(t *testing.T) {
 	}
 }
 
-func TestAnUnreadablePayloadRecordsThePlanItFollowed(t *testing.T) {
+func TestAnUnreadablePayloadIsATornSnapshot(t *testing.T) {
 	twin := NewTwin()
 	three(t, twin, 1)
 	s := twin.Process.Store.(command.Opened).Store
@@ -147,15 +175,21 @@ func TestAnUnreadablePayloadRecordsThePlanItFollowed(t *testing.T) {
 	if _, err := s.Swap(fold.Tag(), marks, []byte("not a fold's payload")); err != nil {
 		t.Fatal(err)
 	}
+	_, unreadable := fold.ReadSnapshot([]byte("not a fold's payload"))
+	// torn is whether m is the store's torn miss for the payload's error
+	torn := func(m store.Miss) bool {
+		tm, ok := m.(store.Torn)
+		return ok && tm.Why.Error() == unreadable.Error()
+	}
 	_, e := run(t, twin, "get", "lit-abc/title")
 	f := folded(t, e)
-	if _, ok := f.Base.(fold.Refolded).Why.(fold.PayloadUnreadable); !ok || f.Records != 3 {
-		t.Fatalf("an unreadable payload folds %+v; want a genesis of the 3 records, payload unreadable", f)
+	if base, ok := f.Base.(fold.Refolded); !ok || !torn(base.Why) || f.Records != 3 || f.Trusted != 0 {
+		t.Fatalf("an unreadable payload folds %+v; want a genesis of the 3 records, torn for %q, trusting none", f, unreadable)
 	}
-	if len(e.Store.Plans) != 1 || len(e.Store.Plans[0].Delta) != 1 || e.Store.Plans[0].Delta[0].From != 0 {
-		t.Errorf("the event records the plan %+v; want the one followed, every stream from 0", e.Store.Plans)
+	if len(e.Store.Plans) != 1 || len(e.Store.Plans[0].Delta) != 1 || e.Store.Plans[0].Delta[0].From != 0 || len(e.Store.Plans[0].Held) != 0 {
+		t.Errorf("the event records the plan %+v; want the torn one followed, every stream from 0, nothing held", e.Store.Plans)
 	}
-	if _, ok := e.Store.Plans[0].Base.(store.Genesis); !ok {
-		t.Errorf("the recorded plan resumes from %#v; want the genesis the fold ran", e.Store.Plans[0].Base)
+	if g, ok := e.Store.Plans[0].Base.(store.Genesis); !ok || !torn(g.Why) {
+		t.Errorf("the recorded plan resumes from %#v; want a genesis for the torn snapshot", e.Store.Plans[0].Base)
 	}
 }

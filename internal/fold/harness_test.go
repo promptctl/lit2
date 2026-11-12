@@ -151,7 +151,7 @@ func wrote(tb testing.TB, f fold.Folded) fold.Written {
 
 // genesis folds every stream from nothing.
 func (wd *world) genesis() fold.Folded {
-	return fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, wd.scans())
+	return fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, wd.scans())
 }
 
 // view is the fold of each stream's first upto[ref] batches, and every
@@ -166,7 +166,7 @@ func (wd *world) view(upto map[store.Ref]int) fold.State {
 		}
 		scans = append(scans, wd.span(ref, 0, n))
 	}
-	return fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, scans).State
+	return fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, scans).State
 }
 
 // heads is every stream at its head, as the store reads them.
@@ -187,7 +187,7 @@ func (wd *world) refold(file store.SnapshotFile) fold.Folded {
 	if !ok {
 		wd.t.Fatalf("the store resumes %#v; want a genesis", r.Base)
 	}
-	return fold.Genesis(env, fold.Missed{Miss: g.Why}, r.Held, file, wd.scans())
+	return fold.Genesis(env, g.Why, r.Held, file, wd.scans())
 }
 
 // state is the genesis's state.

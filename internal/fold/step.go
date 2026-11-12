@@ -175,6 +175,18 @@ func containerOf(id events.ItemID, p events.Placement) (Container, bool) {
 	panic(fmt.Sprintf("fold: %T is not a Parent", id.Parent()))
 }
 
+// placementOf is the placement a container was made from: containerOf
+// read backwards, for the snapshot.
+func placementOf(c Container) events.Placement {
+	switch c := c.(type) {
+	case Home:
+		return events.AtLevel{Level: c.Holds}
+	case Under:
+		return events.BelowParent{}
+	}
+	panic(fmt.Sprintf("fold: %T is not a Container", c))
+}
+
 func misplaced(id events.ItemID) Misaddressed {
 	switch id.Parent().(type) {
 	case events.Top:

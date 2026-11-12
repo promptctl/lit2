@@ -99,14 +99,14 @@ func begin(env fold.Env, heads store.Heads, file store.SnapshotFile) (store.Resu
 	case store.FromSaved:
 		snap, err := fold.ReadSnapshot(b.Payload)
 		if err != nil {
-			return store.Plan(fold.Tag(), heads, store.NoSnapshot{}), func(scans []fold.Scanned) fold.Folded {
-				return fold.Genesis(env, fold.PayloadUnreadable{Err: err}, resume.Held, file, scans)
-			}
+			// a payload that does not read is a snapshot that does not:
+			// the store plans it as torn, every stream from 0, trusting none
+			return begin(env, heads, store.TornSnapshot{Why: err})
 		}
 		return resume, func(scans []fold.Scanned) fold.Folded { return fold.Extend(env, snap, resume.Held, scans) }
 	case store.Genesis:
 		return resume, func(scans []fold.Scanned) fold.Folded {
-			return fold.Genesis(env, fold.Missed{Miss: b.Why}, resume.Held, file, scans)
+			return fold.Genesis(env, b.Why, resume.Held, file, scans)
 		}
 	}
 	panic(fmt.Sprintf("root: %T is not a Base", resume.Base))

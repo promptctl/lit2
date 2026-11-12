@@ -98,7 +98,7 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 }
 
 func TestTheSnapshotCarriesWhereItStopped(t *testing.T) {
-	empty, err := fold.ReadSnapshot(wrote(t, fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, nil)).Payload)
+	empty, err := fold.ReadSnapshot(wrote(t, fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, nil)).Payload)
 	if err != nil || empty.Through != (fold.Nothing{}) || !empty.State.Equal(fold.State{}) {
 		t.Errorf("a fold of nothing saves %#v, %v", empty, err)
 	}

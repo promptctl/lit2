@@ -114,7 +114,7 @@ func (Upto) through()    {}
 // and reads from file only its exceptions, under any fold version: a
 // fold-version bump checks no signature that once verified, and a stream
 // the store found rewritten is checked whole.
-func Genesis(e Env, why Refold, held []store.Mark, file store.SnapshotFile, scans []Scanned) Folded {
+func Genesis(e Env, why store.Miss, held []store.Mark, file store.SnapshotFile, scans []Scanned) Folded {
 	return walk(e, State{}, Nothing{}, nil, nil, trustOf(held, file), Refolded{Why: why}, scans)
 }
 
@@ -206,18 +206,34 @@ func walk(e Env, s State, through Through, marks []store.Mark, exceptions []even
 	return Folded{State: s, Save: saved(base, marks, scans, snap), Facts: facts}
 }
 
-// saved is the save after a walk from base over scans: an extension handed
-// nothing to read leaves the snapshot current, and every other walk writes
+// saved is the save after a walk from base over scans: an extension that
+// moved no mark leaves the snapshot current, and every other walk writes
 // one.
 func saved(base BaseFact, marks []store.Mark, scans []Scanned, snap Snapshot) Save {
 	switch base.(type) {
 	case Extended:
-		if len(scans) == 0 {
+		if !moved(marks, scans) {
 			return Current{}
 		}
 	case Refolded:
 	}
 	return Written{Marks: advanced(marks, scans), Payload: snap.encode()}
+}
+
+// moved is whether a scan read a stream past its mark, or one with none. A
+// stream whose log ends in a torn tail is planned a range on every command
+// and its scan ends at the mark, so it moves nothing.
+func moved(marks []store.Mark, scans []Scanned) bool {
+	at := map[store.Ref]store.Offset{}
+	for _, m := range marks {
+		at[m.Ref] = m.Upto.At
+	}
+	for _, sc := range scans {
+		if mark, ok := at[sc.Range.Stream.Ref]; !ok || mark != sc.Scan.End {
+			return true
+		}
+	}
+	return false
 }
 
 // rank orders the bodies the copies of one event can carry, by how much of
@@ -292,25 +308,11 @@ type BaseFact interface{ baseFact() }
 // Extended is a fold resumed from the snapshot.
 type Extended struct{}
 
-// Refolded is a fold from genesis, and why.
-type Refolded struct{ Why Refold }
+// Refolded is a fold from genesis, and why the store did not resume.
+type Refolded struct{ Why store.Miss }
 
 func (Extended) baseFact() {}
 func (Refolded) baseFact() {}
-
-// Refold is why a fold started from genesis.
-//
-//sumtype:decl
-type Refold interface{ refold() }
-
-// Missed is a snapshot the store did not resume.
-type Missed struct{ Miss store.Miss }
-
-// PayloadUnreadable is a snapshot resumed whose payload does not read.
-type PayloadUnreadable struct{ Err error }
-
-func (Missed) refold()            {}
-func (PayloadUnreadable) refold() {}
 
 // FoldFacts is what one fold did, for the command event: every count is
 // present and zero when zero, so a fold of nothing reads records=0 and no

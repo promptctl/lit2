@@ -131,21 +131,21 @@ func (p Plain) Wire() []byte {
 // ReadValue reads a value's stored form: exactly one of the two forms.
 func ReadValue(b []byte) (Value, error) {
 	var vs []Value
-	var err error
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case valueProse:
-			var e Envelope
-			e, err = ReadEnvelope(r.Bytes())
+			e, err := ReadEnvelope(r.Bytes())
 			vs = append(vs, Prose{Body: e})
+			return err
 		case valuePlain:
 			vs = append(vs, Plain{Canonical: string(r.Bytes())})
 		}
-	}
+		return nil
+	})
 	switch {
-	case err != nil || r.Err() != nil:
-		return nil, fmt.Errorf("a value: %w", errors.Join(err, r.Err()))
+	case err != nil:
+		return nil, fmt.Errorf("a value: %w", err)
 	case len(vs) != 1:
 		return nil, fmt.Errorf("a value is prose or plain; this one is %d of them", len(vs))
 	}
@@ -215,8 +215,14 @@ const (
 
 // item.create = 1:placement · unknown….
 func (p ItemCreate) AppendTo(w *wire.Writer) {
+	w.Bytes(1, PlacementWire(p.Place))
+	w.Keep(p.unknown)
+}
+
+// PlacementWire is a placement as it is stored. ReadPlacement reads it.
+func PlacementWire(p Placement) []byte {
 	var pl wire.Writer
-	switch at := p.Place.(type) {
+	switch at := p.(type) {
 	case AtLevel:
 		pl.Uvarint(placeAtLevel, uint64(at.Level.n))
 	case BelowParent:
@@ -224,49 +230,51 @@ func (p ItemCreate) AppendTo(w *wire.Writer) {
 	default:
 		// [LAW:no-silent-failure] a create placed nowhere would be signed
 		// as a create with no level and no parent
-		panic(fmt.Sprintf("events: %T is not a Placement", p.Place))
+		panic(fmt.Sprintf("events: %T is not a Placement", p))
 	}
-	w.Bytes(1, pl.Encoded())
-	w.Keep(p.unknown)
+	return pl.Encoded()
 }
 
 // ReadItemCreate reads item.create at version 1.
 func ReadItemCreate(r *wire.Reader) (Versioned, error) {
 	var p ItemCreate
-	var err error
-	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
+		var err error
 		if tag == 1 {
-			p.Place, err = readPlacement(r.Bytes())
+			p.Place, err = ReadPlacement(r.Bytes())
 		}
-	}
+		return err
+	})
 	p.unknown = r.Rest()
 	switch {
-	case err != nil || r.Err() != nil:
-		return nil, errors.Join(err, r.Err())
+	case err != nil:
+		return nil, err
 	case p.Place == nil:
 		return nil, errors.New("an item.create has no placement")
 	}
 	return p, nil
 }
 
-func readPlacement(b []byte) (Placement, error) {
+// ReadPlacement reads a placement's stored form: exactly one of a level
+// and below its parent.
+func ReadPlacement(b []byte) (Placement, error) {
 	var at []Placement
-	var err error
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case placeAtLevel:
-			var l Level
-			l, err = ParseLevel(int(min(r.Uvarint(), topLevel+1)))
+			l, err := ParseLevel(int(min(r.Uvarint(), topLevel+1)))
 			at = append(at, AtLevel{Level: l})
+			return err
 		case placeBelowParent:
 			r.Bytes()
 			at = append(at, BelowParent{})
 		}
-	}
+		return nil
+	})
 	switch {
-	case err != nil || r.Err() != nil:
-		return nil, fmt.Errorf("a placement: %w", errors.Join(err, r.Err()))
+	case err != nil:
+		return nil, fmt.Errorf("a placement: %w", err)
 	case len(at) != 1:
 		return nil, fmt.Errorf("a placement is a level or below its parent; this one is %d of them", len(at))
 	}
@@ -278,9 +286,8 @@ func (p ItemDelete) AppendTo(w *wire.Writer) { w.Keep(p.unknown) }
 
 // ReadItemDelete reads item.delete at version 1.
 func ReadItemDelete(r *wire.Reader) (Versioned, error) {
-	for _, ok := r.Next(); ok; _, ok = r.Next() {
-	}
-	return ItemDelete{unknown: r.Rest()}, r.Err()
+	err := r.Each(func(uint32, *wire.Reader) error { return nil })
+	return ItemDelete{unknown: r.Rest()}, err
 }
 
 // field.set = 1:field 2:value 3:over (an event id, repeated) · unknown….
@@ -296,8 +303,8 @@ func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 	var p FieldSet
 	var field []byte
 	var hasField bool
-	var err error
-	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
+		var err error
 		switch tag {
 		case 1:
 			field, hasField = r.Bytes(), true
@@ -308,11 +315,12 @@ func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 			id, err = ReadEventID(r.Bytes())
 			p.Over = append(p.Over, id)
 		}
-	}
+		return err
+	})
 	p.unknown = r.Rest()
 	switch {
-	case err != nil || r.Err() != nil:
-		return nil, errors.Join(err, r.Err())
+	case err != nil:
+		return nil, err
 	case !hasField:
 		return nil, errors.New("a field.set names no field")
 	case p.Value == nil:
@@ -371,17 +379,16 @@ func ReadLabelRm(r *wire.Reader) (Versioned, error) {
 func readLabel(r *wire.Reader, more func(*wire.Reader, uint32) error) (Label, error) {
 	var label []byte
 	var hasLabel bool
-	var err error
-	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		if tag == 1 {
 			label, hasLabel = r.Bytes(), true
-			continue
+			return nil
 		}
-		err = more(r, tag)
-	}
+		return more(r, tag)
+	})
 	switch {
-	case err != nil || r.Err() != nil:
-		return Label{}, errors.Join(err, r.Err())
+	case err != nil:
+		return Label{}, err
 	case !hasLabel:
 		return Label{}, errors.New("it names no label")
 	}
@@ -398,17 +405,18 @@ func (p CommentAdd) AppendTo(w *wire.Writer) {
 func ReadCommentAdd(r *wire.Reader) (Versioned, error) {
 	var p CommentAdd
 	var hasBody bool
-	var err error
-	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
+		var err error
 		if tag == 1 {
 			p.Body, err = ReadEnvelope(r.Bytes())
 			hasBody = true
 		}
-	}
+		return err
+	})
 	p.unknown = r.Rest()
 	switch {
-	case err != nil || r.Err() != nil:
-		return nil, fmt.Errorf("a comment.add: %w", errors.Join(err, r.Err()))
+	case err != nil:
+		return nil, fmt.Errorf("a comment.add: %w", err)
 	case !hasBody:
 		return nil, errors.New("a comment.add has no body")
 	}

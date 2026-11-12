@@ -151,7 +151,7 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 			// Genesis, in an arrival order
 			scans := w.scans()
 			r.Shuffle(len(scans), func(i, j int) { scans[i], scans[j] = scans[j], scans[i] })
-			if got := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, scans).State; !got.Equal(want.State) {
+			if got := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, scans).State; !got.Equal(want.State) {
 				t.Errorf("Genesis in another arrival order disagrees")
 			}
 
@@ -164,7 +164,7 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 				delta = append(delta, w.span(ref, prefix[ref], w.head(ref)))
 			}
 			r.Shuffle(len(delta), func(i, j int) { delta[i], delta[j] = delta[j], delta[i] })
-			saved := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, before)
+			saved := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, before)
 			snap, err := fold.ReadSnapshot(wrote(t, saved).Payload)
 			if err != nil {
 				t.Fatal(err)

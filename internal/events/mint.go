@@ -287,7 +287,7 @@ func ReadOrderKey(b []byte) (OrderKey, error) {
 	var k OrderKey
 	var seen [orderID + 1]bool
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case orderPosition:
 			k.Position.n, seen[tag] = r.Uvarint(), true
@@ -300,8 +300,9 @@ func ReadOrderKey(b []byte) (OrderKey, error) {
 			seen[tag] = len(id) == len(k.ID)
 			copy(k.ID[:], id)
 		}
-	}
-	if err := r.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return OrderKey{}, fmt.Errorf("an order key: %w", err)
 	}
 	if !seen[orderPosition] || !seen[orderWriter] || !seen[orderID] || k.Position.n == 0 {

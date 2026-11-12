@@ -80,8 +80,8 @@ func (w *Writer) Keep(u Unknown) {
 func (w *Writer) Encoded() []byte { return slices.Clone(w.b) }
 
 // Reader decodes one message, field by field. Its first error stops it:
-// Next answers false from then on and Err says what it was, so a decoder
-// reads its fields and checks Err once, after the loop.
+// Next answers false from then on and Err says what it was. A decoder
+// reads its fields with Each, which joins that error once.
 type Reader struct {
 	b       []byte
 	at      int
@@ -167,6 +167,19 @@ func (r *Reader) Bytes() []byte {
 	}
 	r.read = true
 	return r.current.raw
+}
+
+// Each reads every field with f, in stored order, and answers f's first
+// error or, when f has none, the reader's: the one loop every decoder
+// runs, so none forgets the reader's error. The fields f leaves unread are
+// Rest.
+func (r *Reader) Each(f func(tag uint32, r *Reader) error) error {
+	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+		if err := f(tag, r); err != nil {
+			return err
+		}
+	}
+	return r.Err()
 }
 
 // Err is the error that stopped the reader, nil when it reached the end.

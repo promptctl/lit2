@@ -131,15 +131,11 @@ func (enc *encoder) item(r *item) []byte {
 	var w wire.Writer
 	w.Bytes(1, []byte(r.id.String()))
 	for _, c := range r.creates {
-		var cw, in wire.Writer
+		var cw wire.Writer
 		cw.Bytes(1, enc.stamp(c.stamp))
-		switch at := c.in.(type) {
-		case Home:
-			in.Uvarint(1, uint64(at.Holds.Number()))
-		case Under:
-			in.Bytes(2, []byte(at.Parent.String()))
-		}
-		cw.Bytes(2, in.Encoded())
+		// the placement alone: a child's parent is its id's prefix, so it
+		// is derived on read and never stored to disagree with it
+		cw.Bytes(2, events.PlacementWire(placementOf(c.in)))
 		w.Bytes(2, cw.Encoded())
 	}
 	switch l := r.life.(type) {
@@ -231,12 +227,12 @@ func reasonNumber(r Reason) uint64 {
 
 // ReadSnapshot reads a payload this fold's Tag wrote
 // `[LAW:parse-dont-validate]`: the root resumes from the Snapshot, or
-// refolds with the error as PayloadUnreadable.
+// plans again with the snapshot torn for the error.
 func ReadSnapshot(payload []byte) (Snapshot, error) {
 	var sn Snapshot
 	var checked, state []byte
 	var hasChecked, hasState bool
-	err := fields(payload, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(payload).Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			checked, hasChecked = r.Bytes(), true
@@ -264,7 +260,7 @@ func ReadSnapshot(payload []byte) (Snapshot, error) {
 func readExceptions(payload []byte) ([]events.EventID, error) {
 	var checked []byte
 	var has bool
-	err := fields(payload, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(payload).Each(func(tag uint32, r *wire.Reader) error {
 		if tag == 1 {
 			checked, has = r.Bytes(), true
 		}
@@ -282,7 +278,7 @@ func readExceptions(payload []byte) ([]events.EventID, error) {
 func exceptionsOf(checked []byte) ([]events.EventID, error) {
 	var tag string
 	var ex []events.EventID
-	err := fields(checked, func(t uint32, r *wire.Reader) error {
+	err := wire.NewReader(checked).Each(func(t uint32, r *wire.Reader) error {
 		switch t {
 		case 1:
 			tag = string(r.Bytes())
@@ -302,18 +298,6 @@ func exceptionsOf(checked []byte) ([]events.EventID, error) {
 	return withIDs(nil, ex), nil
 }
 
-// fields reads each field of message b with f, stopping at f's first
-// error or the reader's.
-func fields(b []byte, f func(tag uint32, r *wire.Reader) error) error {
-	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
-		if err := f(tag, r); err != nil {
-			return err
-		}
-	}
-	return r.Err()
-}
-
 // decoder reads stamps against the payload's table of attributions.
 type decoder struct{ table []events.Attribution }
 
@@ -322,7 +306,7 @@ func readState(b []byte) (Through, State, error) {
 	var s State
 	var dec decoder
 	var hasFrontier bool
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
@@ -369,7 +353,7 @@ func readState(b []byte) (Through, State, error) {
 func (dec decoder) stamp(b []byte) (Stamp, error) {
 	var s Stamp
 	var seen [5]bool
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
@@ -404,15 +388,14 @@ func (dec decoder) item(b []byte) (*item, error) {
 	var r item
 	r.life = Live{}
 	var id []byte
-	err := fields(b, func(tag uint32, rd *wire.Reader) error {
+	var creates [][]byte
+	err := wire.NewReader(b).Each(func(tag uint32, rd *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			id = rd.Bytes()
 		case 2:
-			var c creation
-			c, err = dec.creation(rd.Bytes())
-			r.creates = append(r.creates, c)
+			creates = append(creates, rd.Bytes())
 		case 3:
 			var st Stamp
 			st, err = dec.stamp(rd.Bytes())
@@ -432,49 +415,49 @@ func (dec decoder) item(b []byte) (*item, error) {
 	if r.id, err = events.ParseItemID(string(id)); err != nil {
 		return nil, err
 	}
+	for _, b := range creates {
+		c, err := dec.creation(r.id, b)
+		if err != nil {
+			return nil, err
+		}
+		r.creates = append(r.creates, c)
+	}
 	return &r, nil
 }
 
-func (dec decoder) creation(b []byte) (creation, error) {
+// creation reads a create of id: its stamp and its placement, from which
+// containerOf derives the container as the fold did.
+func (dec decoder) creation(id events.ItemID, b []byte) (creation, error) {
 	var c creation
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	var place events.Placement
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			c.stamp, err = dec.stamp(r.Bytes())
 		case 2:
-			c.in, err = readContainer(r.Bytes())
+			place, err = events.ReadPlacement(r.Bytes())
 		}
 		return err
 	})
-	if err == nil && c.in == nil {
-		err = errors.New("a creation has no container")
+	switch {
+	case err != nil:
+		return creation{}, err
+	case place == nil:
+		return creation{}, errors.New("a creation has no placement")
 	}
-	return c, err
-}
-
-func readContainer(b []byte) (Container, error) {
-	var c Container
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			l, err := events.ParseLevel(int(min(r.Uvarint(), 1<<8)))
-			c = Home{Holds: l}
-			return err
-		case 2:
-			id, err := events.ParseItemID(string(r.Bytes()))
-			c = Under{Parent: id}
-			return err
-		}
-		return nil
-	})
-	return c, err
+	in, ok := containerOf(id, place)
+	if !ok {
+		return creation{}, fmt.Errorf("a creation of %s is placed as %T, which its id does not admit", id, place)
+	}
+	c.in = in
+	return c, nil
 }
 
 func (dec decoder) element(b []byte) (*element, error) {
 	var el element
 	named := false
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
@@ -497,22 +480,27 @@ func (dec decoder) element(b []byte) (*element, error) {
 
 func (dec decoder) listing(b []byte) (listing, error) {
 	var l listing
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	named := false
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			l.stamp, err = dec.stamp(r.Bytes())
 		case 2:
 			l.in, err = events.ParseName(string(r.Bytes()))
+			named = true
 		}
 		return err
 	})
+	if err == nil && !named {
+		err = errors.New("an element's listing has no kind name")
+	}
 	return l, err
 }
 
 func (dec decoder) facts(b []byte) (Facts, error) {
 	var f Facts
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			reg, err := dec.register(r.Bytes())
@@ -530,11 +518,13 @@ func (dec decoder) facts(b []byte) (Facts, error) {
 
 func (dec decoder) register(b []byte) (register, error) {
 	var reg register
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	named := false
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			reg.name, err = events.ParseName(string(r.Bytes()))
+			named = true
 		case 2:
 			var c candidate
 			c, err = dec.candidate(r.Bytes())
@@ -546,12 +536,15 @@ func (dec decoder) register(b []byte) (register, error) {
 		}
 		return err
 	})
+	if err == nil && !named {
+		err = errors.New("a field has no field name")
+	}
 	return reg, err
 }
 
 func (dec decoder) candidate(b []byte) (candidate, error) {
 	var c candidate
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
@@ -569,11 +562,13 @@ func (dec decoder) candidate(b []byte) (candidate, error) {
 
 func (dec decoder) set(b []byte) (set, error) {
 	var s set
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	named := false
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			s.name, err = events.ParseName(string(r.Bytes()))
+			named = true
 		case 2:
 			var t tally
 			t, err = dec.tally(r.Bytes())
@@ -581,16 +576,21 @@ func (dec decoder) set(b []byte) (set, error) {
 		}
 		return err
 	})
+	if err == nil && !named {
+		err = errors.New("a set has no set name")
+	}
 	return s, err
 }
 
 func (dec decoder) tally(b []byte) (tally, error) {
 	var t tally
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	named := false
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			t.name, err = events.ParseName(string(r.Bytes()))
+			named = true
 		case 2:
 			var st Stamp
 			st, err = dec.stamp(r.Bytes())
@@ -602,13 +602,16 @@ func (dec decoder) tally(b []byte) (tally, error) {
 		}
 		return err
 	})
+	if err == nil && !named {
+		err = errors.New("a set's member has no member name")
+	}
 	return t, err
 }
 
 func readCarried(b []byte) (carriedAt, error) {
 	var c carriedAt
 	ordered := false
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
@@ -643,7 +646,7 @@ func readCarried(b []byte) (carriedAt, error) {
 
 func (dec decoder) unapplied(b []byte) (Unapplied, error) {
 	var u Unapplied
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
@@ -665,14 +668,14 @@ func (dec decoder) unapplied(b []byte) (Unapplied, error) {
 
 func readWhy(b []byte) (UnappliedWhy, error) {
 	var why UnappliedWhy
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case whyUnknownKind:
 			r.Bytes()
 			why = Unread{Why: events.UnknownKind{}}
 		case whyNewerSchema:
 			var n events.NewerSchema
-			err := fields(r.Bytes(), func(t uint32, r *wire.Reader) error {
+			err := wire.NewReader(r.Bytes()).Each(func(t uint32, r *wire.Reader) error {
 				switch t {
 				case 1:
 					n.Have = events.SchemaVersion(r.Uvarint())
@@ -702,7 +705,7 @@ func readWhy(b []byte) (UnappliedWhy, error) {
 func readMalformed(b []byte) (Malformed, error) {
 	var m Malformed
 	var hasRef, hasDigest bool
-	err := fields(b, func(tag uint32, r *wire.Reader) error {
+	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			m.Ref, hasRef = string(r.Bytes()), true

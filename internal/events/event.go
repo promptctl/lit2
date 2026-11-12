@@ -287,7 +287,7 @@ func readRecord(b []byte) (record, error) {
 	var rec record
 	var hasHeader, hasSig bool
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case recordHeader:
 			rec.header, hasHeader = bytes.Clone(r.Bytes()), true
@@ -296,8 +296,9 @@ func readRecord(b []byte) (record, error) {
 		case recordBody:
 			rec.body, rec.hasBody = bytes.Clone(r.Bytes()), true
 		}
-	}
-	switch err := r.Err(); {
+		return nil
+	})
+	switch {
 	case err != nil:
 		return record{}, fmt.Errorf("the record: %w", err)
 	case !hasHeader:
@@ -317,15 +318,16 @@ func readSignature(b []byte) (Signature, error) {
 	var s Signature
 	var hasSuite bool
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			s.Suite, hasSuite = SuiteID(r.Uvarint()), true
 		case 2:
 			s.Bytes = bytes.Clone(r.Bytes())
 		}
-	}
-	switch err := r.Err(); {
+		return nil
+	})
+	switch {
 	case err != nil:
 		return Signature{}, fmt.Errorf("the signature: %w", err)
 	case !hasSuite:
@@ -343,7 +345,7 @@ func bodyOf(k Kinds, h Header, rec record) Body {
 	var payload []byte
 	var hasSalt, hasPayload bool
 	r := wire.NewReader(rec.body)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			b := r.Bytes()
@@ -352,10 +354,11 @@ func bodyOf(k Kinds, h Header, rec record) Body {
 		case 2:
 			payload, hasPayload = bytes.Clone(r.Bytes()), true
 		}
-	}
+		return nil
+	})
 	// a body that does not parse, or whose hash is not the header's, is
 	// not the body the writer signed
-	if r.Err() != nil || !hasSalt || !hasPayload || payloadHash(salt, payload) != h.payload {
+	if err != nil || !hasSalt || !hasPayload || payloadHash(salt, payload) != h.payload {
 		return Uncommitted{}
 	}
 	return k.read(h.kind, h.schema, salt, payload)
@@ -453,7 +456,7 @@ func readHeader(b []byte) (Header, error) {
 	var seen [headerPayloadHash + 1]bool
 	r := wire.NewReader(b)
 	var err error
-	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+	err = r.Each(func(tag uint32, r *wire.Reader) error {
 		if tag <= headerPayloadHash {
 			seen[tag] = true
 		}
@@ -485,12 +488,10 @@ func readHeader(b []byte) (Header, error) {
 				err = errors.New("the payload hash is not 32 bytes")
 			}
 		}
-	}
-	switch {
-	case err != nil:
+		return err
+	})
+	if err != nil {
 		return Header{}, fmt.Errorf("the header: %w", err)
-	case r.Err() != nil:
-		return Header{}, fmt.Errorf("the header: %w", r.Err())
 	}
 	for i, name := range headerNames {
 		if !seen[i+1] {
@@ -515,15 +516,16 @@ func ReadAbout(b []byte) (About, error) {
 	var node, name []byte
 	var hasNode, hasName bool
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			node, hasNode = r.Bytes(), true
 		case 2:
 			name, hasName = r.Bytes(), true
 		}
-	}
-	if err := r.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("the subject: %w", err)
 	}
 	switch {
@@ -552,7 +554,7 @@ func ReadAttribution(b []byte) (Attribution, error) {
 	var hasCheckout, hasPrincipal bool
 	r := wire.NewReader(b)
 	var err error
-	for tag, ok := r.Next(); ok && err == nil; tag, ok = r.Next() {
+	err = r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			c := r.Bytes()
@@ -564,12 +566,11 @@ func ReadAttribution(b []byte) (Attribution, error) {
 		case 3:
 			a.Agent = AgentFrom(string(r.Bytes()))
 		}
-	}
+		return err
+	})
 	switch {
 	case err != nil:
-		return Attribution{}, err
-	case r.Err() != nil:
-		return Attribution{}, fmt.Errorf("the attribution: %w", r.Err())
+		return Attribution{}, fmt.Errorf("the attribution: %w", err)
 	case !hasCheckout:
 		return Attribution{}, errors.New("the attribution has no 16-byte checkout id")
 	case !hasPrincipal:
@@ -592,15 +593,16 @@ func ReadPrincipalID(b []byte) (PrincipalID, error) {
 	var p PrincipalID
 	var hasSuite bool
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			p.suite, hasSuite = SuiteID(r.Uvarint()), true
 		case 2:
 			p.key = string(r.Bytes())
 		}
-	}
-	switch err := r.Err(); {
+		return nil
+	})
+	switch {
 	case err != nil:
 		return PrincipalID{}, fmt.Errorf("the principal: %w", err)
 	case !hasSuite:
@@ -613,15 +615,16 @@ func readConfigRef(b []byte) (git.ObjectID, error) {
 	var format git.ObjectFormat
 	var sum []byte
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			format = git.ObjectFormat(r.Uvarint())
 		case 2:
 			sum = r.Bytes()
 		}
-	}
-	if err := r.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return git.ObjectID{}, fmt.Errorf("the config-ref: %w", err)
 	}
 	id, err := git.ObjectIDFrom(format, sum)

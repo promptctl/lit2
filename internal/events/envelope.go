@@ -155,30 +155,27 @@ func ReadEnvelope(b []byte) (Envelope, error) {
 	var e Envelope
 	forms, committed := 0, false
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case envelopePlain:
 			p, err := readPlain(r.Bytes())
-			if err != nil {
-				return Envelope{}, err
-			}
 			e.form, forms = p, forms+1
+			return err
 		case envelopeSealed:
 			s, err := readSealed(r.Bytes())
-			if err != nil {
-				return Envelope{}, err
-			}
 			e.form, forms = s, forms+1
+			return err
 		case envelopeCommitment:
 			c := r.Bytes()
 			if len(c) != len(e.commitment) {
-				return Envelope{}, fmt.Errorf("an envelope's commitment is %d bytes, not %d", len(c), len(e.commitment))
+				return fmt.Errorf("an envelope's commitment is %d bytes, not %d", len(c), len(e.commitment))
 			}
 			copy(e.commitment[:], c)
 			committed = true
 		}
-	}
-	if err := r.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return Envelope{}, fmt.Errorf("an envelope: %w", err)
 	}
 	e.unknown = r.Rest()
@@ -199,13 +196,14 @@ func ReadEnvelope(b []byte) (Envelope, error) {
 func readPlain(b []byte) (plain, error) {
 	var p plain
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		if tag == 1 {
 			p.text = bytes.Clone(r.Bytes())
 		}
-	}
+		return nil
+	})
 	p.unknown = r.Rest()
-	if err := r.Err(); err != nil {
+	if err != nil {
 		return plain{}, fmt.Errorf("a plaintext envelope: %w", err)
 	}
 	return p, nil
@@ -214,7 +212,7 @@ func readPlain(b []byte) (plain, error) {
 func readSealed(b []byte) (sealed, error) {
 	var s sealed
 	r := wire.NewReader(b)
-	for tag, ok := r.Next(); ok; tag, ok = r.Next() {
+	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			s.suite = SuiteID(r.Uvarint())
@@ -227,9 +225,10 @@ func readSealed(b []byte) (sealed, error) {
 		case 5:
 			s.ciphertext = bytes.Clone(r.Bytes())
 		}
-	}
+		return nil
+	})
 	s.unknown = r.Rest()
-	if err := r.Err(); err != nil {
+	if err != nil {
 		return sealed{}, fmt.Errorf("a sealed envelope: %w", err)
 	}
 	return s, nil

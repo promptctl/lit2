@@ -111,12 +111,7 @@ func (r *item) withFacts(f func(Facts) Facts) *item {
 // has none of that name.
 func (r *item) withElement(name events.Segment, f func(*element) *element) *item {
 	next := *r
-	i, found := slices.BinarySearchFunc(r.elements, name.String(), func(el *element, k string) int { return cmp.Compare(el.name.String(), k) })
-	if found {
-		next.elements = replacedAt(r.elements, i, f(r.elements[i]))
-	} else {
-		next.elements = inserted(r.elements, i, f(&element{name: name}))
-	}
+	next.elements = upsert(r.elements, &element{name: name}, f)
 	return &next
 }
 
@@ -168,28 +163,21 @@ type tally struct {
 // retires the writes it names in either form, so one write settles a
 // field whose kind changed.
 func (f Facts) write(st Stamp, field events.Name, v events.Value, over []events.EventID) Facts {
-	i, found := slices.BinarySearchFunc(f.fields, field.String(), byName[register])
-	r := register{name: field}
-	if found {
-		r = f.fields[i]
-	}
-	retired := withIDs(r.retired, over)
-	live := make([]candidate, 0, len(r.live)+1)
-	for _, c := range r.live {
-		if !hasID(retired, c.stamp.Event) {
-			live = append(live, c)
-		}
-	}
-	if !hasID(retired, st.Event) {
-		live = byOrder(live, candidate{stamp: st, value: v}, func(c candidate) events.OrderKey { return c.stamp.Order })
-	}
-	r.live, r.retired = live, retired
 	next := f
-	if found {
-		next.fields = replacedAt(f.fields, i, r)
-	} else {
-		next.fields = inserted(f.fields, i, r)
-	}
+	next.fields = upsert(f.fields, register{name: field}, func(r register) register {
+		retired := withIDs(r.retired, over)
+		live := make([]candidate, 0, len(r.live)+1)
+		for _, c := range r.live {
+			if !hasID(retired, c.stamp.Event) {
+				live = append(live, c)
+			}
+		}
+		if !hasID(retired, st.Event) {
+			live = byOrder(live, candidate{stamp: st, value: v}, func(c candidate) events.OrderKey { return c.stamp.Order })
+		}
+		r.live, r.retired = live, retired
+		return r
+	})
 	return next
 }
 
@@ -214,27 +202,11 @@ func (f Facts) remove(s, member events.Name, observed []events.EventID) Facts {
 
 // tally is f with member's tally in set changed by change.
 func (f Facts) tally(s, member events.Name, change func(tally) tally) Facts {
-	i, found := slices.BinarySearchFunc(f.sets, s.String(), byName[set])
-	st := set{name: s}
-	if found {
-		st = f.sets[i]
-	}
-	j, had := slices.BinarySearchFunc(st.members, member.String(), byName[tally])
-	t := tally{name: member}
-	if had {
-		t = st.members[j]
-	}
-	if had {
-		st.members = replacedAt(st.members, j, change(t))
-	} else {
-		st.members = inserted(st.members, j, change(t))
-	}
 	next := f
-	if found {
-		next.sets = replacedAt(f.sets, i, st)
-	} else {
-		next.sets = inserted(f.sets, i, st)
-	}
+	next.sets = upsert(f.sets, set{name: s}, func(st set) set {
+		st.members = upsert(st.members, tally{name: member}, change)
+		return st
+	})
 	return next
 }
 
@@ -354,9 +326,10 @@ func (f Facts) advisories(at Target) []Advisory {
 // named is a record kept in a slice sorted by its name.
 type named interface{ key() string }
 
-func (r register) key() string { return r.name.String() }
-func (s set) key() string      { return s.name.String() }
-func (t tally) key() string    { return t.name.String() }
+func (r register) key() string  { return r.name.String() }
+func (s set) key() string       { return s.name.String() }
+func (t tally) key() string     { return t.name.String() }
+func (el *element) key() string { return el.name.String() }
 
 func byName[T named](t T, k string) int { return cmp.Compare(t.key(), k) }
 
@@ -415,10 +388,15 @@ func inserted[T any](s []T, i int, v T) []T {
 	return out
 }
 
-// replacedAt is s with v at i, in a new slice.
-func replacedAt[T any](s []T, i int, v T) []T {
-	out := make([]T, len(s))
-	copy(out, s)
-	out[i] = v
+// upsert is s, sorted by key, with the entry of fresh's key changed by f,
+// fresh standing in when s has none; in a new slice, since s may be shared
+// by an older state.
+func upsert[T named](s []T, fresh T, f func(T) T) []T {
+	i, found := slices.BinarySearchFunc(s, fresh.key(), byName[T])
+	if !found {
+		return inserted(s, i, f(fresh))
+	}
+	out := slices.Clone(s)
+	out[i] = f(s[i])
 	return out
 }

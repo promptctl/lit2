@@ -73,9 +73,9 @@ func TestTheCopiesOfOneEventFoldAlikeInEitherArrivalOrder(t *testing.T) {
 		w.append(a.ref(), must(store.NewBatch(copies[c.first])))
 		w.append(b.ref(), must(store.NewBatch(copies[c.second])))
 		scans := w.scans()
-		one := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, scans)
+		one := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, scans)
 		slices.Reverse(scans)
-		other := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, scans)
+		other := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, scans)
 		if !one.State.Equal(other.State) {
 			t.Errorf("%s then %s folds otherwise than the reverse", c.first, c.second)
 		}
@@ -124,7 +124,7 @@ func TestAnExtendThatReadsNothingKeepsTheSnapshot(t *testing.T) {
 	if empty := fold.Extend(env, snap, wrote(t, first).Marks, []fold.Scanned{w.span(a.ref(), 1, 1)}); !isWritten(empty.Save) {
 		t.Errorf("an extend over an empty range saves %#v; want a snapshot written", empty.Save)
 	}
-	if again := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, nil); !isWritten(again.Save) {
+	if again := fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, nil); !isWritten(again.Save) {
 		t.Errorf("a genesis of nothing saves %#v; want a snapshot written", again.Save)
 	}
 }
@@ -168,8 +168,8 @@ func TestTheIntegrityRecordGrowsLinearly(t *testing.T) {
 	// its unknown kinds unapplied; B's suite is unknown, so its are carried
 	at := w.span(a.ref(), 0, w.head(a.ref())).Range.Stream
 	file := store.Saved{Tag: fold.Tag(), Marks: []store.Mark{{Ref: at.Ref, Upto: at.Until}},
-		Payload: wrote(t, fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, nil)).Payload}
-	got := fold.Genesis(env, fold.Missed{Miss: store.TagChanged{}}, file.Marks, file, w.scans())
+		Payload: wrote(t, fold.Genesis(env, store.Absent{}, nil, store.NoSnapshot{}, nil)).Payload}
+	got := fold.Genesis(env, store.TagChanged{}, file.Marks, file, w.scans())
 	in := got.State.Integrity()
 	if len(in.Unapplied) != n || len(in.Carried) != n || len(in.Malformed) != n {
 		t.Fatalf("the fold holds %d unapplied, %d carried, %d malformed; want %d each", len(in.Unapplied), len(in.Carried), len(in.Malformed), n)

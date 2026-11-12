@@ -82,13 +82,7 @@ func base(b fold.BaseFact) (name, ref, why string) {
 	case fold.Extended:
 		return "extended", "", ""
 	case fold.Refolded:
-		switch w := b.Why.(type) {
-		case fold.Missed:
-			return genesis(w.Miss)
-		case fold.PayloadUnreadable:
-			return "genesis:payload_unreadable", "", w.Err.Error()
-		}
-		panic(fmt.Sprintf("command: %T is not a Refold", b.Why))
+		return genesis(b.Why)
 	}
 	panic(fmt.Sprintf("command: %T is not a BaseFact", b))
 }
