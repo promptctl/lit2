@@ -75,9 +75,9 @@ row; the architecture test fails on one without.
 | §3.18 Capability | `verbs`, `fold` | the capability verdict at the one enforcer; roles from the folded policy |
 | §3.19 Tier and envelope | `events`, `verbs` | the envelope and suite in events; prose sealed in verbs, so no layer below sees it |
 | §3.20 Verification | `fold`, `store` | one fold rule via the suite in events; run by store at receive |
-| §5.1 Open | `store` | ref heads, every open log under the common dir |
+| §5.1 Open | `store` | ref heads, every open log under the common dir and the snapshot read |
 | §5.2 Parse | `config` | the workspace file into the schema value |
-| §5.3 Fold | `fold` | every event, verified |
+| §5.3 Fold | `fold` | events newer than the snapshot, verified |
 | §5.4 Address | `address` | paths into typed addresses; selectors and globs expanded once |
 | §5.5 Evaluate | `verbs`, `tick` | the description of a write; the answer of a get |
 | §5.6 Perform | `verbs`, `store` | the intents signed in verbs' perform step; appended to the log by store |
@@ -88,9 +88,11 @@ row; the architecture test fails on one without.
 | exit classes and statuses | `reason`, `cli` | the four classes in reason; each layer's failure names its own reasons; statuses in cli |
 | checkout discovery | `git` | the work tree, private git dir and common dir |
 | the one enforcer and the in-use check | `verbs` | requirements and capabilities judged once, at the write |
+| the snapshot | `store`, `fold` | its bytes in store; its content and key in fold |
 | `/next`, `/lanes`, `/integrity`, `/me` | `fold`, `tick`, `address`, `cli` | computed by fold and tick, named by address, rendered by cli |
 | the managed block in AGENTS.md | `guidance`, `root` | its text in guidance; written by init in root |
 | liveness of a worktree | `git`, `tick` | read by git; decided by tick |
+| budgets | `fold`, `store` | benchmarks beside the code they measure |
 | field kinds, value parsers, built-in fields, the atom | `field` | the field language config and address both read |
 | scenarios.md as the acceptance contract | `scenarios` | each scenario walked over root's twin |
 

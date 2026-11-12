@@ -180,7 +180,8 @@ without being briefed, and never silently duplicate.
 
 1. Both run `get /next` within a second. Both read the same store under the
    common dir; neither holds a lane; both are served `s4l`.
-2. A runs `set s4l/status plan`; the commit lands on A's ref.
+2. A runs `set s4l/status plan`; the commit lands on A's ref; A's snapshot is
+   rewritten by atomic rename.
 3. B runs `set s4l/status plan` a moment later. B's open reads the ref heads,
    sees A's new head, folds A's event, and finds the lane held by A. Refused:
    `s4l is the head of m2q/lanes/history, held by <A> · 2s`. Nothing written.
@@ -191,6 +192,8 @@ without being briefed, and never silently duplicate.
    last and `contested` names the other. Both agents' next command prints the
    advisory from `/integrity`, and the one named in `contested` runs
    `rm m2q/lanes/history/claim` or keeps working, which is a human's call.
+5. Both snapshots raced on the cache file. The loser's rename is discarded;
+   the next open refolds a handful of events.
 
 **Relies on.** The common case is a refusal with a name; the rare case is a
 visible contest, never a lost write and never a lock.
@@ -409,15 +412,20 @@ store that newer clients have written to.
 ## 13. Scale
 
 **Need.** A store ten times the largest in the fleet answers every command
-without wasted work.
+inside the budgets.
 
 **Walk.** 10,000 items, 200,000 events, 400 lanes. `get '*/title'` is one
 walk of folded state. `/next` is a walk of the lane order, linear in lanes.
 Tick evaluates each rule's selector over every ticket on every read, linear in
-tickets times rules. Every read replays all 200,000 events and checks every
-signature, so the codec and the fold's data structures make that one pass.
+tickets times rules. A warm read is a snapshot load plus a delta fold. A cold
+refold applies 200,000 events in under a second, which sets the bar for the
+codec and for the fold's data structures, and is measured in the harness
+before anything else is built on them. The snapshot holds the folded lane
+order, so a new `rank.place` applies to a known order and nothing replays
+from genesis.
 
-**Relies on.** A replay with no quadratic step.
+**Relies on.** The budgets in event-store/budgets.md, checked in the harness
+from step 2 of the build order.
 
 **Strain S-10.** A `rank.place {above: y}` arriving after lane `y` was
 dissolved or purged. The fold needs one rule: an intent whose anchor no
@@ -490,6 +498,22 @@ write is unaffected; `held`, computed by any reader, reports that
 requirement as `unknown (tier internal)` rather than met or unmet. A new
 value in the verdict's result type, not a branch. Adopted as a constraint in
 architecture §8.
+
+## 16. A fold-version bump across the fleet
+
+**Need.** A release that changes a fold rule reaches fifty stores on one
+machine without a slow morning.
+
+**Walk.** The snapshot key includes the fold version, so every store's
+snapshot misses once. The first command in each store refolds from genesis,
+inside the one-second cold budget, and rewrites the snapshot. Nothing runs at
+install time; the cost is paid per store, on first use, once. Machines that
+never touch a store never pay.
+
+**Relies on.** The disposable cache: deleting every snapshot on the machine
+costs one refold per store and nothing else.
+
+**Strain.** None.
 
 ## What the scenarios did not reach
 

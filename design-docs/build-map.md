@@ -103,7 +103,8 @@ ever, because each of those makes the things around it expensive to replace.
   checks
 
 **tend**
-- ▶ rewrites as events (purge, squash, sweep, destroy); unknown and unverified events carried and
+- ▶ rewrites as events (purge, squash, sweep, destroy); the snapshot keyed
+  by `(fold-version, heads)`; unknown and unverified events carried and
   counted; `min-reader-version` in the workspace file; `/integrity` as a path
 - a `gc` that edits history in place; configuration read from the code's
   own repository
@@ -127,9 +128,11 @@ above, and the slice it needs.
 | 10 purge while others write | rewrites; the receiver's rule | 7 |
 | 11 dead worktree holding a lane | claim expiry in tick; `rm <lane>/claim` | 4 |
 | 12 old binary meets newer events | unknown events preserved; `min-reader-version` | 1 (codec), 7 |
-| 13 scale | the depth corpus | 1, 7 |
+| 13 scale | snapshot; budgets harness; the depth corpus | 1, 7 |
 | 14 a human at the terminal | rendering; the field table as help | 1 |
 | 15 access control | admit at marked depth; verification in share; capabilities in work's enforcer; tiers in look and file | 1, 2 |
+| 16 fold-version bump | snapshot keyed by fold-version | 1, 7 |
+
 ## Slices
 
 Each slice is the whole backbone, thinner at the top and thicker toward
@@ -195,7 +198,8 @@ advisories; re-publishing over a vandalized remote; `/integrity`.
 Scenario 6.
 
 **Slice 7, tending.** Rewrites and the receiver's rule; `gc`; unknown
-events and `min-reader-version`; the depth corpus. Scenarios 10, 12, 13.
+events and `min-reader-version`; the fold-version bump; the budgets harness
+and the depth corpus. Scenarios 10, 12, 13, 16.
 
 **Slice 8, the surface in full.** Selectors with every atom and
 `parent/`; globs; list diffs on `set`; `--json` keyed by path. Scenario 9.

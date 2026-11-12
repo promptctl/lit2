@@ -163,10 +163,13 @@ The owner's framing: reading the board calls `tick`. It is not a command anyone
 runs, and its output is never saved. The owner asked what there would be to
 save, and the answer is nothing. Position is a function of the facts, the
 configuration and the clock, so a saved copy is a second source for something
-already computable.
+already computable. A cache is allowed for speed and is never the source of
+truth. The fold's cache is invalidated when facts change; a cache of tick's
+output also takes `now`, so it expires at the next moment a time-based rule
+would give a different answer.
 
 ```
-state = fold(events)               // deterministic, same bytes everywhere
+state = fold(events)               // deterministic, cacheable, same bytes everywhere
 board = tick(state, config, now)   // rules evaluated at read time, clock passed in
 ```
 
@@ -209,8 +212,9 @@ rules read, and how far it can overrule them is decision 2. Every condition must
 something lit can see, so "PR merged" counts only once something records it as
 an event. Entry rules need history: whether a ticket is still at doing's door
 or already in doing depends on whether its entry rules passed since the drag,
-which means replaying tick over past moments. That is deterministic, and a
-read pays it for every ticket shown and every ticket their rules read. With positions computed, "why is this
+which means replaying tick over past moments. That is deterministic, but a
+read pays it for every ticket shown and every ticket their rules read, so the
+cache the previous section allows is what makes it affordable. With positions computed, "why is this
 ticket in backlog?" becomes the common question, so a `lit why <id>` that
 prints each rule that placed the ticket and the facts it read is worth
 building alongside.
