@@ -297,7 +297,7 @@ and access control.
 - **Buys:** no shared mutable state anywhere but the event log; no lock
   anywhere; a torn or stale cache costs one refold.
 - **Costs:** the refold must meet the budget (E1) from a cold start, which
-  drives the codec and snapshot design from day one; two worktrees racing on
+  drives the codec and snapshot design; two worktrees racing on
   the cache waste a fold.
 
 ### D3. Dead checkouts' refs are swept: a live checkout appends a sweep event with the dead head as a second parent, then deletes the dead ref locally and remotely by compare-and-swap.
@@ -333,8 +333,9 @@ and access control.
   genesis under 1 s, staleness check under 20 ms, background work bounded
   per occasion and machine-wide.
 - **Buys:** a tool an agent can call in a loop; the design decisions that
-  follow (snapshot from day one, codec chosen by measurement, no inline
-  fetch) are forced rather than argued.
+  follow (the snapshot, codec chosen by measurement, no inline fetch) are
+  forced rather than argued. The application is built first, every read a
+  replay; the snapshot and the gates come after it, measured against it.
 - **Costs:** a harness and a corpus that do not yet exist and must be built
   before the first release can be gated; the in-process library (B5) must
   meet the walk budgets, which is unmeasured.

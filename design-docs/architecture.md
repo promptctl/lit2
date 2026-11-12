@@ -646,7 +646,7 @@ walking skeleton.
    (ticket lit-bootstrap-1f9.438)
 2. **Events, principal and fold, first facts.** Items, fields, comments,
    labels; ids; the principal minted at init and every event signed; the
-   local log and the snapshot; `add /children`, `get`, `set`, `add`, `rm`;
+   local log; every read a replay; `add /children`, `get`, `set`, `add`, `rm`;
    `lit2 admin init`.
 3. **Policy.** Enrollment at init; the policy document as events; roles
    and capabilities as path globs in the default profile; the enforcer's
@@ -667,8 +667,9 @@ walking skeleton.
 8. **Sync.** Sealing the log into segments, the writer's commit and ref,
    the background process, verification at receive and re-publishing over
    a vandalized remote, inbox refs, staleness, `/integrity`.
-9. **Rewrites.** Purge, squash, sweep, the receiver's rule; the budgets
-   harness and the depth corpus.
+9. **Rewrites and speed.** Purge, squash, sweep, the receiver's rule; the
+   budgets harness and the depth corpus; the snapshot, built once the
+   harness measures the replay it replaces.
 10. **Selectors in full, `--json`.**
 
 ## Appendix: where this departs from a source document
