@@ -11,7 +11,10 @@ import (
 
 // Tag is the fold's version, which keys the snapshot: raised with any
 // change to a rule, a shape or the snapshot's codec, so no snapshot an
-// older fold wrote is resumed.
+// older fold wrote is resumed. Verification is a fold rule (§3.20), so a
+// binary that adds a signature suite raises it too, and its genesis judges
+// again every event an older binary carried as UnknownSuite: an exception
+// is always checked again.
 func Tag() store.FoldTag { return store.FoldTag("lit2 fold 1") }
 
 // Env is what every fold runs with, built once at the root: the registry,
@@ -36,12 +39,26 @@ type Folded struct {
 	Facts FoldFacts
 }
 
-// Save is what the root hands to store.Swap under Tag: how far the fold
-// consumed each stream, and the payload.
-type Save struct {
+// Save is what the root does with the snapshot after a fold: keep the one
+// it resumed from, which is current, or write the next.
+//
+//sumtype:decl
+type Save interface{ save() }
+
+// Current is a snapshot extended by nothing: the store planned no range,
+// so the snapshot resumed from is the snapshot, and rewriting it would
+// write the same state again.
+type Current struct{}
+
+// Written is the next snapshot: the marks for the store to save, and the
+// fold's payload.
+type Written struct {
 	Marks   []store.Mark
 	Payload []byte
 }
+
+func (Current) save() {}
+func (Written) save() {}
 
 // Trust is the verdicts a snapshot carries: below each mark, under the
 // same log, every event was folded and so checked, and Valid unless it is
@@ -126,8 +143,7 @@ func walk(e Env, s State, through Through, marks []store.Mark, exceptions []even
 					case !dup:
 						seen[d.ID()] = len(located)
 						located = append(located, l)
-					case readable(d) && !readable(located[i].Event):
-						// the header commits to the body, so the readable copy is the event
+					case rank(d.Body()) > rank(located[i].Event.Body()):
 						facts.Duplicates++
 						located[i] = l
 					default:
@@ -150,26 +166,58 @@ func walk(e Env, s State, through Through, marks []store.Mark, exceptions []even
 	}
 	checked, trusted := check(e, located, t)
 	facts.Checked, facts.Trusted = len(checked)-trusted, trusted
+	var excepted []events.EventID
 	for _, c := range checked {
 		facts.Verdicts.count(c.verdict)
 		if c.verdict != events.Valid {
-			exceptions = withIDs(exceptions, []events.EventID{c.event.ID()})
+			excepted = append(excepted, c.event.ID())
 		}
 		var out outcome
 		s, out = e.Registry.step(s, c)
 		facts.count(out)
 	}
+	exceptions = withIDs(exceptions, excepted)
 	if n := len(checked); n > 0 {
 		through = later(through, checked[n-1].event.Order())
 	}
 	snap := Snapshot{Exceptions: exceptions, Through: through, State: s}
 	facts.Exceptions, facts.Counts = len(exceptions), countsOf(s)
-	return Folded{State: s, Save: Save{Marks: advanced(marks, scans), Payload: snap.encode()}, Facts: facts}
+	return Folded{State: s, Save: saved(base, marks, scans, snap), Facts: facts}
 }
 
-func readable(e events.Event) bool {
-	_, ok := e.Body().(events.Readable)
-	return ok
+// saved is the save after a walk from base over scans: an extension handed
+// nothing to read leaves the snapshot current, and every other walk writes
+// one.
+func saved(base BaseFact, marks []store.Mark, scans []Scanned, snap Snapshot) Save {
+	switch base.(type) {
+	case Extended:
+		if len(scans) == 0 {
+			return Current{}
+		}
+	case Refolded:
+	}
+	return Written{Marks: advanced(marks, scans), Payload: snap.encode()}
+}
+
+// rank orders the bodies the copies of one event can carry, by how much of
+// the signed payload each keeps: the payload read; the payload committed
+// but unread by this binary; a body that is not the one signed; none. The
+// walk keeps the highest, so which copy stands does not depend on which
+// stream arrived first. Two copies of one rank stand alike: a committed
+// payload is the one the header hashes, and the other two carry nothing
+// the state records.
+func rank(b events.Body) int {
+	switch b.(type) {
+	case events.Readable:
+		return 3
+	case events.Unread:
+		return 2
+	case events.Uncommitted:
+		return 1
+	case events.Erased:
+		return 0
+	}
+	panic(fmt.Sprintf("fold: %T is not a Body", b))
 }
 
 func later(t Through, k events.OrderKey) Through {
@@ -358,7 +406,7 @@ func UnreadName(w events.UnreadWhy) string {
 // countsOf is s's size and contradictions.
 func countsOf(s State) StateCounts {
 	var c StateCounts
-	for _, r := range s.records() {
+	s.items.each(func(r *item) {
 		c.origin(r.origin())
 		if _, ok := r.life.(Tombstoned); ok {
 			c.Tombstoned++
@@ -373,7 +421,7 @@ func countsOf(s State) StateCounts {
 			c.collided(o)
 			c.facts(el.facts)
 		}
-	}
+	})
 	return c
 }
 

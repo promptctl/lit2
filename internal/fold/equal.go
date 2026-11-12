@@ -72,12 +72,12 @@ func valueEqual(a, b events.Value) bool {
 }
 
 func (in integrity) equal(o integrity) bool {
-	return slices.EqualFunc(in.carried, o.carried, func(a, b carriedAt) bool {
+	return slices.EqualFunc(in.carriedList(), o.carriedList(), func(a, b carriedAt) bool {
 		return a.order == b.order && a.carried.Event == b.carried.Event && a.carried.Writer == b.carried.Writer &&
 			a.carried.Principal == b.carried.Principal && a.carried.RecordedAt.Equal(b.carried.RecordedAt) && a.carried.Reason == b.carried.Reason
-	}) && slices.EqualFunc(in.unapplied, o.unapplied, func(a, b Unapplied) bool {
+	}) && slices.EqualFunc(in.unappliedList(), o.unappliedList(), func(a, b Unapplied) bool {
 		return a.Stamp.equal(b.Stamp) && a.Kind == b.Kind && a.About == b.About && whyEqual(a.Why, b.Why)
-	}) && slices.Equal(in.malformed, o.malformed)
+	}) && slices.Equal(in.malformedList(), o.malformedList())
 }
 
 func whyEqual(a, b UnappliedWhy) bool {

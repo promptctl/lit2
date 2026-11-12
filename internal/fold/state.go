@@ -14,17 +14,52 @@ import (
 // integrity record. It is immutable; Step returns the next one, and the
 // zero State is the fold of nothing.
 type State struct {
-	items     table
+	items     table[events.ItemID, *item, byItem]
 	frontier  events.Frontier
 	integrity integrity
 }
 
-// integrity is what the fold carried, left unapplied, or could not read,
-// each list in its order.
+// integrity is what the fold carried, left unapplied, or could not read:
+// each a table keyed by its event, or by where a malformed record was
+// read, and read in its order by the lists below.
 type integrity struct {
-	carried   []carriedAt // by total order
-	unapplied []Unapplied // by total order
-	malformed []Malformed // by ref, offset and digest
+	carried   table[events.EventID, carriedAt, byEvent]
+	unapplied table[events.EventID, Unapplied, byEvent]
+	malformed table[recordAt, Malformed, byRecord]
+}
+
+// recordAt is where a malformed record was read, and what it held.
+type recordAt struct {
+	ref    string
+	at     store.Offset
+	digest [32]byte
+}
+
+func (c carriedAt) key() events.EventID { return c.carried.Event }
+func (u Unapplied) key() events.EventID { return u.Stamp.Event }
+func (m Malformed) key() recordAt       { return recordAt{ref: m.Ref, at: m.At, digest: m.Digest} }
+
+// carriedList is the carried events by total order.
+func (in integrity) carriedList() []carriedAt {
+	return in.carried.sorted(func(a, b carriedAt) int { return events.Compare(a.order, b.order) })
+}
+
+// unappliedList is the unapplied events by total order.
+func (in integrity) unappliedList() []Unapplied {
+	return in.unapplied.sorted(func(a, b Unapplied) int { return events.Compare(a.Stamp.Order, b.Stamp.Order) })
+}
+
+// malformedList is the malformed records by ref, offset and digest.
+func (in integrity) malformedList() []Malformed { return in.malformed.sorted(compareMalformed) }
+
+func compareMalformed(a, b Malformed) int {
+	if c := cmp.Compare(a.Ref, b.Ref); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.At, b.At); c != 0 {
+		return c
+	}
+	return slices.Compare(a.Digest[:], b.Digest[:])
 }
 
 // carriedAt is a carried event and its place in the total order.
@@ -110,6 +145,9 @@ type LevelOf interface{ levelOf() }
 type Leveled struct{ Level events.Level }
 
 // Orphaned is an item whose chain reaches Missing, an id nobody created.
+// Missing may be the item itself: a Found item whose Origin is Uncreated,
+// which facts name but nothing created, reads Level Orphaned{Missing: its
+// own id}.
 type Orphaned struct{ Missing events.ItemID }
 
 // UnderLeaf is an item whose chain reaches a child of Leaf, a level-1 item,
@@ -250,7 +288,7 @@ type Reason interface{ reason() }
 type BadSignature struct{}
 
 // UnknownSuite is a signature of a suite this binary does not have; a
-// newer binary may verify it.
+// newer binary that has it verifies it at its genesis, under its own Tag.
 type UnknownSuite struct{}
 
 func (BadSignature) reason() {}
@@ -293,8 +331,8 @@ type Malformed struct {
 
 // Item is what the state holds of id.
 func (s State) Item(id events.ItemID) Lookup {
-	r := s.items.get(id)
-	if r == nil {
+	r, ok := s.items.get(id)
+	if !ok {
 		return NotFound{}
 	}
 	return Found{Item: s.itemOf(r)}
@@ -314,11 +352,11 @@ func (s State) Items() []Item {
 // Children is the items created in c, in creation order.
 func (s State) Children(c Container) []events.ItemID {
 	var in []*item
-	for _, r := range s.records() {
+	s.items.each(func(r *item) {
 		if len(r.creates) > 0 && r.creates[0].in == c {
 			in = append(in, r)
 		}
-	}
+	})
 	slices.SortFunc(in, func(a, b *item) int { return events.Compare(a.creates[0].stamp.Order, b.creates[0].stamp.Order) })
 	ids := make([]events.ItemID, len(in))
 	for i, r := range in {
@@ -341,15 +379,13 @@ func (s State) Names() events.Names {
 		case events.Root:
 		}
 	}
-	for _, r := range s.records() {
+	s.items.each(func(r *item) {
 		add(events.Item{ID: r.id})
 		for _, el := range r.elements {
 			add(events.Element{Of: r.id, Name: el.name})
 		}
-	}
-	for _, u := range s.integrity.unapplied {
-		add(u.About)
-	}
+	})
+	s.integrity.unapplied.each(func(u Unapplied) { add(u.About) })
 	return b.Names()
 }
 
@@ -358,9 +394,9 @@ func (s State) Frontier() events.Frontier { return s.frontier }
 
 // Integrity is the state's integrity record.
 func (s State) Integrity() Integrity {
-	in := Integrity{Carried: make([]Carried, len(s.integrity.carried)), Unapplied: slices.Clone(s.integrity.unapplied), Malformed: slices.Clone(s.integrity.malformed)}
-	for i, c := range s.integrity.carried {
-		in.Carried[i] = c.carried
+	in := Integrity{Unapplied: s.integrity.unappliedList(), Malformed: s.integrity.malformedList()}
+	for _, c := range s.integrity.carriedList() {
+		in.Carried = append(in.Carried, c.carried)
 	}
 	return in
 }
@@ -404,7 +440,8 @@ func (s State) Advisories() []Advisory {
 	return out
 }
 
-// records is every item record, by id.
+// records is every item record, by id: for the readers whose result is in
+// that order; the rest read the table with each.
 func (s State) records() []*item {
 	var rs []*item
 	s.items.each(func(r *item) { rs = append(rs, r) })
@@ -429,8 +466,8 @@ func (s State) itemOf(r *item) Item {
 // levelOf is id's level, from its parent chain: an id with no create is
 // the chain's missing link.
 func (s State) levelOf(id events.ItemID) LevelOf {
-	r := s.items.get(id)
-	if r == nil || len(r.creates) == 0 {
+	r, ok := s.items.get(id)
+	if !ok || len(r.creates) == 0 {
 		return Orphaned{Missing: id}
 	}
 	switch c := r.creates[0].in.(type) {

@@ -1,7 +1,6 @@
 package fold
 
 import (
-	"cmp"
 	"fmt"
 	"slices"
 	"sync"
@@ -230,8 +229,8 @@ func (s State) facts(at Target, f func(Facts) Facts) State {
 // update is s with id's record changed by f; an id with no record yet is
 // one with no facts, uncreated.
 func (s State) update(id events.ItemID, f func(*item) *item) State {
-	r := s.items.get(id)
-	if r == nil {
+	r, ok := s.items.get(id)
+	if !ok {
 		r = newItem(id)
 	}
 	s.items = s.items.set(f(r))
@@ -241,29 +240,16 @@ func (s State) update(id events.ItemID, f func(*item) *item) State {
 func (s State) carry(e events.Event, why Reason) State {
 	h := e.Header()
 	c := carriedAt{order: e.Order(), carried: Carried{Event: e.ID(), Writer: h.Attribution().Checkout, Principal: h.Attribution().Principal, RecordedAt: h.RecordedAt(), Reason: why}}
-	s.integrity.carried = byOrder(s.integrity.carried, c, func(c carriedAt) events.OrderKey { return c.order })
+	s.integrity.carried = s.integrity.carried.set(c)
 	return s
 }
 
 func (s State) leave(u Unapplied) State {
-	s.integrity.unapplied = byOrder(s.integrity.unapplied, u, func(u Unapplied) events.OrderKey { return u.Stamp.Order })
+	s.integrity.unapplied = s.integrity.unapplied.set(u)
 	return s
 }
 
 func (s State) malformed(m Malformed) State {
-	i, found := slices.BinarySearchFunc(s.integrity.malformed, m, compareMalformed)
-	if !found {
-		s.integrity.malformed = inserted(s.integrity.malformed, i, m)
-	}
+	s.integrity.malformed = s.integrity.malformed.set(m)
 	return s
-}
-
-func compareMalformed(a, b Malformed) int {
-	if c := cmp.Compare(a.Ref, b.Ref); c != 0 {
-		return c
-	}
-	if c := cmp.Compare(a.At, b.At); c != 0 {
-		return c
-	}
-	return slices.Compare(a.Digest[:], b.Digest[:])
 }

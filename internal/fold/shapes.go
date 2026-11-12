@@ -49,32 +49,35 @@ type listing struct {
 
 func newItem(id events.ItemID) *item { return &item{id: id, life: Live{}} }
 
+func (r *item) key() events.ItemID { return r.id }
+
 func (r *item) origin() Origin {
-	if len(r.creates) == 0 {
-		return Uncreated{}
-	}
-	first := Created{Stamp: r.creates[0].stamp, In: r.creates[0].in}
-	if len(r.creates) == 1 {
-		return first
-	}
-	others := make([]Stamp, len(r.creates)-1)
-	for i, c := range r.creates[1:] {
-		others[i] = c.stamp
-	}
-	return Collided{First: first, Others: others}
+	return origin(r.creates, func(c creation) Container { return c.in })
 }
 
 func (el *element) origin(of events.ItemID) Origin {
-	if len(el.creates) == 0 {
+	return origin(el.creates, func(listing) Container { return Under{Parent: of} })
+}
+
+// made is a create of a node: its stamp.
+type made interface{ made() Stamp }
+
+func (c creation) made() Stamp { return c.stamp }
+func (l listing) made() Stamp  { return l.stamp }
+
+// origin is the origin of a node made by creates, in total order: the
+// first places it, in the container in names.
+func origin[C made](creates []C, in func(C) Container) Origin {
+	if len(creates) == 0 {
 		return Uncreated{}
 	}
-	first := Created{Stamp: el.creates[0].stamp, In: Under{Parent: of}}
-	if len(el.creates) == 1 {
+	first := Created{Stamp: creates[0].made(), In: in(creates[0])}
+	if len(creates) == 1 {
 		return first
 	}
-	others := make([]Stamp, len(el.creates)-1)
-	for i, c := range el.creates[1:] {
-		others[i] = c.stamp
+	others := make([]Stamp, len(creates)-1)
+	for i, c := range creates[1:] {
+		others[i] = c.made()
 	}
 	return Collided{First: first, Others: others}
 }
@@ -372,14 +375,32 @@ func hasID(s []events.EventID, id events.EventID) bool {
 	return found
 }
 
-// withIDs is the sorted union of s and ids.
+// withIDs is the sorted union of s and ids, in a new slice when ids adds
+// any: one merge of s with the sorted ids, linear in s, so a caller holding
+// many ids hands them all at once.
 func withIDs(s, ids []events.EventID) []events.EventID {
-	for _, id := range ids {
-		if i, found := slices.BinarySearchFunc(s, id, compareID); !found {
-			s = inserted(s, i, id)
+	if len(ids) == 0 {
+		return s
+	}
+	add := slices.Clone(ids)
+	slices.SortFunc(add, compareID)
+	add = slices.Compact(add)
+	out := make([]events.EventID, 0, len(s)+len(add))
+	i, j := 0, 0
+	for i < len(s) && j < len(add) {
+		switch c := compareID(s[i], add[j]); {
+		case c < 0:
+			out = append(out, s[i])
+			i++
+		case c > 0:
+			out = append(out, add[j])
+			j++
+		default:
+			out = append(out, s[i])
+			i, j = i+1, j+1
 		}
 	}
-	return s
+	return append(append(out, s[i:]...), add[j:]...)
 }
 
 // inserted is s with v at i, in a new slice, since s may be shared by an

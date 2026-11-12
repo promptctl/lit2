@@ -35,7 +35,10 @@ func verb(p Process, stored *command.StoreFacts, body func(fold.Folded) cli.Outc
 
 // open reads every head and the snapshot, folds what is past it, and saves
 // the snapshot by rename, no lock; each step's result lands on stored as it
-// returns, so a failing step leaves the steps before it on the event.
+// returns, so a failing step leaves the steps before it on the event. The
+// snapshot is a disposable cache, so what became of it is a fact on the
+// event and never a failure of the verb: the next command refolds what a
+// failed swap missed.
 func open(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Folded, error) {
 	heads, err := s.Heads()
 	if err != nil {
@@ -46,11 +49,10 @@ func open(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Folded
 	if err != nil {
 		return fold.Folded{}, err
 	}
-	resume := store.Plan(fold.Tag(), heads, file)
+	resume, start := begin(env, heads, file)
 	stored.Plans = append(stored.Plans, resume)
-	ranges, start := begin(env, heads, file, resume)
-	scans := make([]fold.Scanned, 0, len(ranges))
-	for _, r := range ranges {
+	scans := make([]fold.Scanned, 0, len(resume.Delta))
+	for _, r := range resume.Delta {
 		scan, err := s.Read(r)
 		if err != nil {
 			return fold.Folded{}, err
@@ -60,18 +62,32 @@ func open(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Folded
 	}
 	folded := start(scans)
 	stored.Folds = append(stored.Folds, folded.Facts)
-	swapped, err := s.Swap(fold.Tag(), folded.Save.Marks, folded.Save.Payload)
-	if err != nil {
-		return fold.Folded{}, err
-	}
-	stored.Swaps = append(stored.Swaps, swapped)
+	stored.Swaps = append(stored.Swaps, save(s, folded.Save))
 	return folded, nil
 }
 
-// begin is what the fold reads and how it starts, a pure decision: the
-// delta onto a snapshot whose payload reads, or every stream from 0 for a
-// genesis, which trusts whatever snapshot file there is.
-func begin(env fold.Env, heads store.Heads, file store.SnapshotFile, resume store.Resume) ([]store.Range, func([]fold.Scanned) fold.Folded) {
+// save is what became of the snapshot: kept when the fold extended it by
+// nothing, else written, or not written and why.
+func save(s *store.Store, sv fold.Save) command.Swap {
+	switch sv := sv.(type) {
+	case fold.Current:
+		return command.Kept{}
+	case fold.Written:
+		swapped, err := s.Swap(fold.Tag(), sv.Marks, sv.Payload)
+		if err != nil {
+			return command.SwapFailed{Why: err}
+		}
+		return command.Swapped{Swapped: swapped}
+	}
+	panic(fmt.Sprintf("root: %T is not a Save", sv))
+}
+
+// begin is the plan the fold follows and how it starts, a pure decision:
+// the store's delta onto a snapshot whose payload reads, or, when it does
+// not, the plan of no snapshot, every stream from 0; and a genesis for the
+// store's own reason, which trusts whatever snapshot file there is.
+func begin(env fold.Env, heads store.Heads, file store.SnapshotFile) (store.Resume, func([]fold.Scanned) fold.Folded) {
+	resume := store.Plan(fold.Tag(), heads, file)
 	switch b := resume.Base.(type) {
 	case store.FromSaved:
 		saved, ok := file.(store.Saved)
@@ -80,14 +96,13 @@ func begin(env fold.Env, heads store.Heads, file store.SnapshotFile, resume stor
 		}
 		snap, err := fold.ReadSnapshot(b.Payload)
 		if err != nil {
-			// every stream from 0 is the plan of no snapshot
-			return store.Plan(fold.Tag(), heads, store.NoSnapshot{}).Delta, func(scans []fold.Scanned) fold.Folded {
+			return store.Plan(fold.Tag(), heads, store.NoSnapshot{}), func(scans []fold.Scanned) fold.Folded {
 				return fold.Genesis(env, fold.PayloadUnreadable{Err: err}, file, scans)
 			}
 		}
-		return resume.Delta, func(scans []fold.Scanned) fold.Folded { return fold.Extend(env, snap, saved.Marks, scans) }
+		return resume, func(scans []fold.Scanned) fold.Folded { return fold.Extend(env, snap, saved.Marks, scans) }
 	case store.Genesis:
-		return resume.Delta, func(scans []fold.Scanned) fold.Folded {
+		return resume, func(scans []fold.Scanned) fold.Folded {
 			return fold.Genesis(env, fold.Missed{Miss: b.Why}, file, scans)
 		}
 	}

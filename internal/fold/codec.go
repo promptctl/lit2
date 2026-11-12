@@ -63,7 +63,7 @@ func (sn Snapshot) encode() []byte {
 	for _, r := range sn.State.records() {
 		stamped = append(stamped, tagged{tag: 4, b: enc.item(r)})
 	}
-	for _, c := range sn.State.integrity.carried {
+	for _, c := range sn.State.integrity.carriedList() {
 		var w wire.Writer
 		w.Bytes(1, c.order.Wire())
 		w.Bytes(2, c.carried.Principal.Wire())
@@ -71,7 +71,7 @@ func (sn Snapshot) encode() []byte {
 		w.Uvarint(4, reasonNumber(c.carried.Reason))
 		stamped = append(stamped, tagged{tag: 5, b: w.Encoded()})
 	}
-	for _, u := range sn.State.integrity.unapplied {
+	for _, u := range sn.State.integrity.unappliedList() {
 		var w wire.Writer
 		w.Bytes(1, enc.stamp(u.Stamp))
 		w.Bytes(2, []byte(u.Kind))
@@ -79,7 +79,7 @@ func (sn Snapshot) encode() []byte {
 		w.Bytes(4, whyWire(u.Why))
 		stamped = append(stamped, tagged{tag: 6, b: w.Encoded()})
 	}
-	for _, m := range sn.State.integrity.malformed {
+	for _, m := range sn.State.integrity.malformedList() {
 		var w wire.Writer
 		w.Bytes(1, []byte(m.Ref))
 		w.Uvarint(2, uint64(m.At))
@@ -307,7 +307,7 @@ func exceptionsOf(checked []byte) ([]events.EventID, error) {
 			tag = string(r.Bytes())
 		case 2:
 			id, err := events.ReadEventID(r.Bytes())
-			ex = withIDs(ex, []events.EventID{id})
+			ex = append(ex, id)
 			return err
 		}
 		return nil
@@ -318,7 +318,7 @@ func exceptionsOf(checked []byte) ([]events.EventID, error) {
 	case tag != checkTag:
 		return nil, fmt.Errorf("the fold's verdicts are under %q, not %q", tag, checkTag)
 	}
-	return ex, nil
+	return withIDs(nil, ex), nil
 }
 
 // fields reads each field of message b with f, stopping at f's first
@@ -364,15 +364,15 @@ func readState(b []byte) (Through, State, error) {
 		case 5:
 			var c carriedAt
 			c, err = readCarried(r.Bytes())
-			s.integrity.carried = append(s.integrity.carried, c)
+			s.integrity.carried = s.integrity.carried.set(c)
 		case 6:
 			var u Unapplied
 			u, err = dec.unapplied(r.Bytes())
-			s.integrity.unapplied = append(s.integrity.unapplied, u)
+			s.integrity.unapplied = s.integrity.unapplied.set(u)
 		case 7:
 			var m Malformed
 			m, err = readMalformed(r.Bytes())
-			s.integrity.malformed = append(s.integrity.malformed, m)
+			s.integrity.malformed = s.integrity.malformed.set(m)
 		}
 		return err
 	})

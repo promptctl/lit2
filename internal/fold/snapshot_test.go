@@ -25,7 +25,7 @@ func TestASnapshotIsDisposable(t *testing.T) {
 	}{
 		{fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}},
 		{fold.Missed{Miss: store.Torn{Why: torn}}, store.TornSnapshot{Why: torn}},
-		{fold.PayloadUnreadable{Err: unreadable}, store.Saved{Tag: fold.Tag(), Marks: want.Save.Marks, Payload: garbage}},
+		{fold.PayloadUnreadable{Err: unreadable}, store.Saved{Tag: fold.Tag(), Marks: wrote(t, want).Marks, Payload: garbage}},
 	} {
 		got := fold.Genesis(env, c.why, c.file, w.scans())
 		if !got.State.Equal(want.State) {
@@ -55,7 +55,7 @@ func signed(t *testing.T) (*world, events.Event) {
 func TestAFoldVersionBumpChecksOnlyTheExceptions(t *testing.T) {
 	w, forged := signed(t)
 	first := w.genesis()
-	snap, err := fold.ReadSnapshot(first.Save.Payload)
+	snap, err := fold.ReadSnapshot(wrote(t, first).Payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestAFoldVersionBumpChecksOnlyTheExceptions(t *testing.T) {
 	if n != 10 || first.Facts.Trusted != 0 {
 		t.Fatalf("a first genesis checked %d and trusted %d; want all 10 checked", n, first.Facts.Trusted)
 	}
-	bumped := fold.Genesis(env, fold.Missed{Miss: store.TagChanged{}}, store.Saved{Tag: store.FoldTag("lit2 fold 0"), Marks: first.Save.Marks, Payload: first.Save.Payload}, w.scans())
+	bumped := fold.Genesis(env, fold.Missed{Miss: store.TagChanged{}}, store.Saved{Tag: store.FoldTag("lit2 fold 0"), Marks: wrote(t, first).Marks, Payload: wrote(t, first).Payload}, w.scans())
 	if bumped.Facts.Checked != 1 || bumped.Facts.Trusted != n-1 {
 		t.Errorf("after a tag change Genesis checked %d and trusted %d; want 1 and %d", bumped.Facts.Checked, bumped.Facts.Trusted, n-1)
 	}
@@ -83,7 +83,7 @@ func TestAStreamUnderANewLogIsCheckedWhole(t *testing.T) {
 	first := w.genesis()
 	// B's stream is rewritten: the same records under a new log
 	w.streams[b.ref()].log = store.LogID{0xee}
-	got := fold.Genesis(env, fold.Missed{Miss: store.Rewritten{Ref: b.ref()}}, store.Saved{Tag: fold.Tag(), Marks: first.Save.Marks, Payload: first.Save.Payload}, w.scans())
+	got := fold.Genesis(env, fold.Missed{Miss: store.Rewritten{Ref: b.ref()}}, store.Saved{Tag: fold.Tag(), Marks: wrote(t, first).Marks, Payload: wrote(t, first).Payload}, w.scans())
 	// B's four events, and the forged one as an exception
 	if got.Facts.Checked != 5 || !got.State.Equal(first.State) {
 		t.Errorf("a rewritten stream's genesis checked %d; want B's 4 and the 1 exception, and the same state", got.Facts.Checked)
@@ -96,7 +96,7 @@ func TestAnInterleavedExtendChecksOnlyTheNewEventsAndCountsThemLate(t *testing.T
 		w.mint(a, w.state(), set(id, title, prose("busy")))
 	}
 	first := w.genesis()
-	snap, err := fold.ReadSnapshot(first.Save.Payload)
+	snap, err := fold.ReadSnapshot(wrote(t, first).Payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestAnInterleavedExtendChecksOnlyTheNewEventsAndCountsThemLate(t *testing.T
 	for _, ref := range w.order {
 		delta = append(delta, w.span(ref, at[ref], w.head(ref)))
 	}
-	got := fold.Extend(env, snap, first.Save.Marks, delta)
+	got := fold.Extend(env, snap, wrote(t, first).Marks, delta)
 	if got.Facts.Checked != 3 || got.Facts.Late != 3 || got.Facts.Base != (fold.Extended{}) {
 		t.Errorf("an interleaved Extend checked %d, late %d, base %#v; want 3, 3, extended", got.Facts.Checked, got.Facts.Late, got.Facts.Base)
 	}
@@ -123,7 +123,7 @@ func TestACleanHistorySavesNoExceptions(t *testing.T) {
 	w, id := item(t)
 	w.mint(b, w.state(), set(id, title, prose("clean")))
 	got := w.genesis()
-	snap, err := fold.ReadSnapshot(got.Save.Payload)
+	snap, err := fold.ReadSnapshot(wrote(t, got).Payload)
 	if err != nil {
 		t.Fatal(err)
 	}

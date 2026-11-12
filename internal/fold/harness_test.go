@@ -139,6 +139,16 @@ func (wd *world) scans() []fold.Scanned {
 	return out
 }
 
+// wrote is the snapshot f saves, failing tb when f keeps the current one.
+func wrote(tb testing.TB, f fold.Folded) fold.Written {
+	tb.Helper()
+	w, ok := f.Save.(fold.Written)
+	if !ok {
+		tb.Fatalf("the fold saves %#v; want a snapshot written", f.Save)
+	}
+	return w
+}
+
 // genesis folds every stream from nothing.
 func (wd *world) genesis() fold.Folded {
 	return fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, wd.scans())

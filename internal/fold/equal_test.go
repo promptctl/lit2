@@ -85,7 +85,7 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 				t.Errorf("a state with %s is Equal to one without", c.name)
 			}
 			for _, f := range []fold.Folded{was, now} {
-				snap, err := fold.ReadSnapshot(f.Save.Payload)
+				snap, err := fold.ReadSnapshot(wrote(t, f).Payload)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -98,13 +98,13 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 }
 
 func TestTheSnapshotCarriesWhereItStopped(t *testing.T) {
-	empty, err := fold.ReadSnapshot(fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, nil).Save.Payload)
+	empty, err := fold.ReadSnapshot(wrote(t, fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, nil)).Payload)
 	if err != nil || empty.Through != (fold.Nothing{}) || !empty.State.Equal(fold.State{}) {
 		t.Errorf("a fold of nothing saves %#v, %v", empty, err)
 	}
 	w, _, _, _ := base(t)
 	evs := sortedEvents(w)
-	snap, err := fold.ReadSnapshot(w.genesis().Save.Payload)
+	snap, err := fold.ReadSnapshot(wrote(t, w.genesis()).Payload)
 	if err != nil {
 		t.Fatal(err)
 	}

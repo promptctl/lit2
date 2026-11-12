@@ -151,7 +151,7 @@ func budget(b *testing.B, limit time.Duration) {
 // bump budgets' worst case.
 func BenchmarkFoldGenesisTrusted(b *testing.B) {
 	c := corpus()
-	file := store.Saved{Tag: store.FoldTag("lit2 fold 0"), Marks: c.saved.Save.Marks, Payload: c.saved.Save.Payload}
+	file := store.Saved{Tag: store.FoldTag("lit2 fold 0"), Marks: wrote(b, c.saved).Marks, Payload: wrote(b, c.saved).Payload}
 	b.ResetTimer()
 	for b.Loop() {
 		f := fold.Genesis(env, fold.Missed{Miss: store.TagChanged{}}, file, c.scans)
@@ -168,12 +168,12 @@ func BenchmarkFoldExtendInterleaved(b *testing.B) {
 	c := corpus()
 	b.ResetTimer()
 	for b.Loop() {
-		snap, err := fold.ReadSnapshot(c.saved.Save.Payload)
+		snap, err := fold.ReadSnapshot(wrote(b, c.saved).Payload)
 		if err != nil {
 			b.Fatal(err)
 		}
-		f := fold.Extend(env, snap, c.saved.Save.Marks, c.delta)
-		if f.Facts.Checked != 100 || f.Facts.Late != 100 || len(f.Save.Payload) == 0 {
+		f := fold.Extend(env, snap, wrote(b, c.saved).Marks, c.delta)
+		if f.Facts.Checked != 100 || f.Facts.Late != 100 || len(wrote(b, f).Payload) == 0 {
 			b.Fatalf("an interleaved extend checked %d, late %d", f.Facts.Checked, f.Facts.Late)
 		}
 	}
