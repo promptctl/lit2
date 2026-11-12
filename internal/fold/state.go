@@ -369,12 +369,25 @@ func (s State) Children(c Container) []events.ItemID {
 // Mint draws none of them again; carried events name none.
 func (s State) Names() events.Names {
 	var b events.NamesBuilder
+	// an id names every ancestor on its path, created here or not, so a
+	// clone that folded a child but not its parent never mints the parent's
+	// id afresh
+	var path func(id events.ItemID)
+	path = func(id events.ItemID) {
+		segs := id.Segments()
+		b.Add(events.Children{Parent: id.Parent()}, segs[len(segs)-1])
+		switch p := id.Parent().(type) {
+		case events.Under:
+			path(p.ID)
+		case events.Top:
+		}
+	}
 	add := func(a events.About) {
 		switch a := a.(type) {
 		case events.Item:
-			segs := a.ID.Segments()
-			b.Add(events.Children{Parent: a.ID.Parent()}, segs[len(segs)-1])
+			path(a.ID)
 		case events.Element:
+			path(a.Of)
 			b.Add(events.Elements{Of: a.Of}, a.Name)
 		case events.Root:
 		}

@@ -252,8 +252,10 @@ func (f Facts) Text(n events.Name) TextField {
 
 // Plain is field n as a structural value: its last live plain write in
 // total order, and every other live value it overruled.
-func (f Facts) Plain(n events.Name) PlainField {
-	r := f.register(n)
+func (f Facts) Plain(n events.Name) PlainField { return f.register(n).settled() }
+
+// settled is the register as a structural value, as Plain reads it.
+func (r register) settled() PlainField {
 	var last candidate
 	held := false
 	for _, c := range r.live {
@@ -334,7 +336,7 @@ func (f Facts) advisories(at Target) []Advisory {
 	var out []Advisory
 	for _, r := range f.fields {
 		prose := r.prose()
-		plain := f.Plain(r.name)
+		plain := r.settled()
 		overruled := false
 		if s, ok := plain.(Settled); ok {
 			overruled = len(s.Overruled) > 0

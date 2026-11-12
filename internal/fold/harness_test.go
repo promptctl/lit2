@@ -24,7 +24,7 @@ var (
 	t0         = time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
 	prefix     = must(events.ParsePrefix("lit"))
 	top        = events.Children{Parent: events.Top{Prefix: prefix}}
-	env        = fold.Env{Registry: fold.NewRegistry(fold.FirstFacts()...), Suites: events.NewSuites(events.Ed25519()), Workers: 2}
+	env        = must(fold.NewEnv(fold.NewRegistry(fold.FirstFacts()...), events.NewSuites(events.Ed25519()), 2))
 
 	title    = name("title")
 	priority = name("priority")
@@ -151,7 +151,7 @@ func wrote(tb testing.TB, f fold.Folded) fold.Written {
 
 // genesis folds every stream from nothing.
 func (wd *world) genesis() fold.Folded {
-	return fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, wd.scans())
+	return fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, wd.scans())
 }
 
 // view is the fold of each stream's first upto[ref] batches, and every
@@ -166,7 +166,28 @@ func (wd *world) view(upto map[store.Ref]int) fold.State {
 		}
 		scans = append(scans, wd.span(ref, 0, n))
 	}
-	return fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, scans).State
+	return fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, scans).State
+}
+
+// heads is every stream at its head, as the store reads them.
+func (wd *world) heads() store.Heads {
+	var h store.Heads
+	for _, ref := range wd.order {
+		h.Streams = append(h.Streams, wd.span(ref, 0, wd.head(ref)).Range.Stream)
+	}
+	return h
+}
+
+// refold is the genesis the root runs over every stream when file is the
+// snapshot: the store's plan says why, and which of file's marks hold.
+func (wd *world) refold(file store.SnapshotFile) fold.Folded {
+	wd.t.Helper()
+	r := store.Plan(fold.Tag(), wd.heads(), file)
+	g, ok := r.Base.(store.Genesis)
+	if !ok {
+		wd.t.Fatalf("the store resumes %#v; want a genesis", r.Base)
+	}
+	return fold.Genesis(env, fold.Missed{Miss: g.Why}, r.Held, file, wd.scans())
 }
 
 // state is the genesis's state.

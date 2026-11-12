@@ -51,7 +51,7 @@ const (
 func (sn Snapshot) encode() []byte {
 	var checked, state, payload wire.Writer
 	checked.Bytes(1, []byte(checkTag))
-	ids(&checked, 2, sn.Exceptions)
+	events.WriteIDs(&checked, 2, sn.Exceptions)
 	if u, ok := sn.Through.(Upto); ok {
 		state.Bytes(1, u.Key.Wire())
 	}
@@ -75,7 +75,7 @@ func (sn Snapshot) encode() []byte {
 		var w wire.Writer
 		w.Bytes(1, enc.stamp(u.Stamp))
 		w.Bytes(2, []byte(u.Kind))
-		w.Bytes(3, aboutWire(u.About))
+		w.Bytes(3, events.AboutWire(u.About))
 		w.Bytes(4, whyWire(u.Why))
 		stamped = append(stamped, tagged{tag: 6, b: w.Encoded()})
 	}
@@ -174,7 +174,7 @@ func (enc *encoder) facts(f Facts) []byte {
 			cw.Bytes(2, c.value.Wire())
 			rw.Bytes(2, cw.Encoded())
 		}
-		ids(&rw, 3, r.retired)
+		events.WriteIDs(&rw, 3, r.retired)
 		w.Bytes(1, rw.Encoded())
 	}
 	for _, s := range f.sets {
@@ -186,29 +186,10 @@ func (enc *encoder) facts(f Facts) []byte {
 			for _, a := range t.adds {
 				tw.Bytes(2, enc.stamp(a))
 			}
-			ids(&tw, 3, t.removed)
+			events.WriteIDs(&tw, 3, t.removed)
 			sw.Bytes(2, tw.Encoded())
 		}
 		w.Bytes(2, sw.Encoded())
-	}
-	return w.Encoded()
-}
-
-func ids(w *wire.Writer, tag uint32, ids []events.EventID) {
-	for _, id := range ids {
-		w.Bytes(tag, id[:])
-	}
-}
-
-func aboutWire(a events.About) []byte {
-	var w wire.Writer
-	switch a := a.(type) {
-	case events.Root:
-	case events.Item:
-		w.Bytes(1, []byte(a.ID.String()))
-	case events.Element:
-		w.Bytes(1, []byte(a.Of.String()))
-		w.Bytes(2, []byte(a.Name.String()))
 	}
 	return w.Encoded()
 }
@@ -492,11 +473,13 @@ func readContainer(b []byte) (Container, error) {
 
 func (dec decoder) element(b []byte) (*element, error) {
 	var el element
+	named := false
 	err := fields(b, func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			el.name, err = events.ParseSegment(string(r.Bytes()))
+			named = true
 		case 2:
 			var l listing
 			l, err = dec.listing(r.Bytes())
@@ -506,6 +489,9 @@ func (dec decoder) element(b []byte) (*element, error) {
 		}
 		return err
 	})
+	if err == nil && !named {
+		err = errors.New("an element has no name")
+	}
 	return &el, err
 }
 
@@ -621,11 +607,13 @@ func (dec decoder) tally(b []byte) (tally, error) {
 
 func readCarried(b []byte) (carriedAt, error) {
 	var c carriedAt
+	ordered := false
 	err := fields(b, func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			c.order, err = events.ReadOrderKey(r.Bytes())
+			ordered = true
 		case 2:
 			c.carried.Principal, err = events.ReadPrincipalID(r.Bytes())
 		case 3:
@@ -642,7 +630,11 @@ func readCarried(b []byte) (carriedAt, error) {
 		}
 		return err
 	})
-	if err == nil && c.carried.Reason == nil {
+	switch {
+	case err != nil:
+	case !ordered:
+		err = errors.New("a carried event has no order key")
+	case c.carried.Reason == nil:
 		err = errors.New("a carried event has no reason")
 	}
 	c.carried.Event, c.carried.Writer = c.order.ID, c.order.Writer
@@ -659,7 +651,7 @@ func (dec decoder) unapplied(b []byte) (Unapplied, error) {
 		case 2:
 			u.Kind = events.Kind(r.Bytes())
 		case 3:
-			u.About, err = readAbout(r.Bytes())
+			u.About, err = events.ReadAbout(r.Bytes())
 		case 4:
 			u.Why, err = readWhy(r.Bytes())
 		}
@@ -669,31 +661,6 @@ func (dec decoder) unapplied(b []byte) (Unapplied, error) {
 		err = errors.New("an unapplied event lacks its subject or its reason")
 	}
 	return u, err
-}
-
-func readAbout(b []byte) (events.About, error) {
-	var item, name []byte
-	var hasItem, hasName bool
-	if err := fields(b, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			item, hasItem = r.Bytes(), true
-		case 2:
-			name, hasName = r.Bytes(), true
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	if !hasItem {
-		return events.Root{}, nil
-	}
-	id, err := events.ParseItemID(string(item))
-	if err != nil || !hasName {
-		return events.Item{ID: id}, err
-	}
-	s, err := events.ParseSegment(string(name))
-	return events.Element{Of: id, Name: s}, err
 }
 
 func readWhy(b []byte) (UnappliedWhy, error) {
@@ -734,10 +701,11 @@ func readWhy(b []byte) (UnappliedWhy, error) {
 
 func readMalformed(b []byte) (Malformed, error) {
 	var m Malformed
+	var hasRef, hasDigest bool
 	err := fields(b, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
-			m.Ref = string(r.Bytes())
+			m.Ref, hasRef = string(r.Bytes()), true
 		case 2:
 			m.At = store.Offset(r.Uvarint())
 		case 3:
@@ -746,10 +714,18 @@ func readMalformed(b []byte) (Malformed, error) {
 				return errors.New("a malformed record's digest is not 32 bytes")
 			}
 			copy(m.Digest[:], d)
+			hasDigest = true
 		case 4:
 			m.Why = string(r.Bytes())
 		}
 		return nil
 	})
+	switch {
+	case err != nil:
+	case !hasRef:
+		err = errors.New("a malformed record has no ref")
+	case !hasDigest:
+		err = errors.New("a malformed record has no digest")
+	}
 	return m, err
 }

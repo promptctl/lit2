@@ -69,6 +69,9 @@ func TestAChildOfANeverCreatedIDIsOrphaned(t *testing.T) {
 	if _, ok := s.Item(ghost).(fold.NotFound); !ok {
 		t.Errorf("the missing parent is %#v; want NotFound", s.Item(ghost))
 	}
+	if !s.Names().Taken(top, ghost.Segments()[0]) {
+		t.Errorf("the orphan's missing parent %s is free in Names", ghost)
+	}
 }
 
 func TestALevelStatedOnAChildIsMisaddressed(t *testing.T) {

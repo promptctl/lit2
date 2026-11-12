@@ -100,7 +100,7 @@ var corpus = sync.OnceValue(func() scale {
 		held = append(held, len(batches[w]))
 	}
 	c.scans = streams(batches, held, nil)
-	c.saved = fold.Genesis(fold.Env{Registry: env.Registry, Suites: env.Suites, Workers: runtime.GOMAXPROCS(0)}, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, c.scans)
+	c.saved = fold.Genesis(must(fold.NewEnv(env.Registry(), env.Suites(), runtime.GOMAXPROCS(0))), fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, c.scans)
 	// two writers that last read the store at its half mint 100 acts
 	for i := range 100 {
 		mint(i%2, half, names.Names(), act(r, ids[r.IntN(len(ids)/2)]))
@@ -154,7 +154,7 @@ func BenchmarkFoldGenesisTrusted(b *testing.B) {
 	file := store.Saved{Tag: store.FoldTag("lit2 fold 0"), Marks: wrote(b, c.saved).Marks, Payload: wrote(b, c.saved).Payload}
 	b.ResetTimer()
 	for b.Loop() {
-		f := fold.Genesis(env, fold.Missed{Miss: store.TagChanged{}}, file, c.scans)
+		f := fold.Genesis(env, fold.Missed{Miss: store.TagChanged{}}, file.Marks, file, c.scans)
 		if f.Facts.Checked != 0 || f.Facts.Records != 200_000 {
 			b.Fatalf("a trusted genesis checked %d of %d records", f.Facts.Checked, f.Facts.Records)
 		}
@@ -184,10 +184,10 @@ func BenchmarkFoldExtendInterleaved(b *testing.B) {
 // once, on every core. It is printed as the one-time cost, not gated.
 func BenchmarkFoldGenesisUncached(b *testing.B) {
 	c := corpus()
-	all := fold.Env{Registry: env.Registry, Suites: env.Suites, Workers: runtime.GOMAXPROCS(0)}
+	all := must(fold.NewEnv(env.Registry(), env.Suites(), runtime.GOMAXPROCS(0)))
 	b.ResetTimer()
 	for b.Loop() {
-		f := fold.Genesis(all, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, c.scans)
+		f := fold.Genesis(all, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, c.scans)
 		if f.Facts.Checked != 200_000 {
 			b.Fatalf("an uncached genesis checked %d", f.Facts.Checked)
 		}

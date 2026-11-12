@@ -32,15 +32,12 @@ func readFlag(r *wire.Reader) (events.Versioned, error) {
 
 func TestANewKindTouchesNothing(t *testing.T) {
 	flags := name("flags")
-	withFlags := fold.Env{
-		Registry: fold.NewRegistry(append(fold.FirstFacts(), fold.On(fold.Items, func(f fold.Fact[flag]) fold.Applies {
-			return fold.Changes{List: []fold.Change{fold.Add{At: f.At, Set: flags, Member: f.Payload.Flag}}}
-		}, readFlag))...),
-		Suites: env.Suites, Workers: 1,
-	}
+	withFlags := must(fold.NewEnv(fold.NewRegistry(append(fold.FirstFacts(), fold.On(fold.Items, func(f fold.Fact[flag]) fold.Applies {
+		return fold.Changes{List: []fold.Change{fold.Add{At: f.At, Set: flags, Member: f.Payload.Flag}}}
+	}, readFlag))...), env.Suites(), 1))
 	w, id := item(t)
 	w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: flag{Flag: name("blocked")}})
-	s := fold.Genesis(withFlags, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, w.scans()).State
+	s := fold.Genesis(withFlags, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, w.scans()).State
 	got := found(t, s, id).Facts.Members(flags)
 	if len(got) != 1 || got[0].Name != name("blocked") || len(s.Integrity().Unapplied) != 0 {
 		t.Errorf("test.flag folds to %#v, unapplied %#v; want the flag blocked", got, s.Integrity().Unapplied)

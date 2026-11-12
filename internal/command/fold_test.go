@@ -20,10 +20,16 @@ func foldBlockOf(t *testing.T, f fold.FoldFacts) map[string]any {
 	return list[0].(map[string]any)
 }
 
-var nothing = fold.Env{Registry: fold.NewRegistry(fold.FirstFacts()...), Suites: events.NewSuites(events.Ed25519()), Workers: 1}
+var nothing = func() fold.Env {
+	env, err := fold.NewEnv(fold.NewRegistry(fold.FirstFacts()...), events.NewSuites(events.Ed25519()), 1)
+	if err != nil {
+		panic(err)
+	}
+	return env
+}()
 
 func TestAFoldOfNothingIsEveryCountZeroAndPresent(t *testing.T) {
-	block := foldBlockOf(t, fold.Genesis(nothing, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, nil).Facts)
+	block := foldBlockOf(t, fold.Genesis(nothing, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, nil).Facts)
 	if block["base"] != "genesis:absent" {
 		t.Errorf("a fold with no snapshot is based %v", block["base"])
 	}
@@ -71,7 +77,7 @@ func TestTheFoldSaysWhereItStartedAndWhy(t *testing.T) {
 		{fold.Refolded{Why: fold.Missed{Miss: store.Rewritten{Ref: ref}}}, "genesis:rewritten", "", string(ref.Name())},
 		{fold.Refolded{Why: fold.PayloadUnreadable{Err: bad}}, "genesis:payload_unreadable", bad.Error(), nil},
 	} {
-		f := fold.Genesis(nothing, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, nil).Facts
+		f := fold.Genesis(nothing, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, nil).Facts
 		f.Base = c.base
 		block := foldBlockOf(t, f)
 		why, _ := block["why"].(string)

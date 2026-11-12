@@ -95,9 +95,14 @@ type Range struct {
 
 // Resume is where the fold starts and what it reads: Delta holds one Range
 // per stream with bytes past what the base consumed, so a snapshot that
-// matches every head is resumed with an empty Delta.
+// matches every head is resumed with an empty Delta. Held is the snapshot
+// file's marks that still hold, on every base: each names a stream present
+// under the mark's log, at or past the mark, so the bytes below it are the
+// ones the snapshot read. The store is the one judge of that
+// `[LAW:single-enforcer]`; a fold trusts no other mark.
 type Resume struct {
 	Base  Base
+	Held  []Mark
 	Delta []Range
 }
 
@@ -105,47 +110,70 @@ type Resume struct {
 // and the saved snapshot. It is pure: the cache decision reads no file
 // `[LAW:effects-at-boundaries]`.
 func Plan(tag FoldTag, now Heads, file SnapshotFile) Resume {
-	base, marks := resumable(tag, now, file)
+	base, held := resumable(tag, now, file)
+	from := map[Ref]Offset{}
+	switch base.(type) {
+	case FromSaved:
+		for _, m := range held {
+			from[m.Ref] = m.Upto.At
+		}
+	case Genesis:
+	}
 	delta := []Range{}
 	for _, s := range now.Streams {
-		if from := marks[s.Ref]; from < s.Until.At {
-			delta = append(delta, Range{Stream: s, From: from})
+		if at := from[s.Ref]; at < s.Until.At {
+			delta = append(delta, Range{Stream: s, From: at})
 		}
 	}
-	return Resume{Base: base, Delta: delta}
+	return Resume{Base: base, Held: held, Delta: delta}
 }
 
-// resumable is the base a fold starts from and, when it is a snapshot, the
-// offset it consumed of each stream; a stream it never read starts at 0.
-func resumable(tag FoldTag, now Heads, file SnapshotFile) (Base, map[Ref]Offset) {
-	genesis := func(why Miss) (Base, map[Ref]Offset) { return Genesis{Why: why}, map[Ref]Offset{} }
+// resumable is the base a fold starts from and the marks of file that
+// hold, every mark judged: a snapshot is resumed when its tag is the fold's
+// and every mark holds, and a genesis says the first reason it is not. A
+// base that is a snapshot reads each stream from its mark; a genesis reads
+// every stream from 0.
+func resumable(tag FoldTag, now Heads, file SnapshotFile) (Base, []Mark) {
 	switch f := file.(type) {
 	case NoSnapshot:
-		return genesis(Absent{})
+		return Genesis{Why: Absent{}}, []Mark{}
 	case TornSnapshot:
-		return genesis(Torn(f))
+		return Genesis{Why: Torn(f)}, []Mark{}
 	case Saved:
-		if !bytes.Equal(f.Tag, tag) {
-			return genesis(TagChanged{})
-		}
 		heads := map[Ref]Position{}
 		for _, s := range now.Streams {
 			heads[s.Ref] = s.Until
 		}
-		marks := map[Ref]Offset{}
+		held := []Mark{}
+		var miss Miss
 		for _, m := range f.Marks {
 			head, ok := heads[m.Ref]
-			if !ok {
-				return genesis(Withdrawn{Ref: m.Ref})
+			switch {
+			case !ok:
+				miss = firstMiss(miss, Withdrawn{Ref: m.Ref})
+			case head.Log != m.Upto.Log || head.At < m.Upto.At:
+				miss = firstMiss(miss, Rewritten{Ref: m.Ref})
+			default:
+				held = append(held, m)
 			}
-			if head.Log != m.Upto.Log || head.At < m.Upto.At {
-				return genesis(Rewritten{Ref: m.Ref})
-			}
-			marks[m.Ref] = m.Upto.At
 		}
-		return FromSaved{Payload: f.Payload}, marks
+		switch {
+		case !bytes.Equal(f.Tag, tag):
+			return Genesis{Why: TagChanged{}}, held
+		case miss != nil:
+			return Genesis{Why: miss}, held
+		}
+		return FromSaved{Payload: f.Payload}, held
 	}
 	panic(fmt.Sprintf("store: %T is not a SnapshotFile", file))
+}
+
+// firstMiss is the first of the misses: why, unless it is none yet.
+func firstMiss(why, next Miss) Miss {
+	if why != nil {
+		return why
+	}
+	return next
 }
 
 // The snapshot file: magic, format version, the fold tag, the marks, the

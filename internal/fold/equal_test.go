@@ -98,7 +98,7 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 }
 
 func TestTheSnapshotCarriesWhereItStopped(t *testing.T) {
-	empty, err := fold.ReadSnapshot(wrote(t, fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, nil)).Payload)
+	empty, err := fold.ReadSnapshot(wrote(t, fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, nil)).Payload)
 	if err != nil || empty.Through != (fold.Nothing{}) || !empty.State.Equal(fold.State{}) {
 		t.Errorf("a fold of nothing saves %#v, %v", empty, err)
 	}
@@ -108,8 +108,17 @@ func TestTheSnapshotCarriesWhereItStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Through != (fold.Upto{Key: evs[len(evs)-1].Order()}) {
-		t.Errorf("the snapshot stops at %#v; want the last event in total order", snap.Through)
+	// the base world's forged event sorts last and moves nothing: the last
+	// verified event is where the snapshot stops
+	valid := func(e events.Event) bool {
+		return env.Suites().Check(e.Header().Attribution().Principal, e.SignedBytes(), e.Signature()) == events.Valid
+	}
+	last := len(evs) - 1
+	for !valid(evs[last]) {
+		last--
+	}
+	if snap.Through != (fold.Upto{Key: evs[last].Order()}) || last == len(evs)-1 {
+		t.Errorf("the snapshot stops at %#v; want the last verified event in total order, before the forged one", snap.Through)
 	}
 }
 
@@ -120,7 +129,7 @@ func TestGenesisIsStepsOverTheSortedEvents(t *testing.T) {
 	for _, sc := range w.scans() {
 		for _, fr := range sc.Scan.Frames {
 			for _, rec := range fr.Batch.Records() {
-				e, ok := events.Decode(env.Registry.Kinds(), rec).(events.Event)
+				e, ok := events.Decode(env.Registry().Kinds(), rec).(events.Event)
 				if ok && !seen[e.ID()] {
 					seen[e.ID()] = true
 					located = append(located, fold.Located{Event: e, Ref: sc.Range.Stream.Ref, At: store.Position{Log: sc.Range.Stream.Until.Log, At: fr.At}})
@@ -131,7 +140,7 @@ func TestGenesisIsStepsOverTheSortedEvents(t *testing.T) {
 	slices.SortFunc(located, func(x, y fold.Located) int { return events.Compare(x.Event.Order(), y.Event.Order()) })
 	var s fold.State
 	for _, c := range fold.Check(env, located, fold.Trust{}) {
-		s = fold.Step(env.Registry, s, c)
+		s = fold.Step(env.Registry(), s, c)
 	}
 	if !s.Equal(w.state()) {
 		t.Errorf("stepping the sorted events disagrees with Genesis")
@@ -144,7 +153,7 @@ func sortedEvents(w *world) []events.Event {
 	for _, sc := range w.scans() {
 		for _, fr := range sc.Scan.Frames {
 			for _, rec := range fr.Batch.Records() {
-				if e, ok := events.Decode(env.Registry.Kinds(), rec).(events.Event); ok {
+				if e, ok := events.Decode(env.Registry().Kinds(), rec).(events.Event); ok {
 					es = append(es, e)
 				}
 			}

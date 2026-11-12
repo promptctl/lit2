@@ -151,7 +151,7 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 			// Genesis, in an arrival order
 			scans := w.scans()
 			r.Shuffle(len(scans), func(i, j int) { scans[i], scans[j] = scans[j], scans[i] })
-			if got := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, scans).State; !got.Equal(want.State) {
+			if got := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, scans).State; !got.Equal(want.State) {
 				t.Errorf("Genesis in another arrival order disagrees")
 			}
 
@@ -164,7 +164,7 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 				delta = append(delta, w.span(ref, prefix[ref], w.head(ref)))
 			}
 			r.Shuffle(len(delta), func(i, j int) { delta[i], delta[j] = delta[j], delta[i] })
-			saved := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, before)
+			saved := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, before)
 			snap, err := fold.ReadSnapshot(wrote(t, saved).Payload)
 			if err != nil {
 				t.Fatal(err)
@@ -185,7 +185,7 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 			}
 
 			// Genesis after the fold's tag changed, trusting the verdicts
-			bumped := fold.Genesis(env, fold.Missed{Miss: store.TagChanged{}}, store.Saved{Tag: store.FoldTag("lit2 fold 0"), Marks: wrote(t, want).Marks, Payload: wrote(t, want).Payload}, w.scans())
+			bumped := w.refold(store.Saved{Tag: store.FoldTag("lit2 fold 0"), Marks: wrote(t, want).Marks, Payload: wrote(t, want).Payload})
 			if !bumped.State.Equal(want.State) {
 				t.Errorf("Genesis after a tag change disagrees")
 			}

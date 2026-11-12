@@ -287,7 +287,7 @@ func ReadItemDelete(r *wire.Reader) (Versioned, error) {
 func (p FieldSet) AppendTo(w *wire.Writer) {
 	w.Bytes(1, []byte(p.Field.s))
 	w.Bytes(2, p.Value.Wire())
-	ids(w, 3, p.Over)
+	WriteIDs(w, 3, p.Over)
 	w.Keep(p.unknown)
 }
 
@@ -344,7 +344,7 @@ func ReadLabelAdd(r *wire.Reader) (Versioned, error) {
 // label.rm = 1:label 2:observed (an event id, repeated) · unknown….
 func (p LabelRm) AppendTo(w *wire.Writer) {
 	w.Bytes(1, []byte(p.Label.name.s))
-	ids(w, 2, p.Observed)
+	WriteIDs(w, 2, p.Observed)
 	w.Keep(p.unknown)
 }
 
@@ -415,8 +415,8 @@ func ReadCommentAdd(r *wire.Reader) (Versioned, error) {
 	return p, nil
 }
 
-// ids writes each id as field tag, in order.
-func ids(w *wire.Writer, tag uint32, ids []EventID) {
+// WriteIDs writes each id as field tag, in order.
+func WriteIDs(w *wire.Writer, tag uint32, ids []EventID) {
 	for _, id := range ids {
 		w.Bytes(tag, id[:])
 	}

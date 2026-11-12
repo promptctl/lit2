@@ -81,6 +81,12 @@ func TestAnUnknownKindIsUnreadWithItsNameKept(t *testing.T) {
 	if !s.Names().Taken(top, segs[len(segs)-1]) {
 		t.Errorf("an unread create's name %s is free in Names", idOf(e))
 	}
+	// an unread event about an id no create named names its whole path
+	deep := must(events.ParseItemID("lit-yyy.xxx"))
+	w.mint(a, w.state(), events.Act{About: events.Item{ID: deep}, Payload: unknown{}})
+	if n := w.state().Names(); !n.Taken(top, deep.Segments()[0]) || !n.Taken(events.Children{Parent: deep.Parent()}, deep.Segments()[1]) {
+		t.Errorf("an unread act about %s leaves its path free in Names", deep)
+	}
 }
 
 func TestACommentAboutAnItemIsMisaddressed(t *testing.T) {

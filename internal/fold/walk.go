@@ -17,13 +17,32 @@ import (
 // is always checked again.
 func Tag() store.FoldTag { return store.FoldTag("lit2 fold 1") }
 
-// Env is what every fold runs with, built once at the root: the registry,
-// the suites signatures are judged by, and the goroutines that judge them.
+// Env is what every fold runs with, built once at the root by NewEnv: the
+// registry, the suites signatures are judged by, and the goroutines that
+// judge them.
 type Env struct {
-	Registry Registry
-	Suites   events.Suites
-	Workers  int
+	registry Registry
+	suites   events.Suites
+	workers  int
 }
+
+// NewEnv is the fold's environment, refusing one that verifies on no
+// goroutine `[LAW:parse-dont-validate]`, so a fold never meets one.
+func NewEnv(r Registry, s events.Suites, workers int) (Env, error) {
+	if workers < 1 {
+		return Env{}, fmt.Errorf("a fold verifies on %d goroutines; it needs at least one", workers)
+	}
+	return Env{registry: r, suites: s, workers: workers}, nil
+}
+
+// Registry is the kinds the fold decodes and folds.
+func (e Env) Registry() Registry { return e.registry }
+
+// Suites is the suites the fold judges signatures by.
+func (e Env) Suites() events.Suites { return e.suites }
+
+// Workers is the goroutines that judge them.
+func (e Env) Workers() int { return e.workers }
 
 // Scanned is one range of a stream and what reading it found.
 type Scanned struct {
@@ -91,10 +110,12 @@ func (Nothing) through() {}
 func (Upto) through()    {}
 
 // Genesis folds scans, every stream from 0, from the zero State. It trusts
-// the verdicts of whatever snapshot file the root holds, under any fold
-// version: a fold-version bump checks no signature that once verified.
-func Genesis(e Env, why Refold, file store.SnapshotFile, scans []Scanned) Folded {
-	return walk(e, State{}, Nothing{}, nil, nil, trustOf(file), Refolded{Why: why}, scans)
+// the verdicts below held, the marks the store's plan judged still hold,
+// and reads from file only its exceptions, under any fold version: a
+// fold-version bump checks no signature that once verified, and a stream
+// the store found rewritten is checked whole.
+func Genesis(e Env, why Refold, held []store.Mark, file store.SnapshotFile, scans []Scanned) Folded {
+	return walk(e, State{}, Nothing{}, nil, nil, trustOf(held, file), Refolded{Why: why}, scans)
 }
 
 // Extend folds scans, the streams past marks, onto a snapshot. Every shape
@@ -104,16 +125,17 @@ func Extend(e Env, s Snapshot, marks []store.Mark, scans []Scanned) Folded {
 	return walk(e, s.State, s.Through, marks, s.Exceptions, Trust{Marks: marks, Exceptions: s.Exceptions}, Extended{}, scans)
 }
 
-// trustOf is the verdicts file carries: none from no file, a torn one, or
-// a payload whose exceptions do not read.
-func trustOf(file store.SnapshotFile) Trust {
+// trustOf is the verdicts held carries with file's exceptions: none from no
+// file, a torn one, or a payload whose exceptions do not read, since a mark
+// trusted without them would trust what failed.
+func trustOf(held []store.Mark, file store.SnapshotFile) Trust {
 	switch f := file.(type) {
 	case store.Saved:
 		ex, err := readExceptions(f.Payload)
 		if err != nil {
 			return Trust{}
 		}
-		return Trust{Marks: f.Marks, Exceptions: ex}
+		return Trust{Marks: held, Exceptions: ex}
 	case store.NoSnapshot, store.TornSnapshot:
 		return Trust{}
 	}
@@ -124,7 +146,7 @@ func trustOf(file store.SnapshotFile) Trust {
 // by the total order, check, and step each in order onto s.
 func walk(e Env, s State, through Through, marks []store.Mark, exceptions []events.EventID, t Trust, base BaseFact, scans []Scanned) Folded {
 	facts := newFacts(base)
-	kinds := e.Registry.Kinds()
+	kinds := e.registry.Kinds()
 	var located []Located
 	seen := map[events.EventID]int{}
 	for _, sc := range scans {
@@ -157,29 +179,28 @@ func walk(e Env, s State, through Through, marks []store.Mark, exceptions []even
 		}
 	}
 	slices.SortFunc(located, func(a, b Located) int { return events.Compare(a.Event.Order(), b.Event.Order()) })
-	if u, ok := through.(Upto); ok {
-		for _, l := range located {
-			if events.Compare(l.Event.Order(), u.Key) < 0 {
-				facts.Late++
-			}
-		}
-	}
 	checked, trusted := check(e, located, t)
 	facts.Checked, facts.Trusted = len(checked)-trusted, trusted
+	// Through and Late move over verified events only, as the frontier
+	// does: a carried event's position is the forger's to choose
+	was := through
 	var excepted []events.EventID
 	for _, c := range checked {
 		facts.Verdicts.count(c.verdict)
-		if c.verdict != events.Valid {
+		switch c.verdict {
+		case events.Valid:
+			if before(c.event.Order(), was) {
+				facts.Late++
+			}
+			through = later(through, c.event.Order())
+		case events.Invalid, events.UnknownSuite:
 			excepted = append(excepted, c.event.ID())
 		}
 		var out outcome
-		s, out = e.Registry.step(s, c)
+		s, out = e.registry.step(s, c)
 		facts.count(out)
 	}
 	exceptions = withIDs(exceptions, excepted)
-	if n := len(checked); n > 0 {
-		through = later(through, checked[n-1].event.Order())
-	}
 	snap := Snapshot{Exceptions: exceptions, Through: through, State: s}
 	facts.Exceptions, facts.Counts = len(exceptions), countsOf(s)
 	return Folded{State: s, Save: saved(base, marks, scans, snap), Facts: facts}
@@ -218,6 +239,17 @@ func rank(b events.Body) int {
 		return 0
 	}
 	panic(fmt.Sprintf("fold: %T is not a Body", b))
+}
+
+// before is whether k sorts before where t stopped.
+func before(k events.OrderKey, t Through) bool {
+	switch t := t.(type) {
+	case Nothing:
+		return false
+	case Upto:
+		return events.Compare(k, t.Key) < 0
+	}
+	panic(fmt.Sprintf("fold: %T is not a Through", t))
 }
 
 func later(t Through, k events.OrderKey) Through {
@@ -407,6 +439,9 @@ func UnreadName(w events.UnreadWhy) string {
 func countsOf(s State) StateCounts {
 	var c StateCounts
 	s.items.each(func(r *item) {
+		if len(r.creates) > 0 {
+			c.Items++
+		}
 		c.origin(r.origin())
 		if _, ok := r.life.(Tombstoned); ok {
 			c.Tombstoned++
@@ -418,7 +453,7 @@ func countsOf(s State) StateCounts {
 			if _, uncreated := o.(Uncreated); !uncreated && el.creates[0].in == comments {
 				c.Comments++
 			}
-			c.collided(o)
+			c.origin(o)
 			c.facts(el.facts)
 		}
 	})
@@ -426,17 +461,6 @@ func countsOf(s State) StateCounts {
 }
 
 func (c *StateCounts) origin(o Origin) {
-	switch o.(type) {
-	case Created:
-		c.Items++
-	case Collided:
-		c.Items++
-	case Uncreated:
-	}
-	c.collided(o)
-}
-
-func (c *StateCounts) collided(o Origin) {
 	switch o.(type) {
 	case Created:
 	case Collided:
@@ -452,7 +476,7 @@ func (c *StateCounts) facts(f Facts) {
 		if len(prose) > 1 {
 			c.ProseConflicts++
 		}
-		switch p := f.Plain(r.name).(type) {
+		switch p := r.settled().(type) {
 		case Settled:
 			c.Overruled += len(p.Overruled)
 			if len(prose) > 0 {

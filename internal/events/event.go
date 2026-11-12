@@ -366,7 +366,7 @@ func (h Header) wire() []byte {
 	var w wire.Writer
 	w.Bytes(headerKind, []byte(h.kind))
 	w.Uvarint(headerSchema, uint64(h.schema))
-	w.Bytes(headerSubject, aboutWire(h.about))
+	w.Bytes(headerSubject, AboutWire(h.about))
 	w.Bytes(headerAttribution, h.by.Wire())
 	w.Bytes(headerConfigRef, configRefWire(h.configRef))
 	w.Uvarint(headerPolicy, uint64(h.policy))
@@ -376,7 +376,8 @@ func (h Header) wire() []byte {
 	return w.Encoded()
 }
 
-func aboutWire(a About) []byte {
+// AboutWire is a subject as it is stored. ReadAbout reads it.
+func AboutWire(a About) []byte {
 	var w wire.Writer
 	switch a := a.(type) {
 	case Root:
@@ -462,7 +463,7 @@ func readHeader(b []byte) (Header, error) {
 		case headerSchema:
 			h.schema = SchemaVersion(r.Uvarint())
 		case headerSubject:
-			h.about, err = readAbout(r.Bytes())
+			h.about, err = ReadAbout(r.Bytes())
 		case headerAttribution:
 			h.by, err = ReadAttribution(r.Bytes())
 		case headerConfigRef:
@@ -509,7 +510,8 @@ func readHeader(b []byte) (Header, error) {
 	return h, nil
 }
 
-func readAbout(b []byte) (About, error) {
+// ReadAbout reads a subject's stored form.
+func ReadAbout(b []byte) (About, error) {
 	var node, name []byte
 	var hasNode, hasName bool
 	r := wire.NewReader(b)

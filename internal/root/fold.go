@@ -14,7 +14,13 @@ import (
 // foldEnv is the fold every invocation runs: the first facts' kinds, the
 // suites this binary verifies, and the cores that verify.
 func foldEnv(workers int) fold.Env {
-	return fold.Env{Registry: fold.NewRegistry(fold.FirstFacts()...), Suites: events.NewSuites(events.Ed25519()), Workers: workers}
+	env, err := fold.NewEnv(fold.NewRegistry(fold.FirstFacts()...), events.NewSuites(events.Ed25519()), workers)
+	if err != nil {
+		// [LAW:no-silent-failure] GOMAXPROCS and the twin's count are at
+		// least one; another is a build fault, refused before any step runs
+		panic(fmt.Sprintf("root: %v", err))
+	}
+	return env
 }
 
 // verb runs steps 1 and 3 of §5 before a verb's body: the store opened and
@@ -85,25 +91,22 @@ func save(s *store.Store, sv fold.Save) command.Swap {
 // begin is the plan the fold follows and how it starts, a pure decision:
 // the store's delta onto a snapshot whose payload reads, or, when it does
 // not, the plan of no snapshot, every stream from 0; and a genesis for the
-// store's own reason, which trusts whatever snapshot file there is.
+// store's own reason. A genesis trusts the verdicts below the marks the
+// store's plan held, with the file's exceptions.
 func begin(env fold.Env, heads store.Heads, file store.SnapshotFile) (store.Resume, func([]fold.Scanned) fold.Folded) {
 	resume := store.Plan(fold.Tag(), heads, file)
 	switch b := resume.Base.(type) {
 	case store.FromSaved:
-		saved, ok := file.(store.Saved)
-		if !ok {
-			panic(fmt.Sprintf("root: the store resumed from %T, which is not a saved snapshot", file))
-		}
 		snap, err := fold.ReadSnapshot(b.Payload)
 		if err != nil {
 			return store.Plan(fold.Tag(), heads, store.NoSnapshot{}), func(scans []fold.Scanned) fold.Folded {
-				return fold.Genesis(env, fold.PayloadUnreadable{Err: err}, file, scans)
+				return fold.Genesis(env, fold.PayloadUnreadable{Err: err}, resume.Held, file, scans)
 			}
 		}
-		return resume, func(scans []fold.Scanned) fold.Folded { return fold.Extend(env, snap, saved.Marks, scans) }
+		return resume, func(scans []fold.Scanned) fold.Folded { return fold.Extend(env, snap, resume.Held, scans) }
 	case store.Genesis:
 		return resume, func(scans []fold.Scanned) fold.Folded {
-			return fold.Genesis(env, fold.Missed{Miss: b.Why}, file, scans)
+			return fold.Genesis(env, fold.Missed{Miss: b.Why}, resume.Held, file, scans)
 		}
 	}
 	panic(fmt.Sprintf("root: %T is not a Base", resume.Base))

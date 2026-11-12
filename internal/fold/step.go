@@ -32,7 +32,7 @@ func (c Checked) Verdict() events.SignatureVerdict { return c.verdict }
 
 // Check judges each event's signature, in order: Valid when t trusts it,
 // below a mark of its stream under the same log and not excepted, and
-// otherwise by e.Suites, on e.Workers goroutines. A verdict reads only the
+// otherwise by e.Suites(), on e.Workers() goroutines. A verdict reads only the
 // event's bytes, so the result does not depend on the schedule.
 func Check(e Env, evs []Located, t Trust) []Checked {
 	cs, _ := check(e, evs, t)
@@ -41,10 +41,6 @@ func Check(e Env, evs []Located, t Trust) []Checked {
 
 // check is Check and how many verdicts it trusted.
 func check(e Env, evs []Located, t Trust) ([]Checked, int) {
-	if e.Workers < 1 {
-		// [LAW:no-silent-failure] the root sets GOMAXPROCS; none is a caller's bug
-		panic(fmt.Sprintf("fold: an Env with %d workers", e.Workers))
-	}
 	marks := map[store.Ref]store.Position{}
 	for _, m := range t.Marks {
 		marks[m.Ref] = m.Upto
@@ -58,19 +54,20 @@ func check(e Env, evs []Located, t Trust) ([]Checked, int) {
 	for i, l := range evs {
 		cs[i].event = l.Event
 		m, marked := marks[l.Ref]
-		if marked && m.Log == l.At.Log && l.At.At < m.At && !excepted[l.Event.ID()] {
+		// a held mark's stream is wholly under its log: the store judged it
+		if marked && l.At.At < m.At && !excepted[l.Event.ID()] {
 			cs[i].verdict = events.Valid
 			continue
 		}
 		verify = append(verify, i)
 	}
 	var wg sync.WaitGroup
-	per := (len(verify) + e.Workers - 1) / e.Workers
+	per := (len(verify) + e.workers - 1) / e.workers
 	for chunk := range slices.Chunk(verify, max(per, 1)) {
 		wg.Go(func() {
 			for _, i := range chunk {
 				ev := cs[i].event
-				cs[i].verdict = e.Suites.Check(ev.Header().Attribution().Principal, ev.SignedBytes(), ev.Signature())
+				cs[i].verdict = e.suites.Check(ev.Header().Attribution().Principal, ev.SignedBytes(), ev.Signature())
 			}
 		})
 	}

@@ -11,8 +11,11 @@ import (
 )
 
 func TestAViewDerivesFromTheStateItIsOf(t *testing.T) {
-	env := fold.Env{Registry: fold.NewRegistry(fold.FirstFacts()...), Suites: events.NewSuites(events.Ed25519()), Workers: 1}
-	s := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, store.NoSnapshot{}, nil).State
+	env, err := fold.NewEnv(fold.NewRegistry(fold.FirstFacts()...), events.NewSuites(events.Ed25519()), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := fold.Genesis(env, fold.Missed{Miss: store.Absent{}}, nil, store.NoSnapshot{}, nil).State
 	v := Of(s, config.Schema{}, time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC))
 	if !v.State().Equal(s) {
 		t.Error("a view's state is not the state it is of")
