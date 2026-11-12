@@ -12,12 +12,9 @@ import (
 )
 
 // The store's layout under its root, <git-common-dir>/lit/store/ (D11):
-// log/<checkout-id> per writing checkout, repo/ for lit's repository, and
-// cache/snapshot. The layout is the one builder of a Path.
+// log/<checkout-id> per writing checkout and repo/ for lit's repository. The layout is the one builder of a Path.
 const (
 	logDir Path = "log"
-	// SnapshotPath is the cache snapshot, replaced whole by Swap.
-	SnapshotPath Path = "cache/snapshot"
 	// repoDir is lit's repository's directory, which go-git opens.
 	repoDir = "repo"
 )

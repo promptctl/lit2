@@ -145,7 +145,7 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 	for seed := range uint64(40) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			w := generate(t, seed, 30)
-			want := w.genesis()
+			want := w.replay()
 			reached.duplicates += want.Facts.Duplicates
 			reached.carried += len(want.State.Integrity().Carried)
 			reached.unapplied += len(want.State.Integrity().Unapplied)
@@ -162,8 +162,8 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 					scans = append(scans, w.span(ref, 0, at), w.span(ref, at, w.head(ref)))
 				}
 				r.Shuffle(len(scans), func(i, j int) { scans[i], scans[j] = scans[j], scans[i] })
-				if got := fold.Genesis(env, scans).State; !got.Equal(want.State) {
-					t.Errorf("Genesis in another arrival order disagrees")
+				if got := fold.Replay(env, scans).State; !got.Equal(want.State) {
+					t.Errorf("a replay in another arrival order disagrees")
 				}
 			}
 		})

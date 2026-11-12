@@ -175,18 +175,15 @@ func TestATornWriterRefIsResealedAndCreatedAgain(t *testing.T) {
 	}
 }
 
-// Whoever can read a clone's objects reads its logs, refs and snapshot
+// Whoever can read a clone's objects reads its logs and refs
 // too: the store's files are 0644, as go-git makes the objects.
 func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	c := gittest.Clone(t)
 	s := store.Open(ida, store.DiskPorts(c, storetest.Entropy(5)), store.DefaultSegmentBound)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "event")...)
 	storetest.PublishOwn(t, s)
-	if _, err := s.Swap(store.FoldTag("v1"), []store.Mark{}, []byte("state")); err != nil {
-		t.Fatal(err)
-	}
 	root := filepath.Join(c.SharedDir(), "store")
-	for _, p := range []string{string(store.LogPath(ida)), string(store.SnapshotPath), "repo/" + string(store.WriterRef{Checkout: ida}.Name())} {
+	for _, p := range []string{string(store.LogPath(ida)), "repo/" + string(store.WriterRef{Checkout: ida}.Name())} {
 		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(p)))
 		if err != nil {
 			t.Fatal(err)

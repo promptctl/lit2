@@ -36,9 +36,6 @@ type Files interface {
 	// ReadAt reads up to n bytes at off, fewer at the end of the file.
 	ReadAt(p Path, off, n uint64) ([]byte, error)
 	Size(p Path) (uint64, error)
-	// Replace makes the file hold b by renaming a temporary file over it,
-	// so a reader sees the old bytes or the new ones whole.
-	Replace(p Path, b []byte) error
 	// List is the files directly in dir, sorted; a missing dir holds none.
 	List(dir Path) ([]Path, error)
 }
@@ -67,7 +64,7 @@ type OSFiles struct {
 
 // FilesAt is the store's files under root, which need not exist yet. Every
 // file it makes is 0644, as go-git makes lit's objects, so whoever can read
-// a clone's objects can read its logs and snapshot too.
+// a clone's objects can read its logs too.
 func FilesAt(root string) OSFiles { return FilesAtMode(root, 0o644) }
 
 // FilesAtMode is files under root, each made in mode: the identity files,
@@ -169,20 +166,6 @@ func (o OSFiles) Size(p Path) (uint64, error) {
 	return uint64(info.Size()), nil
 }
 
-func (o OSFiles) Replace(p Path, b []byte) error {
-	f, err := o.temp(filepath.Dir(o.file(p)), b)
-	if err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return errors.Join(err, os.Remove(f.Name()))
-	}
-	if err := os.Rename(f.Name(), o.file(p)); err != nil {
-		return errors.Join(err, os.Remove(f.Name()))
-	}
-	return nil
-}
-
 func (o OSFiles) List(dir Path) ([]Path, error) {
 	entries, err := os.ReadDir(o.file(dir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -250,13 +233,6 @@ func (m *MemoryFiles) Size(p Path) (uint64, error) {
 		return 0, NotFound{Path: p}
 	}
 	return uint64(len(f)), nil
-}
-
-func (m *MemoryFiles) Replace(p Path, b []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.files[p] = slices.Clone(b)
-	return nil
 }
 
 func (m *MemoryFiles) List(dir Path) ([]Path, error) {

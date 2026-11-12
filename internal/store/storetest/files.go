@@ -64,36 +64,12 @@ func Files(t *testing.T, fresh func(*testing.T) store.Files) {
 			t.Errorf("16 creations made %d winners and a file holding %q, %v; want one, holding its bytes", len(winners), got, err)
 		}
 	})
-	t.Run("a reader sees a replace whole", func(t *testing.T) {
-		f := fresh(t)
-		old, next := bytes.Repeat([]byte("o"), 64<<10), bytes.Repeat([]byte("n"), 32<<10)
-		if err := f.Replace(store.SnapshotPath, old); err != nil {
-			t.Fatal(err)
-		}
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			for i := range 100 {
-				if err := f.Replace(store.SnapshotPath, [][]byte{next, old}[i%2]); err != nil {
-					t.Error(err)
-					return
-				}
-			}
-		})
-		for range 100 {
-			b, err := f.ReadAt(store.SnapshotPath, 0, 1<<20)
-			if err != nil || !bytes.Equal(b, old) && !bytes.Equal(b, next) {
-				t.Errorf("a reader during replaces read %d bytes, %v; want one version whole", len(b), err)
-				break
-			}
-		}
-		wg.Wait()
-	})
 	t.Run("a list holds the files of its directory, and no directory holds none", func(t *testing.T) {
 		f := fresh(t)
 		if ps, err := f.List("log"); err != nil || len(ps) != 0 {
 			t.Errorf("List of an absent directory = %v, %v; want none", ps, err)
 		}
-		for _, q := range []store.Path{"log/b", "log/a", "cache/snapshot"} {
+		for _, q := range []store.Path{"log/b", "log/a", "other/c"} {
 			if _, err := f.CreateOnce(q, []byte("x")); err != nil {
 				t.Fatal(err)
 			}

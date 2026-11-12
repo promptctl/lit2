@@ -47,15 +47,10 @@ type Folded struct {
 	Facts FoldFacts
 }
 
-// Genesis folds scans, every stream from 0, from the zero State, checking
-// every signature.
-func Genesis(e Env, scans []Scanned) Folded {
-	return walk(e, scans)
-}
-
-// walk is the one walk: decode every record, keep one of each event, sort
-// by the total order, check, and step each in order onto s.
-func walk(e Env, scans []Scanned) Folded {
+// Replay folds scans, every stream from 0, from the zero State: the one
+// walk, which decodes every record, keeps one of each event, sorts by the
+// total order, checks every signature, and steps each in order onto s.
+func Replay(e Env, scans []Scanned) Folded {
 	facts := newFacts()
 	s := State{}
 	kinds := e.registry.Kinds()
@@ -106,7 +101,7 @@ func walk(e Env, scans []Scanned) Folded {
 // rank orders the bodies the copies of one event can carry, by how much of
 // the signed payload each keeps: the payload read; the payload committed
 // but unread by this binary; a body that is not the one signed; none. The
-// walk keeps the highest, so which copy stands does not depend on which
+// Replay keeps the highest, so which copy stands does not depend on which
 // stream arrived first. Two copies of one rank stand alike: a committed
 // payload is the one the header hashes, and the other two carry nothing
 // the state records.

@@ -1,11 +1,10 @@
 // Package storetest is the behavioral suite every substrate of the store
 // passes, and the contract suite of its Files port. Its assertions speak of
-// logs, segments, publications, refs and snapshots (architecture.md
+// logs, segments, publications, and refs (architecture.md
 // §3.16), never of file layouts or bytes beyond git's object ids.
 package storetest
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -39,8 +38,6 @@ type Fresh func(*testing.T) store.Ports
 var (
 	a = store.CheckoutID{0xa}
 	b = store.CheckoutID{0xb}
-	// tag is the fold version the suite's snapshots are swapped under.
-	tag = store.FoldTag("fold v1")
 )
 
 func batch(t *testing.T, rs ...string) store.Batch {
@@ -169,31 +166,6 @@ func segments(t *testing.T, objects git.Objects, commit git.ObjectID) []git.Entr
 		t.Fatal(err)
 	}
 	return es
-}
-
-func plan(t *testing.T, s *store.Store) store.Resume {
-	t.Helper()
-	file, err := s.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return store.Plan(tag, heads(t, s), file)
-}
-
-// swap swaps a snapshot that consumed every stream to its scan's end.
-func swap(t *testing.T, s *store.Store, payload string) {
-	t.Helper()
-	var marks []store.Mark
-	for _, st := range heads(t, s).Streams {
-		scan, err := s.Read(store.Range{Stream: st, From: 0})
-		if err != nil {
-			t.Fatal(err)
-		}
-		marks = append(marks, store.Mark{Ref: st.Ref, Upto: store.Position{Log: st.Until.Log, At: scan.End}})
-	}
-	if _, err := s.Swap(tag, marks, []byte(payload)); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // Store holds fresh to the store's behavior.
@@ -336,14 +308,16 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 		// the header and half a frame: what a crash in the first append leaves
 		half := store.Encode(batch(t, "half"))
-		if err := p.Files.Replace(store.LogPath(a), append(header, half[:len(half)/2]...)); err != nil {
+		crashed := fresh(t)
+		if _, err := crashed.Files.CreateOnce(store.LogPath(a), append(header, half[:len(half)/2]...)); err != nil {
 			t.Fatal(err)
 		}
+		s = store.Open(a, crashed, store.DefaultSegmentBound)
 		sealed, err := s.SealOwn()
 		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
 			t.Errorf("sealing a log with no whole frame made %#v, %v; want %#v", sealed, err, want)
 		}
-		if refs, bad, err := p.Refs.List("refs/lit/"); err != nil || len(refs)+len(bad) != 0 {
+		if refs, bad, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs)+len(bad) != 0 {
 			t.Errorf("with nothing to publish the refs are %v, %v, %v; want none", refs, bad, err)
 		}
 	})
@@ -396,15 +370,18 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 		AppendAll(t, s, batch(t, "two"))
 		PublishOwn(t, s)
-		if err := p.Files.Replace(store.LogPath(a), short); err != nil {
+		// the same repository beside a log holding only the first batch
+		rewound := fresh(t)
+		rewound.Objects, rewound.Refs = p.Objects, p.Refs
+		if _, err := rewound.Files.CreateOnce(store.LogPath(a), short); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.SealOwn(); !errors.As(err, new(store.ShorterThanPublished)) {
+		if _, err := store.Open(a, rewound, store.DefaultSegmentBound).SealOwn(); !errors.As(err, new(store.ShorterThanPublished)) {
 			t.Errorf("sealing a log shorter than its publication failed with %v; want ShorterThanPublished", err)
 		}
 	})
 
-	t.Run("an inbox publication reads like a writer's, and its rewrite refolds", func(t *testing.T) {
+	t.Run("an inbox publication reads like a writer's, and its rewrite reads in its place", func(t *testing.T) {
 		t.Parallel()
 		p := fresh(t)
 		s := store.Open(a, p, store.DefaultSegmentBound)
@@ -425,13 +402,12 @@ func Store(t *testing.T, fresh Fresh) {
 		if got := Read(Whole(t, s, inbox)); filed.Move != (store.RefCreated{}) || !slices.Equal(got, []string{"filed", "remotely"}) {
 			t.Errorf("the inbox reads %v after %+v; want its two records", got, filed)
 		}
-		swap(t, s, "consumed the inbox")
 		rewrite := publish(store.LogID{2}, "filed")
 		if rewrite.Move != (store.RefReplaced{Previous: filed.Commit}) {
 			t.Errorf("the rewrite's publish was %+v; want it to replace the ref", rewrite)
 		}
-		if base := plan(t, s).Base; base != (store.Genesis{Why: store.Rewritten{Ref: inbox}}) {
-			t.Errorf("after a rewrite the plan starts from %#v; want genesis, rewritten", base)
+		if got := Read(Whole(t, s, inbox)); !slices.Equal(got, []string{"filed"}) {
+			t.Errorf("after a rewrite the inbox reads %v; want only what the rewrite holds", got)
 		}
 	})
 
@@ -460,54 +436,4 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 	})
 
-	t.Run("a snapshot is resumed when the heads match it and extended when they grew", func(t *testing.T) {
-		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
-		if base := plan(t, s).Base; base != (store.Genesis{Why: store.Absent{}}) {
-			t.Errorf("with no snapshot the plan starts from %#v; want genesis, absent", base)
-		}
-		AppendAll(t, s, batch(t, "one"))
-		swap(t, s, "state after one")
-		// a second open, with no write between: a hit
-		again := store.Open(a, p, store.DefaultSegmentBound)
-		hit := plan(t, again)
-		if !equalBase(hit.Base, store.FromSaved{Payload: []byte("state after one")}) || len(hit.Delta) != 0 {
-			t.Errorf("a second open with no write plans %#v; want the snapshot resumed with nothing to read", hit)
-		}
-		mark := heads(t, again).Streams[0].Until.At
-		AppendAll(t, again, batch(t, "two"))
-		extended := plan(t, again)
-		if !equalBase(extended.Base, store.FromSaved{Payload: []byte("state after one")}) || len(extended.Delta) != 1 || extended.Delta[0].From != mark {
-			t.Fatalf("after an append the plan is %#v; want the snapshot extended from %d", extended, mark)
-		}
-		scan, err := again.Read(extended.Delta[0])
-		if err != nil || !slices.Equal(Read(scan), []string{"two"}) {
-			t.Errorf("the delta reads %v, %v; want only the new record", Read(scan), err)
-		}
-		if base := store.Plan(store.FoldTag("fold v2"), heads(t, again), mustSnapshot(t, again)).Base; base != (store.Genesis{Why: store.TagChanged{}}) {
-			t.Errorf("under another fold version the plan starts from %#v; want genesis, tag changed", base)
-		}
-		if err := p.Files.Replace(store.SnapshotPath, []byte("not a snapshot")); err != nil {
-			t.Fatal(err)
-		}
-		genesis, ok := plan(t, again).Base.(store.Genesis)
-		if _, torn := genesis.Why.(store.Torn); !ok || !torn {
-			t.Errorf("over a corrupted snapshot the plan starts from %#v; want genesis, torn", genesis)
-		}
-	})
-}
-
-func mustSnapshot(t *testing.T, s *store.Store) store.SnapshotFile {
-	t.Helper()
-	f, err := s.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return f
-}
-
-func equalBase(got store.Base, want store.FromSaved) bool {
-	f, ok := got.(store.FromSaved)
-	return ok && bytes.Equal(f.Payload, want.Payload)
 }

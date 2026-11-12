@@ -59,7 +59,7 @@ var corpus = sync.OnceValue(func() []store.Record {
 	return rs
 })
 
-// BenchmarkCorpus measures one refold's codec cost over scenario 13's
+// BenchmarkCorpus measures one replay's codec cost over scenario 13's
 // corpus, per event: Decode is the whole of reading a record (its parse,
 // its id's hash and its payload's commitment check, the payload's decode);
 // Hash is the two hashes alone, the id and the payload's; Verify is the

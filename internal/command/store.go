@@ -22,9 +22,7 @@ type StoreFacts struct {
 	Opening   Opening
 	Heads     []store.Heads
 	Reads     []Read
-	Plans     []store.Resume
 	Folds     []fold.FoldFacts
-	Swaps     []store.Swapped
 	Appends   []store.Appended
 	Publishes []store.Publishing
 }
@@ -56,18 +54,16 @@ func (Opened) opening()   {}
 func (Unopened) opening() {}
 
 func (f StoreFacts) empty() bool {
-	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Plans)+len(f.Folds)+len(f.Swaps)+len(f.Appends)+len(f.Publishes) == 0
+	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Folds)+len(f.Appends)+len(f.Publishes) == 0
 }
 
 // The store block as the line spells it: one object per step that ran,
-// and the reads summed over the delta, with torn bytes per ref.
+// and the reads summed, with torn bytes per ref.
 type (
 	storeLine struct {
 		Open    *openLine     `json:"open,omitempty"`
 		Heads   []headsLine   `json:"heads,omitempty"`
 		Read    *readLine     `json:"read,omitempty"`
-		Plan    []planLine    `json:"plan,omitempty"`
-		Swap    []swapLine    `json:"swap,omitempty"`
 		Append  []appendLine  `json:"append,omitempty"`
 		Publish []publishLine `json:"publish,omitempty"`
 	}
@@ -96,15 +92,6 @@ type (
 		Ref   string `json:"ref"`
 		Spans int    `json:"torn_spans"`
 		Bytes uint64 `json:"torn_bytes"`
-	}
-	planLine struct {
-		Snapshot string `json:"snapshot"`
-		Ref      string `json:"ref,omitempty"`
-		Why      string `json:"why,omitempty"`
-		Delta    int    `json:"delta"`
-	}
-	swapLine struct {
-		SnapshotBytes int `json:"snapshot_bytes"`
 	}
 	appendLine struct {
 		Records    int    `json:"records"`
@@ -143,12 +130,6 @@ func storeBlock(f StoreFacts) *storeLine {
 	}
 	if len(f.Reads) > 0 {
 		l.Read = reads(f.Reads)
-	}
-	for _, r := range f.Plans {
-		l.Plan = append(l.Plan, plan(r))
-	}
-	for _, s := range f.Swaps {
-		l.Swap = append(l.Swap, swapLine{SnapshotBytes: s.Bytes})
 	}
 	for _, a := range f.Appends {
 		l.Append = append(l.Append, appendLine{Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), LogCreated: created(a.Log)})
@@ -196,39 +177,6 @@ func reads(rs []Read) *readLine {
 		l.Torn = append(l.Torn, torn[name])
 	}
 	return l
-}
-
-// plan is a resume as hit, extended, or refold with its miss.
-func plan(r store.Resume) planLine {
-	switch b := r.Base.(type) {
-	case store.FromSaved:
-		if len(r.Delta) == 0 {
-			return planLine{Snapshot: "hit"}
-		}
-		return planLine{Snapshot: "extended", Delta: len(r.Delta)}
-	case store.Genesis:
-		l := refold(b.Why)
-		l.Delta = len(r.Delta)
-		return l
-	}
-	panic(fmt.Sprintf("command: %T is not a Base", r.Base))
-}
-
-// refold is a genesis's miss: why the snapshot was not resumed.
-func refold(m store.Miss) planLine {
-	switch m := m.(type) {
-	case store.Absent:
-		return planLine{Snapshot: "refold:absent"}
-	case store.Torn:
-		return planLine{Snapshot: "refold:torn", Why: m.Why.Error()}
-	case store.TagChanged:
-		return planLine{Snapshot: "refold:tag_changed"}
-	case store.Rewritten:
-		return planLine{Snapshot: "refold:rewritten", Ref: string(m.Ref.Name())}
-	case store.Withdrawn:
-		return planLine{Snapshot: "refold:withdrawn", Ref: string(m.Ref.Name())}
-	}
-	panic(fmt.Sprintf("command: %T is not a Miss", m))
 }
 
 func created(o store.Made) bool {

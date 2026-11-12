@@ -78,9 +78,9 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, id, named, red := base(t)
-			was := w.genesis()
+			was := w.replay()
 			c.add(w, id, named, red)
-			now := w.genesis()
+			now := w.replay()
 			if now.State.Equal(was.State) || was.State.Equal(now.State) {
 				t.Errorf("a state with %s is Equal to one without", c.name)
 			}
@@ -88,7 +88,7 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 	}
 }
 
-func TestGenesisIsStepsOverTheSortedEvents(t *testing.T) {
+func TestAReplayIsStepsOverTheSortedEvents(t *testing.T) {
 	w := generate(t, 3, 30)
 	var located []fold.Located
 	seen := map[events.EventID]bool{}
@@ -109,6 +109,6 @@ func TestGenesisIsStepsOverTheSortedEvents(t *testing.T) {
 		s = fold.Step(env.Registry(), s, c)
 	}
 	if !s.Equal(w.state()) {
-		t.Errorf("stepping the sorted events disagrees with Genesis")
+		t.Errorf("stepping the sorted events disagrees with the replay")
 	}
 }

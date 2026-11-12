@@ -52,7 +52,7 @@ func Check(e Env, evs []Located) []Checked {
 	return cs
 }
 
-// Step folds one checked event into s: the one walk, which Genesis and every later reader of events share `[LAW:single-enforcer]`. An event
+// Step folds one checked event into s: the one walk, which Replay and every later reader of events share `[LAW:single-enforcer]`. An event
 // whose signature does not verify is carried and never applied, and moves
 // neither the frontier nor the names; a verified one is observed, then
 // applied by its kind's rule, or left unapplied with why.

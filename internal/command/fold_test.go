@@ -27,7 +27,7 @@ var nothing = func() fold.Env {
 }()
 
 func TestAFoldOfNothingIsEveryCountZeroAndPresent(t *testing.T) {
-	block := foldBlockOf(t, fold.Genesis(nothing, nil).Facts)
+	block := foldBlockOf(t, fold.Replay(nothing, nil).Facts)
 	for _, k := range []string{"records", "torn", "duplicates", "checked", "applied"} {
 		if block[k] != 0.0 {
 			t.Errorf("a fold of nothing has %s %v; want 0, present", k, block[k])

@@ -53,16 +53,13 @@ func TestAnEventThatNeverUsedItsStoreHasNoStoreBlock(t *testing.T) {
 	}
 }
 
-func TestAFreshStoresHeadsAreZerosAndAMissIsARefold(t *testing.T) {
+func TestAFreshStoresHeadsAreZeros(t *testing.T) {
 	s := memoryStore()
 	h := must[store.Heads](t)(s.Heads())
-	block := storeBlockOf(t, StoreFacts{Heads: []store.Heads{h}, Plans: []store.Resume{store.Plan(nil, h, store.NoSnapshot{})}})
+	block := storeBlockOf(t, StoreFacts{Heads: []store.Heads{h}})
 	heads := first(t, block, "heads")
 	if heads["refs_read"] != 0.0 || heads["logs_read"] != 0.0 || heads["streams"] != 0.0 {
 		t.Errorf("a fresh store's heads are %v; want zero refs, logs and streams, present", heads)
-	}
-	if p := first(t, block, "plan"); p["snapshot"] != "refold:absent" {
-		t.Errorf("with no snapshot the plan is %v; want refold:absent", p)
 	}
 }
 
@@ -71,8 +68,6 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	appended := must[store.Appended](t)(s.Append(must[store.Batch](t)(store.NewBatch(store.Record("event")))))
 	h := must[store.Heads](t)(s.Heads())
 	scan := must[store.Scan](t)(s.Read(store.Range{Stream: h.Streams[0], From: 0}))
-	swapped := must[store.Swapped](t)(s.Swap(store.FoldTag("v1"), []store.Mark{{Ref: h.Streams[0].Ref, Upto: h.Streams[0].Until}}, []byte("state")))
-	hit := store.Plan(store.FoldTag("v1"), h, must[store.SnapshotFile](t)(s.Snapshot()))
 	published := must[store.Published](t)(s.Publish(must[store.Sealing](t)(s.SealOwn()).(store.Publication)))
 	idle := must[store.Published](t)(s.Publish(must[store.Sealing](t)(s.SealOwn()).(store.Publication)))
 	nothing := store.NothingToPublish{Ref: h.Streams[0].Ref, Log: h.Streams[0].Until.Log}
@@ -80,7 +75,7 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 		Prior: store.Resealed{Why: errors.New("its publication does not read")}}
 	block := storeBlockOf(t, StoreFacts{
 		Heads: []store.Heads{h}, Reads: []Read{{Range: store.Range{Stream: h.Streams[0], From: 0}, Scan: scan}},
-		Plans: []store.Resume{hit}, Swaps: []store.Swapped{swapped}, Appends: []store.Appended{appended},
+		Appends:   []store.Appended{appended},
 		Publishes: []store.Publishing{published, idle, resealed, nothing},
 	})
 	if a := first(t, block, "append"); a["records"] != 1.0 || a["log_created"] != true || a["log_until"] != float64(appended.Until.At) {
@@ -88,12 +83,6 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	}
 	if r, _ := block["read"].(map[string]any); r["frames_read"] != 1.0 || r["bytes_read"] != float64(appended.Until.At) || r["incomplete_tail_bytes"] != 0.0 {
 		t.Errorf("the read is %v; want one frame, every byte, no tail", r)
-	}
-	if p := first(t, block, "plan"); p["snapshot"] != "hit" {
-		t.Errorf("a plan at the snapshot's heads is %v; want hit", p)
-	}
-	if sw := first(t, block, "swap"); sw["snapshot_bytes"] != float64(swapped.Bytes) || swapped.Bytes == 0 {
-		t.Errorf("the swap is %v; want its bytes", sw)
 	}
 	list, _ := block["publish"].([]any)
 	if len(list) != 4 {

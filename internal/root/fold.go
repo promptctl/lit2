@@ -58,7 +58,7 @@ func open(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Folded
 		stored.Reads = append(stored.Reads, command.Read{Range: r, Scan: scan})
 		scans = append(scans, fold.Scanned{Range: r, Scan: scan})
 	}
-	folded := fold.Genesis(env, scans)
+	folded := fold.Replay(env, scans)
 	stored.Folds = append(stored.Folds, folded.Facts)
 	return folded, nil
 }

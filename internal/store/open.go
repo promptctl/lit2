@@ -259,8 +259,14 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 	return pub, log, nil
 }
 
+// Range is a stream's bytes from From to its head.
+type Range struct {
+	Stream Stream
+	From   Offset
+}
+
 // Read reads a range of a stream, from From to the stream's head as Heads
-// saw it, so what a fold consumes matches the heads it planned against.
+// saw it, so what a fold consumes matches the heads it read.
 func (s *Store) Read(r Range) (Scan, error) {
 	if r.From > r.Stream.Until.At {
 		return Scan{}, fmt.Errorf("%s: reading from %d, past its head at %d", r.Stream.Ref.Name(), r.From, r.Stream.Until.At)
@@ -295,36 +301,6 @@ func (s *Store) bytes(src source, want Span) ([]byte, error) {
 		return b, nil
 	}
 	panic(fmt.Sprintf("store: %T is not a source", src))
-}
-
-// Snapshot reads the cache snapshot. A file replaced while it is read does
-// not read whole, which is a torn snapshot and one refold.
-func (s *Store) Snapshot() (SnapshotFile, error) {
-	size, err := s.ports.Files.Size(SnapshotPath)
-	if errors.As(err, new(NotFound)) {
-		return NoSnapshot{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	b, err := s.ports.Files.ReadAt(SnapshotPath, 0, size)
-	if err != nil {
-		return nil, err
-	}
-	return decodeSnapshot(b), nil
-}
-
-// Swapped is what a swap wrote.
-type Swapped struct{ Bytes int }
-
-// Swap replaces the snapshot whole by atomic rename; no lock, since a
-// reader of a snapshot mid-replace sees one whole file or a torn one.
-func (s *Store) Swap(tag FoldTag, upto []Mark, payload []byte) (Swapped, error) {
-	b := encodeSnapshot(tag, upto, payload)
-	if err := s.ports.Files.Replace(SnapshotPath, b); err != nil {
-		return Swapped{}, err
-	}
-	return Swapped{Bytes: len(b)}, nil
 }
 
 // Sealing is what sealing a checkout's own log made: a publication, or

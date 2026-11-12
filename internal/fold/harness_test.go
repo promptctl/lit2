@@ -139,9 +139,9 @@ func (wd *world) scans() []fold.Scanned {
 	return out
 }
 
-// genesis folds every stream from nothing.
-func (wd *world) genesis() fold.Folded {
-	return fold.Genesis(env, wd.scans())
+// replay folds every stream from 0.
+func (wd *world) replay() fold.Folded {
+	return fold.Replay(env, wd.scans())
 }
 
 // view is the fold of each stream's first upto[ref] batches, and every
@@ -156,11 +156,11 @@ func (wd *world) view(upto map[store.Ref]int) fold.State {
 		}
 		scans = append(scans, wd.span(ref, 0, n))
 	}
-	return fold.Genesis(env, scans).State
+	return fold.Replay(env, scans).State
 }
 
-// state is the genesis's state.
-func (wd *world) state() fold.State { return wd.genesis().State }
+// state is the replay's state.
+func (wd *world) state() fold.State { return wd.replay().State }
 
 func create(at events.Placement) events.Draft {
 	return events.Create{In: top, Payload: events.ItemCreate{Place: at}}

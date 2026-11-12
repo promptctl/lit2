@@ -288,7 +288,7 @@ type Reason interface{ reason() }
 type BadSignature struct{}
 
 // UnknownSuite is a signature of a suite this binary does not have; a
-// newer binary that has it verifies it at its genesis, under its own Tag.
+// newer binary that has it verifies it when it replays, under its own Tag.
 type UnknownSuite struct{}
 
 func (BadSignature) reason() {}
