@@ -43,7 +43,7 @@ Tokens are stable; cite them from code comments, tickets, and reviews as
 | Token | One line |
 |---|---|
 | `INV:rewrite-is-an-event` | an event changes after it is written only by a rewrite event naming the change; a ref moves non-fast-forward only when rewrite events account for every difference (§store) |
-| `INV:deterministic-fold` | same event set ⇒ byte-identical derived state on every machine; only a fold-version bump may change it |
+| `INV:deterministic-fold` | same event set ⇒ byte-identical derived state on every machine |
 | `INV:single-writer-ref` | each ref has exactly one writing checkout; all cross-writer coordination is read-side |
 | `INV:preserve-unknown` | an event a reader cannot interpret is carried and surfaced, never discarded |
 | `INV:no-foreground-network` | no lit command's foreground path waits on a network operation |
@@ -299,8 +299,7 @@ in this design with no crime scene. Two machines hold identical events,
 compute different backlogs, and every individual read looks healthy — the
 divergence surfaces weeks later as two agents confidently working two
 realities. Determinism is enforced, not hoped: golden-fixture tests pin
-`fold(corpus)` byte-for-byte, and the **fold version** — an explicit constant
-— bumps with any rule change.
+`fold(corpus)` byte-for-byte.
 
 **Time enters at the edges.** The fold reads each event's `recorded-at` as
 input, like any payload field, and never reads the clock. A question whose

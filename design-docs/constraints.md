@@ -185,13 +185,12 @@ and access control.
 *Charter #2; design §fold, `INV:deterministic-fold`.*
 
 - **Implies:** no clock, no map-iteration order, no filesystem input in the
-  fold. A fold-version constant bumps with any rule change.
+  fold.
 - **Buys:** every machine with the same events shows the same backlog, which
   is the whole promise; arrival order is irrelevant, so sync needs no merge.
 - **Costs:** a nondeterministic fold is, in the design's words, "the one bug
   with no crime scene". Every derivation must be sorted into fold (pure) or
-  tick (clocked), and some wanted behaviors split in two. Every rule change
-  is a fold-version bump.
+  tick (clocked), and some wanted behaviors split in two.
 - **Departure already made:** the design pins `fold(corpus)` byte-for-byte
   with golden fixtures. `architecture.md` §3.3 tests determinism as state
   equality between independent folds instead.

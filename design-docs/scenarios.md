@@ -491,20 +491,6 @@ requirement as `unknown (tier internal)` rather than met or unmet. A new
 value in the verdict's result type, not a branch. Adopted as a constraint in
 architecture §8.
 
-## 16. A fold-version bump across the fleet
-
-**Need.** A release that changes a fold rule reaches fifty stores on one
-machine without a slow morning.
-
-**Walk.** Every read replays every event, so the first command in each store
-folds under the new version with nothing to invalidate. Nothing runs at
-install time.
-
-**Relies on.** Every read being a replay: no folded state is kept between
-commands.
-
-**Strain.** None.
-
 ## What the scenarios did not reach
 
 Listed so the gap is visible, not to rule on them: the Jira bridge as a
