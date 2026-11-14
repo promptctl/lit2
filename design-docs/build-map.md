@@ -109,10 +109,10 @@ ever, because each of those makes the things around it expensive to replace.
 - a `gc` that edits history in place; configuration read from the code's
   own repository
 
-## Features as stories
+## Scenarios as stories
 
-Each scenario in `scenarios.md` is a feature; each is a set of stories
-above, and the slice it needs.
+Each scenario in `scenarios.md` is a set of stories above, and the slice
+it needs.
 
 | scenario | stories it composes | slice |
 |---|---|---|
@@ -208,3 +208,23 @@ End game, from stories that will already exist and nothing new: a
 `(stage=active updated<-6h)` view as a saved selector in the workspace
 file; a handler on `wrote */status` that files a follow-up; a CI principal
 with write verbs and no tier keys.
+
+## The backlog
+
+The tracker holds this map at three sizes, and each one finishes as
+something that can be used.
+
+- **The product** is the features, in order.
+- **A feature** is an epic. Its title says what a person or an agent can
+  do once its tickets are closed. Features run one after another in slice
+  order, and a slice that holds several things a person would name
+  separately is several features.
+- **A ticket** is one usable part of a feature. Its title says what works
+  when it closes. A part nothing can use alone, such as a path grammar
+  with no verb that takes a path, is built in the ticket that first uses
+  it.
+- **A chore** fills a gap between two tickets: a rename, a moved file. It
+  sits in the feature it serves, directly above the ticket that needs it.
+
+A feature's tickets share one lane, so they run as a series in rank
+order.
