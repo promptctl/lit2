@@ -3,6 +3,7 @@ package events
 import (
 	"bytes"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -145,38 +146,53 @@ func TestNestedMessagesKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 	}
 }
 
+// panicked runs f and is the message it panicked with, or "" if it returned.
+func panicked(f func()) (msg string) {
+	defer func() {
+		if r := recover(); r != nil {
+			msg, _ = r.(string)
+		}
+	}()
+	f()
+	return ""
+}
+
 // A caller can write a zero Level, Name or Label, which no reader reads; the
-// writer refuses it, so no signed event can carry it.
+// writer refuses it, so no signed event can carry it. Each refusal is matched
+// by its message, and a valid value is the control that must not refuse.
 func TestAZeroLevelOrNameIsRefusedByItsWriter(t *testing.T) {
 	for _, c := range []struct {
-		what string
-		p    Payload
+		what, want string
+		p          Payload
 	}{
-		{"a level", ItemCreate{Place: AtLevel{}}},
-		{"a field name", FieldSet{Value: Plain{Canonical: "x"}}},
-		{"a label", LabelAdd{}},
+		{"a level", "is not a level", ItemCreate{Place: AtLevel{}}},
+		{"a field name", "a zero Name is not a name", FieldSet{Value: Plain{Canonical: "x"}}},
+		{"a label", "a zero Name is not a name", LabelAdd{}},
 	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("%s: the writer wrote a zero value; want it refused", c.what)
-				}
-			}()
-			payloadBytes(c.p)
-		}()
+		if got := panicked(func() { payloadBytes(c.p) }); !strings.Contains(got, c.want) {
+			t.Errorf("%s: the writer panicked %q; want a refusal containing %q", c.what, got, c.want)
+		}
+	}
+	if got := panicked(func() { payloadBytes(ItemCreate{Place: AtLevel{Level: mustLevel(1)}}) }); got != "" {
+		t.Errorf("a valid level panicked %q; the control must write", got)
 	}
 }
 
-// A zero Labeled agent reads back as Unlabeled, so the writer refuses it.
+// A zero Labeled agent reads back as Unlabeled, so the writer refuses it. A
+// labeled agent is the control that must be written.
 func TestAZeroAgentLabelIsRefusedByItsWriter(t *testing.T) {
-	c := context(1, Frontier{}, Names{})
-	c.Agent = Labeled{}
-	defer func() {
-		if recover() == nil {
-			t.Errorf("a zero Labeled agent was signed; want it refused")
-		}
-	}()
-	mint(t, c, keyOf(1), 1, Act{About: Item{ID: Top{Prefix: prefix}.Child(Segment{s: "abc"})}, Payload: LabelAdd{Label: mustLabel("a")}})
+	act := Act{About: Item{ID: Top{Prefix: prefix}.Child(Segment{s: "abc"})}, Payload: LabelAdd{Label: mustLabel("a")}}
+	signedWith := func(a Agent) string {
+		c := context(1, Frontier{}, Names{})
+		c.Agent = a
+		return panicked(func() { mint(t, c, keyOf(1), 1, act) })
+	}
+	if got := signedWith(Labeled{}); !strings.Contains(got, "reads back as Unlabeled") {
+		t.Errorf("a zero Labeled agent panicked %q; want a refusal that names Unlabeled", got)
+	}
+	if got := signedWith(AgentFrom("x")); got != "" {
+		t.Errorf("a labeled agent panicked %q; the control must sign", got)
+	}
 }
 
 func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
