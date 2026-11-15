@@ -145,6 +145,28 @@ func TestNestedMessagesKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 	}
 }
 
+// A caller can write a zero Level, Name or Label, which no reader reads; the
+// writer refuses it, so no signed event can carry it.
+func TestAZeroLevelOrNameIsRefusedByItsWriter(t *testing.T) {
+	for _, c := range []struct {
+		what string
+		p    Payload
+	}{
+		{"a level", ItemCreate{Place: AtLevel{}}},
+		{"a field name", FieldSet{Value: Plain{Canonical: "x"}}},
+		{"a label", LabelAdd{}},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s: the writer wrote a zero value; want it refused", c.what)
+				}
+			}()
+			payloadBytes(c.p)
+		}()
+	}
+}
+
 func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	var twoForms wire.Writer
 	twoForms.Bytes(valueProse, text("a").wire())

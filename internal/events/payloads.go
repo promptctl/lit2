@@ -23,6 +23,16 @@ func ParseName(s string) (Name, error) {
 
 func (n Name) String() string { return n.s }
 
+// nameWire is a name as it is stored. Go lets a caller write a zero Name,
+// which no reader reads, so the one writer of a name refuses it before a
+// signed event can carry it `[LAW:single-enforcer]`.
+func nameWire(n Name) []byte {
+	if n.s == "" {
+		panic("events: a zero Name is not a name: only ParseName makes one")
+	}
+	return []byte(n.s)
+}
+
 // Label is one label of an item: a name, an open set the workspace
 // chooses. The labels a workspace file declares and the field table's
 // label kind are this type.
@@ -50,6 +60,16 @@ const (
 	leafLevel = 1
 	topLevel  = 5
 )
+
+// levelWire is a level as it is stored. Go lets a caller write a Level
+// outside 1 to 5, which no reader reads, so the one writer of a level
+// refuses it before a signed event can carry it `[LAW:single-enforcer]`.
+func levelWire(l Level) uint64 {
+	if l.n < leafLevel || l.n > topLevel {
+		panic(fmt.Sprintf("events: level %d is not a level: 1 to 5", l.n))
+	}
+	return uint64(l.n)
+}
 
 // ParseLevel reads a level, 1 to 5.
 func ParseLevel(n int) (Level, error) {
@@ -245,7 +265,7 @@ func PlacementWire(p Placement) []byte {
 	var pl wire.Writer
 	switch at := p.(type) {
 	case AtLevel:
-		pl.Uvarint(placeAtLevel, uint64(at.Level.n))
+		pl.Uvarint(placeAtLevel, levelWire(at.Level))
 		pl.Keep(at.unknown)
 	case BelowParent:
 		pl.Bytes(placeBelowParent, nil)
@@ -324,7 +344,7 @@ func ReadItemDelete(r *wire.Reader) (Versioned, error) {
 
 // field.set = 1:field 2:value 3:over (an event id, repeated) · unknown….
 func (p FieldSet) AppendTo(w *wire.Writer) {
-	w.Bytes(1, []byte(p.Field.s))
+	w.Bytes(1, nameWire(p.Field))
 	w.Bytes(2, p.Value.wire())
 	WriteIDs(w, 3, p.Over)
 	w.Keep(p.unknown)
@@ -366,7 +386,7 @@ func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 
 // label.add = 1:label · unknown….
 func (p LabelAdd) AppendTo(w *wire.Writer) {
-	w.Bytes(1, []byte(p.Label.name.s))
+	w.Bytes(1, nameWire(p.Label.name))
 	w.Keep(p.unknown)
 }
 
@@ -383,7 +403,7 @@ func ReadLabelAdd(r *wire.Reader) (Versioned, error) {
 
 // label.rm = 1:label 2:observed (an event id, repeated) · unknown….
 func (p LabelRm) AppendTo(w *wire.Writer) {
-	w.Bytes(1, []byte(p.Label.name.s))
+	w.Bytes(1, nameWire(p.Label.name))
 	WriteIDs(w, 2, p.Observed)
 	w.Keep(p.unknown)
 }
