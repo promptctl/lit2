@@ -22,11 +22,19 @@ import (
 // item is one item's record.
 type item struct {
 	id       events.ItemID
-	creates  []creation // by total order
+	creates  createSet
 	life     Life
 	facts    Facts
 	elements table[string, *element, byName] // by name
 }
+
+// createSet, listSet and writeSet hold a node's creates and a register's
+// writes, each keyed by the event that made it.
+type (
+	createSet = table[events.EventID, creation, byEvent]
+	listSet   = table[events.EventID, listing, byEvent]
+	writeSet  = table[events.EventID, candidate, byEvent]
+)
 
 // creation is one create of an item and where it places the item.
 type creation struct {
@@ -37,7 +45,7 @@ type creation struct {
 // element is one element's record.
 type element struct {
 	name    events.Segment
-	creates []listing // by total order
+	creates listSet
 	facts   Facts
 }
 
@@ -52,18 +60,32 @@ func newItem(id events.ItemID) *item { return &item{id: id, life: Live{}} }
 func (r *item) key() events.ItemID { return r.id }
 
 func (r *item) origin() Origin {
-	return origin(r.creates, func(c creation) Container { return c.in })
+	return origin(r.sortedCreates(), func(c creation) Container { return c.in })
 }
 
 func (el *element) origin(of events.ItemID) Origin {
-	return origin(el.creates, func(listing) Container { return Under{Parent: of} })
+	return origin(el.sortedCreates(), func(listing) Container { return Under{Parent: of} })
 }
 
-// made is a create of a node: its stamp.
+// made is a create of a node, or a write: its stamp.
 type made interface{ made() Stamp }
 
-func (c creation) made() Stamp { return c.stamp }
-func (l listing) made() Stamp  { return l.stamp }
+func (c creation) made() Stamp  { return c.stamp }
+func (l listing) made() Stamp   { return l.stamp }
+func (c candidate) made() Stamp { return c.stamp }
+
+func (c creation) key() events.EventID  { return c.stamp.Event }
+func (l listing) key() events.EventID   { return l.stamp.Event }
+func (c candidate) key() events.EventID { return c.stamp.Event }
+
+// byMade orders records by their stamps' total order.
+func byMade[R made](a, b R) int { return events.Compare(a.made().Order, b.made().Order) }
+
+// sortedCreates is r's creates in total order: the first places the item.
+func (r *item) sortedCreates() []creation { return r.creates.sorted(byMade[creation]) }
+
+// sortedCreates is el's creates in total order: the first places the element.
+func (el *element) sortedCreates() []listing { return el.creates.sorted(byMade[listing]) }
 
 // origin is the origin of a node made by creates, in total order: the
 // first places it, in the container in names.
@@ -84,7 +106,7 @@ func origin[C made](creates []C, in func(C) Container) Origin {
 
 func (r *item) withCreate(c creation) *item {
 	next := *r
-	next.creates = byOrder(r.creates, c, func(c creation) events.OrderKey { return c.stamp.Order })
+	next.creates = r.creates.set(c)
 	return &next
 }
 
@@ -127,7 +149,7 @@ func (r *item) sortedElements() []*element {
 
 func (el *element) withListing(l listing) *element {
 	next := *el
-	next.creates = byOrder(el.creates, l, func(l listing) events.OrderKey { return l.stamp.Order })
+	next.creates = el.creates.set(l)
 	return &next
 }
 
@@ -146,11 +168,11 @@ type Facts struct {
 // register is one field's multi-value register.
 type register struct {
 	name    events.Name
-	live    []candidate // by total order
-	retired idSet       // every write some write named in Over
+	live    writeSet // every write; liveWrites says which hold
+	retired idSet    // every write some write named in Over
 }
 
-// candidate is one live write of a field.
+// candidate is one write of a field.
 type candidate struct {
 	stamp Stamp
 	value events.Value
@@ -190,17 +212,10 @@ func (r addRec) key() events.EventID { return r.stamp.Event }
 // field whose kind changed.
 func (f Facts) write(st Stamp, field events.Name, v events.Value, over []events.EventID) Facts {
 	r := f.register(field)
-	retired := withIDs(r.retired, over)
-	live := make([]candidate, 0, len(r.live)+1)
-	for _, c := range r.live {
-		if !hasID(retired, c.stamp.Event) {
-			live = append(live, c)
-		}
+	r.retired = withIDs(r.retired, over)
+	if !hasID(r.retired, st.Event) {
+		r.live = r.live.set(candidate{stamp: st, value: v})
 	}
-	if !hasID(retired, st.Event) {
-		live = byOrder(live, candidate{stamp: st, value: v}, func(c candidate) events.OrderKey { return c.stamp.Order })
-	}
-	r.live, r.retired = live, retired
 	next := f
 	next.fields = f.fields.set(r)
 	return next
@@ -254,11 +269,25 @@ func (f Facts) Text(n events.Name) TextField {
 // total order, and every other live value it overruled.
 func (f Facts) Plain(n events.Name) PlainField { return f.register(n).settled() }
 
+// liveWrites is the register's live writes, by total order: those no write
+// names in Over. The filter runs before the sort, so the sort sees only
+// the survivors.
+func (r register) liveWrites() []candidate {
+	var out []candidate
+	r.live.each(func(c candidate) {
+		if !hasID(r.retired, c.stamp.Event) {
+			out = append(out, c)
+		}
+	})
+	slices.SortFunc(out, byMade[candidate])
+	return out
+}
+
 // settled is the register as a structural value, as Plain reads it.
 func (r register) settled() PlainField {
 	var last candidate
 	held := false
-	for _, c := range r.live {
+	for _, c := range r.liveWrites() {
 		if _, ok := c.value.(events.Plain); ok {
 			last, held = c, true
 		}
@@ -286,17 +315,17 @@ func (f Facts) Members(s events.Name) []Member {
 }
 
 // liveAdds is the member's live adds, by total order: those no remove names.
+// As in liveWrites, the filter runs before the sort.
 func (t tally) liveAdds() []Stamp {
 	var out []Stamp
-	for _, a := range t.adds.sorted(byAdd) {
+	t.adds.each(func(a addRec) {
 		if !hasID(t.removed, a.stamp.Event) {
 			out = append(out, a.stamp)
 		}
-	}
+	})
+	slices.SortFunc(out, func(a, b Stamp) int { return events.Compare(a.Order, b.Order) })
 	return out
 }
-
-func byAdd(a, b addRec) int { return events.Compare(a.stamp.Order, b.stamp.Order) }
 
 // register is field n's register, empty if f has none of that name.
 func (f Facts) register(n events.Name) register {
@@ -325,7 +354,7 @@ func (f Facts) setsByName() []set { return f.sets.sorted(byKey[string, set]) }
 // never by opening them (INV:opaque-envelope).
 func (r register) prose() []Candidate {
 	var out []Candidate
-	for _, c := range r.live {
+	for _, c := range r.liveWrites() {
 		p, ok := c.value.(events.Prose)
 		if !ok {
 			continue
@@ -344,7 +373,7 @@ func (r register) prose() []Candidate {
 // the writes holding it, ordered by each value's first write.
 func (r register) plain(settled string) []Candidate {
 	var out []Candidate
-	for _, c := range r.live {
+	for _, c := range r.liveWrites() {
 		p, ok := c.value.(events.Plain)
 		if !ok || p.Canonical == settled {
 			continue
@@ -387,16 +416,6 @@ func (el *element) key() string { return el.name.String() }
 // byKey orders records by their keys: the order a reader sorts a table into.
 func byKey[K cmp.Ordered, R record[K]](a, b R) int { return cmp.Compare(a.key(), b.key()) }
 
-// byOrder is s, sorted by total order, with v in its place, unless the
-// event that made v is in s already: a merge is idempotent on the id.
-func byOrder[T any](s []T, v T, order func(T) events.OrderKey) []T {
-	i, found := slices.BinarySearchFunc(s, order(v), func(e T, k events.OrderKey) int { return events.Compare(order(e), k) })
-	if found {
-		return s
-	}
-	return inserted(s, i, v)
-}
-
 func compareID(a, b events.EventID) int { return bytes.Compare(a[:], b[:]) }
 
 // hasID is whether s holds id.
@@ -421,15 +440,5 @@ func sortedIDs(s idSet) []events.EventID {
 	for i, r := range rs {
 		out[i] = r.id
 	}
-	return out
-}
-
-// inserted is s with v at i, in a new slice, since s may be shared by an
-// older state.
-func inserted[T any](s []T, i int, v T) []T {
-	out := make([]T, len(s)+1)
-	copy(out, s[:i])
-	out[i] = v
-	copy(out[i+1:], s[i:])
 	return out
 }

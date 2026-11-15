@@ -13,12 +13,11 @@ import (
 // the root to its leaf, O(log n), and shares the rest, so a State is a
 // value and Step returns a new one without touching the old
 // `[LAW:types-are-the-program]`. Every collection the fold grows by one per
-// event and keys by an id or a name is one: the items, the carried,
-// unapplied and malformed records, and each element, field, set, member,
-// and id a fact keeps, so no fold is quadratic in what it carries. A table
-// holds no order; a reader that needs one sorts what it reads. The one
-// ordered list a fold keeps is a register's live writes, which only
-// concurrent writers grow.
+// event is one of these, keyed by the id or name that identifies its
+// records: the items, the carried, unapplied and malformed records, and
+// each element, field, set, member, create, write, and id a fact keeps, so
+// no fold is quadratic in what it carries. A table holds no order; a reader
+// that needs one sorts what it reads.
 type table[K comparable, R record[K], H hasher[K]] struct{ root *tnode[K, R] }
 
 // record is a table's record: its key, which no other record of the table
