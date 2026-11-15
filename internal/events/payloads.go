@@ -162,35 +162,29 @@ func (p Plain) wire() []byte {
 
 // readValue reads a value's stored form: exactly one of the two forms.
 func readValue(b []byte) (Value, error) {
-	var vs []Value
+	// each form's constructor waits for the unknown fields, which are only
+	// whole once the loop has read the message
+	var made []func(wire.Unknown) Value
 	r := wire.NewReader(b)
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case valueProse:
 			e, err := readEnvelope(r.Bytes())
-			vs = append(vs, Prose{Body: e})
+			made = append(made, func(u wire.Unknown) Value { return Prose{Body: e, unknown: u} })
 			return err
 		case valuePlain:
-			vs = append(vs, Plain{Canonical: string(r.Bytes())})
+			c := string(r.Bytes())
+			made = append(made, func(u wire.Unknown) Value { return Plain{Canonical: c, unknown: u} })
 		}
 		return nil
 	})
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("a value: %w", err)
-	case len(vs) != 1:
-		return nil, fmt.Errorf("a value is prose or plain; this one is %d of them", len(vs))
+	case len(made) != 1:
+		return nil, fmt.Errorf("a value is prose or plain; this one is %d of them", len(made))
 	}
-	u := r.Rest()
-	switch v := vs[0].(type) {
-	case Prose:
-		v.unknown = u
-		return v, nil
-	case Plain:
-		v.unknown = u
-		return v, nil
-	}
-	panic(fmt.Sprintf("events: %T is not a value the loop appends", vs[0]))
+	return made[0](r.Rest()), nil
 }
 
 // ItemCreate is item.create: About is the item it creates.
@@ -301,36 +295,29 @@ func ReadItemCreate(r *wire.Reader) (Versioned, error) {
 // ReadPlacement reads a placement's stored form: exactly one of a level
 // and below its parent.
 func ReadPlacement(b []byte) (Placement, error) {
-	var at []Placement
+	// each form's constructor waits for the unknown fields, which are only
+	// whole once the loop has read the message
+	var made []func(wire.Unknown) Placement
 	r := wire.NewReader(b)
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case placeAtLevel:
 			l, err := ParseLevel(int(min(r.Uvarint(), topLevel+1)))
-			at = append(at, AtLevel{Level: l})
+			made = append(made, func(u wire.Unknown) Placement { return AtLevel{Level: l, unknown: u} })
 			return err
 		case placeBelowParent:
 			r.Bytes()
-			at = append(at, BelowParent{})
+			made = append(made, func(u wire.Unknown) Placement { return BelowParent{unknown: u} })
 		}
 		return nil
 	})
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("a placement: %w", err)
-	case len(at) != 1:
-		return nil, fmt.Errorf("a placement is a level or below its parent; this one is %d of them", len(at))
+	case len(made) != 1:
+		return nil, fmt.Errorf("a placement is a level or below its parent; this one is %d of them", len(made))
 	}
-	u := r.Rest()
-	switch p := at[0].(type) {
-	case AtLevel:
-		p.unknown = u
-		return p, nil
-	case BelowParent:
-		p.unknown = u
-		return p, nil
-	}
-	panic(fmt.Sprintf("events: %T is not a placement the loop appends", at[0]))
+	return made[0](r.Rest()), nil
 }
 
 // item.delete = unknown….

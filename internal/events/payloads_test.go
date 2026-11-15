@@ -167,6 +167,18 @@ func TestAZeroLevelOrNameIsRefusedByItsWriter(t *testing.T) {
 	}
 }
 
+// A zero Labeled agent reads back as Unlabeled, so the writer refuses it.
+func TestAZeroAgentLabelIsRefusedByItsWriter(t *testing.T) {
+	c := context(1, Frontier{}, Names{})
+	c.Agent = Labeled{}
+	defer func() {
+		if recover() == nil {
+			t.Errorf("a zero Labeled agent was signed; want it refused")
+		}
+	}()
+	mint(t, c, keyOf(1), 1, Act{About: Item{ID: Top{Prefix: prefix}.Child(Segment{s: "abc"})}, Payload: LabelAdd{Label: mustLabel("a")}})
+}
+
 func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	var twoForms wire.Writer
 	twoForms.Bytes(valueProse, text("a").wire())

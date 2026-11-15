@@ -404,6 +404,11 @@ func (a Attribution) wire() []byte {
 	w.Bytes(2, a.Principal.wire())
 	switch agent := a.Agent.(type) {
 	case Labeled:
+		// [LAW:single-enforcer] an empty label reads back as Unlabeled, so a
+		// zero Labeled, which Go lets a caller write, would sign another claim
+		if agent.label == "" {
+			panic("events: a Labeled agent with no label reads back as Unlabeled")
+		}
 		w.Bytes(3, []byte(agent.label))
 	case Unlabeled:
 	default:
