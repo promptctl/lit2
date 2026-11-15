@@ -13,9 +13,12 @@ import (
 // the root to its leaf, O(log n), and shares the rest, so a State is a
 // value and Step returns a new one without touching the old
 // `[LAW:types-are-the-program]`. Every collection the fold grows by one per
-// event is one: the items, and the carried, unapplied and malformed
-// records, so no fold is quadratic in what it carries. A table holds no
-// order; a reader that needs one sorts what it reads.
+// event and keys by an id or a name is one: the items, the carried,
+// unapplied and malformed records, and each element, field, set, member,
+// and id a fact keeps, so no fold is quadratic in what it carries. A table
+// holds no order; a reader that needs one sorts what it reads. The one
+// ordered list a fold keeps is a register's live writes, which only
+// concurrent writers grow.
 type table[K comparable, R record[K], H hasher[K]] struct{ root *tnode[K, R] }
 
 // record is a table's record: its key, which no other record of the table
@@ -50,19 +53,26 @@ const (
 type (
 	// byItem is FNV-1a over the id's text.
 	byItem struct{}
+	// byName is FNV-1a over a name's text.
+	byName struct{}
 	// byEvent is the event id's first eight bytes: the id is a hash.
 	byEvent struct{}
 	// byRecord is the malformed record's digest's first eight bytes.
 	byRecord struct{}
 )
 
-func (byItem) hash(id events.ItemID) uint64 {
+// fnv1a is the 64-bit FNV-1a hash of s.
+func fnv1a(s string) uint64 {
 	h := uint64(14695981039346656037)
-	for _, c := range []byte(id.String()) {
-		h = (h ^ uint64(c)) * 1099511628211
+	for i := range len(s) {
+		h = (h ^ uint64(s[i])) * 1099511628211
 	}
 	return h
 }
+
+func (byItem) hash(id events.ItemID) uint64 { return fnv1a(id.String()) }
+
+func (byName) hash(name string) uint64 { return fnv1a(name) }
 
 func (byEvent) hash(id events.EventID) uint64 { return binary.LittleEndian.Uint64(id[:8]) }
 

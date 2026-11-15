@@ -90,7 +90,7 @@ type Item struct {
 	Level  LevelOf
 	Life   Life
 	Facts  Facts
-	// Elements are the item's created elements, in creation order.
+	// Elements are the item's created elements, in name order.
 	Elements []Element
 }
 
@@ -394,7 +394,7 @@ func (s State) Names() events.Names {
 	}
 	s.items.each(func(r *item) {
 		add(events.Item{ID: r.id})
-		for _, el := range r.elements {
+		for _, el := range r.sortedElements() {
 			add(events.Element{Of: r.id, Name: el.name})
 		}
 	})
@@ -438,7 +438,7 @@ func (s State) Advisories() []Advisory {
 			}
 		}
 		out = append(out, r.facts.advisories(at)...)
-		for _, el := range r.elements {
+		for _, el := range r.sortedElements() {
 			eat := OnElement{Of: r.id, Name: el.name}
 			switch o := el.origin(r.id).(type) {
 			case Created:
@@ -465,7 +465,7 @@ func (s State) records() []*item {
 // itemOf is the record r as an Item, its level derived.
 func (s State) itemOf(r *item) Item {
 	it := Item{ID: r.id, Origin: r.origin(), Level: s.levelOf(r.id), Life: r.life, Facts: r.facts}
-	for _, el := range r.elements {
+	for _, el := range r.sortedElements() {
 		if len(el.creates) > 0 {
 			it.Elements = append(it.Elements, Element{Name: el.name, In: el.creates[0].in, Origin: el.origin(r.id), Facts: el.facts})
 		}

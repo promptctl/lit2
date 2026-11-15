@@ -23,7 +23,7 @@ func (r *item) equal(o *item) bool {
 	return r.id == o.id &&
 		slices.EqualFunc(r.creates, o.creates, func(a, b creation) bool { return a.stamp.equal(b.stamp) && a.in == b.in }) &&
 		lifeEqual(r.life, o.life) && r.facts.equal(o.facts) &&
-		slices.EqualFunc(r.elements, o.elements, (*element).equal)
+		slices.EqualFunc(r.sortedElements(), o.sortedElements(), (*element).equal)
 }
 
 func (el *element) equal(o *element) bool {
@@ -49,12 +49,12 @@ func lifeEqual(a, b Life) bool {
 }
 
 func (f Facts) equal(o Facts) bool {
-	return slices.EqualFunc(f.fields, o.fields, func(a, b register) bool {
-		return a.name == b.name && slices.Equal(a.retired, b.retired) &&
+	return slices.EqualFunc(f.registers(), o.registers(), func(a, b register) bool {
+		return a.name == b.name && slices.Equal(sortedIDs(a.retired), sortedIDs(b.retired)) &&
 			slices.EqualFunc(a.live, b.live, func(x, y candidate) bool { return x.stamp.equal(y.stamp) && valueEqual(x.value, y.value) })
-	}) && slices.EqualFunc(f.sets, o.sets, func(a, b set) bool {
-		return a.name == b.name && slices.EqualFunc(a.members, b.members, func(x, y tally) bool {
-			return x.name == y.name && slices.Equal(x.removed, y.removed) && slices.EqualFunc(x.adds, y.adds, Stamp.equal)
+	}) && slices.EqualFunc(f.setsByName(), o.setsByName(), func(a, b set) bool {
+		return a.name == b.name && slices.EqualFunc(a.members.sorted(byKey[string, tally]), b.members.sorted(byKey[string, tally]), func(x, y tally) bool {
+			return x.name == y.name && slices.Equal(sortedIDs(x.removed), sortedIDs(y.removed)) && slices.EqualFunc(x.liveAdds(), y.liveAdds(), Stamp.equal)
 		})
 	})
 }

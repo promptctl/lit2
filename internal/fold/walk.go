@@ -250,7 +250,7 @@ func countsOf(s State) StateCounts {
 		}
 		c.Labels += len(r.facts.Members(labels))
 		c.facts(r.facts)
-		for _, el := range r.elements {
+		for _, el := range r.sortedElements() {
 			o := el.origin(r.id)
 			if _, uncreated := o.(Uncreated); !uncreated && el.creates[0].in == comments {
 				c.Comments++
@@ -273,7 +273,7 @@ func (c *StateCounts) origin(o Origin) {
 }
 
 func (c *StateCounts) facts(f Facts) {
-	for _, r := range f.fields {
+	for _, r := range f.registers() {
 		prose := r.prose()
 		if len(prose) > 1 {
 			c.ProseConflicts++

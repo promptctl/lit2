@@ -25,7 +25,7 @@ type item struct {
 	creates  []creation // by total order
 	life     Life
 	facts    Facts
-	elements []*element // by name
+	elements table[string, *element, byName] // by name
 }
 
 // creation is one create of an item and where it places the item.
@@ -111,8 +111,18 @@ func (r *item) withFacts(f func(Facts) Facts) *item {
 // has none of that name.
 func (r *item) withElement(name events.Segment, f func(*element) *element) *item {
 	next := *r
-	next.elements = upsert(r.elements, &element{name: name}, f)
+	el, found := r.elements.get(name.String())
+	if !found {
+		el = &element{name: name}
+	}
+	next.elements = r.elements.set(f(el))
 	return &next
+}
+
+// sortedElements is r's elements in name order: a table holds no order, so
+// a reader that needs one sorts what it reads.
+func (r *item) sortedElements() []*element {
+	return r.elements.sorted(byKey[string, *element])
 }
 
 func (el *element) withListing(l listing) *element {
@@ -129,15 +139,15 @@ func (el *element) withFacts(f func(Facts) Facts) *element {
 
 // Facts is a node's registers and sets, by name.
 type Facts struct {
-	fields []register // by name
-	sets   []set      // by name
+	fields table[string, register, byName]
+	sets   table[string, set, byName]
 }
 
 // register is one field's multi-value register.
 type register struct {
 	name    events.Name
-	live    []candidate      // by total order
-	retired []events.EventID // every write some write named in Over, sorted
+	live    []candidate // by total order
+	retired idSet       // every write some write named in Over
 }
 
 // candidate is one live write of a field.
@@ -149,35 +159,50 @@ type candidate struct {
 // set is one observed-remove set.
 type set struct {
 	name    events.Name
-	members []tally // by member name
+	members table[string, tally, byName] // by member name
 }
 
 // tally is one member's adds and the adds removed from it.
 type tally struct {
 	name    events.Name
-	adds    []Stamp          // live adds, by total order
-	removed []events.EventID // every add some remove named, sorted
+	adds    addSet // every add of the member; liveAdds says which hold
+	removed idSet  // every add some remove named
 }
+
+// idSet is a set of event ids, keyed by id, so each id it takes is one path copy.
+type idSet = table[events.EventID, idRec, byEvent]
+
+// addSet is a member's adds, keyed by the event that made each.
+type addSet = table[events.EventID, addRec, byEvent]
+
+// idRec is one id of an idSet.
+type idRec struct{ id events.EventID }
+
+func (r idRec) key() events.EventID { return r.id }
+
+// addRec is one add of an addSet.
+type addRec struct{ stamp Stamp }
+
+func (r addRec) key() events.EventID { return r.stamp.Event }
 
 // write is f with field written, by the write st of v replacing over. Over
 // retires the writes it names in either form, so one write settles a
 // field whose kind changed.
 func (f Facts) write(st Stamp, field events.Name, v events.Value, over []events.EventID) Facts {
+	r := f.register(field)
+	retired := withIDs(r.retired, over)
+	live := make([]candidate, 0, len(r.live)+1)
+	for _, c := range r.live {
+		if !hasID(retired, c.stamp.Event) {
+			live = append(live, c)
+		}
+	}
+	if !hasID(retired, st.Event) {
+		live = byOrder(live, candidate{stamp: st, value: v}, func(c candidate) events.OrderKey { return c.stamp.Order })
+	}
+	r.live, r.retired = live, retired
 	next := f
-	next.fields = upsert(f.fields, register{name: field}, func(r register) register {
-		retired := withIDs(r.retired, over)
-		live := make([]candidate, 0, len(r.live)+1)
-		for _, c := range r.live {
-			if !hasID(retired, c.stamp.Event) {
-				live = append(live, c)
-			}
-		}
-		if !hasID(retired, st.Event) {
-			live = byOrder(live, candidate{stamp: st, value: v}, func(c candidate) events.OrderKey { return c.stamp.Order })
-		}
-		r.live, r.retired = live, retired
-		return r
-	})
+	next.fields = f.fields.set(r)
 	return next
 }
 
@@ -185,28 +210,31 @@ func (f Facts) write(st Stamp, field events.Name, v events.Value, over []events.
 func (f Facts) add(st Stamp, s, member events.Name) Facts {
 	return f.tally(s, member, func(t tally) tally {
 		if !hasID(t.removed, st.Event) {
-			t.adds = byOrder(t.adds, st, func(s Stamp) events.OrderKey { return s.Order })
+			t.adds = t.adds.set(addRec{stamp: st})
 		}
 		return t
 	})
 }
 
-// remove is f with the adds observed of member removed from set.
+// remove is f with the adds observed of member removed from set. The adds
+// stay in the table; liveAdds leaves out the ones named here.
 func (f Facts) remove(s, member events.Name, observed []events.EventID) Facts {
 	return f.tally(s, member, func(t tally) tally {
 		t.removed = withIDs(t.removed, observed)
-		t.adds = slices.DeleteFunc(slices.Clone(t.adds), func(a Stamp) bool { return hasID(t.removed, a.Event) })
 		return t
 	})
 }
 
 // tally is f with member's tally in set changed by change.
 func (f Facts) tally(s, member events.Name, change func(tally) tally) Facts {
+	st := f.setNamed(s)
+	t, found := st.members.get(member.String())
+	if !found {
+		t = tally{name: member}
+	}
+	st.members = st.members.set(change(t))
 	next := f
-	next.sets = upsert(f.sets, set{name: s}, func(st set) set {
-		st.members = upsert(st.members, tally{name: member}, change)
-		return st
-	})
+	next.sets = f.sets.set(st)
 	return next
 }
 
@@ -244,25 +272,53 @@ func (r register) settled() PlainField {
 
 // Members is set's members with a live add, by name.
 func (f Facts) Members(s events.Name) []Member {
-	i, found := slices.BinarySearchFunc(f.sets, s.String(), byName[set])
+	st, found := f.sets.get(s.String())
 	if !found {
 		return nil
 	}
 	var out []Member
-	for _, t := range f.sets[i].members {
-		if len(t.adds) > 0 {
-			out = append(out, Member{Name: t.name, Added: slices.Clone(t.adds)})
+	for _, t := range st.members.sorted(byKey[string, tally]) {
+		if adds := t.liveAdds(); len(adds) > 0 {
+			out = append(out, Member{Name: t.name, Added: adds})
 		}
 	}
 	return out
 }
 
+// liveAdds is the member's live adds, by total order: those no remove names.
+func (t tally) liveAdds() []Stamp {
+	var out []Stamp
+	for _, a := range t.adds.sorted(byAdd) {
+		if !hasID(t.removed, a.stamp.Event) {
+			out = append(out, a.stamp)
+		}
+	}
+	return out
+}
+
+func byAdd(a, b addRec) int { return events.Compare(a.stamp.Order, b.stamp.Order) }
+
+// register is field n's register, empty if f has none of that name.
 func (f Facts) register(n events.Name) register {
-	if i, found := slices.BinarySearchFunc(f.fields, n.String(), byName[register]); found {
-		return f.fields[i]
+	if r, found := f.fields.get(n.String()); found {
+		return r
 	}
 	return register{name: n}
 }
+
+// setNamed is the set named s, empty if f has none of that name.
+func (f Facts) setNamed(s events.Name) set {
+	if st, found := f.sets.get(s.String()); found {
+		return st
+	}
+	return set{name: s}
+}
+
+// registers is f's registers, by name.
+func (f Facts) registers() []register { return f.fields.sorted(byKey[string, register]) }
+
+// setsByName is f's sets, by name.
+func (f Facts) setsByName() []set { return f.sets.sorted(byKey[string, set]) }
 
 // prose is the register's live prose texts, each with the writes holding
 // it, ordered by each text's first write: texts compare by commitment,
@@ -306,7 +362,7 @@ func (r register) plain(settled string) []Candidate {
 // advisories is every field of f holding a contradiction, at at.
 func (f Facts) advisories(at Target) []Advisory {
 	var out []Advisory
-	for _, r := range f.fields {
+	for _, r := range f.registers() {
 		prose := r.prose()
 		plain := r.settled()
 		overruled := false
@@ -323,15 +379,13 @@ func (f Facts) advisories(at Target) []Advisory {
 	return out
 }
 
-// named is a record kept in a slice sorted by its name.
-type named interface{ key() string }
-
 func (r register) key() string  { return r.name.String() }
 func (s set) key() string       { return s.name.String() }
 func (t tally) key() string     { return t.name.String() }
 func (el *element) key() string { return el.name.String() }
 
-func byName[T named](t T, k string) int { return cmp.Compare(t.key(), k) }
+// byKey orders records by their keys: the order a reader sorts a table into.
+func byKey[K cmp.Ordered, R record[K]](a, b R) int { return cmp.Compare(a.key(), b.key()) }
 
 // byOrder is s, sorted by total order, with v in its place, unless the
 // event that made v is in s already: a merge is idempotent on the id.
@@ -345,37 +399,29 @@ func byOrder[T any](s []T, v T, order func(T) events.OrderKey) []T {
 
 func compareID(a, b events.EventID) int { return bytes.Compare(a[:], b[:]) }
 
-func hasID(s []events.EventID, id events.EventID) bool {
-	_, found := slices.BinarySearchFunc(s, id, compareID)
+// hasID is whether s holds id.
+func hasID(s idSet, id events.EventID) bool {
+	_, found := s.get(id)
 	return found
 }
 
-// withIDs is the sorted union of s and ids, in a new slice when ids adds
-// any: one merge of s with the sorted ids, linear in s, so a caller holding
-// many ids hands them all at once.
-func withIDs(s, ids []events.EventID) []events.EventID {
-	if len(ids) == 0 {
-		return s
+// withIDs is s with every id in ids added, one path copy each.
+func withIDs(s idSet, ids []events.EventID) idSet {
+	for _, id := range ids {
+		s = s.set(idRec{id: id})
 	}
-	add := slices.Clone(ids)
-	slices.SortFunc(add, compareID)
-	add = slices.Compact(add)
-	out := make([]events.EventID, 0, len(s)+len(add))
-	i, j := 0, 0
-	for i < len(s) && j < len(add) {
-		switch c := compareID(s[i], add[j]); {
-		case c < 0:
-			out = append(out, s[i])
-			i++
-		case c > 0:
-			out = append(out, add[j])
-			j++
-		default:
-			out = append(out, s[i])
-			i, j = i+1, j+1
-		}
+	return s
+}
+
+// sortedIDs is s's ids in byte order: the order equality compares them in,
+// so two folds agree whatever shape their tables took.
+func sortedIDs(s idSet) []events.EventID {
+	rs := s.sorted(func(a, b idRec) int { return compareID(a.id, b.id) })
+	out := make([]events.EventID, len(rs))
+	for i, r := range rs {
+		out[i] = r.id
 	}
-	return append(append(out, s[i:]...), add[j:]...)
+	return out
 }
 
 // inserted is s with v at i, in a new slice, since s may be shared by an
@@ -385,18 +431,5 @@ func inserted[T any](s []T, i int, v T) []T {
 	copy(out, s[:i])
 	out[i] = v
 	copy(out[i+1:], s[i:])
-	return out
-}
-
-// upsert is s, sorted by key, with the entry of fresh's key changed by f,
-// fresh standing in when s has none; in a new slice, since s may be shared
-// by an older state.
-func upsert[T named](s []T, fresh T, f func(T) T) []T {
-	i, found := slices.BinarySearchFunc(s, fresh.key(), byName[T])
-	if !found {
-		return inserted(s, i, f(fresh))
-	}
-	out := slices.Clone(s)
-	out[i] = f(s[i])
 	return out
 }
