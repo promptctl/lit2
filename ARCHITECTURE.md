@@ -98,8 +98,7 @@ row; the architecture test fails on one without.
 
 ## Decisions
 
-The decisions the layout needed and the design documents did not make, from
-the skeleton ticket's plan (lit-bootstrap-1f9.438).
+The decisions the layout needed and the design documents did not make.
 
 - **D1 Module path** `github.com/promptctl/lit2`: v1's org, the binary's name.
 - **D2 Go and tooling.** `go 1.26`; the one third-party module linked is

@@ -141,7 +141,7 @@ depth before anything that depends on it.
 
 **Slice 0, the frame of the house.** The layout of `architecture.md` §6,
 the composition root, the command event, the harness, `lit2 --help` from
-the field table. One ticket, `lit-bootstrap-1f9.438`.
+the field table.
 
 **Slice 1, the walking skeleton.** Every activity at a depth the next slice
 can build on, and the three risks of the design settled: that one event set

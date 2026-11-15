@@ -643,7 +643,6 @@ walking skeleton.
 
 1. **Skeleton.** The layout of §6, the composition root, the command event,
    the harness, `lit2 --help` from the field table.
-   (ticket lit-bootstrap-1f9.438)
 2. **Events, principal and fold, first facts.** Items, fields, comments,
    labels; ids; the principal minted at init and every event signed; the
    local log; every read a replay; `add /children`, `get`, `set`, `add`, `rm`;

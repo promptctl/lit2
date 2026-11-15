@@ -24,7 +24,8 @@ func ParseName(s string) (Name, error) {
 func (n Name) String() string { return n.s }
 
 // Label is one label of an item: a name, an open set the workspace
-// chooses. zc7's rule labels and ef4's label kind are this type.
+// chooses. The labels a workspace file declares and the field table's
+// label kind are this type.
 type Label struct{ name Name }
 
 // ParseLabel reads a label.

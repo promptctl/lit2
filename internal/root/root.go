@@ -78,17 +78,17 @@ func dispatch(p Process, verbs, admin cli.Table, cmd cli.Command, stored *comman
 	case cli.Help:
 		return written(io.WriteString(p.Out, cli.HelpText(verbs, admin, address.FieldTable{})))
 	case cli.Get:
-		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("get", "lit-bootstrap-1f9.7gj") })
+		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("get") })
 	case cli.Set:
-		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("set", "lit-bootstrap-1f9.7gj") })
+		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("set") })
 	case cli.Add:
-		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("add", "lit-bootstrap-1f9.7gj") })
+		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("add") })
 	case cli.Rm:
-		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("rm", "lit-bootstrap-1f9.7gj") })
+		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("rm") })
 	case cli.AdminInit:
-		return notBuilt("admin init", "lit-bootstrap-1f9.zc7, lit-bootstrap-1f9.m1y and lit-bootstrap-1f9.1s0")
+		return notBuilt("admin init")
 	case cli.AdminSync:
-		return notBuilt("admin sync", "lit-bootstrap-1f9.yz5")
+		return notBuilt("admin sync")
 	}
 	panic(fmt.Sprintf("root: %T is not a Command", cmd))
 }
@@ -134,6 +134,6 @@ func logFailure(err error) string {
 
 // notBuilt ends a row whose body is not in this binary yet (D14). Once the
 // last body is bound it is unused, and the lint forces its deletion.
-func notBuilt(verb, ticket string) cli.Outcome {
-	return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("lit2 %s is not built in this binary: %s", verb, ticket)}}
+func notBuilt(verb string) cli.Outcome {
+	return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("lit2 %s is not built in this binary", verb)}}
 }
