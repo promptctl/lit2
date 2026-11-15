@@ -91,14 +91,21 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 func TestAReplayIsStepsOverTheSortedEvents(t *testing.T) {
 	w := generate(t, 3, 30)
 	var located []events.Event
-	seen := map[events.EventID]bool{}
+	at := map[events.EventID]int{}
 	for _, sc := range w.scans() {
 		for _, fr := range sc.Scan.Frames {
 			for _, rec := range fr.Batch.Records() {
 				e, ok := events.Decode(env.Registry().Kinds(), rec).(events.Event)
-				if ok && !seen[e.ID()] {
-					seen[e.ID()] = true
+				if !ok {
+					continue
+				}
+				i, dup := at[e.ID()]
+				switch {
+				case !dup:
+					at[e.ID()] = len(located)
 					located = append(located, e)
+				case fold.Rank(e.Body()) > fold.Rank(located[i].Body()):
+					located[i] = e
 				}
 			}
 		}

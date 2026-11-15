@@ -15,15 +15,9 @@ type Checked struct {
 	verdict events.SignatureVerdict
 }
 
-// Event is the event checked.
-func (c Checked) Event() events.Event { return c.event }
-
-// Verdict is its signature's verdict.
-func (c Checked) Verdict() events.SignatureVerdict { return c.verdict }
-
-// Check judges each event's signature, in order, by e.Suites(), on
-// e.Workers() goroutines. A verdict reads only the event's bytes, so the
-// result does not depend on the schedule.
+// Check judges each event's signature, in order, by the Env's suites, on its
+// workers. A verdict reads only the event's bytes, so the result does not
+// depend on the schedule.
 func Check(e Env, evs []events.Event) []Checked {
 	cs := make([]Checked, len(evs))
 	for i, ev := range evs {
@@ -43,10 +37,12 @@ func Check(e Env, evs []events.Event) []Checked {
 	return cs
 }
 
-// Step folds one checked event into s: the one walk, which Replay and every later reader of events share `[LAW:single-enforcer]`. An event
-// whose signature does not verify is carried and never applied, and moves
-// neither the frontier nor the names; a verified one is observed, then
-// applied by its kind's rule, or left unapplied with why.
+// Step folds one checked event into s by the rule Replay applies to every
+// event `[LAW:single-enforcer]`, and returns the State alone; Replay keeps the
+// outcome as well, for its facts. An event whose signature does not verify is
+// carried and never applied, and moves neither the frontier nor the names; a
+// verified one is observed, then applied by its kind's rule, or left
+// unapplied with why.
 func Step(r Registry, s State, c Checked) State {
 	next, _ := r.step(s, c)
 	return next

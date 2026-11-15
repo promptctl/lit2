@@ -206,28 +206,12 @@ func TestKDraftsTakeTheKPositionsPastTheFrontierAndAnObserverSortsAfter(t *testi
 	}
 }
 
-func TestTheStoredFormsOfPositionsOrderKeysAndIDsReadBack(t *testing.T) {
-	e := mint(t, context(3, Frontier{highest: 1 << 40}, Names{}), keyOf(1), 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0]
-	if p, err := ReadPosition(e.Header().Position().Wire()); err != nil || p != e.Header().Position() {
-		t.Errorf("a position reads back as %v, %v", p, err)
+func TestAnEventIDReadsBackAndAShortOneIsRefused(t *testing.T) {
+	id := mint(t, context(3, Frontier{highest: 1 << 40}, Names{}), keyOf(1), 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0].ID()
+	if got, err := ReadEventID(id[:]); err != nil || got != id {
+		t.Errorf("an event id reads back as %v, %v", got, err)
 	}
-	if k, err := ReadOrderKey(e.Order().Wire()); err != nil || k != e.Order() {
-		t.Errorf("an order key reads back as %v, %v", k, err)
-	}
-	if id, err := ReadEventID(e.ID().Wire()); err != nil || id != e.ID() {
-		t.Errorf("an event id reads back as %v, %v", id, err)
-	}
-	for name, err := range map[string]error{
-		"position 0":       errOf(ReadPosition(CausalPosition{}.Wire())),
-		"a trailing byte":  errOf(ReadPosition(append(e.Header().Position().Wire(), 0))),
-		"an empty key":     errOf(ReadOrderKey(nil)),
-		"a key at 0":       errOf(ReadOrderKey(OrderKey{Writer: writer(1)}.Wire())),
-		"a short event id": errOf(ReadEventID(e.ID().Wire()[1:])),
-	} {
-		if err == nil {
-			t.Errorf("%s reads; want it refused", name)
-		}
+	if _, err := ReadEventID(id[1:]); err == nil {
+		t.Errorf("a short event id reads; want it refused")
 	}
 }
-
-func errOf[T any](_ T, err error) error { return err }

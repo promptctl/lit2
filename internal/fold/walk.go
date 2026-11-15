@@ -32,9 +32,6 @@ func (e Env) Registry() Registry { return e.registry }
 // Suites is the suites the fold judges signatures by.
 func (e Env) Suites() events.Suites { return e.suites }
 
-// Workers is the goroutines that judge them.
-func (e Env) Workers() int { return e.workers }
-
 // Scanned is one range of a stream and what reading it found.
 type Scanned struct {
 	Range store.Range

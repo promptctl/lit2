@@ -263,7 +263,7 @@ func TestNamesLabelsAndLevelsParseOnlyTheirOwnShape(t *testing.T) {
 	if _, ok := mustLevel(1).Below(); ok {
 		t.Error("a leaf has a level below it")
 	}
-	if below, ok := mustLevel(5).Below(); !ok || below.Number() != 4 {
+	if below, ok := mustLevel(5).Below(); !ok || below != mustLevel(4) {
 		t.Errorf("below level 5 is %v, %v", below, ok)
 	}
 }

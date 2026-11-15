@@ -8,5 +8,5 @@
 // set, in any arrival order, yield equal state, since every shape merges in
 // any order. It reads no clock and no configuration (decision H). Replay
 // reads every event, Check verifies every signature, and Step applies one
-// checked event; every caller folds through it.
+// checked event by the rule Replay uses.
 package fold

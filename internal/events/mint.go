@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -250,49 +249,4 @@ func Compare(a, b OrderKey) int {
 		return c
 	}
 	return bytes.Compare(a.ID[:], b.ID[:])
-}
-
-// The order key's wire fields: 1:position 2:writer 3:id.
-const (
-	orderPosition = 1
-	orderWriter   = 2
-	orderID       = 3
-)
-
-// Wire is the key as it is stored. ReadOrderKey reads it.
-func (k OrderKey) Wire() []byte {
-	var w wire.Writer
-	w.Uvarint(orderPosition, k.Position.n)
-	w.Bytes(orderWriter, k.Writer[:])
-	w.Bytes(orderID, k.ID[:])
-	return w.Encoded()
-}
-
-// ReadOrderKey reads a key's stored form.
-func ReadOrderKey(b []byte) (OrderKey, error) {
-	var k OrderKey
-	var seen [orderID + 1]bool
-	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case orderPosition:
-			k.Position.n, seen[tag] = r.Uvarint(), true
-		case orderWriter:
-			w := r.Bytes()
-			seen[tag] = len(w) == len(k.Writer)
-			copy(k.Writer[:], w)
-		case orderID:
-			id := r.Bytes()
-			seen[tag] = len(id) == len(k.ID)
-			copy(k.ID[:], id)
-		}
-		return nil
-	})
-	if err != nil {
-		return OrderKey{}, fmt.Errorf("an order key: %w", err)
-	}
-	if !seen[orderPosition] || !seen[orderWriter] || !seen[orderID] || k.Position.n == 0 {
-		return OrderKey{}, errors.New("an order key is a position of 1 or more, a 16-byte writer and a 32-byte id")
-	}
-	return k, nil
 }

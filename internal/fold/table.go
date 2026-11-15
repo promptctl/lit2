@@ -2,6 +2,7 @@ package fold
 
 import (
 	"encoding/binary"
+	"hash/fnv"
 	"math/bits"
 	"slices"
 
@@ -61,18 +62,9 @@ type (
 	byRecord struct{}
 )
 
-// fnv1a is the 64-bit FNV-1a hash of s.
-func fnv1a(s string) uint64 {
-	h := uint64(14695981039346656037)
-	for i := range len(s) {
-		h = (h ^ uint64(s[i])) * 1099511628211
-	}
-	return h
-}
+func (byItem) hash(id events.ItemID) uint64 { return fnv64a(id.String()) }
 
-func (byItem) hash(id events.ItemID) uint64 { return fnv1a(id.String()) }
-
-func (byName) hash(name string) uint64 { return fnv1a(name) }
+func (byName) hash(name string) uint64 { return fnv64a(name) }
 
 func (byEvent) hash(id events.EventID) uint64 { return binary.LittleEndian.Uint64(id[:8]) }
 
@@ -188,6 +180,14 @@ func (t table[K, R, H]) each(f func(R)) {
 	if t.root != nil {
 		walk(t.root)
 	}
+}
+
+// fnv64a is the 64-bit FNV-1a hash of s, the standard library's: the one
+// hash this table needs, and one not worth hand-rolling.
+func fnv64a(s string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte(s))
+	return h.Sum64()
 }
 
 // sorted is every record, ordered by compare.
