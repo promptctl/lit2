@@ -369,12 +369,12 @@ cleaning up, and a live holder is never robbed by a clock.
 
 **Walk.**
 
-1. Worktree W starts `9u9`, then is deleted. Its ref remains.
+1. Worktree W starts `k7q`, then is deleted. Its ref remains.
 2. On the same machine, tick's liveness prune finds W absent in `git worktree
    list` and treats the hold as void now; `/next` on a sibling worktree serves
    the lane.
 3. On another machine, the hold persists until `claim_ttl` has passed since
-   W's last event, then prints as none. `get 9u9/claim` during the window
+   W's last event, then prints as none. `get k7q/claim` during the window
    shows the holder and the expiry.
 4. Taking over before expiry is a deliberate write: `rm <lane>/claim`, echoed,
    then the transition.
