@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
@@ -29,6 +30,13 @@ import (
 // as usual. Nothing reads the channel: delivery to a full one is dropped.
 func Main(args []string) int {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+	// [LAW:no-silent-failure] a build with no version cannot say which
+	// workspace versions it reads, so it does not run.
+	reader, err := config.ReadReaderVersion(buildStamp())
+	if err != nil {
+		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
+		return 1
+	}
 	place := here()
 	return Run(Process{
 		Clock:    systemClock{},
@@ -37,7 +45,8 @@ func Main(args []string) int {
 		Place:    place,
 		Store:    opening(place, rand.Reader),
 		Fold:     foldEnv(runtime.GOMAXPROCS(0)),
-		Version:  version(),
+		Reader:   reader,
+		Version:  config.String(reader),
 		Commands: commandLog(),
 		In:       os.Stdin,
 		Out:      os.Stdout,
@@ -124,19 +133,13 @@ func commandLog() command.Sink {
 	return command.NewLog(filepath.Join(state, "lit", "commands"))
 }
 
-// version is the main module's version as the build stamped it, with the
-// commit it was built from and whether the tree was modified, since a build
-// from a checkout with no tag is versioned (devel).
-func version() string {
+// buildStamp is the main module's version as Go stamped it. A build with no
+// version stamp reads "(devel)", or nothing when there is no build info at all;
+// config.ReadReaderVersion refuses both.
+func buildStamp() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return "(no build info)"
+		return ""
 	}
-	v := info.Main.Version
-	for _, s := range info.Settings {
-		if s.Key == "vcs.revision" || s.Key == "vcs.modified" {
-			v += " " + s.Key + "=" + s.Value
-		}
-	}
-	return v
+	return info.Main.Version
 }

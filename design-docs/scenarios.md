@@ -35,7 +35,7 @@ work and knows what to do.
    writes the managed block into `AGENTS.md` and `CLAUDE.md`, and creates the
    store under the common dir with zero events. There is no
    `.lit/workspace.toml`, so the workspace reads as the default profile: three level names, ten columns,
-   two link types, one rule, four workflows, `claim_ttl`, and the two synthetic
+   two link types, four workflows, `claim_ttl`, and the two synthetic
    containers.
 2. A fresh agent reads the managed block: work is tracked by lit2, run
    `lit2`, follow what it prints.
@@ -161,12 +161,12 @@ and does not strand the ticket.
 **Walk.** `s4l` is in `impl` on a passed v2. `set s4l/plan -` writes v3;
 `⇒ s4l/plan/verdict (none), was pass on v2`. The ticket stays in `impl`: a
 requirement is evaluated at the transition and never again. At `set
-s4l/status review`, `review/entry` carries `plan/verdict=pass` at `advise`,
+s4l/status review`, `review/entry` carries `plan/verdict=pass` at `warning`,
 so the write lands with one advisory line naming the digest the verdict was
 on. A workspace that wants a re-review blocks it by setting that
-requirement's strength to `block` or adding it to `impl/exit`.
+requirement's `severity` to `error` or adding it to `impl`'s `entry`.
 
-**Relies on.** The fact is on the record and in the echo; the strength of the
+**Relies on.** The fact is on the record and in the echo; the severity of the
 nudge is one word in data.
 
 **Strain.** None.
@@ -242,11 +242,11 @@ how the team works.
 
 **Walk.**
 
-1. A edits `.lit/workspace.toml` to add `[[columns.backlog.exit]] test =
-   "points" strength = "block"`, tries it in the working tree, commits, opens
+1. A edits `.lit/workspace.toml` to add `{ test = "points", severity = "error" }`
+   to `columns.backlog.exit`, tries it in the working tree, commits, opens
    a pull request. The diff is the change.
 2. B, on a branch without it, runs `set b64/status plan`. B's file has no
-   such requirement; the write lands, citing the blob hash of B's file.
+   such requirement; the write lands, citing the blob id of B's active version.
 3. After both sync events and merge the file, the transition stands: it
    was judged at B's write under B's file, the event names that file's
    blob, and the fold applies it as written; `b64` is in `plan` with
@@ -280,7 +280,7 @@ its own text for that step, without touching the rest of the workspace.
 
 **Walk.**
 
-1. In `.lit/workspace.toml`, under `[epics.rin]`: `columns.audit.next =
+1. In `.lit/workspace.toml`, under `[nodes."<rin's id>"]`: `columns.audit.next =
    ["impl"]` and `columns.plan.next = ["audit"]`. The same edit through the
    verbs is `set rin/columns/audit '{next:[impl]}' rin/columns/plan/next
    '[audit]'`, which edits the file and echoes that it did. The parse checks

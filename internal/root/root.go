@@ -19,6 +19,7 @@ import (
 	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/reason"
@@ -33,6 +34,7 @@ type Process struct {
 	Place    command.Place
 	Store    command.Opening
 	Fold     fold.Env
+	Reader   config.ReaderVersion
 	Version  string
 	Commands command.Sink
 	In       io.Reader
@@ -51,7 +53,7 @@ func Run(p Process, args []string) int {
 		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
 	}
 	verbs, admin := cli.Verbs(), cli.Admin()
-	inv := command.Invocation{Trace: trace, Version: p.Version, Place: p.Place, Agent: p.Agent}
+	inv := command.Invocation{Trace: trace, Version: p.Version, Place: p.Place, Agent: p.Agent, Config: configFacts(p)}
 	event := command.Record(p.Clock, inv, func(_ time.Time, asked func(cli.Summary), stored *command.StoreFacts) cli.Outcome {
 		stored.Opening = p.Store
 		cmd, err := cli.Parse(verbs, admin, args)
@@ -69,6 +71,27 @@ func Run(p Process, args []string) int {
 		_, _ = io.WriteString(p.Err, logFailure(err))
 	}
 	return cli.ExitCode(event.Outcome)
+}
+
+// configFacts reads the workspace configuration in force for this run. Only a
+// committed version is in force (architecture.md §3.15), and none is committed
+// yet, so the shipped default is the model. Loading reads nothing from the
+// working tree, so a draft that does not parse never reaches a command. The
+// config-ref names the version in the code repository's object format, which
+// only an open store has, so a run with no store records no ref.
+func configFacts(p Process) *command.ConfigFacts {
+	loaded, err := config.Load(config.NeverCommitted{}, p.Reader)
+	if err != nil {
+		// [LAW:no-silent-failure] the default profile is embedded in this
+		// binary; one that does not parse is a defect of the build, not a run
+		// to refuse.
+		panic(fmt.Sprintf("root: the shipped default profile does not parse: %v", err))
+	}
+	f := command.ConfigFacts{Facts: loaded.Facts()}
+	if o, ok := p.Store.(command.Opened); ok {
+		f.Ref = loaded.Ref(o.Format).String()
+	}
+	return &f
 }
 
 // dispatch binds each command to its body. Every verb runs the steps of §5

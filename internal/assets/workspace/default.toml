@@ -1,0 +1,74 @@
+# The default profile: the workspace model in force until a person commits a
+# version. config.Parse reads it like any other version. Its git blob id is the
+# config-ref of every event written before a version is committed.
+
+prefix = "lit"
+claim_ttl = "6h"
+labels = ["ready", "needs-design", "external"]
+
+[levels.1]
+name = "story"
+
+[levels.2]
+name = "feature"
+home = "unfiled"
+
+[levels.3]
+name = "epic"
+home = "unassigned"
+
+[checks.ready]
+tests = [
+  { test = "description" },
+  { test = "labels=ready", scope = "ancestors" },
+  { test = "labels!=needs-design", scope = "ancestors" },
+  { test = "labels!=external", scope = "ancestors" },
+  { test = "!blockers" },
+]
+
+[links.blocks]
+kind = "dependency"
+between = [[1, 1], [2, 2], [3, 3]]
+
+[links.relates]
+kind = "relates"
+between = [[1, 1], [1, 2], [1, 3], [2, 1], [2, 2], [2, 3], [3, 1], [3, 2], [3, 3]]
+
+[columns.backlog]
+initial = true
+next = ["plan"]
+exit = [{ check = "ready", severity = "error" }]
+
+[columns.plan]
+next = ["impl"]
+
+[columns.impl]
+next = ["review"]
+entry = [{ test = "plan/verdict=pass", severity = "error" }]
+
+[columns.review]
+next = ["merge"]
+entry = [{ test = "plan/verdict=pass", severity = "warning" }]
+
+[columns.merge]
+next = ["done"]
+entry = [{ test = "verdict=pass", severity = "error" }]
+
+[columns.done]
+terminal = true
+
+[columns.dup]
+terminal = true
+entry = [{ test = "of", severity = "error" }]
+
+[columns.superseded]
+terminal = true
+entry = [{ test = "of", severity = "error" }]
+
+[columns.obsolete]
+terminal = true
+entry = [{ test = "reason", severity = "error" }]
+
+[columns.wontfix]
+terminal = true
+entry = [{ test = "reason", severity = "error" }]

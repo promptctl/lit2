@@ -245,12 +245,14 @@ and access control.
   from citing versions: a revoked writer can keep citing the version that
   allowed it.
 - **Departure already made:** the charter and design say a "versioned,
-  signed configuration stream" of events. `architecture.md` §3.14 makes it
-  a committed file, `.lit/workspace.toml`, versioned by git. **Departure
-  made:** decision H. The fold reads no configuration; `config-ref` stays
-  on the event as provenance; the one enforcer judges a write under the
-  writer's file at the write, and tick judges stored state under the
-  reader's file at the read. Nothing travels with the events but the hash,
+  signed configuration stream" of events. `architecture.md` §3.15 makes it
+  a committed file, `.lit/workspace.toml`, versioned by git; the model in
+  force is the active version a person commits, or the shipped default
+  before any is committed. **Departure made:** decision H. The fold reads no
+  configuration; `config-ref` stays on the event as provenance, the git blob
+  id of the active version its writer ran under; the one enforcer judges a
+  write under that version at the write, and tick applies the reader's
+  active version at the read. Nothing travels with the events but the id,
   and the stream and its quorum-by-events signing are gone.
 
 ### C5. Ids derive from `(writer, causal-position, content)`; they are opaque; sequential numbering is presentation only.

@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
-	_ "embed" // the BIP-39 English word list
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/promptctl/lit2/internal/assets"
 )
 
 // Key is a principal's private key at rest: the Ed25519 seed, RFC 8032's
@@ -99,8 +100,8 @@ type Phrase struct{ words [phraseWords]string }
 // 8-bit checksum: 264 bits, 11 to a word.
 const phraseWords = 24
 
-//go:embed bip39-english.txt
-var englishText string
+// englishText is BIP-39's English word list as the assets package ships it.
+var englishText = string(assets.BIP39English.Bytes())
 
 // english is BIP-39's English word list, in order; a word's index is its
 // 11-bit value. It is read once and never changed.

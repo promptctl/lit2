@@ -17,7 +17,7 @@ A column declares, in the workspace configuration beside its flags and its
 `next` list, two lists of **requirements**: `exit`, what a ticket needs before
 it may leave along a forward edge, and `entry`, what it needs before it may
 arrive by any edge. A requirement is one test over one path of the ticket, a
-scope, and a strength. The tests are evaluated in exactly one place, the
+scope, and a severity. The tests are evaluated in exactly one place, the
 transition write `set x/status <column>`, against the workflow the ticket
 resolves. A blocking requirement that fails refuses the write and nothing is
 written; an advisory one that fails is printed and the write proceeds. Every
@@ -73,7 +73,7 @@ A requirement is three values, no more:
   `needs-design` on the epic hold every ticket under it, and lets a field
   declared on level 2 be required before any of its tickets move, with one
   resolution rule rather than three.
-- **`strength`**: `block` or `advise`, and it has no default. Every declaration
+- **`severity`**: `error` or `warning`, and it has no default. Every declaration
   states its certainty, which is what the north star asks for
   ([project-intent.md](project-intent.md): tune the strength of an intervention
   to its certainty).
@@ -97,7 +97,7 @@ a requirement reads that. A checklist, when one lands, exposes
 grammar does not grow.
 
 The configuration parse refuses, naming the key, a `test` whose path names a
-field declared on no level, a `strength` that is missing or not one of the two,
+field declared on no level, a `severity` that is missing or not one of the two,
 a `scope` that is not one of the two, and an `exit` list on a terminal column,
 which has no forward edge and so could never be evaluated. A path declared on
 some level but not on this ticket's level reads as absent; that is what makes
@@ -109,91 +109,79 @@ Requirements live in the workflow section of the workspace configuration
 document ([workspace-configuration.md](workspace-configuration.md)), the same
 document `/columns` reads and writes, so there is one source whether the
 author edits TOML or runs `add /columns/backlog/exit '{…}'`. The
-shipped default, in full:
+shipped default, in full (the file is `internal/assets/workspace/default.toml`):
 
 ```toml
+prefix = "lit"
+claim_ttl = "6h"
+labels = ["ready", "needs-design", "external"]
+
+[levels.1]
+name = "story"
+
+[levels.2]
+name = "feature"
+home = "unfiled"
+
+[levels.3]
+name = "epic"
+home = "unassigned"
+
+[checks.ready]
+tests = [
+  { test = "description" },
+  { test = "labels=ready", scope = "ancestors" },
+  { test = "labels!=needs-design", scope = "ancestors" },
+  { test = "labels!=external", scope = "ancestors" },
+  { test = "!blockers" },
+]
+
+[links.blocks]
+kind = "dependency"
+between = [[1, 1], [2, 2], [3, 3]]
+
+[links.relates]
+kind = "relates"
+between = [[1, 1], [1, 2], [1, 3], [2, 1], [2, 2], [2, 3], [3, 1], [3, 2], [3, 3]]
+
 [columns.backlog]
 initial = true
 next = ["plan"]
-guidance = """
-A ticket leaves the backlog once it says what to build and someone has put its
-epic in order and marked it ready. Write the description; order the lane; then
-`add <epic>/labels ready`, or `add <ticket>/labels ready` for a ticket with no
-epic."""
-
-[[columns.backlog.exit]]
-test = "description"
-strength = "block"
-
-[[columns.backlog.exit]]
-test = "labels=ready"
-scope = "ancestors"
-strength = "block"
-
-[[columns.backlog.exit]]
-test = "labels!=needs-design"
-scope = "ancestors"
-strength = "block"
-
-[[columns.backlog.exit]]
-test = "labels!=external"
-scope = "ancestors"
-strength = "block"
-
-[[columns.backlog.exit]]
-test = "!blockers"
-strength = "block"
+exit = [{ check = "ready", severity = "error" }]
 
 [columns.plan]
 next = ["impl"]
 
 [columns.impl]
 next = ["review"]
-
-[[columns.impl.entry]]
-test = "plan/verdict=pass"
-strength = "block"
+entry = [{ test = "plan/verdict=pass", severity = "error" }]
 
 [columns.review]
 next = ["merge"]
-
-[[columns.review.entry]]
-test = "plan/verdict=pass"
-strength = "advise"
+entry = [{ test = "plan/verdict=pass", severity = "warning" }]
 
 [columns.merge]
 next = ["done"]
-
-[[columns.merge.entry]]
-test = "verdict=pass"
-strength = "block"
+entry = [{ test = "verdict=pass", severity = "error" }]
 
 [columns.done]
 terminal = true
 
 [columns.dup]
 terminal = true
-[[columns.dup.entry]]
-test = "of"
-strength = "block"
+entry = [{ test = "of", severity = "error" }]
 
 [columns.superseded]
 terminal = true
-[[columns.superseded.entry]]
-test = "of"
-strength = "block"
+entry = [{ test = "of", severity = "error" }]
 
 [columns.obsolete]
 terminal = true
-[[columns.obsolete.entry]]
-test = "reason"
-strength = "block"
+entry = [{ test = "reason", severity = "error" }]
 
 [columns.wontfix]
 terminal = true
-[[columns.wontfix.entry]]
-test = "reason"
-strength = "block"
+entry = [{ test = "reason", severity = "error" }]
 ```
 
 `merge`'s entry requirement reads `verdict`, the newest review verdict on the
@@ -208,7 +196,7 @@ As paths, the same declaration is `/columns/backlog/exit`, a list
 whose elements are objects, edited with `add` and `rm` like any list:
 
 ```
-add /columns/backlog/exit '{test:points strength:advise}'
+add /columns/backlog/exit '{test:points severity:warning}'
 + /columns/backlog/exit/5
 ```
 
@@ -228,14 +216,14 @@ nothing is written, including the claim the transition would have stamped
 ```
 $ lit set dee/status plan
 error (reason=gate): dee/status backlog → plan refused by backlog/exit; nothing written
-  block  description     empty
-  block  labels=ready    absent on dee and its ancestors (unfiled)
+  error  description     empty
+  error  labels=ready    absent on dee and its ancestors (unfiled)
 A ticket leaves the backlog once it says what to build and someone has put its
 epic in order and marked it ready. …
 ```
 
 The first line names the path, the edge and the side that refused; one line per
-unmet requirement gives its strength, its test, and the value found, so the
+unmet requirement gives its severity, its test, and the value found, so the
 agent is not sent back to `get`; then the ticket's current column's guidance,
 the same text `get dee` prints, because the column that holds a ticket is the
 one that says how to leave it. A bulk write, `set 'rin.*/status' plan`,
@@ -251,16 +239,16 @@ tickets, labels them, or holds them. Where [custom-columns.md](custom-columns.md
 computed a ticket's position from rules on every read, this design keeps the
 sibling's stored `status` and puts the rule at the one write that changes it.
 
-## Strength
+## Severity
 
-`block` is the refusal above. `advise` lets the write through and prints the
+`error` is the refusal above. `warning` lets the write through and prints the
 unmet requirement with the echo, in the same line shape, under the derivations:
 
 ```
 $ lit set dee/status review
 dee/status impl → review
-  advise  review/entry  plan/verdict=pass   verdict is empty; plan edited since verdict on digest 3f1c…
-  requirements: 1 evaluated · 0 met · 1 unmet (advise) · 0 unmet (block)
+  warning review/entry  plan/verdict=pass   verdict is empty; plan edited since verdict on digest 3f1c…
+  requirements: 1 evaluated · 0 met · 1 unmet (warning) · 0 unmet (error)
 ```
 
 Nothing more is asked of the agent: no `--reason`, no acknowledgement flag. A
@@ -269,8 +257,8 @@ of the advisory, in the echo and the command event, is the feedback the north
 star wants placed where the agent can act on it. Which requirements are which
 is the author's call per declaration, and the default above shows the split:
 the invariants the workflow exists for (a plan passed before building, a
-canonical id on a duplicate, a ticket groomed before it is pulled) block; a
-heuristic the agent may overrule with reason advises.
+canonical id on a duplicate, a ticket groomed before it is pulled) are `error`;
+a heuristic the agent may overrule with reason is `warning`.
 
 ## Ready to pull
 
@@ -340,7 +328,7 @@ requirement in the default above or a derivation it reads; none is engine code.
 
 - `ready.required_fields`, already moved by custom-fields.md to `required =
   true` on a field per level, moves once more, to an exit requirement on the
-  initial column: `test = "<field>"`, `strength = "block"`. "Required means
+  initial column: `test = "<field>"`, `severity = "error"`. "Required means
   required to be pulled" is exactly "an exit requirement on the initial
   column", and a flag on the field was a second place that rule lived, one that
   could not say which transition it guarded. The `required` key on a field
@@ -386,15 +374,15 @@ transition whose requirements were not evaluated must not look alike
 
 ```
 dee/status backlog → plan   ⇒ dee/claim = this checkout
-  requirements: 5 evaluated · 5 met · 0 unmet (advise) · 0 unmet (block)
+  requirements: 5 evaluated · 5 met · 0 unmet (warning) · 0 unmet (error)
 ```
 
 Above the summary, one line per unmet requirement, advisory or blocking, with
-its strength, the column and side that declared it, its test, and the value
+its severity, the column and side that declared it, its test, and the value
 found. The refusal is the same lines under the `error` header.
 
 The command event for a transition records, per requirement evaluated: the
-column and side, the test, the scope, the strength, the workflow node it
+column and side, the test, the scope, the severity, the workflow node it
 resolved from, the outcome, and the value read, with `absent` as a value; the
 totals the echo prints; and `written: false` on a refusal. The event for `/next`
 records every lane considered, each head's `held` lines, which lane was served
@@ -409,10 +397,11 @@ writes it made.
 1. The label's name. Recommended: `ready`, the shorter word for the agents who
    will type it; it is one string in the default workflow and nothing else
    changes if it is `ready-to-pull`.
-2. `!blockers` ships as `block`. Recommended, because a lane's order and a
-   `blocks` edge are both statements that this cannot be done before that. The
-   alternative is `advise`, which lets an agent start the next lane member
-   while the previous sits in review; either is one word in the default.
+2. `!blockers` ships as `error`, inside `ready`, which backlog's exit checks at
+   `error`. Recommended, because a lane's order and a `blocks` edge are both
+   statements that this cannot be done before that. The alternative is
+   `warning`, which lets an agent start the next lane member while the previous
+   sits in review; either is one word in the default.
 3. The `required` key on a field declaration is removed in favor of a
    requirement on the column where it bites. Recommended, for one source; the
    alternative keeps the key as shorthand that the configuration parse expands

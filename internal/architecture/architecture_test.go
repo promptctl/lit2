@@ -28,6 +28,7 @@ const (
 	program    rule = "is the program and imports a unit other than root"
 	ambient    rule = "reads the process's world outside root"
 	exits      rule = "calls os.Exit outside cmd/lit2"
+	embeds     rule = "embeds a file outside internal/assets, which holds every shipped file"
 	network    rule = "imports the network, which lit2 never speaks; the user's git does (decision G, D13)"
 	missingRow rule = "has no row in ARCHITECTURE.md's concern table"
 	rowUnit    rule = "has a concern row naming no unit, or one not in the layers block"
@@ -153,7 +154,7 @@ func checkCode(tree fs.FS, mod string, rank map[string]int, declared map[string]
 			if err != nil {
 				return err
 			}
-			f, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
+			f, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution|parser.ParseComments)
 			if err != nil {
 				return err
 			}
@@ -210,6 +211,15 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 		}
 		if at.rule != "" {
 			vs = append(vs, at)
+		}
+	}
+	// a go:embed directive outside assets ships a file that assets does not
+	// name, so the Asset handles would miss it `[LAW:one-source-of-truth]`.
+	for _, group := range f.Comments {
+		for _, c := range group.List {
+			if strings.HasPrefix(c.Text, "//go:embed") && owner != "assets" {
+				vs = append(vs, violation{path + ": " + c.Text, embeds})
+			}
 		}
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -439,6 +449,7 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"crypto/tls in the program", "cmd/lit2/main.go", "package main\n\nimport _ \"crypto/tls\"\n", network},
 		{"a file under internal/", "internal/README", "notes\n", unlisted},
 		{"os.Exit outside cmd/lit2", "internal/root/exit.go", "package root\n\nimport \"os\"\n\nfunc init() { os.Exit(0) }\n", exits},
+		{"go:embed outside assets", "internal/git/git.go", "package git\n\nimport _ \"embed\"\n\n//go:embed x.txt\nvar X string\n", embeds},
 		{"a §3 heading with no row", "design-docs/architecture.md", strings.Replace(design, "## 5.", "### 3.2 Event and intent\n\n## 5.", 1), missingRow},
 		{"a §5 step with no row", "design-docs/architecture.md", strings.Replace(design, "## 6.", "2. **Parse** the file.\n\n## 6.", 1), missingRow},
 		{"a row naming an unlisted unit", "ARCHITECTURE.md", strings.Replace(note, "`git` |", "`gitt` |", 1), rowUnit},

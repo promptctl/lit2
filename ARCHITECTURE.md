@@ -37,6 +37,7 @@ events
 store
 git
 reason
+assets
 ```
 
 Each line of the `dependencies` block is a module outside the standard
@@ -47,6 +48,8 @@ names it here first.
 github.com/go-git/go-git/v5 git
 github.com/go-git/go-billy/v5 git
 filippo.io/edwards25519 events
+github.com/BurntSushi/toml config
+golang.org/x/mod config
 ```
 
 ## Concerns
@@ -61,16 +64,16 @@ row; the architecture test fails on one without.
 | §3.3 Fold and tick | `fold`, `tick` | fold(events) → state; tick(state, config, now) → view |
 | §3.4 Work item, level, tree | `config`, `fold`, `tick` | levels and homes declared in config; the tree folded; stage and rollup in tick |
 | §3.5 Column and stage | `config`, `tick` | the column graph and its check in config's parse; stage and the undeclared column in tick |
-| §3.6 Requirement | `verbs`, `field`, `tick` | evaluated by the one enforcer in verbs; the test is field's atom; `held` in tick |
+| §3.6 Requirement | `verbs`, `field`, `config`, `tick` | evaluated by the one enforcer in verbs; the test is field's atom; checks expanded in config; `held` in tick |
 | §3.7 Lane | `fold` | membership, order and the one rank order |
 | §3.8 Claim | `fold`, `tick` | the holder set folded; expiry in tick |
 | §3.9 Checklist | `fold`, `verbs` | items folded; the `set` list diff in verbs |
 | §3.10 Link | `fold`, `config` | links folded; link types declared in config |
-| §3.11 Rule | `tick`, `config` | evaluated on every read in tick; declared in config |
+| §3.11 Label | `config`, `fold` | declared in config's `labels` list; applied as events and folded; computed by nothing |
 | §3.12 Moment and handler | `guidance` | moments, handlers, workflows, their three layers |
 | §3.13 Rewrite | `fold`, `store` | applied by the fold; segments re-sealed by store |
 | §3.14 Identity | `root`, `events` | the checkout id, principal and agent label read in root; attribution carried in events |
-| §3.15 The workspace file | `config` | the one schema parse of `.lit/workspace.toml` |
+| §3.15 The workspace file | `config`, `assets` | the one schema parse of a committed version, and the default profile it falls back to; the shipped files and their `Asset` handles in assets |
 | §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs through git |
 | §3.17 Principal and policy | `events`, `fold` | the key, signature and suite in events; the policy as events folded |
 | §3.18 Capability | `verbs`, `fold` | the capability verdict at the one enforcer; roles from the folded policy |

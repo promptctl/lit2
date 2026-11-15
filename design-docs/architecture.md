@@ -38,7 +38,7 @@ are, rather than adding a mechanism beside the substrate.
 | append-only, content-addressed events | an immutable record; a history that is the audit log; undo as another event | in-place change: a correction is a new event, a removal is a rewrite |
 | one ref per writing checkout, replaced only by its writer | writes that never contend; push and fetch that never merge; no locks anywhere; nothing on the remote grows with commands | coordination before a write: two offline writers can both do a thing |
 | a deterministic fold with a total order `(causal-position, writer, event id)` | the same state on every machine from the same events; concurrent contradictions settled identically everywhere | reading a clock, so any "how long ago" question is answered after the fold |
-| read-time evaluation with `now` | labels, expiry, staleness, held, computed on every read, never stored, so they settle as facts change | a stored reaction to a condition, which would outlive the condition |
+| read-time evaluation with `now` | expiry, staleness, held, computed on every read, never stored, so they settle as facts change | a stored reaction to a condition, which would outlive the condition |
 | committed configuration files, versioned by git | the model as data a person edits, reviews in a pull request and diffs; every version addressable by blob hash in the code repository's history | a model that changes without someone's edit |
 | rewrites as events | purge, squash, compaction, erasure, converging on every replica | reaching copies that never sync again (charter #7) |
 | a git remote as a dumb replicated store | sync through the channel the code already uses; remote filing from a storeless machine | enforcement by the remote; a server of any kind |
@@ -55,8 +55,7 @@ above y`, not `x is at position 4`.
 
 Each primitive is one type, one job, and a stated set of things the engine
 reads from it. The content is the workspace's. The engine ships no column
-name, no level name, no label, no guidance text; those are the default
-profile, data a workspace may rewrite `[LAW:types-are-the-program]`.
+name, no level name, no label; those are the default profile, data a workspace may rewrite `[LAW:types-are-the-program]`.
 
 ### 3.1 Node and path
 
@@ -116,13 +115,13 @@ one writer at one position.
 `fold(events) → state`: items, fields, comments, labels, links,
 lanes, their order and their rank, checklists, lane holders, and every
 unresolved concurrent contradiction as a value on the thing it concerns.
-`tick(state, config, now) → view`: computed labels, `held`, claim
+`tick(state, config, now) → view`: `held`, claim
 expiry, staleness, stage, rollup. Every read is `tick(fold(events), now)`;
 every write is evaluated against the same. Neither function performs I/O.
 The fold reads no configuration: an event's legality under the model was
-judged by the one enforcer at its write, under the writer's file, and the
-reader's file is applied by tick, which is where a column or field the
-reader's model no longer declares is reported (§3.5).
+judged by the one enforcer at its write, under the active version its writer
+ran under, and tick applies the active version its reader ran under, which is
+where a column or field that version no longer declares is reported (§3.5).
 
 Determinism is a behavior: two folds of one event set, in any arrival order,
 from genesis or from a snapshot, yield equal state. It is tested as that
@@ -181,15 +180,18 @@ adds an `audit` column by declaring it and pointing `plan/next` at it.
 
 ### 3.6 Requirement
 
-A **requirement** is three values on a column's `entry` or `exit` list: a
-`test` (one selector atom over one path of the ticket: `p`, `!p`, `p=v`,
-`p!=v`, `p~re`), a `scope` (`self` or `ancestors`), and a `strength` (`block`
-or `advise`, no default). One pure function evaluates them, at exactly one
-place, the transition write: the source's `exit` list on a forward edge, the
-destination's `entry` list on every arrival, all of them, so a refusal names
-everything unmet at once `[LAW:single-enforcer]`. `block` refuses and writes
-nothing; `advise` prints and proceeds. The same evaluation, run as a dry run
-of each forward edge, is the derived field `held`.
+A **requirement** is one entry of a column's `entry` or `exit` list: a `test`
+and a `severity` (`error` or `warning`, no default). A test is one selector
+atom over one path of the ticket (`p`, `!p`, `p=v`, `p!=v`, `p~re`) with a
+`scope` (`self` or `ancestors`), or the name of a **check**: a named list of
+tests under `[checks.<name>]`. `Parse` expands every check name, so the list the
+enforcer reads is flat, and each test keeps the name of the check it was written
+in. One pure function evaluates the flat list at exactly one place, the
+transition write: the source's `exit` list on a forward edge, the destination's
+`entry` list on every arrival, all of them, so a refusal names everything unmet
+at once `[LAW:single-enforcer]`. `error` refuses and writes nothing; `warning`
+prints and proceeds. The same evaluation, run as a dry run of each forward edge,
+is the derived field `held`.
 
 Anything a workspace wants to require is a fact something wrote (a field, a
 label, a verdict) or a derived field the engine exposes (`blockers`,
@@ -248,8 +250,8 @@ which is what lets a harness hook push an agent's whole TODO list on every
 change with no agent effort. The fold merges per item and a final state
 wins over `pending`. No event per check is folded into history beyond the
 item events themselves; the leaf's transitions carry the counts. The
-default profile's terminal columns require `checklist/pending = 0` on
-entry, so finishing a leaf with pending items is refused and names them.
+column may require `checklist/pending = 0` on entry, so finishing a leaf with
+pending items is refused and names them; the shipped default does not.
 Item text is prose and an envelope (§3.19); the `set` diff matches on the
 commitment.
 
@@ -263,13 +265,13 @@ join, adds one with a new name, and cannot add a kind. The default profile
 joins same-level items with `blocks` and any pair with `relates`; a node's
 stage is derived, so a dependency on a node is a dependency on its leaves.
 
-### 3.11 Rule
+### 3.11 Label
 
-A **rule** is `{where: <selector>, label: <name>}` in `/rules`. Tick evaluates
-every rule on every read and the matching tickets carry the label, computed,
-never stored, so it is gone the read after its condition stops holding and
-needs no merge. The default profile ships one: `blocked` where a blocker's
-stage is not terminal.
+A **label** is declared in the workspace file's top-level `labels` list before
+anything uses it, and a person applies it (`add x/labels ready`). Nothing
+computes a label: an item carries exactly the labels written to it, and a
+requirement reads them as `labels=ready`. The shipped default declares `ready`,
+`needs-design` and `external`.
 
 ### 3.12 Moment and handler
 
@@ -309,31 +311,29 @@ prints the three and the tiers this principal holds.
 
 ### 3.15 The workspace file
 
-The workspace's model is one committed file, `.lit/workspace.toml`: levels and
-their fields, columns and their requirements, link types, rules, the project
-layer of workflows, `claim_ttl`, the project prefix, `min-reader-version`.
-Per-node overrides are sections keyed by the node's id in the same file. A
-person edits it in an editor and reviews it in a pull request; git versions
-and merges it. The four verbs still read it as nodes, `get /columns`, and a
-write such as `set /columns/backlog/exit '[…]'` edits the file in the working
-tree and says so in the echo; committing it is the person's act, like any
-other file. It never becomes an event.
+The project's model is written in `.lit/workspace.toml`: the prefix,
+`min-reader-version`, levels and their fields, columns and their requirements,
+labels, checks, link types, `claim_ttl`, and per-node sections keyed by a node's
+id. A person edits it in an editor and reviews it in a pull request; git
+versions and merges it. A write such as `set /columns/backlog/exit '[…]'` edits
+the working-tree draft and says so in the echo; committing it is the person's
+act, like any other file. It never becomes an event.
 
-lit2 runs inside a checkout, and the working tree's copy of the file is the
-model, like every tool that reads its configuration from the repository, so an
-edit can be tried before it is committed. A repository with no file reads as
-the shipped default profile.
+The model in force is the **active version**: the last one a person applied with
+`lit2 config commit` and recorded in the event log, or the shipped default profile
+when none has been. A draft in the working tree is not in force until it is
+committed, so a draft that does not parse stops no command. `Parse` reads one
+version's bytes into one typed schema, or refuses naming every fault with its key
+path. The default profile is `internal/assets/workspace/default.toml`, embedded in
+the binary and read by the same `Parse` as any committed version.
 
-Every event carries `config-ref`, the blob hash of the file its writer read,
-as provenance: it names the version the enforcer judged the write under,
-and it resolves from the code repository's history when that version was
-committed. The fold reads no configuration (§3.3), so nothing but the hash
-travels with the events, and a version tried in the working tree and never
-committed costs nothing and is remembered by nothing but the hash on the
-events written under it. The schema parse refuses, at the
-write, what the designs say it refuses. Two people who edit the file
-concurrently meet in a git merge, which is where people already resolve
-concurrent edits to a file.
+Every event carries `config-ref`, the git blob id of the active version its writer
+ran under, in the code repository's object format. It is provenance: it names the
+version the enforcer judged the write under, and it resolves from the repository's
+history once that version is committed. The fold reads no configuration (§3.3), so
+nothing but the id travels with the events. Two people who edit the file
+concurrently meet in a git merge, which is where people already resolve concurrent
+edits to a file.
 
 Workflows have three layers and nothing else does: shipped in the binary, the
 person's own `$XDG_CONFIG_HOME/lit/config.toml` across every repository, and
@@ -464,10 +464,10 @@ row is that no primitive learned a new case.
 | park, reopen | a transition into `initial`, reachable from everywhere; the claim ends |
 | finish a container | derived: a node's stage is terminal when every child's is |
 | tell an agent what to do now | the handler bound `in <column>` prints after the ticket on `get x` and on `/next` |
-| nudge without blocking | a requirement with `strength = advise`; a handler |
+| nudge without blocking | a requirement with `severity = "warning"`; a handler |
 | customize the process per project or per node | sections of `.lit/workspace.toml`, at the root or keyed by a node's id; nearest ancestor wins per column, per handler field; reviewed in a pull request like any change to how the team works |
 | add a field, a level name, a link type | the same file: `[levels.1.fields.points]`, `[levels.2] name`, `[links.tests]`; no code |
-| see why a ticket is where it is | `get x/history`; `get x/held`; a rule's label names the rule |
+| see why a ticket is where it is | `get x/history`; `get x/held`, which names each unmet test and the check it came from when it has one |
 | undo | `set` back from the echo, or `get x/body/versions/N | set x/body -`; every version is in the history |
 | find things | selectors over any field, at any depth, across every node's dialect of a column name |
 | edit many things at once, safely | selectors and globs expand once; `--dry-run` prints the expansion and the diff; a refusal on one path writes nothing |
@@ -499,8 +499,7 @@ of (events, clock, argv, writer); the rest is the hearth
    common dir, this checkout's and its sibling worktrees'; load the cache
    snapshot keyed by `(fold-version, ref heads, log lengths)`. A miss or a
    torn snapshot is one refold; no lock.
-2. **Parse** `.lit/workspace.toml` as this reader sees it (§3.15) into the
-   schema value.
+2. **Parse** the active workspace version (§3.15) into the schema value.
 3. **Fold** the events newer than the snapshot, from the sealed segments
    and the open log, verifying each (§3.20).
 4. **Address.** Parse each path into a typed address; expand selectors and
@@ -533,8 +532,8 @@ same test fails when the two disagree.
  guidance   moments → resolved handlers → text after the data
  verbs      get/set/add/rm on typed addresses; requirements; verb → intents; echo
  address    path grammar; selectors; globs; the field table
- tick       clocked derivations: labels, held, expiry, staleness, stage, rollup
- config     .lit/workspace.toml from the working tree → one typed schema value
+ tick       clocked derivations: held, expiry, staleness, stage, rollup
+ config     the active workspace version (§3.15) → one typed schema value
  field      field kinds and their value parsers; the built-in fields; the atom
  fold       events → state; validation engine; rank; holders; conflicts
  events     record, codec, upcasters, ids, signature, envelope
@@ -651,8 +650,8 @@ walking skeleton.
    and capabilities as path globs in the default profile; the enforcer's
    capability verdict; membership verbs and the owner threshold;
    verification as a fold rule and at receive.
-4. **Config and columns.** `.lit/workspace.toml` from the working tree, the
-   schema parse, `config-ref` on events as provenance; levels and
+4. **Config and columns.** The active workspace version, the schema parse,
+   `config-ref` on events as provenance; levels and
    synthetic homes; columns, stage, rollup; transitions with the one
    enforcer; the checklist and its terminal requirement; the default profile.
 5. **Tiers.** Envelopes encrypted under the default tier; content keys and
@@ -660,7 +659,7 @@ walking skeleton.
    on admit and rotation on removal; `rm x --destroy`; succession;
    `get /me`.
 6. **Lanes, rank, claims, next.** Lanes on nodes and the one rank order;
-   rank intents; holders and expiry; `/lanes`, `/next`, `held`, rules.
+   rank intents; holders and expiry; `/lanes`, `/next`, `held`.
 7. **Guidance.** Workflows, handlers, the three layers, moments, the managed
    block, `--dry-run` printing guidance.
 8. **Sync.** Sealing the log into segments, the writer's commit and ref,
@@ -683,7 +682,7 @@ One line each, so a reader of the older document knows the position moved.
   workspace-configuration.md, workflows.md decision 1: the configuration is a
   committed file in the repository, not a stream in the store. Git supplies
   the versioning, signing and review the config stream was to provide, and
-  events cite the file's blob hash. The access-control policy document, when
+  events cite the active version's blob id. The access-control policy document, when
   it comes, is read against this.
 - path-addressed-cli.md: kept as written for hierarchy, lanes and rank;
   `rank` takes relative forms that are the events' own shape.
@@ -715,8 +714,8 @@ One line each, so a reader of the older document knows the position moved.
   process (decision G); go-git touches objects and refs only.
 - event-store design `INV:config-versioned`: the fold reads no
   configuration; `config-ref` is provenance, the enforcer judges a write
-  under the writer's file and tick judges state under the reader's; a
-  writer's tree carries no configuration (decision H).
+  under the active version its writer ran under, and tick judges state under
+  the active version its reader ran under.
 - access-control design: nothing in it is later; the write layer and the
   encrypted default tier are in the first release (requirements.md §1).
   Capabilities name path globs rather than the v1 command table's verbs;

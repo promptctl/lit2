@@ -74,7 +74,7 @@ ever, because each of those makes the things around it expensive to replace.
 **work**
 - ▶ columns in the workspace file; one enforcer on the write reading
   requirement lists and the writer's capabilities; `stage`, `rollup`,
-  `held` and rule labels in tick; verdicts as children on paths; the
+  `held` in tick; labels declared in the workspace file and applied by people, none computed; verdicts as children on paths; the
   checklist on the leaf, its final state kept
 - a status enum in code with a switch per transition; permission checks
   scattered per command
@@ -151,9 +151,10 @@ every event is signed and verified with no server. Built to full depth here
 because everything stands on them: the log and its sealing into segments,
 the event record and codec with its signature, the principal and the policy
 as events, authorization as a fold rule and at receive, the workspace
-file's mechanics (parse, `config-ref` as provenance), the fold and its total order, the path grammar and field table, the
+file's mechanics (the active version read by parse, the shipped default profile
+it falls back to, `config-ref` as the blob id of that version), the fold and its total order, the path grammar and field table, the
 verb-to-intent table. Built at working minimum: the default roles with the
-enforcer judging capabilities and empty requirement lists, the default
+enforcer judging capabilities, under the default profile's requirement lists, the default
 tier in plaintext mode with the envelope type in place, `stage` and
 `rollup` in tick, `/next` as the head of the top-ranked lane,
 `lit2 admin sync` run by hand. The slice is done when the walk below
@@ -180,7 +181,7 @@ grant on admit, rotation on removal; `rm x --destroy`; succession;
 `get /me`; redaction in every view. Scenario 15.
 
 **Slice 3, process.** Requirements and `held`; levels with their fields
-and templates; the checklist and its terminal requirement; links and rules; per-epic sections and the nearest-ancestor
+and templates; the checklist and its terminal requirement; links; per-epic sections and the nearest-ancestor
 rule; versioned text nodes, verdicts, terminal columns with reasons;
 history and undo. Scenarios 2, 3, 4, 7, 8.
 

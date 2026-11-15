@@ -115,6 +115,7 @@ type line struct {
 	Version    string       `json:"version"`
 	Command    commandFacts `json:"command"`
 	Counts     counts       `json:"counts"`
+	Config     *configLine  `json:"config,omitempty"`
 	Store      *storeLine   `json:"store,omitempty"`
 	Fold       []foldLine   `json:"fold,omitempty"`
 	Place      any          `json:"place"`
@@ -130,6 +131,56 @@ type counts struct {
 	Values int `json:"values"`
 }
 
+// configLine is the config block: the version a run read, where it came from,
+// and what it held. Refusals are a list, empty when the version parsed. Every
+// count is written, zeros included, so an absent block and an empty version
+// are different facts.
+type configLine struct {
+	Source   string        `json:"source"`
+	Ref      string        `json:"ref,omitempty"`
+	Gate     string        `json:"gate"`
+	Outcome  string        `json:"outcome"`
+	Refusals []refusalLine `json:"refusals"`
+	Counts   configCounts  `json:"counts"`
+}
+
+type refusalLine struct {
+	Key    string `json:"key"`
+	Reason string `json:"reason"`
+}
+
+type configCounts struct {
+	Levels       int `json:"levels"`
+	Columns      int `json:"columns"`
+	Labels       int `json:"labels"`
+	Requirements int `json:"requirements"`
+	Checks       int `json:"checks"`
+	Links        int `json:"links"`
+	Sections     int `json:"sections"`
+}
+
+func configBlock(c *ConfigFacts) *configLine {
+	if c == nil {
+		return nil
+	}
+	refusals := []refusalLine{}
+	for _, r := range c.Facts.Refusals {
+		refusals = append(refusals, refusalLine{Key: string(r.Key), Reason: string(r.Reason)})
+	}
+	n := c.Facts.Counts
+	return &configLine{
+		Source:   c.Facts.Source,
+		Ref:      c.Ref,
+		Gate:     c.Facts.Gate,
+		Outcome:  c.Facts.Outcome,
+		Refusals: refusals,
+		Counts: configCounts{
+			Levels: n.Levels, Columns: n.Columns, Labels: n.Labels, Requirements: n.Requirements,
+			Checks: n.Checks, Links: n.Links, Sections: n.Sections,
+		},
+	}
+}
+
 func encode(e Event) ([]byte, error) {
 	l := line{
 		Event:      "lit2 " + string(e.Command.Name),
@@ -141,6 +192,7 @@ func encode(e Event) ([]byte, error) {
 		Version:    e.Version,
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
+		Config:     configBlock(e.Config),
 		Store:      storeBlock(e.Store),
 		Fold:       foldBlock(e.Store.Folds),
 		Place:      placeLine(e.Place),

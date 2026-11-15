@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/promptctl/lit2/internal/cli"
+	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
@@ -41,6 +42,18 @@ type Invocation struct {
 	Version string
 	Place   Place
 	Agent   events.Agent
+	// Config is the workspace configuration the run read; nil when none was
+	// read, which the event records as an absent config block.
+	Config *ConfigFacts
+}
+
+// ConfigFacts is the workspace configuration a run read, and the config-ref it
+// names when the run had a store to hash it in.
+type ConfigFacts struct {
+	Facts config.Facts
+	// Ref is the config-ref in hex; empty when the run had no store, so no
+	// object format to hash the version in.
+	Ref string
 }
 
 // Event is the command event: the invocation, what was asked, when it

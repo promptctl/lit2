@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
@@ -55,6 +56,7 @@ func NewTwin() Twin {
 			Place:    command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}},
 			Store:    command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
 			Fold:     foldEnv(2),
+			Reader:   config.Released{V: "v0.4.0"},
 			Version:  "twin",
 			Commands: commands,
 			In:       strings.NewReader(""),

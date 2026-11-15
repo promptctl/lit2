@@ -29,12 +29,13 @@ its history row, its bulk-import key, its `--field` name and its merge rule, so
 a field cannot be written without being recorded. There is no way to add a
 field without a Go change and a column.
 
-"Required" exists as `ready.required_fields` in `.lit/config.toml`: a list of
-built-in field names, read by the readiness classifier, which marks a ticket
-with an empty one `blocked: missing <field>` so `lit next` skips it. It applies
-to every ticket regardless of level, it cannot name a field that does not
-exist, and an outside reader of the store cannot see it (the cross-repo gap
-[workspace-configuration.md](workspace-configuration.md) closes).
+"Required" is a requirement on a column, not a flag. The shipped default's
+`ready` check is the example: an exit requirement on the initial column that
+keeps a ticket with no description, no `labels=ready`, or a blocker out of the
+queue. A requirement's test reaches every ticket its scope names, regardless of
+level, and `Parse` refuses a test that names a path no level or built-in
+declares. [workspace-configuration.md](workspace-configuration.md) covers what an
+outside reader sees.
 
 ## Declaring a field
 

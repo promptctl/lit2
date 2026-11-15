@@ -17,7 +17,7 @@ A lit store can be read from outside its repository. `lit ls --at <dir>` lists
 a discovered store, and `lit stores --counts` rolls up ready / in-flight /
 blocked counts across every store under a root. Both open the storage
 directory, `<git-common-dir>/links`, and nothing else: no repository root, no
-`.lit/config.toml`, no working tree. Anything lit needs in order to say what a
+working tree. The model in force is in that directory too, since `lit config commit` records each version in the log. Anything lit needs in order to say what a
 backlog *is* has to be inside that directory, or the outside reader computes a
 different answer than the repository's own `lit backlog` does.
 
@@ -27,7 +27,7 @@ boundary is "store-intrinsic", so a ticket the repository's own lit calls
 blocked for a missing description is ready from outside. Two more values are
 about to join it. The hierarchy epic puts level
 names in a `[levels]` table and strategy declarations in a `[strategies]` table,
-both in `.lit/config.toml`. An outside reader would render `L2` where the
+both in `.lit/workspace.toml`. An outside reader would render `L2` where the
 repository says `epic`, and could not tell a strategy label from any other
 label, which makes a cross-repository strategy report impossible to compute.
 Custom field definitions ([custom-fields.md](custom-fields.md)) would be a
@@ -43,9 +43,9 @@ when they can. The test is that sentence and nothing else.
 
 | Value | Today | Class | Reason |
 |---|---|---|---|
-| `ready.required_fields` | `.lit/config.toml` | workspace truth | decides whether a ticket is ready |
-| `[levels]` names | planned for `.lit/config.toml` | workspace truth | the name of a level is a fact about the backlog, not about a machine |
-| `[strategies]` | planned for `.lit/config.toml` | workspace truth | which labels are strategies decides what a report counts |
+| the `ready` check (was `ready.required_fields`) | `.lit/workspace.toml`, committed | workspace truth | decides whether a ticket is ready |
+| `[levels]` names | planned for `.lit/workspace.toml` | workspace truth | the name of a level is a fact about the backlog, not about a machine |
+| `[strategies]` | planned for `.lit/workspace.toml` | workspace truth | which labels are strategies decides what a report counts |
 | custom field definitions | new | workspace truth | which fields exist, their kinds, which are required |
 | workflows | new | workspace truth (see [workflows.md](workflows.md), which supersedes the earlier local-preference row) | handlers bind to columns and epics, which are store nodes |
 | plan-review caps | new | local preference | policy for a writer in this clone; the record it produces is in the store either way |
@@ -109,8 +109,8 @@ records.
 
 ## Moving the three values that exist or are planned
 
-`ready.required_fields` becomes required flags on built-in fields per level
-([custom-fields.md](custom-fields.md) says how). The hierarchy epic's two
+`ready.required_fields` is now the `ready` check, an exit requirement on the
+initial column ([transition-requirements.md](transition-requirements.md)). The hierarchy epic's two
 tickets that write config, level names and strategies, are re-pointed at the
 document before they are built; their text today says `.lit/config.toml`. The grooming rule needs nothing here: a label is already
 store-resident.
