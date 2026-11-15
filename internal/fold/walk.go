@@ -241,7 +241,7 @@ func UnreadName(w events.UnreadWhy) string {
 func countsOf(s State) StateCounts {
 	var c StateCounts
 	s.items.each(func(r *item) {
-		if len(r.sortedCreates()) > 0 {
+		if !r.creates.empty() {
 			c.Items++
 		}
 		c.origin(r.origin())
@@ -252,7 +252,7 @@ func countsOf(s State) StateCounts {
 		c.facts(r.facts)
 		for _, el := range r.sortedElements() {
 			o := el.origin(r.id)
-			if _, uncreated := o.(Uncreated); !uncreated && el.sortedCreates()[0].in == comments {
+			if _, uncreated := o.(Uncreated); !uncreated && el.firstCreate().in == comments {
 				c.Comments++
 			}
 			c.origin(o)

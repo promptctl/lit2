@@ -12,12 +12,13 @@ import (
 // Vinju's compressed HAMT) from key to record. A write copies the path from
 // the root to its leaf, O(log n), and shares the rest, so a State is a
 // value and Step returns a new one without touching the old
-// `[LAW:types-are-the-program]`. Every collection the fold grows by one per
-// event is one of these, keyed by the id or name that identifies its
-// records: the items, the carried, unapplied and malformed records, and
-// each element, field, set, member, create, write, and id a fact keeps, so
-// no fold is quadratic in what it carries. A table holds no order; a reader
-// that needs one sorts what it reads.
+// `[LAW:types-are-the-program]`. Every collection the fold keeps and grows
+// by one per event is one of these, keyed by what identifies its records:
+// items by id; the carried, unapplied and malformed records by event, or by
+// where and what the malformed record was; and each element, field, set,
+// member, create, write, add and id a fact keeps by name or by event. So no
+// kept state is quadratic in what it carries. A table holds no order; a
+// reader that needs one sorts what it reads.
 type table[K comparable, R record[K], H hasher[K]] struct{ root *tnode[K, R] }
 
 // record is a table's record: its key, which no other record of the table
@@ -196,3 +197,19 @@ func (t table[K, R, H]) sorted(compare func(a, b R) int) []R {
 	slices.SortFunc(rs, compare)
 	return rs
 }
+
+// least is the record that sorts first under compare, if the table has one.
+func (t table[K, R, H]) least(compare func(a, b R) int) (R, bool) {
+	var best R
+	found := false
+	t.each(func(r R) {
+		if !found || compare(r, best) < 0 {
+			best, found = r, true
+		}
+	})
+	return best, found
+}
+
+// empty is whether the table has no record. A table never removes one, so
+// its root is nil exactly when nothing was ever set.
+func (t table[K, R, H]) empty() bool { return t.root == nil }

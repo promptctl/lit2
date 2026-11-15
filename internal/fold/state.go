@@ -342,7 +342,7 @@ func (s State) Item(id events.ItemID) Lookup {
 func (s State) Items() []Item {
 	var out []Item
 	for _, r := range s.records() {
-		if len(r.sortedCreates()) > 0 {
+		if !r.creates.empty() {
 			out = append(out, s.itemOf(r))
 		}
 	}
@@ -353,12 +353,12 @@ func (s State) Items() []Item {
 func (s State) Children(c Container) []events.ItemID {
 	var in []*item
 	s.items.each(func(r *item) {
-		if len(r.sortedCreates()) > 0 && r.sortedCreates()[0].in == c {
+		if !r.creates.empty() && r.firstCreate().in == c {
 			in = append(in, r)
 		}
 	})
 	slices.SortFunc(in, func(a, b *item) int {
-		return events.Compare(a.sortedCreates()[0].stamp.Order, b.sortedCreates()[0].stamp.Order)
+		return events.Compare(a.firstCreate().stamp.Order, b.firstCreate().stamp.Order)
 	})
 	ids := make([]events.ItemID, len(in))
 	for i, r := range in {
@@ -430,7 +430,7 @@ func (s State) Advisories() []Advisory {
 		case Uncreated:
 			out = append(out, Advisory{At: at, Is: o})
 		}
-		if len(r.sortedCreates()) > 0 {
+		if !r.creates.empty() {
 			switch l := it.Level.(type) {
 			case Leveled:
 			case Orphaned:
@@ -468,8 +468,8 @@ func (s State) records() []*item {
 func (s State) itemOf(r *item) Item {
 	it := Item{ID: r.id, Origin: r.origin(), Level: s.levelOf(r.id), Life: r.life, Facts: r.facts}
 	for _, el := range r.sortedElements() {
-		if len(el.sortedCreates()) > 0 {
-			it.Elements = append(it.Elements, Element{Name: el.name, In: el.sortedCreates()[0].in, Origin: el.origin(r.id), Facts: el.facts})
+		if !el.creates.empty() {
+			it.Elements = append(it.Elements, Element{Name: el.name, In: el.firstCreate().in, Origin: el.origin(r.id), Facts: el.facts})
 		}
 	}
 	slices.SortStableFunc(it.Elements, func(a, b Element) int {
@@ -482,10 +482,10 @@ func (s State) itemOf(r *item) Item {
 // the chain's missing link.
 func (s State) levelOf(id events.ItemID) LevelOf {
 	r, ok := s.items.get(id)
-	if !ok || len(r.sortedCreates()) == 0 {
+	if !ok || r.creates.empty() {
 		return Orphaned{Missing: id}
 	}
-	switch c := r.sortedCreates()[0].in.(type) {
+	switch c := r.firstCreate().in.(type) {
 	case Home:
 		return Leveled{Level: c.Holds}
 	case Under:

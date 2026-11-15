@@ -84,8 +84,28 @@ func byMade[R made](a, b R) int { return events.Compare(a.made().Order, b.made()
 // sortedCreates is r's creates in total order: the first places the item.
 func (r *item) sortedCreates() []creation { return r.creates.sorted(byMade[creation]) }
 
+// firstCreate is r's first create in total order, the one that places it. A
+// caller checks r.creates.empty() first.
+func (r *item) firstCreate() creation {
+	c, found := r.creates.least(byMade[creation])
+	if !found {
+		panic("fold: firstCreate of an item with no create")
+	}
+	return c
+}
+
 // sortedCreates is el's creates in total order: the first places the element.
 func (el *element) sortedCreates() []listing { return el.creates.sorted(byMade[listing]) }
+
+// firstCreate is el's first create in total order. A caller checks
+// el.creates.empty() first.
+func (el *element) firstCreate() listing {
+	l, found := el.creates.least(byMade[listing])
+	if !found {
+		panic("fold: firstCreate of an element with no create")
+	}
+	return l
+}
 
 // origin is the origin of a node made by creates, in total order: the
 // first places it, in the container in names.
@@ -205,6 +225,8 @@ func (r idRec) key() events.EventID { return r.id }
 // addRec is one add of an addSet.
 type addRec struct{ stamp Stamp }
 
+func (r addRec) made() Stamp { return r.stamp }
+
 func (r addRec) key() events.EventID { return r.stamp.Event }
 
 // write is f with field written, by the write st of v replacing over. Over
@@ -269,19 +291,25 @@ func (f Facts) Text(n events.Name) TextField {
 // total order, and every other live value it overruled.
 func (f Facts) Plain(n events.Name) PlainField { return f.register(n).settled() }
 
-// liveWrites is the register's live writes, by total order: those no write
-// names in Over. The filter runs before the sort, so the sort sees only
-// the survivors.
-func (r register) liveWrites() []candidate {
-	var out []candidate
-	r.live.each(func(c candidate) {
-		if !hasID(r.retired, c.stamp.Event) {
-			out = append(out, c)
+// liveOf is the records of t that no removed id names, by total order: the
+// one rule every observed-remove or multi-value shape applies. The filter
+// runs before the sort, so the sort sees only the survivors.
+func liveOf[R interface {
+	record[events.EventID]
+	made
+}](t table[events.EventID, R, byEvent], removed idSet) []R {
+	var out []R
+	t.each(func(r R) {
+		if !hasID(removed, r.key()) {
+			out = append(out, r)
 		}
 	})
-	slices.SortFunc(out, byMade[candidate])
+	slices.SortFunc(out, byMade[R])
 	return out
 }
+
+// liveWrites is the register's live writes: those no write names in Over.
+func (r register) liveWrites() []candidate { return liveOf(r.live, r.retired) }
 
 // settled is the register as a structural value, as Plain reads it.
 func (r register) settled() PlainField {
@@ -315,15 +343,11 @@ func (f Facts) Members(s events.Name) []Member {
 }
 
 // liveAdds is the member's live adds, by total order: those no remove names.
-// As in liveWrites, the filter runs before the sort.
 func (t tally) liveAdds() []Stamp {
 	var out []Stamp
-	t.adds.each(func(a addRec) {
-		if !hasID(t.removed, a.stamp.Event) {
-			out = append(out, a.stamp)
-		}
-	})
-	slices.SortFunc(out, func(a, b Stamp) int { return events.Compare(a.Order, b.Order) })
+	for _, a := range liveOf(t.adds, t.removed) {
+		out = append(out, a.stamp)
+	}
 	return out
 }
 
