@@ -51,9 +51,12 @@ func TestTheFirstFactsReadBackAsMinted(t *testing.T) {
 		same  func(Payload) bool
 	}{
 		{Create{In: Children{Parent: Top{Prefix: prefix}}, Payload: ItemCreate{Place: AtLevel{Level: mustLevel(3)}}},
-			func(p Payload) bool { return p.(ItemCreate).Place == AtLevel{Level: mustLevel(3)} }},
+			func(p Payload) bool {
+				at, ok := p.(ItemCreate).Place.(AtLevel)
+				return ok && at.Level == mustLevel(3)
+			}},
 		{Create{In: Children{Parent: Under{ID: id}}, Payload: ItemCreate{Place: BelowParent{}}},
-			func(p Payload) bool { return p.(ItemCreate).Place == BelowParent{} }},
+			func(p Payload) bool { _, ok := p.(ItemCreate).Place.(BelowParent); return ok }},
 		{Act{About: Item{ID: id}, Payload: ItemDelete{}},
 			func(p Payload) bool { _, ok := p.(ItemDelete); return ok }},
 		{Act{About: Item{ID: id}, Payload: FieldSet{Field: mustName("title"), Value: Prose{Body: text("a title")}, Over: over}},
@@ -65,7 +68,8 @@ func TestTheFirstFactsReadBackAsMinted(t *testing.T) {
 		{Act{About: Item{ID: id}, Payload: FieldSet{Field: mustName("priority"), Value: Plain{Canonical: "high"}}},
 			func(p Payload) bool {
 				f := p.(FieldSet)
-				return f.Field == mustName("priority") && f.Value == Value(Plain{Canonical: "high"}) && len(f.Over) == 0
+				pl, ok := f.Value.(Plain)
+				return f.Field == mustName("priority") && ok && pl.Canonical == "high" && len(f.Over) == 0
 			}},
 		{Act{About: Item{ID: id}, Payload: LabelAdd{Label: mustLabel("urgent")}},
 			func(p Payload) bool { return p.(LabelAdd).Label == mustLabel("urgent") }},
@@ -110,6 +114,33 @@ func TestTheFirstFactsKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 		}
 		if back := payloadBytes(v.(Payload)); !bytes.HasSuffix(back, future) || !bytes.Equal(back, append(payloadBytes(c.p), future...)) {
 			t.Errorf("%s writes back %x; want its fields and the newer one", c.p.Kind(), back)
+		}
+	}
+}
+
+// A nested message keeps the fields it does not know too: a placement and a
+// value written by a newer binary read and write back whole, with the
+// newer field where the newer binary put it.
+func TestNestedMessagesKeepTheFieldsTheyDoNotKnow(t *testing.T) {
+	future := futureField(15, "newer")
+	placement := append(PlacementWire(AtLevel{Level: mustLevel(2)}), future...)
+	p, err := ReadPlacement(placement)
+	if err != nil {
+		t.Fatalf("a placement with a newer field: %v", err)
+	}
+	if back := PlacementWire(p); !bytes.Equal(back, placement) {
+		t.Errorf("a placement writes back %x; want %x", back, placement)
+	}
+	for _, stored := range [][]byte{
+		append(Plain{Canonical: "high"}.wire(), future...),
+		append(Prose{Body: text("a title")}.wire(), future...),
+	} {
+		v, err := readValue(stored)
+		if err != nil {
+			t.Fatalf("a value with a newer field: %v", err)
+		}
+		if back := v.wire(); !bytes.Equal(back, stored) {
+			t.Errorf("a %T writes back %x; want %x", v, back, stored)
 		}
 	}
 }

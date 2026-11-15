@@ -80,10 +80,13 @@ type Placement interface{ placement() }
 
 // AtLevel is a top-level item at Level, in the synthetic home of that
 // level.
-type AtLevel struct{ Level Level }
+type AtLevel struct {
+	Level   Level
+	unknown wire.Unknown
+}
 
 // BelowParent is a child, under the item its id names.
-type BelowParent struct{}
+type BelowParent struct{ unknown wire.Unknown }
 
 func (AtLevel) placement()     {}
 func (BelowParent) placement() {}
@@ -100,11 +103,17 @@ type Value interface {
 }
 
 // Prose is a prose value, opaque below the verbs.
-type Prose struct{ Body Envelope }
+type Prose struct {
+	Body    Envelope
+	unknown wire.Unknown
+}
 
 // Plain is a structural value in its canonical text, as the field's kind
 // parsed it at the write.
-type Plain struct{ Canonical string }
+type Plain struct {
+	Canonical string
+	unknown   wire.Unknown
+}
 
 func (Prose) value() {}
 func (Plain) value() {}
@@ -119,6 +128,7 @@ const (
 func (p Prose) wire() []byte {
 	var w wire.Writer
 	w.Bytes(valueProse, p.Body.wire())
+	w.Keep(p.unknown)
 	return w.Encoded()
 }
 
@@ -126,6 +136,7 @@ func (p Prose) wire() []byte {
 func (p Plain) wire() []byte {
 	var w wire.Writer
 	w.Bytes(valuePlain, []byte(p.Canonical))
+	w.Keep(p.unknown)
 	return w.Encoded()
 }
 
@@ -150,7 +161,16 @@ func readValue(b []byte) (Value, error) {
 	case len(vs) != 1:
 		return nil, fmt.Errorf("a value is prose or plain; this one is %d of them", len(vs))
 	}
-	return vs[0], nil
+	u := r.Rest()
+	switch v := vs[0].(type) {
+	case Prose:
+		v.unknown = u
+		return v, nil
+	case Plain:
+		v.unknown = u
+		return v, nil
+	}
+	panic(fmt.Sprintf("events: %T is not a value the loop appends", vs[0]))
 }
 
 // ItemCreate is item.create: About is the item it creates.
@@ -226,8 +246,10 @@ func PlacementWire(p Placement) []byte {
 	switch at := p.(type) {
 	case AtLevel:
 		pl.Uvarint(placeAtLevel, uint64(at.Level.n))
+		pl.Keep(at.unknown)
 	case BelowParent:
 		pl.Bytes(placeBelowParent, nil)
+		pl.Keep(at.unknown)
 	default:
 		// [LAW:no-silent-failure] a create placed nowhere would be signed
 		// as a create with no level and no parent
@@ -279,7 +301,16 @@ func ReadPlacement(b []byte) (Placement, error) {
 	case len(at) != 1:
 		return nil, fmt.Errorf("a placement is a level or below its parent; this one is %d of them", len(at))
 	}
-	return at[0], nil
+	u := r.Rest()
+	switch p := at[0].(type) {
+	case AtLevel:
+		p.unknown = u
+		return p, nil
+	case BelowParent:
+		p.unknown = u
+		return p, nil
+	}
+	panic(fmt.Sprintf("events: %T is not a placement the loop appends", at[0]))
 }
 
 // item.delete = unknown….

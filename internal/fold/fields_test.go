@@ -74,7 +74,7 @@ func TestTwoConcurrentPlainValuesSettleToTheLaterAndNameTheOther(t *testing.T) {
 	}
 	s := w.state()
 	got, ok := found(t, s, id).Facts.Plain(priority).(fold.Settled)
-	if !ok || got.By.Event != winner.ID() || len(got.Overruled) != 1 || got.Overruled[0].Value != events.Value(plain(lost)) || !stamped(got.Overruled[0].By, loser) {
+	if !ok || got.By.Event != winner.ID() || len(got.Overruled) != 1 || !isPlain(got.Overruled[0].Value, lost) || !stamped(got.Overruled[0].By, loser) {
 		t.Fatalf("two concurrent values are %#v; want the later in total order, the other overruled", found(t, s, id).Facts.Plain(priority))
 	}
 	if !advised(s, fold.OnItem{ID: id}, fold.Conflict{Field: priority}) {
@@ -112,7 +112,7 @@ func TestAHighPositionedWriteRetiresNothingItDidNotSee(t *testing.T) {
 	}
 	s := w.state()
 	got, ok := found(t, s, id).Facts.Plain(priority).(fold.Settled)
-	if !ok || got.Value != "low" || len(got.Overruled) != 1 || got.Overruled[0].Value != events.Value(plain("high")) || !advised(s, fold.OnItem{ID: id}, fold.Conflict{Field: priority}) {
+	if !ok || got.Value != "low" || len(got.Overruled) != 1 || !isPlain(got.Overruled[0].Value, "high") || !advised(s, fold.OnItem{ID: id}, fold.Conflict{Field: priority}) {
 		t.Errorf("a later write that saw nothing is %#v; want A's value overruled and named, never retired unseen", found(t, s, id).Facts.Plain(priority))
 	}
 }

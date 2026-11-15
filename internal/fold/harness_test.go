@@ -180,6 +180,14 @@ func prose(s string) events.Value { return events.Prose{Body: events.SealPlain(s
 
 func plain(s string) events.Value { return events.Plain{Canonical: s} }
 
+// isPlain reports whether v is the plain value canonical. A Value is not
+// compared with == : a plain value carries its unknown fields, so equality
+// is its canonical text, as valueEqual states.
+func isPlain(v events.Value, canonical string) bool {
+	p, ok := v.(events.Plain)
+	return ok && p.Canonical == canonical
+}
+
 func idsOf(es []events.Event) []events.EventID {
 	var ids []events.EventID
 	for _, e := range es {
