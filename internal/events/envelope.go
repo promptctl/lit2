@@ -215,7 +215,11 @@ func readSealed(b []byte) (sealed, error) {
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
-			s.suite = SuiteID(r.Uvarint())
+			suite, err := byteOf(r)
+			if err != nil {
+				return err
+			}
+			s.suite = SuiteID(suite)
 		case 2:
 			s.tier = Tier(r.Bytes())
 		case 3:

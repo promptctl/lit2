@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"time"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -71,9 +70,6 @@ type EventID [32]byte
 
 func (id EventID) String() string { return hex.EncodeToString(id[:]) }
 
-// Wire is the id as it is stored: its 32 bytes. ReadEventID reads it.
-func (id EventID) Wire() []byte { return slices.Clone(id[:]) }
-
 // ReadEventID reads an id's stored form.
 func ReadEventID(b []byte) (EventID, error) {
 	if len(b) != len(EventID{}) {
@@ -82,22 +78,10 @@ func ReadEventID(b []byte) (EventID, error) {
 	return EventID(b), nil
 }
 
-// CausalPosition is an event's Lamport timestamp, 1 and up. Only Decode,
-// Mint and ReadPosition make one, so a position is minted in Mint alone
-// and never forged by a caller.
+// CausalPosition is an event's Lamport timestamp, 1 and up. Only the header
+// reader and Mint make one, so a position is minted in Mint alone and never
+// forged by a caller.
 type CausalPosition struct{ n uint64 }
-
-// Wire is the position as it is stored: its varint. ReadPosition reads it.
-func (p CausalPosition) Wire() []byte { return binary.AppendUvarint(nil, p.n) }
-
-// ReadPosition reads a position's stored form.
-func ReadPosition(b []byte) (CausalPosition, error) {
-	n, size := binary.Uvarint(b)
-	if size <= 0 || size != len(b) || n == 0 {
-		return CausalPosition{}, errors.New("a causal position is one varint, 1 or more")
-	}
-	return CausalPosition{n: n}, nil
-}
 
 // PolicyVersion is the policy version an event cites, 1 and up; the
 // enrollment cites 1, the version it founds.
@@ -321,7 +305,11 @@ func readSignature(b []byte) (Signature, error) {
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
-			s.Suite, hasSuite = SuiteID(r.Uvarint()), true
+			suite, err := byteOf(r)
+			if err != nil {
+				return err
+			}
+			s.Suite, hasSuite = SuiteID(suite), true
 		case 2:
 			s.Bytes = bytes.Clone(r.Bytes())
 		}
@@ -605,7 +593,11 @@ func readPrincipal(b []byte) (PrincipalID, error) {
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
-			p.suite, hasSuite = SuiteID(r.Uvarint()), true
+			suite, err := byteOf(r)
+			if err != nil {
+				return err
+			}
+			p.suite, hasSuite = SuiteID(suite), true
 		case 2:
 			p.key = string(r.Bytes())
 		}
@@ -627,7 +619,11 @@ func readConfigRef(b []byte) (git.ObjectID, error) {
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
-			format = git.ObjectFormat(r.Uvarint())
+			f, err := byteOf(r)
+			if err != nil {
+				return err
+			}
+			format = git.ObjectFormat(f)
 		case 2:
 			sum = r.Bytes()
 		}

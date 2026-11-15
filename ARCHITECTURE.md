@@ -46,6 +46,7 @@ names it here first.
 ```dependencies
 github.com/go-git/go-git/v5 git
 github.com/go-git/go-billy/v5 git
+filippo.io/edwards25519 events
 ```
 
 ## Concerns

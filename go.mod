@@ -5,6 +5,7 @@ go 1.26.0
 tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 require (
+	filippo.io/edwards25519 v1.2.0
 	github.com/go-git/go-billy/v5 v5.9.2
 	github.com/go-git/go-git/v5 v5.19.3
 )

@@ -5,8 +5,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
+
+	"filippo.io/edwards25519"
+
+	"github.com/promptctl/lit2/internal/events/wire"
 )
 
 // SuiteID names a crypto suite. Every signature and principal carries one,
@@ -31,10 +36,35 @@ type ed25519Suite struct{}
 
 func (ed25519Suite) ID() SuiteID { return SuiteEd25519 }
 
-// Verify is crypto/ed25519's strict verification, under which a valid
-// signature has no second valid encoding, so an event id names one event.
+// Verify is crypto/ed25519's verification, refusing a key or a signature's R
+// of small order: the identity key verifies any message under a zero
+// signature, so without this a writer could attribute an event to a principal
+// no one holds. Under that refusal a valid signature has no second valid
+// encoding, so an event id names one event.
 func (ed25519Suite) Verify(key, message, sig []byte) bool {
-	return len(key) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(key), message, sig)
+	return len(key) == ed25519.PublicKeySize && len(sig) == ed25519.SignatureSize &&
+		!smallOrder(key) && !smallOrder(sig[:ed25519.PublicKeySize]) &&
+		ed25519.Verify(ed25519.PublicKey(key), message, sig)
+}
+
+// smallOrder is whether enc is a point of order dividing 8. An encoding that
+// is not a point is not small-order here; crypto/ed25519 refuses it itself.
+func smallOrder(enc []byte) bool {
+	var p, cleared edwards25519.Point
+	if _, err := p.SetBytes(enc); err != nil {
+		return false
+	}
+	return cleared.MultByCofactor(&p).Equal(edwards25519.NewIdentityPoint()) == 1
+}
+
+// byteOf reads a varint that stores one byte. A wider value is refused: a
+// suite or format of 257 would otherwise read as the one a byte of 1 names.
+func byteOf(r *wire.Reader) (uint8, error) {
+	v := r.Uvarint()
+	if v > math.MaxUint8 {
+		return 0, fmt.Errorf("%d does not fit a byte", v)
+	}
+	return uint8(v), nil
 }
 
 // Suites is every suite this binary verifies, built once at the
