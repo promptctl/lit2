@@ -54,27 +54,25 @@ func Replay(e Env, scans []Scanned) Folded {
 	facts := newFacts()
 	s := State{}
 	kinds := e.registry.Kinds()
-	var located []Located
+	var located []events.Event
 	seen := map[events.EventID]int{}
 	for _, sc := range scans {
 		facts.Torn += len(sc.Scan.Torn)
 		ref := sc.Range.Stream.Ref
 		for _, fr := range sc.Scan.Frames {
-			at := store.Position{Log: sc.Range.Stream.Until.Log, At: fr.At}
 			for _, rec := range fr.Batch.Records() {
 				facts.Records++
 				switch d := events.Decode(kinds, rec).(type) {
 				case events.Event:
 					facts.Decoded.count(d)
-					l := Located{Event: d, Ref: ref, At: at}
 					i, dup := seen[d.ID()]
 					switch {
 					case !dup:
 						seen[d.ID()] = len(located)
-						located = append(located, l)
-					case rank(d.Body()) > rank(located[i].Event.Body()):
+						located = append(located, d)
+					case rank(d.Body()) > rank(located[i].Body()):
 						facts.Duplicates++
-						located[i] = l
+						located[i] = d
 					default:
 						facts.Duplicates++
 					}
@@ -85,7 +83,7 @@ func Replay(e Env, scans []Scanned) Folded {
 			}
 		}
 	}
-	slices.SortFunc(located, func(a, b Located) int { return events.Compare(a.Event.Order(), b.Event.Order()) })
+	slices.SortFunc(located, func(a, b events.Event) int { return events.Compare(a.Order(), b.Order()) })
 	checked := Check(e, located)
 	facts.Checked = len(checked)
 	for _, c := range checked {

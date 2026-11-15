@@ -90,7 +90,7 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 
 func TestAReplayIsStepsOverTheSortedEvents(t *testing.T) {
 	w := generate(t, 3, 30)
-	var located []fold.Located
+	var located []events.Event
 	seen := map[events.EventID]bool{}
 	for _, sc := range w.scans() {
 		for _, fr := range sc.Scan.Frames {
@@ -98,12 +98,12 @@ func TestAReplayIsStepsOverTheSortedEvents(t *testing.T) {
 				e, ok := events.Decode(env.Registry().Kinds(), rec).(events.Event)
 				if ok && !seen[e.ID()] {
 					seen[e.ID()] = true
-					located = append(located, fold.Located{Event: e, Ref: sc.Range.Stream.Ref, At: store.Position{Log: sc.Range.Stream.Until.Log, At: fr.At}})
+					located = append(located, e)
 				}
 			}
 		}
 	}
-	slices.SortFunc(located, func(x, y fold.Located) int { return events.Compare(x.Event.Order(), y.Event.Order()) })
+	slices.SortFunc(located, func(x, y events.Event) int { return events.Compare(x.Order(), y.Order()) })
 	var s fold.State
 	for _, c := range fold.Check(env, located) {
 		s = fold.Step(env.Registry(), s, c)

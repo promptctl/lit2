@@ -6,16 +6,7 @@ import (
 	"sync"
 
 	"github.com/promptctl/lit2/internal/events"
-	"github.com/promptctl/lit2/internal/store"
 )
-
-// Located is an event and where the walk read it: the stream's ref and the
-// offset of its frame in the stream's log.
-type Located struct {
-	Event events.Event
-	Ref   store.Ref
-	At    store.Position
-}
 
 // Checked is an event and its signature's verdict. Only Check makes one,
 // so no event reaches Step unjudged `[LAW:parse-dont-validate]`.
@@ -33,10 +24,10 @@ func (c Checked) Verdict() events.SignatureVerdict { return c.verdict }
 // Check judges each event's signature, in order, by e.Suites(), on
 // e.Workers() goroutines. A verdict reads only the event's bytes, so the
 // result does not depend on the schedule.
-func Check(e Env, evs []Located) []Checked {
+func Check(e Env, evs []events.Event) []Checked {
 	cs := make([]Checked, len(evs))
-	for i, l := range evs {
-		cs[i].event = l.Event
+	for i, ev := range evs {
+		cs[i].event = ev
 	}
 	per := (len(cs) + e.workers - 1) / e.workers
 	var wg sync.WaitGroup
