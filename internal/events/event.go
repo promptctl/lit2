@@ -469,7 +469,11 @@ func readHeader(b []byte) (Header, error) {
 		case headerKind:
 			h.kind = Kind(r.Bytes())
 		case headerSchema:
-			h.schema = SchemaVersion(r.Uvarint())
+			ver := r.Uvarint()
+			if ver > math.MaxUint32 {
+				err = fmt.Errorf("the schema version is %d, which no SchemaVersion (uint32) holds", ver)
+			}
+			h.schema = SchemaVersion(ver)
 		case headerSubject:
 			h.about, err = readAbout(r.Bytes())
 		case headerAttribution:

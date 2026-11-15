@@ -28,16 +28,20 @@ type integrity struct {
 	malformed table[recordAt, Malformed, byRecord]
 }
 
-// recordAt is where a malformed record was read, and what it held.
+// recordAt is where a malformed record was read, and what it held. Two
+// records of one batch can hold the same bytes, so their place is part of it.
 type recordAt struct {
 	ref    string
 	at     store.Offset
+	index  int
 	digest [32]byte
 }
 
 func (c carriedAt) key() events.EventID { return c.carried.Event }
 func (u Unapplied) key() events.EventID { return u.Stamp.Event }
-func (m Malformed) key() recordAt       { return recordAt{ref: m.Ref, at: m.At, digest: m.Digest} }
+func (m Malformed) key() recordAt {
+	return recordAt{ref: m.Ref, at: m.At, index: m.Index, digest: m.Digest}
+}
 
 // carriedList is the carried events by total order.
 func (in integrity) carriedList() []carriedAt {
@@ -49,7 +53,7 @@ func (in integrity) unappliedList() []Unapplied {
 	return in.unapplied.sorted(func(a, b Unapplied) int { return events.Compare(a.Stamp.Order, b.Stamp.Order) })
 }
 
-// malformedList is the malformed records by ref, offset and digest.
+// malformedList is the malformed records by ref, offset, index and digest.
 func (in integrity) malformedList() []Malformed { return in.malformed.sorted(compareMalformed) }
 
 func compareMalformed(a, b Malformed) int {
@@ -57,6 +61,9 @@ func compareMalformed(a, b Malformed) int {
 		return c
 	}
 	if c := cmp.Compare(a.At, b.At); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Index, b.Index); c != 0 {
 		return c
 	}
 	return slices.Compare(a.Digest[:], b.Digest[:])
@@ -90,7 +97,8 @@ type Item struct {
 	Level  LevelOf
 	Life   Life
 	Facts  Facts
-	// Elements are the item's created elements, in name order.
+	// Elements are the item's created elements, in the total order of the
+	// creates that placed each.
 	Elements []Element
 }
 
@@ -321,10 +329,12 @@ func (Erased) why()       {}
 func (Uncommitted) why()  {}
 func (Misaddressed) why() {}
 
-// Malformed is a record with no readable header, where it was read.
+// Malformed is a record with no readable header, where it was read: its
+// ref, its frame's offset, and its place in that frame's batch.
 type Malformed struct {
 	Ref    string
 	At     store.Offset
+	Index  int
 	Digest [32]byte
 	Why    string
 }

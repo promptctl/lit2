@@ -60,7 +60,7 @@ func Replay(e Env, scans []Scanned) Folded {
 		facts.Torn += len(sc.Scan.Torn)
 		ref := sc.Range.Stream.Ref
 		for _, fr := range sc.Scan.Frames {
-			for _, rec := range fr.Batch.Records() {
+			for n, rec := range fr.Batch.Records() {
 				facts.Records++
 				switch d := events.Decode(kinds, rec).(type) {
 				case events.Event:
@@ -78,7 +78,7 @@ func Replay(e Env, scans []Scanned) Folded {
 					}
 				case events.Malformed:
 					facts.Decoded.Malformed++
-					s = s.malformed(Malformed{Ref: string(ref.Name()), At: fr.At, Digest: d.Digest, Why: d.Why})
+					s = s.malformed(Malformed{Ref: string(ref.Name()), At: fr.At, Index: n, Digest: d.Digest, Why: d.Why})
 				}
 			}
 		}
@@ -117,9 +117,10 @@ func rank(b events.Body) int {
 	panic(fmt.Sprintf("fold: %T is not a Body", b))
 }
 
-// FoldFacts is what one fold did, for the command event: every count is
-// present and zero when zero, so a fold of nothing reads records=0 and no
-// fold leaves no facts `[LAW:nothing-unseen]`.
+// FoldFacts is what one fold did, for the command event: every scalar count
+// is present and zero when zero, and Carried and Unapplied list every reason,
+// so a fold of nothing reads records=0 and no fold leaves no facts
+// `[LAW:nothing-unseen]`. Unread is keyed by the kinds and reasons read.
 type FoldFacts struct {
 	// Records is the records read; Torn the torn spans skipped; Duplicates
 	// the records of an event read twice.

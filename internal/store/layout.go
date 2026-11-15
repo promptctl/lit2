@@ -12,7 +12,8 @@ import (
 )
 
 // The store's layout under its root, <git-common-dir>/lit/store/ (D11):
-// log/<checkout-id> per writing checkout and repo/ for lit's repository. The layout is the one builder of a Path.
+// log/<checkout-id> per writing checkout and repo/ for lit's repository.
+// The layout is the one builder of a Path.
 const (
 	logDir Path = "log"
 	// repoDir is lit's repository's directory, which go-git opens.
