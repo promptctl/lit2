@@ -110,21 +110,25 @@ where the process says so, and is handed the next ticket when it finishes.
 2. `set s4l/status impl`. Refused: `impl/entry  block  plan/verdict=pass
    s4l/plan/verdict = (none)`; nothing written; the `plan-review/unreviewed`
    handler fires on `refused impl`.
-3. `set s4l/plan - <<EOF …` writes v1; the echo prints the digest.
-4. A reviewer in another checkout: `get s4l/plan` prints the digest beside
-   the text. `add s4l/plan/verdicts '{pass of:3e1a9c0d laws:[…]}'`. The verdict
-   binds to v1. `⇒ s4l/plan/verdict = pass`.
-5. The author had saved v2 between the reviewer's read and the verdict. The
-   `add` is refused: `s4l/plan moved to v2 (digest 7e0f15c2) since 3e1a9c0d`.
-   The reviewer reads v2 and records the verdict against it.
+3. `add s4l/plan/revisions - <<EOF …` appends revision 1; the echo prints
+   its number.
+4. A reviewer in another checkout: `get s4l/plan` prints the latest revision
+   with its number. `add s4l/plan/reviews '{of:1 how:"/code-review high"
+   result:"…" response:"…" verdict:pass}'`. The review names revision 1.
+   `⇒ s4l/plan/verdict = pass`.
+5. The author had appended revision 2 between the reviewer's read and the
+   review. The `add` lands as a review of revision 1 and derives nothing:
+   `⇒ s4l/plan/verdict = (none): latest revision is 2, last reviewed 1`. The
+   reviewer reads revision 2 and reviews it.
 6. `set s4l/status impl` lands. The `phases/impl` handler prints: when the PR
-   opens, `set s4l/status review`.
-7. `set s4l/status review`, then a reviewer `add s4l/verdicts '{fail
-   findings:["…", "…"]}'`. The ticket stays in `review`; `⇒ s4l/verdict fail,
-   round 2`. `get s4l` now prints the `phases/findings` handler, bound `in
-   review` where `(verdict=fail)`.
-8. `set s4l/status merge` is refused on `merge/entry verdict=pass`. After
-   `add s4l/verdicts '{pass}'`, it lands.
+   opens, `add s4l/pr/revisions <head>` and `set s4l/status review`.
+7. `set s4l/status review`, then a reviewer `add s4l/pr/reviews '{of:1 how:"…"
+   result:"…" response:"…" verdict:fail}'`. The ticket stays in `review`;
+   `⇒ s4l/pr/verdict fail, round 2`. `get s4l` now prints the
+   `phases/findings` handler, bound `in review` where `(pr/verdict=fail)`.
+8. `set s4l/status merge` is refused on `merge/entry pr/verdict=pass`. The
+   author pushes and `add s4l/pr/revisions <head>` appends revision 2; after
+   `add s4l/pr/reviews '{of:2 … verdict:pass}'`, it lands.
 9. `set s4l/status done 's4l/reason' "Merged in #12"`. One write, two paths.
    Derivations: `⇒ s4l/claim this checkout → (none)`, `⇒
    m2q/lanes/history head is now 7ka`, `⇒ 7ka/claim = this checkout`. The
@@ -134,11 +138,12 @@ where the process says so, and is handed the next ticket when it finishes.
 writes nothing. The claim follows the transitions with no claim command. The
 next ticket arrives with the finishing write.
 
-**Strain S-1.** If `of` were optional and defaulted to the current digest,
-step 5's reviewer would have passed v2 unread. A verdict is a judgment of one
-text, so its type carries the text's digest: `of` is required on a plan
-verdict, refused when it is not the current digest. One more token for the
-reviewer, who has the digest from the read in step 4. Adopted.
+**Strain S-1.** If `of` were optional and defaulted to the latest revision,
+step 5's reviewer would have passed revision 2 unread. A review is a judgment
+of one revision, so `of` is required and names it. A review of an older
+revision is still a fact worth keeping, so it lands; only the derived verdict
+ignores it, and the echo says which revision is latest. One more token for the
+reviewer, who has the number from the read in step 4. Adopted.
 
 **Strain S-2.** "The reviewer is not the plan's author" compares the verdict's
 writer with the plan version's writer. No requirement atom compares two
@@ -161,11 +166,12 @@ serves held lanes in rank order first. Adopted in architecture §4.
 **Need.** A plan edited after review does not silently carry a stale pass,
 and does not strand the ticket.
 
-**Walk.** `s4l` is in `impl` on a passed v2. `set s4l/plan -` writes v3;
-`⇒ s4l/plan/verdict (none), was pass on v2`. The ticket stays in `impl`: a
+**Walk.** `s4l` is in `impl` on a passed revision 2. `add s4l/plan/revisions -`
+appends revision 3; `⇒ s4l/plan/verdict (none), was pass on revision 2`. The
+ticket stays in `impl`: a
 requirement is evaluated at the transition and never again. At `set
 s4l/status review`, `review/entry` carries `plan/verdict=pass` at `warning`,
-so the write lands with one advisory line naming the digest the verdict was
+so the write lands with one advisory line naming the revision the verdict was
 on. A workspace that wants a re-review blocks it by setting that
 requirement's `severity` to `error` or adding it to `impl`'s `entry`.
 

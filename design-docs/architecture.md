@@ -101,10 +101,10 @@ same shape:
 | `rm x` | `item.delete {item}`, a reversible tombstone |
 | `rm x --purge` | a rewrite naming the item |
 
-Ids are opaque. An item's id is 128 random bits minted at its create and
-carried in the create event; the fold reads it from there, so where the
-event lands in a log is no part of identity, and a create replayed into
-another log keeps its id. An id is rendered by its **segment**, a short form
+Ids are opaque. An id, an item's or an element's such as a comment's, is 128
+random bits minted at its create and carried in the create event; the fold
+reads it from there, so where the event lands in a log is no part of
+identity, and a create replayed into another log keeps its id. An id is rendered by its **segment**, a short form
 fixed at mint: the shortest prefix of the id that no id this writer has
 folded shares, as wide as the namespace's fill needs, so a later item cannot
 make yesterday's `1f9` ambiguous; the later mint goes wider instead. Two
@@ -206,7 +206,7 @@ is the derived field `held`.
 
 Anything a workspace wants to require is a fact something wrote (a field, a
 label, a verdict) or a derived field the engine exposes (`blockers`,
-`plan/verdict`, `verdict`), read by a requirement. The test grammar does not
+`plan/verdict`, `pr/verdict`), read by a requirement. The test grammar does not
 grow.
 
 ### 3.7 Lane
@@ -728,8 +728,10 @@ One line each, so a reader of the older document knows the position moved.
 - work-claims.md: the routing steps collapse into the walk of the lane
   order; the holder set replaces the single claim scalar; everything else
   stands.
-- columns-and-phases.md, transition-requirements.md: a verdict carries `of`,
-  the digest it judged; the checklist's open count is `checklist/pending`.
+- columns-and-phases.md, transition-requirements.md: `plan` and `pr` are one
+  reviewable (§4); a review carries `of`, the revision it judged, and the
+  field those documents call `verdict` is `pr/verdict`; the checklist's open
+  count is `checklist/pending`.
 - workspace-schema design and the v1 hierarchy epic
   `promptctl-hierarchy-6cqf`: levels are configured, one to five, not three
   fixed in code (decision A). Exact containment, the synthetic homes, the
