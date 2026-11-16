@@ -101,21 +101,23 @@ same shape:
 | `rm x` | `item.delete {item}`, a reversible tombstone |
 | `rm x --purge` | a rewrite naming the item |
 
-Ids are opaque: a hash of `(writer, causal-position, payload hash)` taken
-from the create event, children as `<parent>.<hash>`, each segment as wide
-as its namespace's fill needs. The segments are the id, `1f9.zc7`, unique
-within one store; the create event's full hash stands behind them for
-anything that ever looks across stores. The project prefix is not part of
-the id: it is a label the active version (§3.15) supplies when an id is
+Ids are opaque. An item's id is 128 random bits minted at its create and
+carried in the create event; the fold reads it from there, so where the
+event lands in a log is no part of identity, and a create replayed into
+another log keeps its id. An id is rendered by its **segment**, a short form
+fixed at mint: the shortest prefix of the id that no id this writer has
+folded shares, as wide as the namespace's fill needs, so a later item cannot
+make yesterday's `1f9` ambiguous; the later mint goes wider instead. Two
+writers offline can fix one segment for two items; after sync that segment
+resolves to neither, lit2 lists both, and each item keeps its id. A child
+renders as `<parent>.<segment>`, `1f9.zc7`, from its parent link, so where
+an item sits is display, not identity. The project prefix is not part of the
+id either: it is a label the active version (§3.15) supplies when an id is
 rendered, `lit-bootstrap-1f9.zc7`, so changing it rewrites nothing. Parsing
 accepts the segments bare or under any prefix a version in this store's log
 has ever declared, and refuses one none has, naming it as another project's.
-Two offline writers
-cannot mint from one input, nor two commands of one checkout, which can
-share a frontier and so a position; a writer never mints a name it has
-folded, and a short id resolves by unique suffix. The total order is
-`(causal-position, writer, event id)`: the event id settles two events of
-one writer at one position.
+The total order is `(causal-position, writer, event id)`: the event id, the
+record's content hash, settles two events of one writer at one position.
 
 ### 3.3 Fold and tick
 
@@ -312,9 +314,9 @@ the writes to one register address in a window, the last survives at its own
 position and the rest go; adds and removes on one set address net out to the
 last or to nothing; an appended element is a new address, so every revision
 and every review survives. A window is bounded by the item's create and its
-transitions: a create is never rewritten, since ids derive from it, and a
-transition is never squashed and nothing squashes across one, so the state an
-item was in when it moved stays as the enforcer judged it. Positions are
+transitions: the create is kept, and a transition is never squashed and
+nothing squashes across one, so the state an item was in when it moved stays
+as the enforcer judged it. Positions are
 deleted, never renumbered.
 
 ### 3.14 Identity
@@ -710,7 +712,8 @@ walking skeleton.
 One line each, so a reader of the older document knows the position moved.
 
 - event-store design §events: no fold-derived child ordinals; ids are the
-  opaque form only.
+  opaque form only, random and carried in the create event, not derived
+  from the event's place in a log.
 - event-store design §fold: determinism is asserted as state equality, not
   pinned bytes.
 - event-store design §security-and-config (birth requirement 6),
