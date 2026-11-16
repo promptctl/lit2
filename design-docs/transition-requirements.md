@@ -81,9 +81,9 @@ A requirement is three values, no more:
 The closed set is the atoms. The other candidate kinds are all instances of
 them reading a path the ticket already exposes: a field present or matching is
 `points` or `target_release~'^\d+\.\d+$'`; a label present is `labels=ready`;
-a verdict on the current plan digest is `plan/verdict=pass`, because
-`plan/verdict` is the derived field path-addressed-cli.md defines as the latest
-verdict on the current digest or nothing; a relation present is `of`; a
+a passing review of the latest plan revision is `plan/verdict=pass`, because
+`plan/verdict` is the derived field architecture.md §4 defines as the verdict of
+the last review naming the latest revision, or nothing; a relation present is `of`; a
 dependency closed is `!blockers`, where `blockers` is a derived list, the
 members of `blocked_by` (the lane predecessor, and every ticket whose `blocks`
 names this one) that are not in a terminal column.
@@ -162,7 +162,7 @@ entry = [{ test = "plan/verdict=pass", severity = "warning" }]
 
 [columns.merge]
 next = ["done"]
-entry = [{ test = "verdict=pass", severity = "error" }]
+entry = [{ test = "pr/verdict=pass", severity = "error" }]
 
 [columns.done]
 terminal = true
@@ -184,13 +184,14 @@ terminal = true
 entry = [{ test = "reason", severity = "error" }]
 ```
 
-`merge`'s entry requirement reads `verdict`, the newest review verdict on the
-work as [columns-and-phases.md](columns-and-phases.md) defines it; a `fail`
-keeps the ticket in `review`, which is where rework happens, so `review` has no
-backward edge. The advisory on `review` is the one place the default nudges
-rather than refuses: editing the plan makes a new version and empties the derived verdict,
-so a ticket arriving at review with a plan changed since its verdict is worth
-a line, and an agent that changed the plan for a reason it can defend proceeds.
+`merge`'s entry requirement reads `pr/verdict`, the verdict of the last review
+naming the PR's latest revision as [columns-and-phases.md](columns-and-phases.md)
+defines it; a `fail` keeps the ticket in `review`, which is where rework
+happens, so `review` has no backward edge. The advisory on `review` is the one
+place the default nudges rather than refuses: appending a plan revision empties
+the derived verdict, so a ticket arriving at review with a plan revised since
+its review is worth a line, and an agent that revised the plan for a reason it
+can defend proceeds.
 
 As paths, the same declaration is `/columns/backlog/exit`, a list
 whose elements are objects, edited with `add` and `rm` like any list:
@@ -233,7 +234,7 @@ which is how an agent asks "could I?" without trying.
 
 A requirement is evaluated at the transition and never again. A ticket whose
 column's requirements stop holding afterwards, a description deleted, a verdict
-emptied by a plan edit, stays where it is; the facts are in the history and in
+emptied by a new plan revision, stays where it is; the facts are in the history and in
 any selector that asks. There is no second evaluation on read that moves
 tickets, labels them, or holds them. Where [custom-columns.md](custom-columns.md)
 computed a ticket's position from rules on every read, this design keeps the
@@ -247,7 +248,7 @@ unmet requirement with the echo, in the same line shape, under the derivations:
 ```
 $ lit set dee/status review
 dee/status impl → review
-  warning review/entry  plan/verdict=pass   verdict is empty; plan edited since verdict on digest 3f1c…
+  warning review/entry  plan/verdict=pass   verdict is empty; plan revised since the review of revision 3
   requirements: 1 evaluated · 0 met · 1 unmet (warning) · 0 unmet (error)
 ```
 

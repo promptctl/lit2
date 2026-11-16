@@ -92,7 +92,7 @@ them:
 /columns/plan        next:[impl]    guidance:"…"
 /columns/impl        next:[review]  entry:[plan/verdict=pass]  guidance:"…"
 /columns/review      next:[merge]   guidance:"…"
-/columns/merge       next:[done]    entry:[verdict=pass]       guidance:"…"
+/columns/merge       next:[done]    entry:[pr/verdict=pass]    guidance:"…"
 /columns/done        terminal:true
 /columns/dup         terminal:true  entry:[of]
 /columns/superseded  terminal:true  entry:[of]
@@ -173,63 +173,69 @@ The phases-and-rework proposal's shapes A (a fifth column) and B
 (`impl` entered from `review`, derived) are both superseded; there is no return
 to `impl` in the default profile because returning is not what happens.
 
-**What is recorded.** The review itself. `x/verdicts` is a list on the ticket,
-the same element type as `x/plan/verdicts` `[LAW:one-type-per-behavior]`: a
-`pass` or `fail` with findings, writer and time, id minted by the system.
+**What is recorded.** The review itself. `x/pr` is a reviewable, the same type
+as `x/plan` `[LAW:one-type-per-behavior]`: two append-only lists, `revisions`,
+each a head commit, and `reviews`, each naming the revision it judged (`of`,
+required) and carrying how it was run, the reviewer's result, the agent's
+response and a `pass` or `fail` verdict, with writer and time, id minted by the
+system.
 
 ```
-$ lit add s4l/verdicts '{fail findings:["…", "…"]}'
-+ s4l/verdicts/9k2  fail, 2 findings
-⇒ s4l/verdict  (none) → fail   round 2
+$ lit add s4l/pr/reviews '{of:1 how:"/code-review high" result:"…" verdict:fail}'
++ s4l/pr/reviews/9k2  fail, of:1
+⇒ s4l/pr/verdict  (none) → fail   round 2
 ```
 
-`x/verdict` is derived: the newest verdict, or `(none)`. The round is derived:
-one more than the number of `fail` verdicts, so the first trip through review
-is round 1 and each fail opens the next. Nothing records "rework" and nothing
-asks the author to; the reviewer's verdict is the whole record, and the
-author's answer to it is a comment, a push, and the next verdict. lit sees no
-pushes, so nothing empties a verdict but a newer verdict.
+`x/pr/verdict` is derived: the verdict of the last review naming the latest
+revision, or `(none)`. The round is derived: one more than the number of `fail`
+reviews, so the first trip through review is round 1 and each fail opens the
+next. Nothing records "rework" and nothing asks the author to; the review is
+the whole record, and the author's answer to it is the `response` on that
+review, a push recorded as the next revision, and the next review. A new
+revision empties the derived verdict until a review names it.
 
 **What the agent sees.** `get s4l` on the second trip:
 
 ```
 $ = orange-history-4y3.s4l
-$/status    review   round 2 · verdict fail (2 findings, 40m ago)
+$/status    review   round 2 · pr/verdict fail (40m ago)
 $/claim     this checkout
-$/verdicts/9k2   [claude_64e3…] fail: …
+$/pr/reviews/9k2   [claude_64e3…] of:1 fail: …
 
-guidance (review, verdict=fail): address every finding or say on the thread
+guidance (review, pr/verdict=fail): address every finding or say on the thread
 why not; do not widen the change; …
 ```
 
 The second line of guidance is a shipped handler bound `in review` with the
-selector `(verdict=fail)` ([workflows.md](workflows.md)). On round 1 the
+selector `(pr/verdict=fail)` ([workflows.md](workflows.md)). On round 1 the
 selector does not match and only `review`'s own guidance prints. That is the
 hook the phases-and-rework proposal said could not be derived; it is a handler
 reading a stored fact.
 
 **What differs between the first trip and the second.** Stored: the first trip
-has one transition `impl → review` and no verdicts; the second has the same one
-transition and one `fail` verdict. Printed: `round 1` with no verdict line, then
-`round 2 · verdict fail` with the conditional guidance. A selector finds the
-rework in flight with `(status=review verdict=fail)`, and a report counts time
-in rounds above 1 from the verdict timestamps on the trail.
+has one transition `impl → review` and no reviews; the second has the same one
+transition and one `fail` review. Printed: `round 1` with no verdict line, then
+`round 2 · pr/verdict fail` with the conditional guidance. A selector finds the
+rework in flight with `(status=review pr/verdict=fail)`, and a report counts
+time in rounds above 1 from the review timestamps on the trail.
 
-**The forward edge.** `merge` carries the entry requirement `verdict=pass`:
+**The forward edge.** `merge` carries the entry requirement `pr/verdict=pass`:
 
 ```
 $ lit set s4l/status merge
 error (reason=gate): s4l/status review → merge refused by merge/entry; nothing written
-  block  verdict=pass   s4l/verdict = fail (round 2)
+  block  pr/verdict=pass   s4l/pr/verdict = fail (round 2)
 
-$ lit add s4l/verdicts '{pass}'
-+ s4l/verdicts/c3q  pass
-⇒ s4l/verdict  fail → pass
+$ lit add s4l/pr/revisions 7e0f15c2
++ s4l/pr/revisions/2
+$ lit add s4l/pr/reviews '{of:2 how:"/code-review high" result:"…" verdict:pass}'
++ s4l/pr/reviews/c3q  pass, of:2
+⇒ s4l/pr/verdict  fail → pass
 $ lit set s4l/status merge
 s4l/status  review → merge
 ```
 
-The plan gets the same treatment for free: `plan/verdicts` already exists, a
+The plan gets the same treatment for free: `plan` is the same reviewable, a
 `fail` there keeps the ticket in `plan`, and the round counts the same way.
 That answers phases-and-rework.md's second decision without a second mechanism.
 
@@ -288,21 +294,20 @@ refused at the write, the same `in_use` check from the other side.
   its decisions 2, 3 and 5 dissolve; its decision 4 (phases become columns) is
   yes, and decision 1 (named groups) is answered by stage.
 - phases-and-rework.md: neither A nor B; rework stays in `review`, recorded as
-  verdicts.
+  reviews on the PR's revisions.
 - path-addressed-cli.md: `/workflow/states` is spelled `/columns`;
   the lane listing prints the column, not `in_progress`; `review/next` is
   `[merge]`; reachability follows from `next` alone, which is what its own
   `plan → done` example already assumes; levels 2 and 3 have `stage` and
   `rollup`, no `status`.
 
-## Decisions for the owner
+## Settled with the owner
 
 The column graph's node is `/columns`, settled on 2026-11-05: the owner reserved
 the word workflow for a named unit of handlers ([workflows.md](workflows.md)),
 so the graph of columns cannot share it.
 
-1. **Whether a verdict on the work names what it judged.** Recommended: an
-   optional `of` on the verdict (a commit or PR reference), recorded and printed,
-   checked by nothing, because lit cannot see the code. The alternative is to
-   record a digest of the work and empty the verdict when it changes, as the
-   plan does; that requires lit to be told about every push.
+A review names what it judged: `of` is required and names a revision of the
+reviewable, and a PR's revision is the head commit the author records with
+`add x/pr/revisions`. lit sees no pushes, so a push the author does not record
+is not a revision.

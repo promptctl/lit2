@@ -17,7 +17,7 @@ design states: a selector, glob, list, or object is single-quoted.
     was: lit quickstart review
     $ lit get /workflow/states/plan/guidance
     Before any code, write the plan: what changes, in which files, and how it is proven.
-    A reviewer other than the author judges it against the laws and records one verdict.
+    A reviewer other than the author judges it against the laws and records one review of the revision they read.
 
 ### Read the ticket under review
 
@@ -30,9 +30,9 @@ design states: a selector, glob, list, or object is single-quoted.
     $/lane           atb
     $/claim          claude_7f2e… (elsewhere)
     $/body           The refresh path in src/oauth.ts sleeps on the wall clock …
-    $/plan           v7  digest b8fa35fac99f…
+    $/plan           revision 7
     $/plan/verdict   (none)
-    $/comments/43s   [claude_7f2e…] v7 moves the clock behind the injected Clock port …
+    $/comments/43s   [claude_7f2e…] revision 7 moves the clock behind the injected Clock port …
 
     /workflow/states/plan/guidance  Before any code, write the plan: …
 
@@ -41,27 +41,21 @@ design states: a selector, glob, list, or object is single-quoted.
     was: lit show promptctl-brain-vu2t.abp --field plan > /tmp/abp_break/plan_v4.md
     $ lit get abp/plan > /tmp/abp_break/plan_v4.md
 
-### Get the digest to name in the reasons comment, and see whether a verdict already exists
+### Get the revision to name in the review, and see whether a verdict already exists
 
     was: lit show promptctl-brain-q9s8.45d | grep -o 'plan (v[0-9]*, digest [0-9a-f]*' | tail -1
-    $ lit get 45d/plan/digest 45d/plan/verdict
+    $ lit get 45d/plan 45d/plan/verdict
     $ = promptctl-brain-q9s8.45d
-    $/plan/digest   b8fa35fac99f2c41e0d7a6b95e3f18c24d07a9e1c6b3f50e8d2a71c4f9e06b3d
+    $/plan          revision 7
     $/plan/verdict  (none)
 
-### Stop computing the digest by hand
-
-    was: printf '%s' "$(cat /tmp/8ro6-ticket/plan.md)" | shasum -a 256 | cut -c1-16
-    $ lit get 8ro6/plan/digest
-    a02badd67281e5f0c93d14b7a8e26c0f5d91b3e47a0c62d8f1e5b9a3c07d4e16
-
-### Check whether this plan version was already reviewed
+### Check whether this plan revision was already reviewed
 
     was: lit show promptctl-brain-vu2t.abp | grep -c "Plan review (digest f2623ef71b5d)"
-    $ lit get abp/plan/verdicts
+    $ lit get abp/plan/reviews
     $ = promptctl-brain-vu2t.abp
-    $/plan/verdicts/r4x   fail  v3  f2623ef71b5d  laws:[nothing-unseen]
-    $/plan/verdicts/9pe   fail  v4  c81e07a2d4b9  laws:[single-enforcer, one-source-of-truth]
+    $/plan/reviews/r4x   fail  of:3  how:"/plan-review"  result:"nothing-unseen: …"
+    $/plan/reviews/9pe   fail  of:4  how:"/plan-review"  result:"single-enforcer, one-source-of-truth: …"
 
 ### Read the epic's sibling tickets to see what the plan must fit beside
 
@@ -96,34 +90,34 @@ design states: a selector, glob, list, or object is single-quoted.
     REASONS
     + atb/comments/7kq
 
-### Record the fail verdict, citing the laws
+### Record the fail review, citing the laws
 
     was: lit verdict mock-mock-flu.atb fail --plan b8fa35fac99f… --law no-ambient-temporal-coupling --law nothing-unseen
-    $ lit add atb/plan/verdicts '{fail laws:[no-ambient-temporal-coupling, nothing-unseen]}'
-    + atb/plan/verdicts/r4x
+    $ lit add atb/plan/reviews '{of:7 how:"/plan-review" result:"no-ambient-temporal-coupling, nothing-unseen: …" verdict:fail}'
+    + atb/plan/reviews/r4x
     ⇒ atb/plan/verdict = fail
 
-### Record a pass verdict
+### Record a pass review
 
     was: lit verdict rich-joiners-er38.a1h pass --plan cea7cfc9d682… --law dataflow-not-control-flow --law types-are-the-program
-    $ lit add a1h/plan/verdicts '{pass laws:[dataflow-not-control-flow, types-are-the-program]}'
-    + a1h/plan/verdicts/b97
+    $ lit add a1h/plan/reviews '{of:4 how:"/plan-review" result:"dataflow-not-control-flow, types-are-the-program: …" verdict:pass}'
+    + a1h/plan/reviews/b97
     ⇒ a1h/plan/verdict = pass
 
-### A fail that cites no law is refused
+### A review that names no revision is refused
 
-    $ lit add atb/plan/verdicts '{fail}'
-    error (reason=requires): a fail verdict requires laws; nothing written
+    $ lit add atb/plan/reviews '{verdict:fail}'
+    error (reason=requires): a review names the revision it judged: of; nothing written
 
-### The plan changed between reading it and recording the verdict
+### The plan changed between reading it and recording the review
 
-The reviewer read v7. The author saved v8 while the review ran.
+The reviewer read revision 7. The author appended revision 8 while the review ran.
 
-    $ lit add atb/plan/verdicts '{pass laws:[single-enforcer]}'
-    + atb/plan/verdicts/c2m
-    ⇒ atb/plan/verdict = pass
+    $ lit add atb/plan/reviews '{of:7 how:"/plan-review" result:"single-enforcer: …" verdict:pass}'
+    + atb/plan/reviews/c2m
+    ⇒ atb/plan/verdict = (none): latest revision is 8, last reviewed 7
 
-### Confirm the verdict landed, not only the comment
+### Confirm the review landed, not only the comment
 
 152 of 296 reviewers in one slice wrote a review comment and recorded no verdict.
 
@@ -132,50 +126,50 @@ The reviewer read v7. The author saved v8 while the review ran.
 
 ### The plan's author passes their own plan
 
-    $ lit add s4l/plan/verdicts '{pass laws:[one-source-of-truth]}'
-    + s4l/plan/verdicts/q1z
+    $ lit add s4l/plan/reviews '{of:1 how:"/plan-review" result:"one-source-of-truth: …" verdict:pass}'
+    + s4l/plan/reviews/q1z
     ⇒ s4l/plan/verdict = pass
 
-## Plan versions and verdicts
+## Plan revisions and reviews
 
 ### Has the current plan been reviewed yet?
 
-Before review, then after a reviewer passes v43.
+Before review, then after a reviewer passes revision 43.
 
     was: lit show 8ro6 | grep -nE '^plan \(v|reviews of plan'
     $ lit get 8ro6/plan/verdict
     (none)
     $ lit get 8ro6/plan/verdict
-    pass  815  claude_9f1e…  v43 (digest a02badd67281…)
+    pass  815  claude_9f1e…  of:43
 
-### List every version of a plan
+### List every revision of a plan
 
-    $ lit get 8ro6/plan/versions
-    8ro6/plan/versions
-      1   9a752806…  claude_2eb9…  2026-10-21T03:12Z
-      2   0b7ecac8…  claude_2eb9…  2026-10-21T04:40Z
+    $ lit get 8ro6/plan/revisions
+    8ro6/plan/revisions
+      1   claude_2eb9…  2026-10-21T03:12Z
+      2   claude_2eb9…  2026-10-21T04:40Z
       …
-      21  f7613236…  claude_2eb9…  2026-10-24T18:40Z
+      21  claude_2eb9…  2026-10-24T18:40Z
 
-### Read plan version 3
+### Read plan revision 3
 
     was: lit history 8ro6 --version plan@3
-    $ lit get 8ro6/plan/versions/3
+    $ lit get 8ro6/plan/revisions/3
     ## Plan
     1. The watcher derives its target through one builder …
 
-### Diff two plan versions
+### Diff two plan revisions
 
-    $ diff <(lit get 8ro6/plan/versions/20) <(lit get 8ro6/plan/versions/21)
+    $ diff <(lit get 8ro6/plan/revisions/20) <(lit get 8ro6/plan/revisions/21)
     14c14
     < 3. The cache keys on three positional strings.
     ---
     > 3. The cache keys on a render origin.
 
-### Record a verdict directly instead of adding one
+### Record a verdict directly instead of adding a review
 
     $ lit set atb/plan/verdict pass
-    error (reason=derived): atb/plan/verdict is derived (latest verdict on the current digest); add one: lit add atb/plan/verdicts '{pass laws:[…]}'; nothing written
+    error (reason=derived): atb/plan/verdict is derived (the verdict of the last review naming the latest revision); add one: lit add atb/plan/reviews '{of:8 how:"…" result:"…" verdict:pass}'; nothing written
 
 ### Find plans waiting on a reviewer
 
@@ -186,26 +180,24 @@ Before review, then after a reviewer passes v43.
 ### Revise a plan after it passed
 
     was: lit update 8ro6 --plan-file /tmp/8ro6-ticket/plan.md
-    $ lit set 8ro6/plan - < /tmp/8ro6-ticket/plan.md
-    8ro6/plan  v42 → v43
-    ⇒ 8ro6/plan/digest = a02badd67281…
-    ⇒ 8ro6/plan/verdict = (none)   was pass on v42
+    $ lit add 8ro6/plan/revisions - < /tmp/8ro6-ticket/plan.md
+    + 8ro6/plan/revisions/43
+    ⇒ 8ro6/plan/verdict = (none)   was pass on revision 42
 
 ### Revise a plan while the ticket is already in impl
 
-    $ lit set 8ro6/plan - < /tmp/8ro6-ticket/plan.md
-    8ro6/plan  v43 → v44
-    ⇒ 8ro6/plan/digest = 7e0f15c2…
-    ⇒ 8ro6/plan/verdict = (none)   was pass on v43
+    $ lit add 8ro6/plan/revisions - < /tmp/8ro6-ticket/plan.md
+    + 8ro6/plan/revisions/44
+    ⇒ 8ro6/plan/verdict = (none)   was pass on revision 43
 
-### My verdict lands on a version I did not read
+### My review names a revision that is no longer the latest
 
-I read v21; the author wrote v22 while I was reviewing.
+I read revision 21; the author appended revision 22 while I was reviewing.
 
     was: lit verdict 8ro6 pass --plan f76132367de4b85c… --law one-source-of-truth   (refused: stale digest)
-    $ lit add 8ro6/plan/verdicts '{pass laws:[one-source-of-truth]}'
-    + 8ro6/plan/verdicts/81f
-    ⇒ 8ro6/plan/verdict = pass (v22, digest 3c1e9a04…)
+    $ lit add 8ro6/plan/reviews '{of:21 how:"/plan-review" result:"one-source-of-truth: …" verdict:pass}'
+    + 8ro6/plan/reviews/81f
+    ⇒ 8ro6/plan/verdict = (none): latest revision is 22, last reviewed 21
 
 ## Working a ticket, start to done
 
@@ -246,24 +238,24 @@ I read v21; the author wrote v22 while I was reviewing.
 ### Write the plan from stdin
 
     was: lit update orange-history-4y3.s4l --plan-file /tmp/s4l-plan.md
-    $ lit set s4l/plan - <<'EOF'
+    $ lit add s4l/plan/revisions - <<'EOF'
     1. Move the history query behind HistoryStore (src/history/store.ts).
     2. …
     Proof: test/history.test.ts covers an empty store and a 10k-row store.
     EOF
-    s4l/plan  (none) → v1  digest 3e1a9c0d77b2
+    + s4l/plan/revisions/1
 
 ### Revise the plan after a fail
 
     was: lit update brandon-unfiled-3248.8ro6 --plan-file /tmp/8ro6-ticket/plan.md && lit show brandon-unfiled-3248.8ro6 | grep -nE '^plan \(v|reviews of plan'
-    $ lit set 8ro6/plan - < /tmp/8ro6-ticket/plan.md
-    8ro6/plan  v21 → v22  digest f76132367de4 → a02badd67281
+    $ lit add 8ro6/plan/revisions - < /tmp/8ro6-ticket/plan.md
+    + 8ro6/plan/revisions/22
     ⇒ 8ro6/plan/verdict  fail → (none)
 
-### Read the previous plan version to diff against
+### Read the previous plan revision to diff against
 
     was: lit history brandon-unfiled-3248.8ro6 --version plan@21
-    $ lit get 8ro6/plan/versions/21 > /tmp/8ro6-ticket/plan.v21.md
+    $ lit get 8ro6/plan/revisions/21 > /tmp/8ro6-ticket/plan.r21.md
 
 ### Move to impl once the plan has passed
 
@@ -282,7 +274,7 @@ I read v21; the author wrote v22 while I was reviewing.
 
     $ lit set atb/status impl
     error (reason=gate): atb/status plan → impl is gated by /workflow/states/plan/gate
-      plan/verdict=pass   atb/plan/verdict = fail (v7)
+      plan/verdict=pass   atb/plan/verdict = fail (of:7)
     nothing written
 
 ### Trying to finish a ticket whose plan was never reviewed
@@ -457,7 +449,7 @@ Two checkouts each started a ticket in px1f before either saw the other.
     $/lane           49k
     $/claim          this checkout
     $/body           The bar dedupes by text, but two warnings with …
-    $/plan           v3  digest 9a7528062561…
+    $/plan           revision 3
     $/plan/verdict   pass
 
     /workflow/states/merge/guidance  Once it has merged, close it.
@@ -609,8 +601,8 @@ The write's echo already says it; this is the read a later session makes.
     was: lit history houdini-laws-etg.6op 2>&1 | tail -8
     $ lit get 6op/history
     6op/history/1   Oct 15 05:11  claude_214f…  status open → plan
-    6op/history/2   Oct 15 05:40  claude_214f…  plan (none) → v1
-    6op/history/3   Oct 15 09:02  claude_8e0c…  plan/verdicts + c71 pass
+    6op/history/2   Oct 15 05:40  claude_214f…  plan/revisions + 1
+    6op/history/3   Oct 15 09:02  claude_8e0c…  plan/reviews + c71 pass
 
 ### Find claims nobody has touched in half a day
 
@@ -2224,7 +2216,7 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
     $ lit get 9uht/history
     9uht/history
       e01  2026-10-15T05:11Z  claude_214f…  status open → plan   ⇒ claim = claude_214f…
-      e02  2026-10-15T06:02Z  claude_214f…  plan (none) → v1
+      e02  2026-10-15T06:02Z  claude_214f…  plan/revisions + 1
       e07  2026-10-21T19:40Z  claude_214f…  status merge → done
 
 ## Odd nodes and refusals
@@ -2308,7 +2300,7 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
     zsh: no matches found: (status=review)/title
     $ lit get unfiled.*/title
     zsh: no matches found: unfiled.*/title
-    $ lit add a1h/plan/verdicts {pass laws:[one-source-of-truth, single-enforcer]}
+    $ lit add a1h/plan/reviews {of:4 how:"/plan-review" result:"one-source-of-truth, single-enforcer: …" verdict:pass}
     zsh: parse error near `}'
 
 ### A title with a colon and quotes in it
@@ -2394,8 +2386,8 @@ The old `comment rm` took only the comment id; the new path needs both.
 ### JSON wanted for a few fields
 
     was: lit show links-scale-dy46.19m --json
-    $ lit get 19m/status 19m/plan/digest --json
-    {"19m/status":"impl","19m/plan/digest":"45d6d009cb32…"}
+    $ lit get 19m/status 19m/plan/verdict --json
+    {"19m/status":"impl","19m/plan/verdict":"pass"}
 
 ### Wrong id prefix
 
@@ -2474,12 +2466,8 @@ The old `comment rm` took only the comment id; the new path needs both.
 ### Reasons passed to the verdict
 
     was: lit verdict mock-mock-flu.17w fail --plan 0b7ecac89fe6… --law single-enforcer --body "…"
-    $ lit add 17w/comments - <<'REASONS'
-    Plan review (digest 0b7ecac89fe6): fail. …
-    REASONS
-    + 17w/comments/n5g
-    $ lit add 17w/plan/verdicts '{fail laws:[single-enforcer]}'
-    + 17w/plan/verdicts/t8b
+    $ lit add 17w/plan/reviews '{of:2 how:"/plan-review" result:"single-enforcer: …" verdict:fail}'
+    + 17w/plan/reviews/t8b
     ⇒ 17w/plan/verdict = fail
 
 ### Guessed verbs: search, list, create, comments, epics
@@ -2515,7 +2503,7 @@ The old `comment rm` took only the comment id; the new path needs both.
 ### Write while an admin sync holds the store
 
     was: lit verdict rm9w … --law single-enforcer   →   workspace_busy: held by pid 95859 (lit sync push --remote origin)
-    $ lit add rm9w/plan/verdicts '{pass laws:[single-enforcer]}'
+    $ lit add rm9w/plan/reviews '{of:3 how:"/plan-review" result:"single-enforcer: …" verdict:pass}'
     lit: waiting for the store; held by pid 95859 (lit admin sync push --remote origin) since 2s
     error (reason=workspace_busy): store held by pid 95859 (lit admin sync push --remote origin) for 30s; nothing written; rerun unchanged
 
@@ -2576,15 +2564,15 @@ writes, the refusal and dry-run shapes, `--json` keyed by path, short ids, `rm x
 
 **Plans and gates**
 
-- A verdict binds to the digest current when it is written, not the one the reviewer
-  read. A reviewer who read v21 while the author saved v22 passes v22 unread, and the
-  old stale-digest refusal has no equivalent.
+- A review names the revision it judged, `of`, and lands whether or not that revision
+  is still the latest. Only the derived verdict ignores a review of an older revision,
+  so a reviewer who read revision 21 while the author appended 22 passes nothing
+  unread, and the echo says which revision is latest.
 - "The reviewer is not the plan's author" compares two paths; the gate form shows
-  only `path=literal`. Where "a fail cites at least one law" lives: field table or
-  workflow.
-- Editing the plan of a ticket already in `impl` empties the verdict `impl` was
-  entered on. What happens to the ticket, and what the echo says.
-- The echo on a verdict cannot say whether the gate now passes.
+  only `path=literal`.
+- Appending a revision to the plan of a ticket already in `impl` empties the verdict
+  `impl` was entered on. What happens to the ticket, and what the echo says.
+- The echo on a review cannot say whether the gate now passes.
 - Guidance is one field per state, but `plan` has two readers, the author and the
   reviewer, and `quickstart review` was the reviewer's own text. Whether a transition
   prints the guidance of the state it enters: the old `start` printed "write its plan"

@@ -153,8 +153,8 @@ set dee/parent rin                      parent set
 add dee/blocks 4ou                      dep add
 add unfiled/children '{title:… type:bug}' new
 add /children '{title:… type:epic}'     new, top level
-add dee/plan/verdicts '{fail laws:[…]}' verdict, bound to the current plan digest
-get dee/plan/versions/3                 history --version plan@3
+add dee/plan/reviews '{of:3 how:"…" result:"…" verdict:fail}'  verdict, naming the revision it judged
+get dee/plan/revisions/3                history --version plan@3
 get '(stage=active updated<-6h)'        orphaned
 get /lanes                              backlog
 get /next                               next
@@ -168,11 +168,12 @@ else. `next` and `backlog` are derived nodes on the root, like `/integrity`: `/l
 read in rank order *is* the backlog, and `/next` is the head the lane rule (below)
 selects for this checkout.
 
-A long text field (`body`, `plan`, `prompt`) is a node: `dee/plan` reads the current
-text, `dee/plan/versions/3` reads one version, `dee/plan/digest` the digest of the
-current one. A verdict is added under the plan and binds to the current digest by
-construction; `dee/plan/verdict` is derived: the latest verdict on the current digest,
-or nothing. Editing the plan makes a new version and empties the derived verdict.
+A long text field (`body`, `prompt`) is a node. `dee/plan` is a reviewable: two
+append-only lists, `dee/plan/revisions`, each a text, and `dee/plan/reviews`, each
+naming the revision it judged. `dee/plan` reads the latest revision with its number,
+`dee/plan/revisions/3` reads one. `dee/plan/verdict` is derived: the verdict of the
+last review naming the latest revision, or nothing. Appending a revision empties the
+derived verdict until a review names it.
 
 Values: a bare word, a `"quoted string"`, `-` for stdin (once per command), `[a, b]`
 for a list, `{k:v k:v}` for an object, and `@id` for the addressed node's own id.
@@ -225,7 +226,7 @@ What follows from `set x/status <s>`, validated against the resolved workflow:
 - **an epic's status** is derived from its children, so an epic is finished or
   reopened only through them.
 - **gates** are path predicates on a state. `plan/gate` says `set status impl` is
-  refused until a `verdict` node on the plan reads `pass`. `[LAW:single-enforcer]`: the
+  refused until a review of the plan's latest revision reads `pass`. `[LAW:single-enforcer]`: the
   gate is checked in one place, on `set`, against one definition.
 - **guidance** moves into the state nodes. `get dee` prints the ticket and then
   `/workflow/states/<current>/guidance`. The "what should I do now" prose is data
@@ -386,8 +387,8 @@ sub-sub-commands. This design has four verbs, one path grammar, selectors, globs
 | was | is |
 |---|---|
 | `start`, `done`, `close`, `open`, `phase` | `set x/status` |
-| `verdict --plan <digest> --law …` | `add x/plan/verdicts '{…}'`; the digest is bound by construction |
-| `history`, `history --version plan@N` | `get x/history`, `get x/plan/versions/N` |
+| `verdict --plan <digest> --law …` | `add x/plan/reviews '{of:N …}'`; the review names the revision it judged |
+| `history`, `history --version plan@N` | `get x/history`, `get x/plan/revisions/N` |
 | `ls --search`, `search` | `get '(text~"…")'` |
 | `quickstart <stage>`, `workflows show` | `get /workflow/states/<s>/guidance`, `get x/workflow` |
 | `show --field body`, `--body-file -` | `get x/body`, a `-` value reads stdin |

@@ -97,7 +97,7 @@ be mechanical enforcement is, and guidance is what remains.
 
 The body is prose with two substitutions: `{$}` is the subject's id and
 `{$/<field>}` is a field of the subject, read after the write:
-`{$/plan/digest}`, `{$/status}`. A field not in the field table is refused when
+`{$/plan/verdict}`, `{$/status}`. A field not in the field table is refused when
 the body is written, so no body references a field that does not exist
 `[LAW:parse-dont-validate]`. A body that needs a fact about the ticket names
 the field, never copies the value, so it cannot go stale. There is no other
@@ -232,20 +232,20 @@ with their commands rewritten to the path grammar.
     review`.
   - `review`, `enter review` and `in review`: when review is done and the
     merge is under way, `set {$}/status merge`.
-  - `findings`, `in review` where `(verdict=fail)`: address every finding or
+  - `findings`, `in review` where `(pr/verdict=fail)`: address every finding or
     say on the thread why not; do not widen the change. This is the rework
     guidance of [columns-and-phases.md](columns-and-phases.md): a handler with
     a selector, not a rule.
   - `merge`, `enter merge` and `in merge`: once merged, `set {$}/status done`.
 - **`plan-review`**: a plan is written, proven and reviewed before code.
   - `plan`, `enter plan` and `in plan`: v1's plan text: core first, prove each
-    fact against the real system, record with `set {$}/plan -`, hand it to a
-    reviewer with a fresh context.
+    fact against the real system, record with `add {$}/plan/revisions -`, hand
+    it to a reviewer with a fresh context.
   - `brief`, `read */plan`: the reviewer's brief: load the laws, judge the
-    whole mechanism at this digest, record one verdict with `add
-    {$}/plan/verdicts`.
-  - `unreviewed`, `refused impl`: the plan has no passing verdict on its
-    current digest; have it reviewed, or revise it and have the new text
+    whole mechanism at this revision, record one review with `add
+    {$}/plan/reviews`, naming the revision in `of`.
+  - `unreviewed`, `refused impl`: the plan has no passing review of its
+    latest revision; have it reviewed, or revise it and have the new revision
     reviewed.
 - **`capture`**: prepare the next loop ([guidance.md](guidance.md)).
   - `created`, `wrote */children`: the description says what and why and

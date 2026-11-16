@@ -728,9 +728,7 @@ One line each, so a reader of the older document knows the position moved.
 - work-claims.md: the routing steps collapse into the walk of the lane
   order; the holder set replaces the single claim scalar; everything else
   stands.
-- columns-and-phases.md, transition-requirements.md: `plan` and `pr` are one
-  reviewable (§4); a review carries `of`, the revision it judged, and the
-  field those documents call `verdict` is `pr/verdict`; the checklist's open
+- columns-and-phases.md, transition-requirements.md: the checklist's open
   count is `checklist/pending`.
 - workspace-schema design and the v1 hierarchy epic
   `promptctl-hierarchy-6cqf`: levels are configured, one to five, not three
