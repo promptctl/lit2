@@ -84,7 +84,15 @@ one field nothing stores: `text~re` reads an item's prose fields and its
 comments' bodies together. Matches print in backlog order, lanes by rank and
 members in lane order; `--sort <path>` orders them by a scalar field, `--desc`
 reverses, and `--limit N` keeps the first N. `set` and `add` both take `path
-value` pairs; a list value on `add` appends each element.
+value` pairs; a list value on `add` appends each element. Inside one `add`,
+`@N` names the Nth object the value declares, counted in document order
+through nested `children`, so items filed together can link to each other:
+`add m2q/children '[{title:"parser"}, {title:"renderer" blocks:[@1]}]'`.
+Every id is minted before any field resolves, so a forward reference is
+fine; `@` is a sigil only where an id is expected, and an id never contains
+one, so a literal `@` in a title needs no escape; `@N` past the count is
+refused at parse naming the count, and a self or cross-level reference is
+refused by the checks every link meets.
 
 ### 3.2 Event and intent
 
@@ -123,11 +131,15 @@ make yesterday's `1f9` ambiguous; the later mint goes wider instead. Two
 writers offline can fix one segment for two items; after sync that segment
 resolves to neither, lit2 lists both, and each item keeps its id. A child
 renders as `<parent>.<segment>`, `1f9.zc7`, from its parent link, so where
-an item sits is display, not identity. The project prefix is not part of the
-id either: it is a label the active version (§3.15) supplies when an id is
-rendered, `lit-bootstrap-1f9.zc7`, so changing it rewrites nothing. Parsing
-accepts the segments bare or under any prefix a version in this store's log
-has ever declared, and refuses one none has, naming it as another project's.
+an item sits is display, not identity. The project prefix and the item's
+`topic` (§3.4) are not part of the id either: the rendering is
+`<prefix>-<topic>-<segments>`, `lit-bootstrap-1f9.zc7`, the prefix a label
+the active version (§3.15) supplies and the topic the item's own field, so a
+reader can tell otherwise arbitrary segments apart and changing either
+rewrites nothing. Parsing accepts the segments bare, or under any prefix a
+version in this store's log has ever declared and any topic the item has ever
+carried, and refuses a prefix none has, naming it as another project's, or a
+topic the item never had, naming its current rendering.
 The total order is `(causal-position, writer, event id)`: the event id, the
 record's content hash, settles two events of one writer at one position.
 
@@ -183,8 +195,10 @@ derived, its own id. `level`, derived, which a selector reads by number or by
 the active version's name for it, `(level=2)` or `(level=epic)`. `topic`,
 settable, one short word that groups items across the tree: the create
 supplies it or lit2 derives one from the title and echoes the derivation, and
-`(topic=cli)` selects on it. `deleted`, settable: `rm x` is `set x/deleted
-true`, a reversible tombstone, and `set x/deleted false` restores the item.
+`(topic=cli)` selects on it; a child's default is its parent's topic, a
+top-level item's is derived from its title, and the topic renders in the id
+(§3.2). `deleted`, settable: `rm x` is `set x/deleted true`, a reversible
+tombstone, and `set x/deleted false` restores the item.
 
 The tree groups, scopes and rolls up. It orders nothing: no item has a rank,
 and a node is a folder. Order is the lane's (§3.7). The backlog is the
@@ -665,10 +679,11 @@ decided in the body.
   for objects and refs (§6). The first budget run measures go-git's object
   walk on the depth corpus.
 - **C. `topic`.** A built-in settable field, one short word that groups
-  items across the tree, kept from v1 for search and grouping: the create
-  supplies it or lit2 derives one from the title, and `set x/topic` changes
-  it. Ids are opaque and render under the project prefix without it, so
-  editing a topic changes no id.
+  items across the tree and renders in the id, kept from v1 because a
+  reader cannot tell `1f9.zc7` from `2ae.k3f` without it: the create
+  supplies it, or a child takes its parent's and a top-level item one derived
+  from its title, and `set x/topic` changes it. The id is the segments, so
+  editing a topic rewrites nothing and an old rendering still parses (§3.2).
 - **D. `archived`.** Not a field; a ticket out of the flow is in a terminal
   column, one that should not exist is deleted (tombstone) or purged
   (rewrite).

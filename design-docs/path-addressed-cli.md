@@ -84,8 +84,9 @@ The two separators do different jobs and cannot collide: `.` is part of an id an
 only ever precedes a minted child id, `/` only ever precedes a field name. No reserved
 words, so an id can be anything the minter produces. An id is its segments, and a
 ticket is addressed by its own segment, as the ids above are written; the parent
-segments and the prefix are rendering. A segment two tickets share is refused naming
-both.
+segments, the prefix and the ticket's `topic` are rendering,
+`<prefix>-<topic>-<segments>`, and the topic is what tells one run of segments from
+another at a glance. A segment two tickets share is refused naming both.
 
 Selectors, globs, lists, and objects are made of shell metacharacters, so on a command
 line they are single-quoted: `get '(status=backlog)/title'`, `set 'rin.*/priority' urgent`.
@@ -186,8 +187,12 @@ derived verdict until a review names it.
 
 Values: a bare word, a `"quoted string"` taking `\"`, `\\`, `\n` and `\t`, `-` for
 stdin (once per command; for a list path, one element per line, so a `get` of ids
-pipes in), `[a, b]` for a list, `{k:v k:v}` for an object, and `@id` for the
-addressed node's own id. A selector or glob is never a value.
+pipes in), `[a, b]` for a list, `{k:v k:v}` for an object, `@id` for the
+addressed node's own id, and inside one `add`, `@N` for the Nth object the value
+declares in document order, so `'[{title:A}, {title:B blocks:[@1]}]'` files two
+tickets with the edge between them in one call. `@` is a sigil only where an id is
+expected, and ids never contain it, so a literal `@` elsewhere needs no escape. A
+selector or glob is never a value.
 
 ### The column graph is a node
 
