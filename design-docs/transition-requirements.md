@@ -58,11 +58,15 @@ A requirement is three values, no more:
 - **`test`**: one atom of the selector grammar the CLI already has, written
   against a path relative to the ticket. The atoms are `p` (present: a scalar
   with a value, a list with an element), `!p` (absent), `p=v`, `p!=v` (the
-  negation of `=`), and `p~re`. On a list path `=` and `~` hold when some
-  element does, so `labels=ready` is "carries the label" and
-  `labels!=needs-design` is "does not". Values are the CLI's values: a bare
-  word or a quoted string. There is no `and`, `or`, arithmetic or clock inside
-  an atom; a column's list is the conjunction, and that is the whole language.
+  negation of `=`), `p~re`, and `p<v`, `p>v` on a number or date path. On a
+  list path `=` and `~` hold when some element does, so `labels=ready` is
+  "carries the label" and `labels!=needs-design` is "does not". `v` may be
+  several values, `status=backlog,impl`: `=` holds when any matches and `!=`
+  when none. Values are the CLI's values: a bare word or a quoted string; a
+  date value is a date or time, or a duration before the evaluation's `now`,
+  `updated<-6h`; every list exposes `count`, a derived number. There is no
+  `and`, `or` or arithmetic inside an atom; a column's list is the
+  conjunction, and that is the whole language.
   The selector in `get '(status=open type=bug)'` and a requirement's `test`
   are parsed by one grammar, so a reader learns it once
   `[LAW:one-source-of-truth]`.
@@ -114,7 +118,10 @@ shipped default, in full (the file is `internal/assets/workspace/default.toml`):
 ```toml
 prefix = "lit"
 claim_ttl = "6h"
-labels = ["ready", "needs-design", "external"]
+
+[labels.ready]
+[labels.needs-design]
+[labels.external]
 
 [levels.1]
 name = "story"
@@ -235,8 +242,10 @@ which is how an agent asks "could I?" without trying.
 A requirement is evaluated at the transition and never again. A ticket whose
 column's requirements stop holding afterwards, a description deleted, a verdict
 emptied by a new plan revision, stays where it is; the facts are in the history and in
-any selector that asks. There is no second evaluation on read that moves
-tickets, labels them, or holds them. Where [custom-columns.md](custom-columns.md)
+any selector that asks. Nothing re-evaluates a requirement on read: what the
+facts say about a ticket afterwards is a derived field such as `held`, or a
+label declared with a `where` selector (architecture.md §3.11). Where
+[custom-columns.md](custom-columns.md)
 computed a ticket's position from rules on every read, this design keeps the
 sibling's stored `status` and puts the rule at the one write that changes it.
 

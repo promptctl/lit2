@@ -393,8 +393,9 @@ cleaning up, and a live holder is never robbed by a clock.
 3. On another machine, the hold persists until `claim_ttl` has passed since
    W's last event, then prints as none. `get k7q/claim` during the window
    shows the holder and the expiry.
-4. Taking over before expiry is a deliberate write: `rm <lane>/claim`, echoed,
-   then the transition.
+4. Taking over before expiry is a deliberate write: `add <lane>/claim`,
+   echoed; W is `contested` until its claim expires, and the head changes
+   hands whatever column it sits in.
 5. A later sweep anchors W's tree under a live ref and deletes W's ref; a W
    that reappears with events the anchor lacks is alive and kept.
 

@@ -16,7 +16,7 @@ each owning its own concern in the vocabulary `architecture.md` fixes.
 - `requirements.md`: what lit2 must do and must not do, stated from what lit
   is for; the plan is judged against it.
 - `columns-and-phases.md`: column, phase and workflow state are one concept; the
-  column is the one stored fact, labels are applied by people; rework is
+  column is the one stored fact, a label is applied or computed; rework is
   reviews on the PR's revisions inside `review`. Owns the column graph at
   `/columns`.
 - `transition-requirements.md`: entry and exit requirements on a column, one

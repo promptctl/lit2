@@ -75,8 +75,16 @@ anything runs; a write over many paths is one write and lands whole or not at
 all. The selector grammar is the same atom set a requirement's `test` uses
 (§3.6), so a reader learns it once, and an atom's path may read through
 `parent`, so `(stage=terminal parent/stage=terminal)` names the last ticket
-of an epic. `set` and `add` both take `path value` pairs; a list value on
-`add` appends each element.
+of an epic. A selector may stand at any step of a path and filters that
+step's children by their fields: `x/comments/(by=claude_5c44)` is one
+session's comments on `x`, and `'(status=backlog)/history/(by=claude_5c44)'`
+its edits across the backlog. A selector matches items in every column and at
+every level, and a deleted item only when it names `deleted`. `text` is the
+one field nothing stores: `text~re` reads an item's prose fields and its
+comments' bodies together. Matches print in backlog order, lanes by rank and
+members in lane order; `--sort <path>` orders them by a scalar field, `--desc`
+reverses, and `--limit N` keeps the first N. `set` and `add` both take `path
+value` pairs; a list value on `add` appends each element.
 
 ### 3.2 Event and intent
 
@@ -100,7 +108,9 @@ same shape:
 | `add x/checklist '["…", "…"]'` / `set x/checklist/<id>/state done` | `checklist.add {item, id, text}` / `checklist.set {item, id, state, reason}` |
 | `set <lane>/rank '{above: y}'`, `'{below: y}'`, `top`, `bottom` | `rank.place {lane, above \| below \| top \| bottom}` |
 | `set /columns/impl/entry '[…]'` | no event: an edit to `.lit/workspace.toml` in the working tree, echoed as such |
-| `rm x` | `item.delete {item}`, a reversible tombstone |
+| `rm x`, which is `set x/deleted true` | `field.set {item, deleted, true}`, a reversible tombstone; `set x/deleted false` restores |
+| `add <lane>/claim` / `rm <lane>/claim` | `claim.take {lane}` / `claim.release {lane}` |
+| any write with `--reason "…"` | the reason on every event the write mints, an enveloped prose field |
 | `rm x --purge` | a rewrite naming the item |
 
 Ids are opaque. An id, an item's or an element's such as a comment's, is 128
@@ -129,7 +139,7 @@ and reviews of each reviewable (§4), the applied workspace versions (§3.15),
 and every
 unresolved concurrent contradiction as a value on the thing it concerns.
 `tick(state, config, now) → view`: `held`, claim
-expiry, staleness, stage, rollup. Every read is `tick(fold(events), now)`;
+expiry, staleness, stage, rollup, the labels declared with `where` (§3.11). Every read is `tick(fold(events), now)`;
 every write is evaluated against the same. Neither function performs I/O.
 The fold reads no configuration: an event's legality under the model was
 judged by the one enforcer at its write, under the active version its writer
@@ -162,7 +172,19 @@ so an item created without a parent, `add /children '{level: 1, …}'`, lands
 in the home above it and that home in the home above, and every leaf has a
 full ancestry. The homes are shown, never hidden, and nothing in the engine
 handles a parentless case. `add <parent>/children` creates at the level
-below the parent; `add /children` with no level creates at the top.
+below the parent; `add /children` with no level creates at the top; a child
+object may itself carry `children`, minted at the level below it, so a node
+and its tree are one call. `set x/parent y` moves an item: `y` must be one
+level up and its resolved column graph must declare `x`'s column, or the
+write is refused naming which.
+
+Every item carries four built-in fields beside its title and prose. `id`,
+derived, its own id. `level`, derived, which a selector reads by number or by
+the active version's name for it, `(level=2)` or `(level=epic)`. `topic`,
+settable, one short word that groups items across the tree: the create
+supplies it or lit2 derives one from the title and echoes the derivation, and
+`(topic=cli)` selects on it. `deleted`, settable: `rm x` is `set x/deleted
+true`, a reversible tombstone, and `set x/deleted false` restores the item.
 
 The tree groups, scopes and rolls up. It orders nothing: no item has a rank,
 and a node is a folder. Order is the lane's (§3.7). The backlog is the
@@ -195,9 +217,13 @@ adds an `audit` column by declaring it and pointing `plan/next` at it.
 
 A **requirement** is one entry of a column's `entry` or `exit` list: a `test`
 and a `severity` (`error` or `warning`, no default). A test is one selector
-atom over one path of the ticket (`p`, `!p`, `p=v`, `p!=v`, `p~re`) with a
-`scope` (`self` or `ancestors`), or the name of a **check**: a named list of
-tests under `[checks.<name>]`. `Parse` expands every check name, so the list the
+atom over one path of the ticket with a `scope` (`self` or `ancestors`), or
+the name of a **check**: a named list of tests under `[checks.<name>]`. The
+atoms are `p`, `!p`, `p=v`, `p!=v`, `p~re`, and `p<v`, `p>v` on a number or
+date path. `v` may be several values, `status=backlog,impl`: `=` holds when
+any matches and `!=` when none. A date value is a date or time, or a duration
+before the evaluation's `now`, `updated<-6h`; every list exposes `count`, a
+derived number, so `comments/count>2` is an atom too. `Parse` expands every check name, so the list the
 enforcer reads is flat, and each test keeps the name of the check it was written
 in. One pure function evaluates the flat list at exactly one place, the
 transition write: the source's `exit` list on a forward edge, the destination's
@@ -241,8 +267,10 @@ made its latest establishing transition, out of `initial` or into a
 `terminal`, on any member; the fold computes the holder set in total order,
 `claim` is the last, and `contested` is the rest. Release is a write,
 `rm <lane>/claim`, which the fold reads as ending the hold until the next
-establishing transition; parking a member into `initial` and finishing the
-lane's last member end it too. Expiry is tick's: `claim_ttl`, resolved by
+establishing act; taking is one too, `add <lane>/claim`, which the fold reads
+as this checkout's establishing act, so work another checkout left in the
+middle of a column changes hands in one echoed write; parking a member into
+`initial` and finishing the lane's last member end a hold too. Expiry is tick's: `claim_ttl`, resolved by
 nearest ancestor, measured from the holder's newest event on any member; an
 expired claim is no claim and prints as none. A ticket's `claim` reads its
 lane's, so finishing one member hands the checkout the next with no second
@@ -280,11 +308,19 @@ stage is derived, so a dependency on a node is a dependency on its leaves.
 
 ### 3.11 Label
 
-A **label** is declared in the workspace file's top-level `labels` list before
-anything uses it, and a person applies it (`add x/labels ready`). Nothing
-computes a label: an item carries exactly the labels written to it, and a
-requirement reads them as `labels=ready`. The shipped default declares `ready`,
-`needs-design` and `external`.
+A **label** is a name declared in the workspace file under `[labels.<name>]`
+before anything uses it. A label declared plain is applied by a person,
+`add x/labels ready`, and an item carries exactly the plain labels written to
+it. A label declared with `where`, a selector, is computed: tick evaluates the
+selector on every read and the item carries the label while it matches, so
+`[labels.orphaned] where = "(stage=active updated<-6h)"` gives what the facts
+say a name, and `add x/labels orphaned` is refused at parse as a write to any
+derived value is. Either kind reads as `labels=<name>` in a selector or a
+requirement, the requirement judged at the write with the command's `now`. A
+`where` reads stored fields, the engine's derived fields other than `held`,
+and `parent/`, never another computed label, so derivations never loop, and
+apply refuses a version in which one does. The shipped default declares
+`ready`, `needs-design` and `external`, all plain.
 
 ### 3.12 Moment and handler
 
@@ -506,7 +542,8 @@ row is that no primitive learned a new case.
 | file work, alone or in bulk, with defaults | `add <parent>/children '{…}'` or a list of them, at the level below the parent; the level's template fills absent fields and echoes each as a derivation |
 | keep work out of the queue until it is ready | the initial column's `exit` list: a description present, `labels=ready` on the ticket or an ancestor, no blocker; `held` reports it, `/next` reads `held` |
 | say what to work on | `/next`: the heads of the lanes this checkout holds, in rank order; a held head whose own `held` is non-empty is printed with its reasons and passed; then the first lane head in rank order that is not held elsewhere and whose `held` is empty, labeled as outside the commitment; every lane passed over is named with its reason |
-| commit a checkout to a unit of work | the claim on the lane, derived from the start transition; `/next` serves the held lane first; leaving is `rm <lane>/claim` |
+| commit a checkout to a unit of work | the claim on the lane, derived from the start transition; `/next` serves the held lane first; leaving is `rm <lane>/claim`, taking over is `add <lane>/claim` |
+| pick work inside one node | `<node>/next`: the same walk over the lanes whose head is under the node |
 | sequence work | a lane, on any node, with members from anywhere; reorder with one `set` on the list; order lanes against each other with `set <lane>/rank` |
 | track the steps inside one ticket | the checklist on the leaf; `checklist/pending = 0` on entry to a terminal column |
 | make work wait on other work | a `blocks` link; `blockers` and `blocked_by` derive from links and lane position together |
@@ -523,7 +560,10 @@ row is that no primitive learned a new case.
 | add a field, a level name, a link type | the same file: `[levels.1.fields.points]`, `[levels.2] name`, `[links.tests]`; no code |
 | see why a ticket is where it is | `get x/history`; `get x/held`, which names each unmet test and the check it came from when it has one |
 | undo | `set` back from the echo, or `get x/body/versions/N | set x/body -`; every version is in the history |
-| find things | selectors over any field, at any depth, across every node's dialect of a column name |
+| find things | selectors over any field, at any depth, across every node's dialect of a column name; below an item, over its comments and history; `--sort`, `--desc`, `--limit` |
+| say why | `--reason "…"` on any write, carried on every event it mints and printed in `history` beside the change |
+| delete and restore | `rm x`, which is `set x/deleted true`; `set x/deleted false`; a deleted item matches a selector only when it names `deleted` |
+| take the backlog out, and bring it in | `lit2 admin export`: every event as one JSON document naming its schema version; `lit2 admin import`: the document replayed into a store as this checkout's writes, each carrying its source attribution and time as provenance; a create carries its id, so every item keeps its id |
 | edit many things at once, safely | selectors and globs expand once; `--dry-run` prints the expansion and the diff; a refusal on one path writes nothing |
 | work from several worktrees of one clone | one store under the common dir; each worktree its own checkout, ref and claims |
 | work from several machines, offline | per-writer refs; background push and fetch; the fold settles concurrent edits; conflicts are values; `/integrity` lists advisories |
@@ -624,8 +664,11 @@ decided in the body.
 - **B. Language and git library.** Go, with go-git (Apache-2.0) in process
   for objects and refs (§6). The first budget run measures go-git's object
   walk on the depth corpus.
-- **C. `topic`.** Not a field; ids are opaque, rendered under the project
-  prefix, and an area of focus is a label.
+- **C. `topic`.** A built-in settable field, one short word that groups
+  items across the tree, kept from v1 for search and grouping: the create
+  supplies it or lit2 derives one from the title, and `set x/topic` changes
+  it. Ids are opaque and render under the project prefix without it, so
+  editing a topic changes no id.
 - **D. `archived`.** Not a field; a ticket out of the flow is in a terminal
   column, one that should not exist is deleted (tombstone) or purged
   (rewrite).

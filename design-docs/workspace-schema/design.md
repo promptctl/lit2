@@ -157,7 +157,8 @@ advisories to a person, not repairs.
 The 2026-08-27 draft declared a status graph per type: statuses, each in one
 of three status categories, and transitions with validators. That half is gone. A column is a name
 in configuration, a ticket's column is the one stored fact about its position
-while labels are declared in the workspace file and applied by people, and
+while a label is declared in the workspace file and applied by a person or
+computed from a `where` selector (architecture.md §3.11), and
 what Jira calls a status category is the column's stage
 ([columns-and-phases.md](../columns-and-phases.md),
 [custom-columns.md](../custom-columns.md)). What Jira calls conditions and

@@ -13,7 +13,8 @@ The operations of an issue tracker, as `architecture.md` §4 lists them:
 file and groom, pick and claim, move work through a configurable process
 with requirements and guidance, review and send back, close with a reason,
 order and sequence, link and block, comment and label, search and edit in
-bulk, undo, delete and purge, configure the process. Role-based access
+bulk, undo, delete and purge, configure the process, export the whole store
+and import one. Role-based access
 control and the workflow features are part of this. Several rows of that
 table are specializations of other rows and are not requirements of their
 own.

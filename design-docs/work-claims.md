@@ -28,8 +28,9 @@ Claiming is implicit — a transition out of the initial column on a ticket in a
 lane claims the lane. Release is implicit — finishing the lane, parking a
 member back into the initial column, or the claim expiring releases it — or
 one explicit write, `rm <lane>/claim`, which the fold reads as ending the hold
-until the next establishing transition. A released claim is gone: nothing
-records that it existed. Focus and unfocus are not modes: a checkout with live
+until the next establishing act: a start or finish transition, or
+`add <lane>/claim`, the take that moves work left mid-column to this checkout.
+A released claim is gone: nothing records that it existed. Focus and unfocus are not modes: a checkout with live
 claims is focused on them; a checkout without claims sees the global backlog.
 The global case is the natural zero state, not a second layer.
 
@@ -117,8 +118,8 @@ hold:
    runs behind still outranks the start it took over. The fold computes the
    holder set in that order; `claim` is the last and `contested` the rest. A
    release write, `rm <lane>/claim`, ends the hold until the next
-   establishing transition, and so does parking a member into the initial
-   column.
+   establishing act, and so does parking a member into the initial column;
+   `add <lane>/claim` is an establishing act with no transition.
 3. **The claim is fresh.** Once established, *any* event by S on L's members
    refreshes it — ordinary working commentary keeps a claim alive through a
    long stretch on a single ticket. A claim whose newest event is older than
@@ -327,7 +328,8 @@ A claim ends four ways:
 1. **Completion** — the lane finishes; the predicate no longer holds anywhere.
 2. **Parking** — a member is moved back into the initial column.
 3. **Release** — the one explicit write, `rm <lane>/claim`, read by the fold
-   as ending the hold until the next establishing transition.
+   as ending the hold until the next establishing act, a transition or an
+   `add <lane>/claim`.
 4. **Age-out** — the safety net for silent abandonment anywhere: evidence
    older than `claim_ttl` stops supporting the claim.
 

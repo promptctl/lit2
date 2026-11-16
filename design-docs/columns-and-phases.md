@@ -40,11 +40,12 @@ no rule to evaluate.
 **What tick computes.** Everything custom-columns.md computes except position:
 `held`, stage, claim expiry, staleness, the rollup of a node above level 1.
 `view = tick(fold(events), config, now)`, writing nothing, cached if wanted,
-never the source of truth. There are no rules: nothing computes a label, an
-item carries exactly the labels written to it, and what the facts say about a
-ticket is a derived field such as `blockers` or `held`. Conditional guidance is
-a handler with a selector ([workflows.md](workflows.md)), so one mechanism
-prints after a ticket.
+never the source of truth. What the facts say about a ticket is a derived
+field such as `blockers` or `held`, or a label declared with a `where`
+selector (architecture.md §3.11), which tick computes as it computes any
+derived field; a plain label is exactly what was written to the item.
+Conditional guidance is a handler with a selector
+([workflows.md](workflows.md)), so one mechanism prints after a ticket.
 
 Why the column is the one thing not computed:
 

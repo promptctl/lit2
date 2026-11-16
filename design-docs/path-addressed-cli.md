@@ -68,6 +68,7 @@ dee/status              scalar, validated against the column graph (below)
 dee/labels              list
 dee/comments            list; elements have system-minted ids
 dee/comments/43s        one comment
+dee/comments/(by=claude_64e3)   one session's comments: a selector filters any step
 dee/blocks              list of ticket ids
 dee/parent              scalar ticket id
 dee/claim               scalar, derived, not settable
@@ -118,6 +119,10 @@ rm    path...         delete a node: a ticket, a comment, a label, a dep.
 Global on every write: `--dry-run` prints the same diff the write would echo, and
 performs nothing. `[LAW:effects-at-boundaries]`: a write computes a description of
 its change and hands it to the edge; dry-run is the edge declining to perform it.
+Also on every write: `--reason "…"`, carried on every event the write mints and
+printed in `get x/history` beside the change, so the why travels with the what.
+On `get`: `--sort <path>` orders the matches by a scalar field, `--desc` reverses,
+`--limit N` keeps the first N; without them matches print in backlog order.
 
 `set` on a list replaces the list. `add` appends; a list value appends each element.
 The two are the only list operations, and `set` echoes every element it removed, so a
@@ -133,8 +138,9 @@ the system mints the id and echoes `+ $/comments/43s`. The question "how do I ad
 specific id" does not arise because it is not expressible.
 
 `rm` takes any node. Comment removal is `rm dee/comments/43s`; ticket deletion is
-`rm dee`, a reversible tombstone; `rm dee --purge` rewrites it out of the history.
-One deletion verb, every kind of node.
+`rm dee`, a reversible tombstone that is `set dee/deleted true`, and
+`set dee/deleted false` restores it; `rm dee --purge` rewrites it out of the
+history. One deletion verb, every kind of node.
 
 ### Everything else is a path
 
@@ -147,16 +153,22 @@ set dee/status impl                     phase --to impl
 set dee/status done                     done
 set dee/status dup dee/of 4ou           close --resolution duplicate --of
 set dee/status backlog                  open
+set dee/deleted false                   restore
+add /lanes/datetime/claim               start --take
 set dee/parent rin                      parent set
 add dee/blocks 4ou                      dep add
 add rin/children '{title:…}'            new
+add rin/children '{title:… children:[{title:…}]}'  new, with its own children
 add /children '{title:…}'               new, top level
 add dee/plan/reviews '{of:3 how:"…" result:"…" response:"…" verdict:fail}'  verdict, naming the revision it judged
 get dee/plan/revisions/3                history --version plan@3
 get '(stage=active updated<-6h)'        orphaned
 get /lanes                              backlog
 get /next                               next
+get rin/next                            next, over the lanes whose head is under rin
 get /integrity                          doctor
+lit2 admin export                       export
+lit2 admin import                       import
 ```
 
 Phases are not a second axis beside status. `plan`, `impl`, `review`, `merge` are
@@ -172,8 +184,10 @@ naming the revision it judged. `dee/plan` reads the latest revision with its num
 last review naming the latest revision, or nothing. Appending a revision empties the
 derived verdict until a review names it.
 
-Values: a bare word, a `"quoted string"`, `-` for stdin (once per command), `[a, b]`
-for a list, `{k:v k:v}` for an object, and `@id` for the addressed node's own id.
+Values: a bare word, a `"quoted string"` taking `\"`, `\\`, `\n` and `\t`, `-` for
+stdin (once per command; for a list path, one element per line, so a `get` of ids
+pipes in), `[a, b]` for a list, `{k:v k:v}` for an object, and `@id` for the
+addressed node's own id. A selector or glob is never a value.
 
 ### The column graph is a node
 
@@ -213,7 +227,8 @@ What follows from `set x/status <s>`, validated against the resolved column grap
 - **claim** is derived. A lane is held by the checkout that made its latest
   establishing transition, out of `initial` or into a `terminal`, on any member; a
   ticket's `claim` reads its lane's. Not settable; `rm <lane>/claim` releases it,
-  echoed, and parking a member into `initial` ends it. Expiry is `claim_ttl`, resolved
+  echoed, `add <lane>/claim` takes it, the establishing act for work left in the
+  middle of a column, and parking a member into `initial` ends it. Expiry is `claim_ttl`, resolved
   by nearest ancestor, measured from the holder's newest event on any member.
   `[LAW:no-ambient-temporal-coupling]`: the claim's lifetime is state with an owner,
   not a timer somebody remembers. Every transition echoes its derivations:
@@ -355,7 +370,9 @@ paths in three escalating forms, none of which is a new verb:
   write would echo, then `(dry run: nothing written)`.
 - `get` on one scalar prints the bare value, so it pipes. `get` on many paths or a
   glob prints `path<TAB>value`, one per line, so it can be grepped and fed back to
-  `set`. The read–edit–write round trip is the whole agent workflow and it must not
+  `set`; a value holding a newline, a tab or an edge space prints as a quoted
+  string with the escapes above and every other value bare, so a line always
+  splits on its one tab and the round trip holds for a body. The read–edit–write round trip is the whole agent workflow and it must not
   need JSON to work; `--json` exists for the cases that do, and prints one object
   keyed by path.
 - `get` prints each shared ancestor once.
@@ -402,7 +419,7 @@ sub-sub-commands. This design has four verbs, one path grammar, selectors, globs
 | `orphaned`, `backlog`, `next`, `ls` | `get '(selector)'` |
 | `doctor`, `doctor --fix` | `get /integrity`; each advisory names the write that clears it |
 | `workflows edit` | `set /columns/…` edits `.lit/workspace.toml`; `lit config commit` applies it |
-| `delete`, `restore` | `rm x`, a reversible tombstone |
+| `delete`, `restore` | `rm x`, a reversible tombstone; `set x/deleted false` |
 | `archive` | a terminal column: `set x/status obsolete x/reason "…"` |
 | `purge` | `rm x --purge` |
 | `update --lane` | lane membership; `x/lane` is derived |

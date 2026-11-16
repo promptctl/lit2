@@ -74,7 +74,8 @@ ever, because each of those makes the things around it expensive to replace.
 **work**
 - ▶ columns in the workspace file; one enforcer on the write reading
   requirement lists and the writer's capabilities; `stage`, `rollup`,
-  `held` in tick; labels declared in the workspace file and applied by people, none computed; `plan` and `pr` as reviewables, their
+  `held` in tick; labels declared in the workspace file, applied by people or
+  computed by tick from a `where` selector; `plan` and `pr` as reviewables, their
   revisions and reviews as lists on paths; the checklist on the leaf, its
   final state kept
 - a status enum in code with a switch per transition; permission checks
@@ -207,10 +208,11 @@ and the depth corpus. Scenarios 10, 12, 13, 16.
 **Slice 8, the surface in full.** Selectors with every atom and
 `parent/`; globs; list diffs on `set`; `--json` keyed by path. Scenario 9.
 
-End game, from stories that will already exist and nothing new: a
-`(stage=active updated<-6h)` view as a saved selector in the workspace
-file; a handler on `wrote */status` that files a follow-up; a CI principal
-with write verbs and no tier keys.
+End game, from stories that will already exist and nothing new: `orphaned`
+as a label with a `where` selector in the default profile; a handler on
+`wrote */status` that files a follow-up; a CI principal with write verbs and
+no tier keys; `admin export` and `admin import` of the whole store as one
+versioned document.
 
 ## The backlog
 
