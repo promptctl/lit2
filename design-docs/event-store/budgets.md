@@ -1,23 +1,23 @@
 # Event store: budgets and baselines
 
-Status: baselines measured 2026-08-25; targets set by owner directive; scale
-projections await the harness. This file is the single home for every
-**measured baseline and derived budget figure** in the event-store design —
-prose in charter.md/design.md cites those rather than restating them. The two
-governing directives are **charter.md hard constraint 3's** — the figures
-live there, and this file only turns them into measurable rows. A budget
-change is an owner decision recorded here, not a drift.
+Status: baselines measured 2026-08-25 on the lit v1 fleet; targets set by
+owner directive; scale projections await the harness. This file is the single
+home for every **measured baseline and derived budget figure** in the
+event-store design — prose in charter.md/design.md cites those rather than
+restating them. The governing directive is **charter.md hard constraint 3** —
+the figures live there, and this file only turns them into measurable rows. A
+budget change is an owner decision recorded here, not a drift.
 
-## Measured baselines (2026-08-25, this machine)
+## Measured baselines (the lit v1 fleet, 2026-08-25, the owner's machine)
+
+The v1 fleet is the scale lit2 is sized against; "10x" means ten times these.
 
 | Measurement | Value | Provenance |
 |---|---|---|
 | lit stores under ~/code | 52 unique store paths (57 pre-dedup; owner counts ~30 projects) | walk of `git-common-dir/links/dolt`, deduplicated by resolved real path |
-| Aggregate Dolt store disk | ~0.9 GB (901 MB deduplicated; the naive 57-dir sum reads 1.1 GB) | `du -sm` over the 52 unique real paths |
+| Aggregate store disk | ~0.9 GB (901 MB deduplicated; the naive 57-dir sum reads 1.1 GB) | `du -sm` over the 52 unique real paths |
 | Largest single store | 190 MB (links-issue-tracker) | `du -sh` |
-| `lit backlog` wall time, pre-#414 binary | 10.9 s (includes inline receive fetch) | timed in links-issue-tracker |
-| `lit backlog` wall time, post-#414 | ~0.2 s | PR #414's measurement; re-confirm in harness |
-| Active backlog rows (this repo) | ~123 | `lit backlog \| wc -l` |
+| Active backlog rows (links-issue-tracker) | ~123 | `lit backlog \| wc -l` |
 | Total tickets / total mutations per store | **unmeasured** — harness's first job | — |
 | Events per week of agent churn | **unmeasured** — harness's first job | — |
 
@@ -66,27 +66,22 @@ store — compaction is one — but no budget here depends on one running.
 
 | Quantity | Budget | Notes |
 |---|---|---|
-| Event store disk per store at 10x history | ≤ 1/10 of today's Dolt store at 1x (i.e. ≤ ~19 MB where Dolt spends 190 MB) | hypothesis to verify in S1; if missed, it is a design problem to solve before S2, not a note |
+| Event store disk per store at 10x history | ≤ ~19 MB: one tenth of what v1's largest store spent at 1x | a hypothesis the harness verifies first; a miss is a design problem to solve, not a note |
 | Aggregate lit disk per machine at 10x both axes | ≤ the measured aggregate in the baselines table | checked against the breadth fleet |
-| Change to any git operation the developer runs in the code repo (`git status`, `git fetch`, `git gc`, `git log --all`, …): behavior, output, or latency | none: indistinguishable from a control clone without lit | charter #10 |
+| Change to any git operation the developer runs in the code repo (`git status`, `git fetch`, `git gc`, `git log --all`, …): behavior, output, or latency | none: indistinguishable from a control clone without lit | charter #9 |
 | Dead-checkout writer refs remaining after maintenance | 0 (refs present = live checkouts + unswept inbox refs) | countable predicate; dead-ref growth is a hygiene bug the harness asserts away |
 
 ## Harness contract
 
-The load harness is the migration's instrument, not an afterthought:
+The load harness is the design's instrument, not an afterthought:
 
 - **Measures first.** Its first run produces the unmeasured baseline rows
-  above from the real fleet before any synthetic scaling.
-- **Replays reality.** Both corpus components are built from real-store
-  replays per the corpus definition above — never from uniform random
+  above from the real v1 fleet before any synthetic scaling.
+- **Replays reality.** Both corpus components are built from replays of real
+  v1 stores per the corpus definition above — never from uniform random
   events.
-- **Gates the migration.** The gate condition is **owned by design
-  §migration** (S1 row) and its wording governs: the oracle diff empty over
-  sustained real use, and budgets passing at 10x — where "budgets passing"
-  means every row of the two budget tables above green (the baselines table
-  is descriptive input, not a gate). A red row stops the flip; the fix
-  happens while Dolt is still authoritative and stopping is free.
-- **Outlives the migration.** The per-command budgets become regression
-  checks in CI once S4 lands, so the charter #3 directive is enforced by the
-  build, not by memory (the testperf epic's runtime-budget gate is the
-  pattern).
+- **Gates releases.** "Budgets passing" means every row of the two budget
+  tables above green (the baselines table is descriptive input, not a gate).
+  A red row stops the release until the design meets it.
+- **Runs in CI.** The per-command budgets are regression checks in CI, so
+  the charter #3 directive is enforced by the build, not by memory.

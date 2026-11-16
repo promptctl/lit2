@@ -1,13 +1,13 @@
 # Workspace schema: one declared configuration for levels, fields, columns, link types and templates
 
-Status: draft, rewritten 2026-11-05 for lit v2 from the 2026-08-27 draft and
-amended 2026-11-11 for configured levels. The hierarchy is the model stated
-below; fields are owned by
-[custom-fields.md](../custom-fields.md), columns and their transitions by
+Status: draft, rewritten 2026-11-05 for lit v2 from the 2026-08-27 draft,
+amended 2026-11-11 for configured levels and 2026-11-16 to take in the fields
+design. The hierarchy, the fields, the link types and the templates are
+stated below; columns and their transitions are
 [columns-and-phases.md](../columns-and-phases.md),
 [custom-columns.md](../custom-columns.md) and
-[transition-requirements.md](../transition-requirements.md), and the schema's
-storage by [workspace-configuration.md](../workspace-configuration.md).
+[transition-requirements.md](../transition-requirements.md); how a version of
+the file comes into force is [architecture.md](../architecture.md) §3.15.
 
 ## The shape in one paragraph
 
@@ -33,7 +33,7 @@ node edits the working-tree draft.
 |---|---|---|
 | issue type, work item type | a hierarchy level: one to five, roles fixed in code, names in configuration | this document |
 | issue type hierarchy | the levels and exact containment | this document |
-| field, field configuration | a field declared per level with a kind | [custom-fields.md](../custom-fields.md) |
+| field, field configuration | a field declared per level with a kind | this document |
 | required field | an entry or exit requirement on a column that names the field | [transition-requirements.md](../transition-requirements.md) |
 | status, status category | a column and its stage; phase, column and workflow state are one concept | [columns-and-phases.md](../columns-and-phases.md), [custom-columns.md](../custom-columns.md) |
 | workflow (statuses and transitions), conditions and validators | columns with entry and exit requirements | [transition-requirements.md](../transition-requirements.md) |
@@ -51,7 +51,7 @@ container, the levels' names, the link types and the templates.
 /levels/1                 name:story        fields:{…}   template:{…}
 /levels/2                 name:feature      home:unfiled     fields:{…}   template:{…}
 /levels/3                 name:epic         home:unassigned  fields:{…}   template:{…}
-/levels/<n>/fields/<f>    kind, parameters, required         custom-fields.md
+/levels/<n>/fields/<f>    kind, parameters                   this document
 /levels/<n>/template      defaults applied to a new item     this document
 /links/blocks             kind:dependency   between:[[1,1],[2,2]]
 /links/relates            kind:relates      between:[[1,1],[1,2],…,[3,3]]
@@ -95,13 +95,62 @@ edit like any other.
 
 ## Fields
 
-A field is declared per level with a kind and the kind's parameters; values
-cross one parse boundary and are stored as the canonical encoding. All of it,
-including what the parse refuses, is [custom-fields.md](../custom-fields.md).
-Whether a field is required, and before which transition, is a requirement on
-a column ([transition-requirements.md](../transition-requirements.md)), not a
-flag on the field. The template below may name any field
-that document declares on the level.
+A ticket's fields are the field table's rows: the built-in fields the engine
+exposes and the fields the workspace file declares per level. The table gives
+each field its type, whether it is settable or derived, what `set` accepts,
+its history and its `--help` line, so a field cannot be written without being
+recorded, and a field not in the table does not exist.
+
+A field is declared on a level, under that level's `fields` table:
+
+```toml
+[levels.2.fields.target_release]
+kind = "pattern"
+pattern = '^\d+\.\d+$'
+
+[levels.1.fields.points]
+kind = "enum"
+values = ["1", "2", "3", "5", "8"]
+```
+
+A field has a name, a kind, and the kind's parameters. The kinds are five:
+`text`, `number`, `date`, `enum` with its `values`, `pattern` with its
+regular expression. A field declared on level 2 exists on epics and not on
+tickets; a name is unique within a level, and the same name on two levels is
+two fields. A built-in field exists on every level with its built-in kind and
+cannot be redeclared with another. Prose-shaped custom fields are not
+offered: `body` and `prompt` are the prose fields, and every prose field is an
+envelope ([architecture.md](../architecture.md) §3.19). Whether a field is
+required, and before which transition, is a requirement on a column
+([transition-requirements.md](../transition-requirements.md)), never a flag on
+the field, so required never means required to be created.
+
+The parse is one boundary. Raw text crosses it at `set` and `add` and comes
+back as a typed value or a refusal naming the field, the kind and the
+offending input; the store persists only what passed, and nothing downstream
+re-checks `[LAW:parse-dont-validate]`. The definitions the parse reads are
+the active version, so every checkout parses, renders and judges a value with
+the same definitions. The value recorded is the canonical encoding of the
+parsed value: a number as its decimal text, a date as `YYYY-MM-DD`, an enum
+member and a pattern match as given. A field set is an event and the fold
+holds the current value; `get x/history` shows it under the field's declared
+name, `points: - → 5`, as it shows `priority: normal → urgent`.
+
+`set x/points 5` writes a declared field; a name not declared on the item's
+level is refused, listing the names that are. `get x` prints every declared
+field that has a value, one path per line; `get x/points` returns the value
+bare, so the round trip into `set` works for custom names as for built-in
+ones; a selector reads a custom field like any other, `(points=8)`; bulk
+filing takes the fields as keys of each item. The template below may name any
+field declared on the level.
+
+Declarations change with the file. Removing a field does not delete its
+values: they stay in the fold and `get x` prints them marked undeclared, so
+nothing a person typed vanishes because a definition changed
+`[LAW:nothing-unseen]`. Changing a kind leaves existing values as they are; a
+value that no longer parses under the new kind is listed on `/integrity` with
+the item, the field and the value, and is never rewritten. Both are
+advisories to a person, not repairs.
 
 ## Columns and transitions
 
@@ -145,9 +194,8 @@ wants cross-level dependencies writes the pair into `between`.
 
 **Removing a link type keeps its links.** `rm /links/<name>` refuses new links
 of that name; existing ones stay, `get` prints them under the name marked
-undeclared, and `/integrity` counts them, the stance
-[custom-fields.md](../custom-fields.md) takes for a removed field
-`[LAW:nothing-unseen]`.
+undeclared, and `/integrity` counts them, the stance Fields above takes for a
+removed field `[LAW:nothing-unseen]`.
 
 ## Templates
 
@@ -173,9 +221,9 @@ reader sees after an item lives on the column nodes. The 2026-08-27 draft's
 per-type `show:` references are gone.
 
 The default profile ships every level's template empty. A required field that is
-empty is visibly missing and blocks the pull
-([custom-fields.md](../custom-fields.md)); a skeleton reads as filled and
-defeats that signal.
+empty is visibly missing and holds the ticket at the initial column's exit
+([transition-requirements.md](../transition-requirements.md)); a skeleton
+reads as filled and defeats that signal.
 
 ## Validating the schema
 
@@ -199,8 +247,8 @@ downstream re-checks a name, a pair or a kind.
 with a home name. Link types: a kind from the two, a non-empty `between`
 whose entries name declared levels, names unique. Templates:
 every key a field declared on that level, every value parsing under the field's
-kind. What a field declaration must satisfy is
-[custom-fields.md](../custom-fields.md); what a column and a requirement must
+kind. Fields: a kind from the five with its parameters, names unique within
+the level, no built-in name redeclared. What a column and a requirement must
 satisfy is [columns-and-phases.md](../columns-and-phases.md) and
 [transition-requirements.md](../transition-requirements.md).
 
@@ -231,8 +279,7 @@ home = "unfiled"
 name = "epic"
 home = "unassigned"
 
-# [levels.<n>.fields.<name>]  custom-fields.md: the built-in fields and
-#                             which are required on which level
+# [levels.<n>.fields.<name>]  Fields above; the default profile declares none
 
 [links.blocks]
 kind = "dependency"

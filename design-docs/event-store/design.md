@@ -5,22 +5,14 @@ live in [budgets.md](budgets.md) and prose here cites them without restating
 them. Written 2026-08-25. Sections marked **OPEN** are decisions a later
 session must close; everything else is a position this draft commits to.
 
-Every system section carries a status line: `destination` (designed, not shipped),
-`built (unreleased)` (merged to `master`, carried by no tag yet),
-`built (vX.Y.Z)` (describes shipped reality as of that release), or
-`superseded → §anchor`. A version appears here only once a tag actually carries
-it: naming the release a state is *expected* to ship in makes this a second map
-of a number [`CHANGELOG.md`](../../CHANGELOG.md) and the tags already own, and
-it is wrong the moment the release is cut as a different version.
-`grep 'status: destination'` lists the unbuilt frontier. Flipping a section's
-status is part of closing the work that ships it, not a separate act of
-documentation.
-
-A section that describes several states — §migration is the only one — carries
-its status per state in its own table, and keeps the section-level line at
-`destination` until the last of them is built. The frontier grep is the reason:
-a section holding four unshipped states must appear in it, and one holding a
-shipped state must still say so somewhere a reader will look.
+Every system section carries a status line: `destination` (designed, not
+shipped), `built (vX.Y.Z)` (describes shipped reality as of that release), or
+`superseded → §anchor`. A version appears here only once a tag actually
+carries it: naming the release a state is *expected* to ship in makes this a
+second map of a number the tags already own, and it is wrong the moment the
+release is cut as a different version. `grep 'status: destination'` lists the
+unbuilt frontier. Flipping a section's status is part of closing the work that
+ships it, not a separate act of documentation.
 
 ## The shape in one paragraph
 
@@ -33,7 +25,7 @@ disposably, and identical on every machine that holds the same events. Sync is
 remote — appending to a ref only you write contends with nothing, so
 concurrency has nothing to manage. Remote bug-filing is the same write path
 executed from a machine without a clone: mint events, push them to a fresh
-ref. The apparatus the current store needs to manage shared mutable state —
+ref. The apparatus lit v1's store needed to manage shared mutable state —
 one-writer engines, flock choreography, field-aware reconcile, inline receive
 — has nothing to be about and does not exist here.
 
@@ -95,23 +87,18 @@ first without a schema change.
 as read. It is data, not order (`INV:wall-time-is-data`). Durations read it:
 how long a ticket has been in progress, how long ago it was last touched,
 whether a claim has outlived `claim_ttl`. Order never reads it. Which
-event superseded which is the total order's question alone: every ordering the
-current store takes from stamps, a claim's latest establishing event and a
-ticket's phase among them, comes from the total order once the fold owns it.
-When a question asks *when*, such as a claim's last refresh or a ticket's last
-touch, its answer is the largest `recorded-at` among the events that qualify.
-The total order cannot answer it, because between concurrent events it is a
-tiebreak, not a sequence in time: a writer that worked offline through many
-events can rank a three-day-old touch after one made today. Backfilled events
-keep the times the current store stamped, which sit past their writer's clock
-wherever it carried a lane's history forward; while such a time runs ahead of
-real time, its events read as fresh and its writer draws the advisory below.
+event superseded which is the total order's question alone, a claim's latest
+establishing event and a ticket's column among them. When a question asks
+*when*, such as a claim's last refresh or a ticket's last touch, its answer is
+the largest `recorded-at` among the events that qualify. The total order
+cannot answer it, because between concurrent events it is a tiebreak, not a
+sequence in time: a writer that worked offline through many events can rank a
+three-day-old touch after one made today.
 
-The current store stamps each write just past its lane's history, because
-there stamp order is the order. The total order removes that reason, so a
-writer does not carry folded times forward. If it did, one fast clock would
-hand its future to every writer that folded its events, and every claim they
-refreshed would read as fresh until real time caught up.
+A writer's `recorded-at` is its own clock reading, never a time it folded from
+another writer carried forward. If it were, one fast clock would hand its
+future to every writer that folded its events, and every claim they refreshed
+would read as fresh until real time caught up.
 
 Skew still reaches every duration and can make one negative. Claim expiry
 is a duration that decides who holds a lane, measured from the holder's newest
@@ -151,10 +138,15 @@ the access-control design's "required lit redesigns" §1 owns the id *policy*
 
 **Schema versioning.** Events are immortal, so every shape ever shipped stays
 readable forever. Readers hold a chain of pure upcasters (v1→v2→…) applied at
-fold time; a schema bump changes no bytes on disk. Know what an
-upcaster is before writing one: a frozen historical artifact, kept and tested
-forever — the same class of object as `schema_reconcile.go`, whose deletion
-once bricked every pre-v1 workspace (the P000 incident). The temptation will
+fold time; a schema bump changes no bytes on disk. A binary built from a
+working tree mints no event at a schema version no published release carries,
+whatever the command or flag, so a remote never holds events only a dev build
+can read: raising the schema a remote holds is a release's act, and
+`min-reader-version` below is how a workspace then gates writers too old to
+read it. Know what an upcaster is before writing one: a frozen historical
+artifact, kept and tested forever — the same class of object as lit v1's
+`schema_reconcile.go`, whose deletion once bricked every pre-v1 workspace (the
+P000 incident). The temptation will
 arrive as hygiene: *"this upcaster handles a version nothing produces anymore
 — dead code."* It is not dead; its producers are merely finished. Somewhere a
 store still holds their events, and deleting the upcaster deletes that store's
@@ -271,7 +263,13 @@ write, whose sync durably restores the ref. Two survivors racing to sweep the
 same corpse is harmless: sweep events are idempotent facts the fold
 deduplicates, and each CAS delete has at most one winner — the loser no-ops.
 lit may not change the behavior, output, or speed of any git operation the
-developer runs (charter #10); the budgets file carries the check.
+developer runs (charter #9); the budgets file carries the check. A developer's
+clone and fetch ask for `refs/heads/*` and `refs/tags/*`, so lit's refs and
+the objects behind them are never transferred; under protocol v2 the
+advertisement is filtered by the prefixes asked for, so they are not listed
+either, while a protocol v0 client is sent every ref on every fetch and pays in
+proportion to the ref count, which the sweep keeps at live checkouts plus
+unswept inbox refs.
 
 **Remote filing** is the ordinary write path from a storeless machine: mint
 events, seal them into one segment, publish a commit holding it to a fresh
@@ -400,13 +398,11 @@ status: destination
 mirrors and receive fetches run in background processes; a command reads and
 writes local objects only. The temptation is always modest: *"one quick fetch
 inline here — it's fast and the data's fresher."* That exact reasoning, made
-policy, is how `lit backlog` came to overshoot the per-command directive by an
-order of magnitude under the current store (budgets.md's pre-#414 baseline
-row; fixed only by PR #414 after the fact). The current architecture had an
-excuse: embedded Dolt permits one read-write engine, so background sync would
-break foreground commands, and inline was the least-bad seat for the fetch.
-This design removes the excuse — appends and folds cannot conflict with a
-background fetch — so nothing earns a seat on the foreground path again.
+policy, is how lit v1's `backlog` came to overshoot the per-command directive
+by an order of magnitude, and v1 had an excuse: its embedded store permitted
+one read-write engine, so a background sync would have broken foreground
+commands. Appends and folds cannot conflict with a background fetch, so
+nothing earns a seat on the foreground path.
 
 **Out:** a write schedules a detached `lit2 admin sync`, which seals this
 checkout's log into segments and publishes its one commit, replacing its ref.
@@ -507,120 +503,6 @@ absence is not a smaller system but a fleet-wide schema migration standing
 between the system and its own roadmap. The slots ship inert; the features
 wait their turn.
 
-## §migration — five states, four gates
-status: destination
-
-Decisions of 2026-10-28 are recorded in this section: the read-source rule,
-event-only facts, the shortened S1 proof period, retirement by no-op, and the
-freeze on Dolt-shaped additions.
-
-The store advances through five architectural states. Each gate is a
-condition, not a date; a state whose gate hasn't passed is where the system
-rests. The strangler-fig discipline: the Dolt store is the oracle until the
-gates prove the fold against it, on real fleet data, at 10x.
-
-| State | The system is | Gate to advance | Status |
-|---|---|---|---|
-| S0 seam | CLI depends on a storage interface; Dolt implements it, and a second engine proves it is one | interface carved; behavior unchanged | built (v0.9.0) |
-| S1 shadow | every mutation dual-writes; differential oracle diffs fold vs Dolt after each command | oracle diff empty over the proof period below; budgets pass at 10x | destination |
-| S2 read-flip | reads serve from the fold behind a flag; Dolt still authoritative for writes | flag default-on with no regressions; oracle still clean; budgets re-green at 10x | destination |
-| S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet; budgets re-green at 10x | destination |
-| S4 exit | Dolt, the vendored driver, reconcile, engine-serialization, mirror-flock machinery are **deleted**; the oracle retires with Dolt | deletions merged; budgets green as CI regression checks; docs' statuses flipped | destination |
-
-This table's Status column is load-bearing beyond this document: README.md and
-docs/architecture.md carry user-facing claims that Dolt is lit's storage —
-true today, falsified at S3 — and `internal/docsclaims` registers each one
-against this table. Flipping a state's status fails that gate test until those
-docs are rewritten, so the doc-update duty rides the same flip that closes the
-shipping work.
-
-S0 shipped as four things, and the shape matters to every state after it.
-`internal/storage` is the contract, stated in the model's vocabulary with no
-engine in any signature. Beside it sit seven **capabilities** — sync,
-reconcile, checkpoints, repair, schema migration, import, and raw test access —
-each an interface an engine may decline, asked for by a discovery call that
-returns the interface or a typed refusal naming the engine. The split rule is
-that two operations share a capability only when no engine could plausibly
-offer one without the other, which is why reconcile is not part of sync: this
-design's §sync says arrival needs no merge, so the event store will offer sync
-and decline reconcile, and it must be able to say so rather than stub a
-reconciliation it did not perform. What each state after S0 attaches to is
-therefore specific: S1's dual-write is a decorator installed at the engine
-factory, the one place a store is opened; the oracle diffs through the
-contract's whole-state export, which is core rather than a capability precisely
-so that two engines are comparable; and S4 deletes the capabilities the event
-store never offered.
-
-The **conformance suite** is what makes the contract a boundary rather than a
-description of Dolt. An interface pins shapes, and shapes are not behavior; the
-suite is a set of statements about behavior, parameterized over "give me a
-fresh engine," and an engine that satisfies the interface but fails the suite
-does not implement the contract. Both engines run it. Its second job starts at
-S1: the suite is where a behavior the two engines disagree about gets settled
-in writing, before the oracle meets the disagreement and reports it as
-divergence.
-
-Two such disagreements were settled at S0, and both are settled AGAINST the
-better answer on purpose, because an engine that is right where the other is
-arbitrary still reads as divergence. A listing's order ends in the issue id as
-its last key, always, so no tie is left to an engine's incidental row order.
-History is ordered by creation time and then by event id — not a happens-before
-claim, since ids are random and a coarse clock ties routinely, but a rule both
-engines can obey identically. Ordering that genuinely carries happens-before
-arrives with §events' Lamport positions, which supersedes this rule for both
-engines at once rather than refining it.
-
-S1 is also where history backfills: the existing backlog replays into events
-via export, with a provenance marker so pre-migration history is attributed
-honestly rather than re-authored. A ticket purged before the backfill has no
-rows in the export to replay, and the export's purge records backfill as purge
-events, so a store that still held the ticket when it backfilled drops it as
-the record arrives, the same as after the switch (§store).
-
-Gate scope, stated once: the budgets gate binds from S1 onward — at S0 no
-event store exists to measure, so S0's gate is behavioral identity alone.
-
-The oracle's comparison ends at the write flip: once S3 flips writes, Dolt
-receives none, so there is nothing left to diff — S2's gate is deliberately
-the last to carry an oracle clause, and S3→S4 is judged on rollback-quiet
-plus budgets alone.
-
-The dangerous state is the comfortable one. S1–S2 *work* — everything green,
-both stores humming — and the temptation will be to live there: *"the shadow's
-been clean for weeks; flipping is risk with no feature."* A dual-truth store
-is not a conservative resting point; it is two systems' carrying cost plus a
-divergence risk neither system has alone, and every week in it teaches new
-code to straddle both. The gates are the pace: pass a gate, advance; fail a
-gate, fix what failed. Parking is the one move the charter forbids, and S4's
-deletions are part of the campaign's definition of done, not a someday.
-
-**One authoritative read source at every moment: Dolt until the read flip,
-the fold after.** There are never two read paths live at once. Serving
-event-only reads from the fold during S1 while Dolt serves everything else is
-rejected: it is the straddling the previous paragraph warns against, arriving
-early and by choice. The priority is getting to S2 quickly, so S1's proof
-period is shortened to what we would trust behind a flag with Dolt still
-owning writes and the oracle still running. The proof is shortened, not
-skipped.
-
-**Event-only facts, from S2 onward.** Event-only data shapes are allowed, with
-no requirement to backport them to Dolt. Once reads come from the fold, any new
-fact is an event kind plus a fold rule: no Dolt table, no migration. The config
-stream (§security-and-config) already works this way; it is the rule, not an
-exception. Because the fold must be readable first, this starts at S2, not S1.
-Schema-bearing features wait for S2.
-
-**Nothing Dolt-shaped is added before the flip, and nothing slated for
-redesign is grown.** plan_reviews is the first case: findings, reasons and the
-owner override are events, not columns.
-
-**Features retire by no-op, never by dropping the table.** A retired command
-refuses and names its replacement; it never exits zero having done nothing. One
-code-side registry marks retired collections. Sync and reconcile keep carrying
-them so older lits don't break; reads, the oracle and the backfill ignore
-them. Purge still clears them. Retired history ends at S4 unless a feature
-explicitly maps its old rows into events.
-
 ## Rejected alternatives
 
 Recorded so they are not re-proposed from scratch; each was weighed in the
@@ -630,9 +512,9 @@ Recorded so they are not re-proposed from scratch; each was weighed in the
   push): safe but serializes all writers through retry contention, keeps a
   merge/replay step alive, and re-imports the remote's availability into the
   write path. Per-writer refs need no winner at all.
-- **In-place remote mutation of the Dolt store**: requires partial chunk
-  fetch the git transport can't promise, and a full lit+Dolt peer wherever a
-  bug is filed. The inbox ref subsumes the use case.
+- **Mutating the remote's store in place to file from a storeless machine**:
+  requires a partial fetch the git transport can't promise, and a full lit
+  peer wherever a bug is filed. The inbox ref subsumes the use case.
 - **Existence-hiding visibility** (per-ticket secrecy of *presence*): breaks
   rank, claims, and epic derivation wholesale; the access-control design's
   visible-skeleton rule is adopted unchanged.
@@ -651,22 +533,3 @@ Recorded so they are not re-proposed from scratch; each was weighed in the
 2. Snapshot sharing: purely local, or a shared snapshot ref to accelerate
    adoption — and what trust that implies, given that adoption verifies the
    full history (§sync).
-3. Chunked read flipping (§migration), for whoever pulls the read-flip work
-   to investigate. Not decided. The idea: S0 shipped `internal/storage` as a
-   contract and the read flip routes reads through it to the fold; instead of
-   one flag that flips every read, group the contract's read methods into four
-   or five coarse chunks (roughly: issues and fields; labels, relations and
-   parents; comments and history; rank; config), each with its own flag. A
-   chunk flips when its reads route to the fold; the oracle keeps comparing
-   every chunk against Dolt until S3; Dolt still owns writes, so a bad flip is
-   a display bug with a one-flag rollback. It would let simple facts like
-   labels and comments flip early while rank stays on Dolt until proven, and
-   event-only features would wait for their own chunk rather than the whole
-   fold. It costs two read sources live during the chunked period, the
-   straddling §migration warns against; it only works if chunks are coarse and
-   the period short, and a command spanning two chunks (`lit show` printing
-   labels from one and history from another) forces those chunks to flip
-   together. Unverified: whether the methods in
-   `internal/storage/contract.go` partition cleanly, or whether reads cross
-   boundaries (a listing filtered by label and ordered by rank, say). If they
-   don't partition, it's one flip.

@@ -374,6 +374,19 @@ drift apart whenever one is edited or the other applied; `config status`
 reports the drift, and whether the active blob is in HEAD's history, and the
 board carries one line for it. No other command mentions it.
 
+What belongs in the file is decided by one test: a value is the workspace's
+when two machines that disagree about it cannot both be right about the
+backlog, and a person's own when they can. A level's name, which fields exist,
+a column's requirements, which labels are declared, a link type's legal pairs,
+`claim_ttl`, `min-reader-version`: each decides what a write may do or how a
+fact reads, so each is in the file and in force only once applied. How a
+machine syncs, caches and speaks is its own, and stays in that person's
+configuration; the record it produces is in the store either way. A new
+setting is classified at birth by the same test. The model is one document
+rather than one table per concern because `Parse` then has a single boundary,
+the applied version has the one blob id that `config-ref` names, and the
+person edits one file in a syntax they already know.
+
 Workflows have three layers and nothing else does: shipped in the binary, the
 person's own `$XDG_CONFIG_HOME/lit/config.toml` across every repository, and
 the project's workspace file. Nearest wins per field.

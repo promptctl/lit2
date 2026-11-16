@@ -1,8 +1,8 @@
 # Event store: the charter
 
-This document records the owner's directive for replacing lit's storage engine
-with an event-sourced store, so the design can proceed across many sessions
-without drifting from what was asked. It is the question;
+This document records the owner's directive for the event-sourced store lit
+is built on, so the design can proceed across many sessions without drifting
+from what was asked. It is the question;
 [design.md](design.md) is the answer and [budgets.md](budgets.md) is the
 numbers. Precedence: **charter over design, design over tickets, budgets.md
 over any prose that repeats its figures.** When two disagree, the higher one
@@ -12,12 +12,12 @@ wins — amend it deliberately, never by reinterpretation.
 
 Three pressures point at the same architecture.
 
-**Concurrency.** lit's unit of truth today is mutable state (Dolt table rows),
-so every concurrent writer contends for the same thing, and the cost is the
+**Concurrency.** lit v1's unit of truth was mutable state (Dolt table rows),
+so every concurrent writer contended for the same thing, and the cost was the
 machinery around that contention: one read-write engine per path, the
 mirror-pending flock choreography, field-aware reconcile with linear-history
-replay, an inline receive that holds the foreground because a background
-worker would break it. Each piece is correct; together they are the tax on
+replay, an inline receive that held the foreground because a background
+worker would break it. Each piece was correct; together they were the tax on
 choosing mutable shared state. The owner's direction: stop paying the tax —
 make writes immutable appends and derive state deterministically, so
 concurrency is opted out of by construction rather than managed by protocol.
@@ -31,9 +31,9 @@ fingerprints, tier-scoped reconcile — is friction between RBAC and *reconcile*
 and the event store removes reconcile. Building the write layer against Dolt
 first would build its hardest machinery twice.
 
-**Licensing and weight.** The Dolt dependency tree (including the vendored
-driver and its patch ledger) exits the picture. What remains must be
-permissively licensed; prior art with non-permissive licenses (git-bug,
+**Licensing and weight.** v1's Dolt dependency tree (including the vendored
+driver and its patch ledger) is not carried. What is must be permissively
+licensed; prior art with non-permissive licenses (git-bug,
 GPL-3.0) informs at the behavior level only and is never copied.
 
 ## Hard constraints
@@ -96,21 +96,11 @@ These are settled. Do not reopen them in the design.
 8. **No heartbeats, no liveness probes.** The standing owner ban applies to
    this store as to all of lit, mechanism-wide, storage and locking included
    (design-docs/work-claims.md records the ban).
-9. **The migration is a strangler fig with the old system as oracle.** The
-   current Dolt store remains authoritative while the event store shadows it;
-   every advance — from the moment an event store exists to measure, the
-   shadow state onward — is gated by [budgets.md](budgets.md) passing at 10x and, at
-   every gate up to and including the write flip, by the differential oracle
-   agreeing (after the flip Dolt no longer receives writes, so there is
-   nothing left to compare; the oracle is deleted with Dolt at exit); each
-   superseded mechanism is deleted in the same campaign that replaces it. A
-   store with two truths is a temporary state with a gate out, never a
-   resting place.
-10. **lit touches git no more than the Dolt store does.** Locally, lit keeps
-    its data in its own storage under the git common dir and adds nothing to
-    the code repo's refs or object database. On the remote, lit's data lives
-    under its own refs and nowhere else. No git operation the developer runs
-    changes in behavior, output, or speed.
+9. **lit leaves the code repository's git alone.** Locally, lit keeps its
+   data in its own storage under the git common dir and adds nothing to the
+   code repo's refs or object database. On the remote, lit's data lives under
+   its own refs and nowhere else. No git operation the developer runs changes
+   in behavior, output, or speed.
 
 ## Calibration
 
@@ -148,3 +138,7 @@ is a second thing to keep true.
   background sync process; #6 states the workspace model as a committed file
   applied by an event, the policy as events, and both versions on every event
   as provenance the fold does not read.
+- 2026-11-16: owner amendment: the strangler-fig migration constraint is
+  removed. lit2 is built fresh and never migrates lit v1's store, so the
+  oracle, the shadow states and their gates have nothing to govern. The
+  constraint on the code repository's git, formerly #10, is #9.

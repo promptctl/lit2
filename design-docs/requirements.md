@@ -2,9 +2,10 @@
 
 What lit2 must do and must not do, from what lit is for: an issue tracker
 that lives in the code repository and is worked mostly by agents. The plan
-is judged against this document. The constraints the carried charters and
-designs impose are mapped in `constraints.md`; a constraint there that no
-requirement here needs is a choice, not a requirement.
+is judged against this document. The constraints are the charters' own
+(`event-store/charter.md`, `access-control/charter.md`) and `architecture.md`
+§8; a constraint that no requirement here needs is a choice, not a
+requirement.
 
 ## 1. What lit must do
 

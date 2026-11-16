@@ -15,8 +15,6 @@ each owning its own concern in the vocabulary `architecture.md` fixes.
   the walking skeleton first.
 - `requirements.md`: what lit2 must do and must not do, stated from what lit
   is for; the plan is judged against it.
-- `constraints.md`: every constraint the charters and the event-store design
-  impose, with what each implies, buys and costs, and which are load-bearing.
 - `columns-and-phases.md`: column, phase and workflow state are one concept; the
   column is the one stored fact, labels are applied by people; rework is
   reviews on the PR's revisions inside `review`. Owns the column graph at
@@ -29,7 +27,7 @@ each owning its own concern in the vocabulary `architecture.md` fixes.
 - `guidance.md` (provisional): what lit says to an agent and when. Consolidates
   three April 2026 v1 designs, since removed.
 - `workspace-schema/design.md`: rewritten from the 2026-08-27 draft in
-  standard tracker vocabulary.
+  standard tracker vocabulary; owns levels, fields, link types and templates.
 
 ## Carried from lit v1, unedited unless noted
 
@@ -37,14 +35,13 @@ Copied from `links-issue-tracker` at commit `3f84f1d3`, which includes the
 2026-11-03 amendment to the event-store charter (rewriting history is
 first-class).
 
-- `path-addressed-cli.md` and `path-addressed-cli-examples.md` came from that
-  repo's working tree; they were never committed there. The accepted CLI
-  design; corrected in part by the v2 docs above, as its status line says.
-- `custom-fields.md` and `custom-columns.md`: corrected in part by the v2 docs
-  above, as their notes say.
+- `path-addressed-cli.md` came from that repo's working tree; it was never
+  committed there. The accepted CLI design; corrected in part by the v2 docs
+  above, as its status line says.
+- `custom-columns.md`: corrected in part by the v2 docs above, as its note
+  says.
 - `MINIMAL-LIT-SKETCH-2026-09-29.md`: provisional; the v2 feature baseline.
-- `project-intent.md`, `workspace-configuration.md`, `work-claims.md`,
-  `schema-reversibility.md`, `event-store/`, `access-control/`.
+- `project-intent.md`, `work-claims.md`, `event-store/`, `access-control/`.
 
 Not carried as files, because they exist only as ticket text in the v1 store:
 the hierarchy model (epic `promptctl-hierarchy-6cqf`; `architecture.md` §3.4

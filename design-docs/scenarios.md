@@ -332,9 +332,15 @@ and reorders, with every change visible before and after.
 4. `set lq3.9od/body - 2d80.d66/status dup 2d80.d66/of lq3.9od < merged.md`:
    the canonical body and the duplicate's close in one write.
 5. Eleven different grooming notes on eleven tickets.
+6. `get /integrity` ends the pass. It lists what the fold could not settle
+   silently, and each line names the write that clears it: a lane ranked
+   against an anchor that no longer exists, an edge to a deleted ticket.
+   Nothing on it is a repair lit2 runs.
+7. The groomer runs those writes, dry run first; `get /integrity` prints
+   none.
 
 **Relies on.** Expansion once, all or nothing, dry run first, and the echoes
-are the grooming report.
+are the grooming report; the pass ends on an empty `/integrity`.
 
 **Strain S-7.** Step 5 is eleven `add` calls because `add` takes one value.
 `set` already takes `path value` pairs; `add` taking the same pairs removes
@@ -342,8 +348,8 @@ the asymmetry and no grammar: `add a/comments "…" b/comments "…"`. The
 one-path-many-elements form stays a list value. Adopted.
 
 **Strain S-8.** Six bodies from six files in one call: `-` reads stdin once.
-The examples document notes it. Frequency in the transcripts is low and the
-one-body form is the common case. Open; a `@file` value form is the natural
+Frequency in the v1 transcripts is low and the one-body form is the common
+case. Open; a `@file` value form is the natural
 addition if it bites, and nothing in the grammar forecloses it.
 
 ## 10. Purge while others still write
@@ -441,8 +447,8 @@ from step 2 of the build order.
 **Strain S-10.** A `rank.place {above: y}` arriving after lane `y` was
 dissolved or purged. The fold needs one rule: an intent whose anchor no
 longer exists places the subject at the bottom of the order and
-`/integrity` names the intent. Deterministic, loses nothing the writer could
-have meant, and closes design.md's OPEN #2. Adopted.
+`/integrity` names the intent. Deterministic, and loses nothing the writer
+could have meant. Adopted; the event-store design's §rank states it.
 
 ## 14. A human at the terminal
 

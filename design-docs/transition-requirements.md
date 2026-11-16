@@ -46,10 +46,10 @@ rather than complete it, and a workspace that could not close a backlog ticket
 as `wontfix` until it had a description would be refusing the one write that
 makes the description unnecessary. Creation is the transition into the initial
 column and carries that column's entry requirements like any other arrival;
-the shipped default declares none, so creation is free, and
-[custom-fields.md](custom-fields.md)'s rule that required never means required
-to be created is kept by data rather than by a special case
-`[LAW:dataflow-not-control-flow]`.
+the shipped default declares none, so creation is free, and the rule that
+required never means required to be created
+([workspace-schema/design.md](workspace-schema/design.md) §Fields) is kept by
+data rather than by a special case `[LAW:dataflow-not-control-flow]`.
 
 ## What a requirement is
 
@@ -326,18 +326,16 @@ held above it:
 The readiness classifier knew six reasons to hold a ticket. Each is a
 requirement in the default above or a derivation it reads; none is engine code.
 
-- `ready.required_fields`, already moved by custom-fields.md to `required =
-  true` on a field per level, moves once more, to an exit requirement on the
-  initial column: `test = "<field>"`, `severity = "error"`. "Required means
+- `ready.required_fields` is an exit requirement on the initial column, one
+  per field: `test = "<field>"`, `severity = "error"`. "Required means
   required to be pulled" is exactly "an exit requirement on the initial
-  column", and a flag on the field was a second place that rule lived, one that
-  could not say which transition it guarded. The `required` key on a field
-  declaration goes away, and with it custom-fields.md's second check at the
-  `ready-to-pull` label write; a field a workspace wants before `merge` rather
-  than before `plan` declares it on `merge.entry`. A field declared required on
-  level 2 is the same requirement with `scope = "ancestors"`, which bites, as
-  before, on the tickets under the epic, since level 2 has no stored status to
-  transition.
+  column"; a `required` flag on the field declaration would be a second place
+  that rule lived, one that could not say which transition it guarded, so a
+  declaration carries none ([workspace-schema/design.md](workspace-schema/design.md)
+  §Fields), and a field a workspace wants before `merge` rather than before
+  `plan` declares it on `merge.entry`. A field required on level 2 is the same
+  requirement with `scope = "ancestors"`, which bites on the tickets under
+  the epic, since level 2 has no stored status to transition.
 - `needs-design` and `external` are the two `labels!=` requirements, scoped to
   ancestors. The constants are gone; a workspace that wants a third such label
   adds a line.
