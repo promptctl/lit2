@@ -101,9 +101,16 @@ same shape:
 | `rm x` | `item.delete {item}`, a reversible tombstone |
 | `rm x --purge` | a rewrite naming the item |
 
-Ids are opaque: the project prefix from the workspace file, then a hash of
-`(writer, causal-position, payload hash)`, children as `<parent>.<hash>`,
-each segment as wide as its namespace's fill needs. Two offline writers
+Ids are opaque: a hash of `(writer, causal-position, payload hash)` taken
+from the create event, children as `<parent>.<hash>`, each segment as wide
+as its namespace's fill needs. The segments are the id, `1f9.zc7`, unique
+within one store; the create event's full hash stands behind them for
+anything that ever looks across stores. The project prefix is not part of
+the id: it is a label the active version (§3.15) supplies when an id is
+rendered, `lit-bootstrap-1f9.zc7`, so changing it rewrites nothing. Parsing
+accepts the segments bare or under any prefix a version in this store's log
+has ever declared, and refuses one none has, naming it as another project's.
+Two offline writers
 cannot mint from one input, nor two commands of one checkout, which can
 share a frontier and so a position; a writer never mints a name it has
 folded, and a short id resolves by unique suffix. The total order is
@@ -113,7 +120,9 @@ one writer at one position.
 ### 3.3 Fold and tick
 
 `fold(events) → state`: items, fields, comments, labels, links,
-lanes, their order and their rank, checklists, lane holders, and every
+lanes, their order and their rank, checklists, lane holders, the revisions
+and reviews of each reviewable (§4), the applied workspace versions (§3.15),
+and every
 unresolved concurrent contradiction as a value on the thing it concerns.
 `tick(state, config, now) → view`: `held`, claim
 expiry, staleness, stage, rollup. Every read is `tick(fold(events), now)`;
@@ -298,6 +307,16 @@ had not seen it, and counts them on `/integrity` with their writer, so a lost
 comment is named to the one who wrote it. Compaction is the rewrite that
 squashes. Nothing else removes anything.
 
+A squash, wherever it runs, keeps and drops by address and nothing else. Of
+the writes to one register address in a window, the last survives at its own
+position and the rest go; adds and removes on one set address net out to the
+last or to nothing; an appended element is a new address, so every revision
+and every review survives. A window is bounded by the item's create and its
+transitions: a create is never rewritten, since ids derive from it, and a
+transition is never squashed and nothing squashes across one, so the state an
+item was in when it moved stays as the enforcer judged it. Positions are
+deleted, never renumbered.
+
 ### 3.14 Identity
 
 Every event's attribution is `(checkout, principal, agent)`. The checkout id
@@ -314,18 +333,29 @@ prints the three and the tiers this principal holds.
 The project's model is written in `.lit/workspace.toml`: the prefix,
 `min-reader-version`, levels and their fields, columns and their requirements,
 labels, checks, link types, `claim_ttl`, and per-node sections keyed by a node's
-id. A person edits it in an editor and reviews it in a pull request; git
-versions and merges it. A write such as `set /columns/backlog/exit '[…]'` edits
+id. The file in git is the intent: a person edits it in an editor, git
+versions and merges it, and the team reviews it however it reviews any change
+to the repository. A write such as `set /columns/backlog/exit '[…]'` edits
 the working-tree draft and says so in the echo; committing it is the person's
-act, like any other file. It never becomes an event.
+act, like any other file. The file itself never becomes an event.
 
-The model in force is the **active version**: the last one a person applied with
-`lit2 config commit` and recorded in the event log, or the shipped default profile
-when none has been. A draft in the working tree is not in force until it is
-committed, so a draft that does not parse stops no command. `Parse` reads one
-version's bytes into one typed schema, or refuses naming every fault with its key
-path. The default profile is `internal/assets/workspace/default.toml`, embedded in
-the binary and read by the same `Parse` as any committed version.
+The model in force is the **active version**: the last one applied with
+`lit2 config commit`. Applying is an event that carries the version's bytes
+and its git blob id and names the version it replaces, so the log is
+self-sufficient and the file is never read to learn what is in force. Apply
+names a committed blob and refuses a dirty or untracked file; a squash merge
+changes no blob id, so how the file reached its branch is immaterial. Apply
+refuses a version that does not parse, or whose column graph fails the check
+of §3.5, naming every fault with its key path, and nothing overrides that
+refusal; a later lit2 is expected to say which edit would clear each fault, or
+to make it. A draft in the working tree is not in force until it is applied,
+so a draft that does not parse stops no command. `Parse` reads one version's
+bytes into one typed schema. `lit2 admin init` writes the default profile,
+`internal/assets/workspace/default.toml`, to `.lit/workspace.toml` when no
+file exists, and applies the same bytes as version one, the first event of
+every store, so the file and the active version share one blob id from the
+start; an existing file is applied instead, and must parse. Every later event
+can rely on an active version existing.
 
 Every event carries `config-ref`, the git blob id of the active version its writer
 ran under, in the code repository's object format. It is provenance: it names the
@@ -333,7 +363,12 @@ version the enforcer judged the write under, and it resolves from the repository
 history once that version is committed. The fold reads no configuration (§3.3), so
 nothing but the id travels with the events. Two people who edit the file
 concurrently meet in a git merge, which is where people already resolve concurrent
-edits to a file.
+edits to a file. Two applies that name one parent are a conflict value on the
+workspace in the fold, resolved by an apply that names both: git merges the
+file, lit merges which version is in force. The file and the active version
+drift apart whenever one is edited or the other applied; `config status`
+reports the drift, and whether the active blob is in HEAD's history, and the
+board carries one line for it. No other command mentions it.
 
 Workflows have three layers and nothing else does: shipped in the binary, the
 person's own `$XDG_CONFIG_HOME/lit/config.toml` across every repository, and
@@ -458,8 +493,8 @@ row is that no primitive learned a new case.
 | make work wait on other work | a `blocks` link; `blockers` and `blocked_by` derive from links and lane position together |
 | interrupt for an urgency | `priority: urgent` on a ticket; `/next` serves an urgent head ranked above the held lane |
 | move work through a process | transitions along `next`; requirements on the edges; stage gives start and done |
-| review a plan before code | `plan` is a versioned text node; `add x/plan/verdicts '{pass of:<digest> laws:[…]}'` names the digest the reviewer read, `of` required, refused if the plan has moved since; `impl/entry` requires `plan/verdict=pass` |
-| send work back from review | `add x/verdicts '{fail findings:[…]}'`; the ticket stays in `review`; round derives from the count of fails; `merge/entry` requires `verdict=pass` |
+| review a plan before code | `plan` is a **reviewable**: two append-only lists, `revisions`, each carrying its content, and `reviews`, each naming the revision it judged and carrying how it was run, one line, the reviewer's result, the agent's response, and its verdict. `add x/plan/reviews '{of:3 how:"…" result:"…" response:"…" verdict:pass}'`, `of` required. `plan/verdict` is the verdict of the last review naming the latest revision; `impl/entry` requires `plan/verdict=pass` |
+| send work back from review | `pr` is the same reviewable, a revision being a head commit; `add x/pr/reviews '{of:2 … verdict:fail}'`; the ticket stays in `review`; round derives from the count of fails; `merge/entry` requires `pr/verdict=pass` |
 | close without finishing, with a reason | terminal columns `dup`, `superseded`, `obsolete`, `wontfix`, each with an `entry` requirement for `of` or `reason` |
 | park, reopen | a transition into `initial`, reachable from everywhere; the claim ends |
 | finish a container | derived: a node's stage is terminal when every child's is |
@@ -569,8 +604,8 @@ decided in the body.
 - **B. Language and git library.** Go, with go-git (Apache-2.0) in process
   for objects and refs (§6). The first budget run measures go-git's object
   walk on the depth corpus.
-- **C. `topic`.** Not a field; ids are opaque with the project prefix, and
-  an area of focus is a label (appendix).
+- **C. `topic`.** Not a field; ids are opaque, rendered under the project
+  prefix, and an area of focus is a label (appendix).
 - **D. `archived`.** Not a field; a ticket out of the flow is in a terminal
   column, one that should not exist is deleted (tombstone) or purged
   (rewrite) (appendix).
@@ -680,10 +715,11 @@ One line each, so a reader of the older document knows the position moved.
   pinned bytes.
 - event-store design §security-and-config (birth requirement 6),
   workspace-configuration.md, workflows.md decision 1: the configuration is a
-  committed file in the repository, not a stream in the store. Git supplies
-  the versioning, signing and review the config stream was to provide, and
-  events cite the active version's blob id. The access-control policy document, when
-  it comes, is read against this.
+  committed file in the repository as the intent, and the version in force is
+  the one applied into the log, by an event carrying its bytes and blob id.
+  Git supplies the editing, merging and review; the log says what is in
+  force; events cite the active version's blob id. The access-control policy
+  document, when it comes, is read against this.
 - path-addressed-cli.md: kept as written for hierarchy, lanes and rank;
   `rank` takes relative forms that are the events' own shape.
 - work-claims.md: the routing steps collapse into the walk of the lane

@@ -32,11 +32,13 @@ work and knows what to do.
 **Walk.**
 
 1. `lit2 admin init` mints the checkout id and the checkout's principal key,
-   writes the managed block into `AGENTS.md` and `CLAUDE.md`, and creates the
-   store under the common dir with zero events. There is no
-   `.lit/workspace.toml`, so the workspace reads as the default profile: three level names, ten columns,
+   writes the managed block into `AGENTS.md` and `CLAUDE.md`, writes the
+   default profile to `.lit/workspace.toml`, and creates the store under the
+   common dir with one event: that profile applied as version one, the same
+   bytes and so the same blob id as the file. The workspace reads as the
+   default profile: three level names, ten columns,
    two link types, four workflows, `claim_ttl`, and the two synthetic
-   containers.
+   containers, and the file is there to edit and review.
 2. A fresh agent reads the managed block: work is tracked by lit2, run
    `lit2`, follow what it prints.
 3. `lit2` is `get /`. The root prints its children (none), `lanes` (none),
@@ -48,7 +50,8 @@ work and knows what to do.
    empty backlog and a backlog of held lanes do not look alike.
 
 **Relies on.** From zero knowledge, two reads reach the loop. The default
-profile is data that `get /columns` prints whole. Nothing was written.
+profile is data that `get /columns` prints whole. The only event is the
+applied version, so every later event can rely on one existing.
 
 **Strain.** None.
 
@@ -243,8 +246,9 @@ how the team works.
 **Walk.**
 
 1. A edits `.lit/workspace.toml` to add `{ test = "points", severity = "error" }`
-   to `columns.backlog.exit`, tries it in the working tree, commits, opens
-   a pull request. The diff is the change.
+   to `columns.backlog.exit`, tries it in the working tree, commits, and the
+   team reviews the diff as it reviews any change. Once it is on the branch,
+   A runs `lit2 config commit`, which applies that committed blob.
 2. B, on a branch without it, runs `set b64/status plan`. B's file has no
    such requirement; the write lands, citing the blob id of B's active version.
 3. After both sync events and merge the file, the transition stands: it

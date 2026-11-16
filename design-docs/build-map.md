@@ -152,7 +152,7 @@ because everything stands on them: the log and its sealing into segments,
 the event record and codec with its signature, the principal and the policy
 as events, authorization as a fold rule and at receive, the workspace
 file's mechanics (the active version read by parse, the shipped default profile
-it falls back to, `config-ref` as the blob id of that version), the fold and its total order, the path grammar and field table, the
+applied as version one at init, `config-ref` as the blob id of that version), the fold and its total order, the path grammar and field table, the
 verb-to-intent table. Built at working minimum: the default roles with the
 enforcer judging capabilities, under the default profile's requirement lists, the default
 tier in plaintext mode with the envelope type in place, `stage` and

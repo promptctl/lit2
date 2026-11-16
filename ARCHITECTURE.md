@@ -73,7 +73,7 @@ row; the architecture test fails on one without.
 | §3.12 Moment and handler | `guidance` | moments, handlers, workflows, their three layers |
 | §3.13 Rewrite | `fold`, `store` | applied by the fold; segments re-sealed by store |
 | §3.14 Identity | `root`, `events` | the checkout id, principal and agent label read in root; attribution carried in events |
-| §3.15 The workspace file | `config`, `assets` | the one schema parse of a committed version, and the default profile it falls back to; the shipped files and their `Asset` handles in assets |
+| §3.15 The workspace file | `config`, `assets` | the one schema parse of an applied version, and the default profile init applies as version one; the shipped files and their `Asset` handles in assets |
 | §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs through git |
 | §3.17 Principal and policy | `events`, `fold` | the key, signature and suite in events; the policy as events folded |
 | §3.18 Capability | `verbs`, `fold` | the capability verdict at the one enforcer; roles from the folded policy |
