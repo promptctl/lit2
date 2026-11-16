@@ -20,10 +20,12 @@ interprets it and ships no vocabulary of its own: no level name, link type,
 column or template is a constant in code. What lit does out of the box is the
 **default profile**, a data file in the same grammar that expresses lit's
 discipline, and a workspace that wants `feature → story → task` with story
-points edits data, not code. The schema is read and edited with the four verbs
-of the [path-addressed CLI](../path-addressed-cli.md) and stored as the
-versioned document of
-[workspace-configuration.md](../workspace-configuration.md).
+points edits data, not code. The schema is the workspace file,
+`.lit/workspace.toml`, committed in the repository as the intent; the version in
+force is the one applied into the log with `lit2 config commit`
+([architecture.md](../architecture.md) §3.15). It is read with the four verbs of
+the [path-addressed CLI](../path-addressed-cli.md), and a verb write to a schema
+node edits the working-tree draft.
 
 ## In an administrator's vocabulary
 
@@ -56,9 +58,11 @@ container, the levels' names, the link types and the templates.
 (columns and transitions)  node named by columns-and-phases.md
 ```
 
-Every write to one of these nodes goes through the path parser, then the schema
-parse below, then appends a version of the whole document. Reads print paths,
-so what is read is what is typed:
+A write to one of these nodes goes through the path parser and edits the
+working-tree draft of the workspace file, saying so in the echo; the draft is in
+force once it is committed and applied, and the apply runs the schema parse
+below over the whole document. Reads print paths, so what is read is what is
+typed:
 
 ```
 get /levels                                   the hierarchy as configured
@@ -87,8 +91,7 @@ in. The tree orders nothing; order is the lane's, and rank is on lanes only
 A level is addressed by its number and its name is display, so
 `set /levels/2/name theme` renames without a migration and `(level=2)`
 selects the same items under any name. The number of levels is a schema
-write like any other, refused while an item exists at a level being
-removed.
+edit like any other.
 
 ## Fields
 
@@ -176,20 +179,19 @@ defeats that signal.
 
 ## Validating the schema
 
-**One parse, the whole document, on every schema write.** A write to any
-schema node re-parses the resulting document into one typed value, the single
-boundary [workspace-configuration.md](../workspace-configuration.md) draws, so a
-cross-reference is caught whichever node the write touched: a link pair naming
-level 4, a template key naming a field the level does not declare. A refusal
-names the path and the reason and writes nothing:
+**One parse, the whole document, at apply.** `lit2 config commit` parses the
+version it applies into one typed value, so a cross-reference is caught
+whichever key the edit touched: a link pair naming level 4, a template key
+naming a field the level does not declare. A refusal names every fault with
+its key path and applies nothing:
 
 ```
-error (reason=schema): /links/blocks/between [1,4] names no level; nothing written
+error (reason=schema): /links/blocks/between [1,4] names no level; nothing applied
 ```
 
-The parse is a pure package with no I/O, and every reader runs it, so a store
-read from outside its repository holds the same typed schema the repository
-does `[LAW:parse-dont-validate]`. Every command carries that value; nothing
+The parse is a pure package with no I/O, and every command runs it over the
+active version, so every checkout of the repository holds the same typed schema
+`[LAW:parse-dont-validate]`. Every command carries that value; nothing
 downstream re-checks a name, a pair or a kind.
 
 **What this document's parts must satisfy.** Levels: 1 to n with n at most
@@ -211,11 +213,11 @@ replays events must be deterministic
 
 ## The default profile
 
-The default profile is one TOML file in the repository, embedded in the binary,
-read by the parser above and by nothing else. A store with no configuration
-document is at version 0 and reads as this file
-([workspace-configuration.md](../workspace-configuration.md)); the first schema
-write appends version 1 holding the whole document.
+The default profile is one TOML file, `internal/assets/workspace/default.toml`,
+embedded in the binary and read by the parser above and by nothing else.
+`lit2 admin init` writes it to `.lit/workspace.toml` when no file exists and
+applies the same bytes as version one, the first event of every store; an
+existing file is applied instead.
 
 ```toml
 [levels.1]
@@ -271,15 +273,7 @@ the behavior is not.
 
 ## Decisions for the owner
 
-1. **Cross-level dependencies in the default profile.** Recommended: none;
-   `blocks` joins same-level pairs only, for the reason given under Link
-   types. The alternative admits `[1,2]` and `[2,1]` by default, and `/next`
-   then needs a rule for a ticket blocked by an epic whose status is derived.
-2. **Templates are creation templates, not rendering templates.** Recommended,
-   as written: defaults applied by `add`, with the 2026-08-27 draft's per-type
-   `show:` references dropped. The alternative, a per-level layout for `get`,
-   breaks the path-addressed CLI's rule that what is read is what is typed.
-3. **Default templates are empty.** Recommended, for the required-field signal
+1. **Default templates are empty.** Recommended, for the required-field signal
    above. The alternative ships a body skeleton on level 1, such as a
    done-when heading, and accepts that an untouched skeleton passes for a
    described ticket.

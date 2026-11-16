@@ -1,8 +1,8 @@
 # A path-addressed CLI: examples
 
-Worked examples for the design in `path-addressed-cli.md`, which is the authority on
-every command here. Nothing is implemented; the output shown is what the design says
-a terminal will print.
+Worked examples for the path grammar of `path-addressed-cli.md`, under the model
+`architecture.md` fixes, which is the authority on every command here. Nothing is
+implemented; the output shown is what the design says a terminal will print.
 
 The examples are grounded in 4,319 Claude Code sessions that ran `lit`, 24,223
 invocations in all. Where the old command was short, it sits above the new one as
@@ -15,8 +15,9 @@ design states: a selector, glob, list, or object is single-quoted.
 ### Read what a plan reviewer is told before judging
 
     was: lit quickstart review
-    $ lit get /workflow/states/plan/guidance
-    Before any code, write the plan: what changes, in which files, and how it is proven.
+    $ lit get atb
+    …
+    guidance (plan): Before any code, write the plan: what changes, in which files, and how it is proven.
     A reviewer other than the author judges it against the laws and records one review of the revision they read.
 
 ### Read the ticket under review
@@ -34,7 +35,7 @@ design states: a selector, glob, list, or object is single-quoted.
     $/plan/verdict   (none)
     $/comments/43s   [claude_7f2e…] revision 7 moves the clock behind the injected Clock port …
 
-    /workflow/states/plan/guidance  Before any code, write the plan: …
+    guidance (plan): Before any code, write the plan: …
 
 ### Read only the plan text
 
@@ -68,8 +69,8 @@ design states: a selector, glob, list, or object is single-quoted.
     flu.w0o/title    The CLI flag set is parsed once into a typed config
     flu.0m9/status   done
     flu.faz/status   impl
-    flu.03v/status   open
-    flu.0go/status   open
+    flu.03v/status   backlog
+    flu.0go/status   backlog
     flu.w0o/status   plan
 
 ### Search for earlier tickets on the same mechanism before judging novelty
@@ -211,15 +212,15 @@ I read revision 21; the author appended revision 22 while I was reviewing.
 
     $ lit get /lanes/history
     /lanes/history  rank 1
-      s4l   open
-      7ka   open
-      m3d   open
+      s4l   backlog
+      7ka   backlog
+      m3d   backlog
 
 ### Start it
 
     was: lit start orange-history-4y3.s4l
     $ lit set s4l/status plan
-    s4l/status  open → plan
+    s4l/status  backlog → plan
     ⇒ s4l/claim = this checkout
     ⇒ /lanes/history  held by this checkout
 
@@ -227,13 +228,14 @@ I read revision 21; the author appended revision 22 while I was reviewing.
 
     was: lit start brandon-menus-sjhy.ju8
     $ lit set ju8/status plan
-    ju8/status  open → plan
+    ju8/status  backlog → plan
     ⇒ ju8/claim = this checkout
 
 ### Starting a ticket behind another in its lane is refused
 
     $ lit set fw9/status plan
-    error (reason=blocked): fw9/status open → plan; fw9/blocked_by is [b64], ahead of it in /lanes/datetime; nothing written
+    error (reason=gate): fw9/status backlog → plan refused by backlog/exit; nothing written
+      block  !blockers   fw9/blockers = [b64]  (ahead of it in /lanes/datetime)
 
 ### Write the plan from stdin
 
@@ -266,28 +268,28 @@ I read revision 21; the author appended revision 22 while I was reviewing.
 ### Moving to impl with no verdict is refused
 
     $ lit set s4l/status impl
-    error (reason=gate): s4l/status plan → impl is gated by /workflow/states/plan/gate
-      plan/verdict=pass   s4l/plan/verdict = (none)
-    nothing written
+    error (reason=gate): s4l/status plan → impl refused by impl/entry; nothing written
+      block  plan/verdict=pass   s4l/plan/verdict = (none)
 
 ### Moving to impl on a failed plan is refused
 
     $ lit set atb/status impl
-    error (reason=gate): atb/status plan → impl is gated by /workflow/states/plan/gate
-      plan/verdict=pass   atb/plan/verdict = fail (of:7)
-    nothing written
+    error (reason=gate): atb/status plan → impl refused by impl/entry; nothing written
+      block  plan/verdict=pass   atb/plan/verdict = fail (of:7)
 
 ### Trying to finish a ticket whose plan was never reviewed
 
+`done` is named by `merge/next` alone, so it is entered only from `merge`.
+
     was: lit done orange-devices-bue.355
     $ lit set 355/status done
-    error (reason=not_in_next): 355/status plan → done; /workflow/states/plan/next = [impl]; nothing written
+    error (reason=not_in_next): 355/status plan → done; plan/next = [impl]; nothing written
 
-### Moving an open ticket straight to merge is refused
+### Moving a backlog ticket straight to merge is refused
 
     was: lit phase promptctl-schema-reversal-u0if.0ca --to merge
     $ lit set 0ca/status merge
-    error (reason=not_in_next): 0ca/status open → merge; /workflow/states/open/next = [plan]; nothing written
+    error (reason=not_in_next): 0ca/status backlog → merge; backlog/next = [plan]; nothing written
 
 ### Hand the branch to review
 
@@ -332,46 +334,53 @@ I read revision 21; the author appended revision 22 while I was reviewing.
     $ lit get /next
     /next   bryp   /lanes/sync-p0 1/1   top-ranked unclaimed lane
 
-### Starting a ticket whose lane another checkout holds is refused
+### Starting a ticket whose lane another checkout holds
+
+Nothing coordinates a write, so the start lands; the lane now has two holders, and
+the latest in total order is its `claim`.
 
     was: lit start links-plan-review-o3mh.avl
     $ lit set avl/status plan
-    error (reason=claimed): avl is the head of /lanes/plan-review, held by stream ufijgjuy (elsewhere) · 5m; to take it over: lit rm avl/claim; nothing written
+    avl/status  backlog → plan
+    ⇒ avl/claim = this checkout
+    ⇒ /lanes/plan-review  held by this checkout; contested: stream ufijgjuy (elsewhere) · 5m
 
-### Take the lane over: drop the claim, then start
+### Take the lane over cleanly: release the hold, then start
 
     was: lit start links-plan-review-o3mh.avl --take
-    $ lit rm avl/claim
-    - avl/claim  stream ufijgjuy (elsewhere)
-    ⇒ /lanes/plan-review  held by (none)
+    $ lit rm /lanes/plan-review/claim
+    - /lanes/plan-review/claim  stream ufijgjuy (elsewhere)
     $ lit set avl/status plan
-    avl/status  open → plan
+    avl/status  backlog → plan
     ⇒ avl/claim = this checkout
     ⇒ /lanes/plan-review  held by this checkout
 
 ### Take over a ticket another checkout left in impl
 
+A hold is established by a start or a finish. Moving `impl → review` is neither, so
+the lane stays unheld until this checkout finishes a member.
+
     was: lit start candybar-daemon-health-ajx0.co4 --take
-    $ lit rm co4/claim
-    - co4/claim  stream 8c1d02aa (elsewhere)
+    $ lit rm /lanes/daemon-health/claim
+    - /lanes/daemon-health/claim  stream 8c1d02aa (elsewhere)
     $ lit set co4/status review
     co4/status  impl → review
-    ⇒ co4/claim = this checkout
-    ⇒ /lanes/daemon-health  held by this checkout
 
 ### Check who holds a lane before deciding to take it
 
     was: lit backlog 2>&1 | grep -n -B2 -A3 -i 'bryp\|claim'
     $ lit get /lanes/plan-review
     /lanes/plan-review  rank 3
-      avl   open   stream ufijgjuy (elsewhere), claimed 5m ago
-      bjm   open
+      avl   backlog   stream ufijgjuy (elsewhere), claimed 5m ago
+      bjm   backlog
 
-### Push ticket writes at the end of the session
+### Publish ticket writes at the end of the session
+
+Every write already schedules a detached sync; running it by hand waits for it.
 
     was: lit sync push
-    $ lit admin sync push
-    pushed
+    $ lit admin sync
+    sealed 1 segment, published; fetched 2 writers, verified
 
 ## Claims
 
@@ -380,30 +389,31 @@ I read revision 21; the author appended revision 22 while I was reviewing.
     was: lit start 9u9 --take
     $ lit add 9u9/comments "Took the px1f lane from voice-di1: no process has that worktree as cwd, no tmux pane, tree clean."
     + 9u9/comments/b7a0
-    $ lit rm 9u9/claim
-    - 9u9/claim   stream voice-di1 (elsewhere) · 3h
-    ⇒ /lanes/px1f/claim = (none)
+    $ lit rm /lanes/px1f/claim
+    - /lanes/px1f/claim   stream voice-di1 (elsewhere) · 3h
     $ lit set 9u9/status review
     9u9/status  impl → review
-    ⇒ 9u9/claim = this checkout
 
 ### A claim that has expired
 
+An expired claim is no claim; it prints as none, with why.
+
     $ lit get bci/claim
-    claude_214f… (elsewhere) · since 2026-10-15T05:11Z · expired 09:11Z (claim_ttl 4h from /)
+    (none)   claude_214f… (elsewhere) held it; its newest event 2026-10-15T05:11Z is past claim_ttl 4h (from /)
     $ lit get /next
     /next   bci   /lanes/scene-load 1/2   top-ranked lane; its claim expired
 
 ### A contested lane
 
-Two checkouts each started a ticket in px1f before either saw the other.
+Two checkouts each started a ticket in px1f before either saw the other. The holder
+set has both; `claim` is the latest in total order and `contested` the rest.
 
     was: lit start 9u9   →   claimed here: … contested by stream ufijgjuy …
     $ lit get /lanes/px1f
-    /lanes/px1f  rank 2
-      9u9   impl   stream voice-di1 (elsewhere) · 3h
-      xuv   open
-      31y   open
+    /lanes/px1f  rank 2   claim stream voice-di1 (elsewhere) · 3h   contested this checkout
+      9u9   impl
+      xuv   backlog
+      31y   backlog
 
 ### What next serves when every lane is held elsewhere
 
@@ -425,16 +435,19 @@ Two checkouts each started a ticket in px1f before either saw the other.
     $ lit get /lanes/datetime hf4/lane hf4/claim
     /lanes/datetime  rank 4
       dee   impl   this checkout
-      b64   open
-      fw9   open
+      b64   backlog
+      fw9   backlog
     hf4/lane    hf4
     hf4/claim   (none)
 
 ### Who am I writing as?
 
     was: lit whoami   →   unknown command "whoami"
-    $ lit get dee/claim
-    this checkout
+    $ lit get /me
+    checkout    7f2e…
+    principal   claude_7f2e…  (contributor)
+    agent       claude-code
+    tiers       default
 
 ## Reading
 
@@ -452,7 +465,7 @@ Two checkouts each started a ticket in px1f before either saw the other.
     $/plan           revision 3
     $/plan/verdict   pass
 
-    /workflow/states/merge/guidance  Once it has merged, close it.
+    guidance (merge): Once it has merged, close it.
 
 ### Read one field
 
@@ -513,10 +526,10 @@ Two checkouts each started a ticket in px1f before either saw the other.
 
     was: lit children candybar-testing-0x6u --columns id,state,blocked,title | grep -v closed
     $ lit get '0x6u.*/status'
-    0x6u.4bt/status   open
+    0x6u.4bt/status   backlog
     0x6u.snf/status   impl
     0x6u.1ur/status   done
-    0x6u.yzt/status   open
+    0x6u.yzt/status   backlog
 
 ### Read an epic without its children's bodies
 
@@ -524,7 +537,8 @@ Two checkouts each started a ticket in px1f before either saw the other.
     $ lit get cjt
     $ = orange-alerts-cjt
     $/title      Alerts fire on threshold crossings and say what crossed
-    $/type       epic
+    $/stage      active
+    $/rollup     backlog 1 · impl 1 · done 1
     $/body       Alerts today fire on every sample above the line …
     $/children   [cjt.3ns, cjt.7pq, cjt.v2a]
     $/lanes      [/lanes/alerts]
@@ -535,7 +549,7 @@ Two checkouts each started a ticket in px1f before either saw the other.
     $ lit get 4xm
     $ = promptctl-testing-c3u.4xm
     $/title      The replay test waits on the brain's own signal, not a sleep
-    $/status     open
+    $/status     backlog
     $/parent     promptctl-testing-c3u
     $/lane       4xm
     $/body       test/replay.test.ts sleeps 2s and then asserts …
@@ -545,8 +559,8 @@ Two checkouts each started a ticket in px1f before either saw the other.
     $ lit get /lanes/datetime
     /lanes/datetime  rank 4
       dee   impl   this checkout
-      b64   open
-      fw9   open
+      b64   backlog
+      fw9   backlog
 
 ### Read several tickets in one call
 
@@ -554,7 +568,7 @@ Two checkouts each started a ticket in px1f before either saw the other.
     $ lit get 1e6 chz hqi
     $ = orange-devices-bue.1e6
     $/title    The device list shows a sweep in progress
-    $/status   open
+    $/status   backlog
     …
     $ = orange-devices-bue.chz
     …
@@ -568,7 +582,7 @@ Two checkouts each started a ticket in px1f before either saw the other.
     0yy/status       impl
     0yy/claim        stream 4f1c09e2 (elsewhere)
     0yy/updated_at   2026-10-14T23:02:51Z
-    y04/status       open
+    y04/status       backlog
     y04/claim        (none)
     y04/updated_at   2026-10-12T08:40:17Z
 
@@ -586,21 +600,21 @@ The write's echo already says it; this is the read a later session makes.
     $ lit get 2af/blocked_by
     [orange-device-sources-rec]
 
-### Read the workflow a ticket resolves to
+### Read the column graph a ticket resolves to
 
     was: lit workflows show promptctl-brain-q9s8.45d
-    $ lit get 45d/workflow
-    45d/workflow  /workflow
-      open    initial:true  next:[plan]
-      plan    next:[impl]  gate:plan/verdict=pass
-      impl    next:[review]
+    $ lit get 45d/columns
+    45d/columns  /columns
+      backlog   initial:true  next:[plan]  exit:[ready]
+      plan      next:[impl]
+      impl      next:[review]  entry:[plan/verdict=pass]
       …
 
 ### See who claimed a ticket and when
 
     was: lit history houdini-laws-etg.6op 2>&1 | tail -8
     $ lit get 6op/history
-    6op/history/1   Oct 15 05:11  claude_214f…  status open → plan
+    6op/history/1   Oct 15 05:11  claude_214f…  status backlog → plan
     6op/history/2   Oct 15 05:40  claude_214f…  plan/revisions + 1
     6op/history/3   Oct 15 09:02  claude_8e0c…  plan/reviews + c71 pass
 
@@ -629,8 +643,8 @@ The grooming pass ran one `show` per ticket and got ~270 KB back. Most of it was
     was: for id in …; do lit show $id | grep '^status:'; done
     $ lit get '*/status'
     792a.dee/status   impl
-    792a.b64/status   open
-    792a.fw9/status   open
+    792a.b64/status   backlog
+    792a.fw9/status   backlog
     rin.2ae/status    review
     rin.9u9/status    done
     …
@@ -641,7 +655,7 @@ The grooming pass ran one `show` per ticket and got ~270 KB back. Most of it was
     792a.dee/status   impl
     792a.dee/lane     datetime
     792a.b64/title    dateInZone accepts fixed offsets like +05:30
-    792a.b64/status   open
+    792a.b64/status   backlog
     792a.b64/lane     datetime
     rin.2ae/title     define and template share one namespace
     rin.2ae/status    review
@@ -653,14 +667,14 @@ The grooming pass ran one `show` per ticket and got ~270 KB back. Most of it was
     $ lit get dy46.5tv/status dy46.zi4/status dy46.8l0/status
     dy46.5tv/status   done
     dy46.zi4/status   impl
-    dy46.8l0/status   open
+    dy46.8l0/status   backlog
 
 ### Status of every child of an epic
     was: lit children candybar-testing-0x6u --columns id,state,blocked,title | grep -v closed
     $ lit get '0x6u.*/status'
     0x6u.snf/status   impl
-    0x6u.1ur/status   open
-    0x6u.4bt/status   open
+    0x6u.1ur/status   backlog
+    0x6u.4bt/status   backlog
     0x6u.yzt/status   done
     0x6u.5bi/status   dup
 
@@ -681,7 +695,7 @@ Several paths on one ticket print the ticket once, as `$`.
     $ lit get dy46.5tv/title dy46.5tv/status dy46.5tv/blocked_by dy46.5tv/body
     $ = links-scale-dy46.5tv
     $/title        Backlog reads stay under 200 ms at 10k tickets
-    $/status       open
+    $/status       backlog
     $/blocked_by   bryp
     $/body         The backlog query scans every issue_history row …
 
@@ -697,12 +711,6 @@ Several paths on one ticket print the ticket once, as `$`.
     was: lit show b2q.8ew | sed -n '/cmt-e28a7f6d/,/cmt-507e36b0/p'
     $ lit get b2q.8ew/comments/e28
     [claude_9c02…] Plan review (digest 56fa5f1faa63): fail. 1. one-source-of-truth: …
-
-### Every epic's body, to audit the epics before decomposing them
-    was: for e in $(lit ls --type epic --columns id | awk '{print $1}'); do lit show $e > /tmp/groom/epic-$e.txt; done
-    $ lit get '(type=epic)/body' > /tmp/groom/epics.txt
-    $ grep -c '' /tmp/groom/epics.txt
-    41
 
 ### Titles of the children of five epics
     was: for e in 6pj 1dh f00 5d8 b2l; do lit ls --parent 76bb.$e; done
@@ -728,7 +736,7 @@ Several paths on one ticket print the ticket once, as `$`.
 
 ### Every open ticket's body in one file, to grep
     was: for id in $(lit ls --status open,in_progress --columns id | awk '{print $1}'); do lit show $id --no-plan > /tmp/groom/t-$id.txt; done
-    $ lit get '(status=open)/body' > /tmp/groom/open-bodies.txt
+    $ lit get '(status=backlog)/body' > /tmp/groom/open-bodies.txt
     $ grep -n 'backoff' /tmp/groom/open-bodies.txt
     212:3k6u.ckq/body   … retries with exponential backoff capped at 30 s …
 
@@ -740,19 +748,20 @@ Several paths on one ticket print the ticket once, as `$`.
 
 ## Selectors
 
-### Open bugs, by title
+### Backlog tickets labelled bug, by title
+`type` is not a field; a workspace that sorts bugs from the rest declares a `bug` label.
+
     was: lit ls --status open --type bug
-    $ lit get '(status=open type=bug)/title'
+    $ lit get '(status=backlog labels=bug)/title'
     3248.kler/title   daemon.log is ~90% 'schema: unknown field' lines
     xu4.8pq/title     A connected device sweeps with an empty name
 
-### Every epic
+### Every top-level item
+The root's children are the top-level items; `type` is not a field.
+
     was: lit ls --type epic
-    $ lit get '(type=epic)/title'
-    792a/title   Unfiled
-    rin/title    Subtemplates
-    6fq5/title   Theme colours
-    …
+    $ lit get /children
+    [792a, rin, 6fq5, …]
 
 ### Children of an epic, by selector or by glob
 `(parent=rin)` and `rin.*` expand to the same ids when every child sits directly under `rin`.
@@ -770,10 +779,10 @@ Reviewers searched two or three terms before writing a ticket.
     $ lit get '(text~"powerd")/status' '(text~"sweep")/status'
     bue.6on/status   review
     bue.1e6/status   done
-    bue.chz/status   open
+    bue.chz/status   backlog
 
-### Dedupe within one type, before filing a bug
-    $ lit get '(text~"empty name" type=bug)/title'
+### Dedupe among the bugs, before filing one
+    $ lit get '(text~"empty name" labels=bug)/title'
     xu4.8pq/title   A connected device sweeps with an empty name
 
 ### Orphaned: in flight, no update in six hours
@@ -791,7 +800,7 @@ Reviewers searched two or three terms before writing a ticket.
 
 ### Tickets that have comments
     was: lit ls --query 'has:comments'
-    $ lit get '(status=open)/comments'
+    $ lit get '(status=backlog)/comments'
     3248.8ro6/comments/43s   [claude_64e3…] Plan v21 recorded …
     3248.8ro6/comments/9kq   [claude_a1f9…] Plan review (digest f76132367de4): fail. …
     bue.6on/comments/1pa     [claude_7f2e…] powerd sleeps the sweep during a call …
@@ -799,26 +808,27 @@ Reviewers searched two or three terms before writing a ticket.
 
 ### First five closed tasks with comments, in rank order
     was: lit ls --query 'status:closed type:task has:comments sort:rank:asc limit:5'
-    $ lit get '(status=done type=task)/title'
+    $ lit get '(status=done)/title'
     792a.2ku/title   dateInZone rejects a malformed offset
     792a.207/title   date accepts a Unix timestamp string
     …   (every one, in no order)
 
-### Archived tickets
+### Tickets parked out of the flow
+There is no archive; a ticket out of the flow sits in a terminal column.
+
     was: lit ls --ids hands-nativeui-02f,hands-install-dye --include-archived
-    $ lit get '(archived=true)/title'
-    voice-r7y/title       Voice: wake word
+    $ lit get '(status=obsolete)/title'
     voice-r7y.8rr/title   Wake word survives a sleep/wake cycle
 
 ### Restore an epic deleted in error
-`rm x` is `set x/deleted true`; the inverse is the inverse.
+`rm x` is a reversible tombstone; the examples write the reversal as `set x/deleted false`.
 
     was: lit restore vhid-aim-sjt
     $ lit set sjt/deleted false
     sjt/deleted  true → false
     ⇒ sjt.*/deleted  true → false  (3 children)
 
-### Every ticket in review, at every depth, in each subtree's own workflow
+### Every ticket in review, at every depth, in each subtree's own column graph
 `rin` adds an `audit` state. `(status=review)` still matches its review tickets, because a selector matches each node's resolved state.
 
     $ lit get '(status=review)/title'
@@ -828,7 +838,7 @@ Reviewers searched two or three terms before writing a ticket.
 
 ### Open tickets except epics
     was: lit ls --status open | grep -v epic
-    $ lit get '(status=open)/title'
+    $ lit get '(status=backlog)/title'
     792a/title       Unfiled
     792a.b64/title   dateInZone accepts fixed offsets like +05:30
     rin/title        Subtemplates
@@ -839,7 +849,7 @@ Reviewers searched two or three terms before writing a ticket.
     $ lit get etg.0yy/status etg.0yy/claim etg.y04/status etg.y04/claim
     etg.0yy/status   impl
     etg.0yy/claim    claude_214f… (worktree etg-0yy)
-    etg.y04/status   open
+    etg.y04/status   backlog
     etg.y04/claim    (none)
 
 ## Comments
@@ -896,7 +906,7 @@ Reviewers searched two or three terms before writing a ticket.
 ### File a bug under an epic, body from stdin
 
     was: lit new --type bug --topic devices --parent orange-devices-bue --title "A connected device sweeps with an empty name" --description-file - <<'EOF'
-    $ lit add bue/children '{title:"A connected device sweeps with an empty name" type:bug body:-}' <<'EOF'
+    $ lit add bue/children '{title:"A connected device sweeps with an empty name" body:-}' <<'EOF'
     Repro: pair a device with no name set; the sweep row renders "" …
     EOF
     + bue.k7r
@@ -904,13 +914,13 @@ Reviewers searched two or three terms before writing a ticket.
 ### File a task with a one-line body
 
     was: lit new --parent promptctl-evals-bgz --type task --topic isolation --title "The Opus verification reads what the session runs" --description "…"
-    $ lit add bgz/children '{title:"The Opus verification reads what the session runs, not what the model says it is" type:task body:"Done looks like: …"}'
+    $ lit add bgz/children '{title:"The Opus verification reads what the session runs, not what the model says it is" body:"Done looks like: …"}'
     + bgz.10
 
 ### File three children in one call
 
     was: for t in one two three; do lit new --parent $E --topic wake-word --title "ticket $t"; done
-    $ lit add i15t/children '[{title:"Wake word fires on the first syllable" type:task}, {title:"Wake word ignores the TV" type:task}, {title:"Wake word logs each miss" type:task}]'
+    $ lit add i15t/children '[{title:"Wake word fires on the first syllable"}, {title:"Wake word ignores the TV"}, {title:"Wake word logs each miss"}]'
     + i15t.r2a
     + i15t.r2b
     + i15t.r2c
@@ -920,29 +930,33 @@ Reviewers searched two or three terms before writing a ticket.
     was: lit followup --on orange-settings-7du.5uw --title "The app quit by itself twice right after the Settings window opened" --type bug
     $ lit get 5uw/parent
     orange-settings-7du
-    $ lit add 7du/children '{title:"The app quit by itself twice right after the Settings window opened" type:bug}'
+    $ lit add 7du/children '{title:"The app quit by itself twice right after the Settings window opened"}'
     + 7du.a2c
 
 ### File a top-level epic
 
     was: lit new --type epic --topic history --title "History reads come from one store"
-    $ lit add /children '{title:"History reads come from one store" type:epic}'
+    $ lit add /children '{title:"History reads come from one store"}'
     + orange-m2q
 
-### A bug filed with no epic is refused
+### A leaf filed with no parent lands in the synthetic home
+
+`add /children` with no level creates at the top; naming level 1 files a leaf, and
+it lands in the home the workspace file names for the level above it.
 
     was: lit new --type bug --topic daemon-git-identity --title "A daemon serving sessions …"
-    $ lit add /children '{title:"A daemon serving sessions commits as the wrong identity" type:bug}'
-    error (reason=invalid_value): /children: a bug lives inside an epic; add it under <epic>/children; nothing written
+    $ lit add /children '{level:1 title:"A daemon serving sessions commits as the wrong identity"}'
+    + unfiled.k4e
+    ⇒ k4e/parent = unfiled
 
 ## Bulk create
 
 ### Create an epic's tickets from one list on stdin
     was: lit import --path /tmp/w0o-groom/tickets.yaml
     $ lit add flu/children - <<'EOF'
-    [{title:"Login writes the credential where the refresh reads it" type:bug},
-     {title:"The refresh retries once on a 401, then surfaces it" type:task},
-     {title:"Token expiry is read from the token, not assumed" type:task}]
+    [{title:"Login writes the credential where the refresh reads it"},
+     {title:"The refresh retries once on a 401, then surfaces it"},
+     {title:"Token expiry is read from the token, not assumed"}]
     EOF
     + flu.8xa
     + flu.8xb
@@ -952,25 +966,25 @@ Reviewers searched two or three terms before writing a ticket.
 The YAML import failed on `mapping values are not allowed`. In a value, a colon inside quotes is text.
 
     $ lit add cb/children - <<'EOF'
-    [{title:"Vocab: one word per gauge" type:task labels:[refine] body:"Done when: every gauge label is one word."},
-     {title:"Vocab: units in the legend, not the label" type:task labels:[refine]}]
+    [{title:"Vocab: one word per gauge" labels:[refine] body:"Done when: every gauge label is one word."},
+     {title:"Vocab: units in the legend, not the label" labels:[refine]}]
     EOF
     + cb.v1a
     + cb.v1b
 
 ### Dry-run a bulk create to check every item before minting ids
     $ lit add 0x6u/children - --dry-run < /tmp/epic-tickets.list
-    + 0x6u/children  {title:"launchWaited returns after the first frame" type:bug}
-    + 0x6u/children  {title:"The fake store answers schema v12" type:task}
-    + 0x6u/children  {title:"…" type:bugg}   refused: type "bugg" is not a type
+    + 0x6u/children  {title:"launchWaited returns after the first frame"}
+    + 0x6u/children  {title:"The fake store answers schema v12"}
+    + 0x6u/children  {title:"…" labels:[bugg]}   refused: label bugg is not declared in the workspace file
     (dry run: nothing written)
 
 ### Create a new epic and its children in one call
     was: lit import --path /tmp/ccb-tickets/candybar.yaml   (created 18 issues / tmux-epic -> candybar-tmux-events-y457)
     $ lit add /children - <<'EOF'
-    [{title:"tmux server events" type:epic
-      children:[{title:"Parse %output notifications" type:task},
-                {title:"Reconnect after the server restarts" type:task}]}]
+    [{title:"tmux server events"
+      children:[{title:"Parse %output notifications"},
+                {title:"Reconnect after the server restarts"}]}]
     EOF
     + y457
     + y457.a1
@@ -1020,74 +1034,74 @@ The import help said a document with an `id` updates that ticket. Updating is `s
 
     was: lit close houdini-install-aby.80r --resolution wontfix --reason "…"
     $ lit set 80r/status wontfix 80r/reason "Installing into the user's Houdini prefs is theirs to do; the README says how."
-    80r/status  open → wontfix
+    80r/status  backlog → wontfix
     80r/reason  "" → "Installing into the user's Houdini prefs is theirs to do; the README says how."
 
 ### Won't-fix with no reason is refused
 
     $ lit set 80r/status wontfix
-    error (reason=requires): /workflow/states/wontfix requires 80r/reason, which is empty; nothing written
+    error (reason=requires): /columns/wontfix requires 80r/reason, which is empty; nothing written
 
 ### Close as obsolete, with the reason
 
     was: lit close promptctl-hierarchy-6cqf.2la --resolution obsolete --reason "groom: its work (a migration dropping issue_type) is ruled out by …"
     $ lit set 2la/status obsolete 2la/reason "groom: its work (a migration dropping issue_type) is ruled out by …"
-    2la/status  open → obsolete
+    2la/status  backlog → obsolete
     2la/reason  "" → "groom: its work (a migration dropping issue_type) is ruled out by …"
 
 ### Close as a duplicate of the canonical ticket
 
     was: lit close promptctl-warnings-2d80.d66 --resolution duplicate --of promptctl-brain-lq3.9od
     $ lit set d66/status dup d66/of lq3.9od
-    d66/status  open → dup
+    d66/status  backlog → dup
     d66/of      "" → promptctl-brain-lq3.9od
 
 ### A duplicate with no canonical is refused
 
     $ lit set d66/status dup
-    error (reason=requires): /workflow/states/dup requires d66/of, which is empty; nothing written
+    error (reason=requires): /columns/dup requires d66/of, which is empty; nothing written
 
 ### Close three duplicates into one canonical
 
     was: for t in d66 c7e 61x; do lit close promptctl-warnings-2d80.$t --resolution duplicate --of promptctl-brain-lq3.9od; done
     $ lit set d66/status dup d66/of lq3.9od c7e/status dup c7e/of lq3.9od 61x/status dup 61x/of lq3.9od
-    d66/status  open → dup
+    d66/status  backlog → dup
     d66/of      "" → promptctl-brain-lq3.9od
-    c7e/status  open → dup
+    c7e/status  backlog → dup
     c7e/of      "" → promptctl-brain-lq3.9od
-    61x/status  open → dup
+    61x/status  backlog → dup
     61x/of      "" → promptctl-brain-lq3.9od
 
 ### Close as superseded by the ticket that replaced it
 
     was: lit close houdini-laws-etg.2ka --resolution superseded --of houdini-laws-etg.6op --reason "user decided: too-large results go whole to a file …"
     $ lit set 2ka/status superseded 2ka/of 6op 2ka/reason "user decided: too-large results go whole to a file …"
-    2ka/status  open → superseded
+    2ka/status  backlog → superseded
     2ka/of      "" → houdini-laws-etg.6op
     2ka/reason  "" → "user decided: too-large results go whole to a file …"
 
 ### Close an abandoned epic's open children with one reason, previewed first
 
     was: lit close dotfiles-iterm2-restore-5k5.4.1 --resolution obsolete; lit close dotfiles-iterm2-restore-5k5 --resolution obsolete
-    $ lit set '(parent=5k5 status=open)/status' obsolete '(parent=5k5 status=open)/reason' "iTerm2 restore dropped" --dry-run
-    5k5.4.1/status  open → obsolete
+    $ lit set '(parent=5k5 status=backlog)/status' obsolete '(parent=5k5 status=backlog)/reason' "iTerm2 restore dropped" --dry-run
+    5k5.4.1/status  backlog → obsolete
     5k5.4.1/reason  "" → "iTerm2 restore dropped"
-    5k5.4.2/status  open → obsolete
+    5k5.4.2/status  backlog → obsolete
     5k5.4.2/reason  "" → "iTerm2 restore dropped"
     (dry run: nothing written)
 
 ### Reopen a closed ticket
 
     was: lit open sanctuary-render-tgx.rkm --reason "Done-when fails: the bump has not landed"
-    $ lit set rkm/status open rkm/reason "Done-when fails: the bump has not landed"
-    rkm/status  done → open
+    $ lit set rkm/status backlog rkm/reason "Done-when fails: the bump has not landed"
+    rkm/status  done → backlog
     rkm/reason  "Merged in #212" → "Done-when fails: the bump has not landed"
 
-### Park an in-flight ticket back in open and release its claim
+### Park an in-flight ticket back in backlog and release its claim
 
     was: lit open links-scale-dy46.37o --reason "parked behind promptctl-sync-bryp"
-    $ lit set 37o/status open 37o/reason "parked behind promptctl-sync-bryp"
-    37o/status  impl → open
+    $ lit set 37o/status backlog 37o/reason "parked behind promptctl-sync-bryp"
+    37o/status  impl → backlog
     37o/reason  "" → "parked behind promptctl-sync-bryp"
     ⇒ 37o/claim  this checkout → (none)
     ⇒ /lanes/37o  held by (none)
@@ -1106,7 +1120,7 @@ The import help said a document with an `id` updates that ticket. Updating is `s
     $ lit rm 9to/labels/external
     - 9to/labels/external
     $ lit set 9to/status plan
-    9to/status  open → plan
+    9to/status  backlog → plan
     ⇒ 9to/claim = this checkout
 
 ### Clear the label from the epics the pass finished
@@ -1123,11 +1137,11 @@ The import help said a document with an `id` updates that ticket. Updating is `s
     $ lit set rm9w/parent 0oqd
     rm9w/parent  links-unfiled-fc79 → promptctl-testing-0oqd
 
-### Move a ticket under an epic that carries its own workflow
+### Move a ticket under an epic that carries its own column graph
 
     $ lit set q4p/parent lq3
     q4p/parent  (none) → promptctl-brain-lq3
-    ⇒ q4p/workflow  /workflow → promptctl-brain-lq3/workflow
+    ⇒ q4p/columns  /columns → promptctl-brain-lq3/columns
 
 ### Move three tickets under one epic
 
@@ -1177,13 +1191,12 @@ The old CLI refused this ("Do not set 'blocks' relationships between two issues 
 
 ## Several fields on one ticket
 
-### Title, body, and type in one call
+### Title and body in one call
     was: lit update e9pl.9ym --title "…" --type task --description-file -
-    $ lit set e9pl.9ym/title "The statusline names the lane it serves" e9pl.9ym/type task e9pl.9ym/body - <<'EOF'
+    $ lit set e9pl.9ym/title "The statusline names the lane it serves" e9pl.9ym/body - <<'EOF'
     The statusline shows the lane's head and its position (2/3).
     EOF
     e9pl.9ym/title   The statusline shows rank → The statusline names the lane it serves
-    e9pl.9ym/type    bug → task
     e9pl.9ym/body    v4 → v5  (+1 −6 lines)
 
 ### Replace a ticket's labels, seeing what was removed
@@ -1276,19 +1289,6 @@ The old CLI refused this ("Do not set 'blocks' relationships between two issues 
     aha.ths/parent   aha → 99o
     (dry run: nothing written)
 
-### Label every epic for the decompose pass
-    was: for e in $(lit ls --type epic --columns id | awk '{print $1}'); do lit label add $e decompose; done
-    $ lit add '(type=epic)/labels' decompose --dry-run
-    (type=epic) = [4y3, bue, lm3, kg2, xu4, 7du, cjt]
-    + 4y3/labels/decompose
-    + bue/labels/decompose
-    + lm3/labels/decompose
-    + kg2/labels/decompose
-    + xu4/labels/decompose
-    + 7du/labels/decompose
-    + cjt/labels/decompose
-    (dry run: nothing written)
-
 ### Clear a label from every epic that still has it
     $ lit rm '(labels=decompose)/labels/decompose'
     - kg2/labels/decompose
@@ -1297,17 +1297,17 @@ The old CLI refused this ("Do not set 'blocks' relationships between two issues 
 ### Close stale tickets as obsolete, each with the reason obsolete requires
     was: for t in etg.8qa etg.3d4 etg.ugm etg.aj3 2pq; do lit close $t --resolution obsolete --reason "ws_client deleted in #55"; done
     $ lit set etg.8qa/status obsolete etg.8qa/reason "ws_client deleted in #55" etg.3d4/status obsolete etg.3d4/reason "ws_client deleted in #55" etg.ugm/status obsolete etg.ugm/reason "ws_client deleted in #55"
-    etg.8qa/status   open → obsolete
+    etg.8qa/status   backlog → obsolete
     etg.8qa/reason   (none) → ws_client deleted in #55
-    etg.3d4/status   open → obsolete
+    etg.3d4/status   backlog → obsolete
     etg.3d4/reason   (none) → ws_client deleted in #55
-    etg.ugm/status   open → obsolete
+    etg.ugm/status   backlog → obsolete
     etg.ugm/reason   (none) → ws_client deleted in #55
 
 ### Close every ticket matching a selector as obsolete, with the reason it requires
-    $ lit set '(text~"ws_client" status=open)/status' obsolete '(text~"ws_client" status=open)/reason' "ws_client deleted in #55" --dry-run
-    (text~"ws_client" status=open) = [etg.8qa, etg.3d4, etg.ugm, etg.aj3, 2pq]
-    etg.8qa/status   open → obsolete
+    $ lit set '(text~"ws_client" status=backlog)/status' obsolete '(text~"ws_client" status=backlog)/reason' "ws_client deleted in #55" --dry-run
+    (text~"ws_client" status=backlog) = [etg.8qa, etg.3d4, etg.ugm, etg.aj3, 2pq]
+    etg.8qa/status   backlog → obsolete
     etg.8qa/reason   (none) → ws_client deleted in #55
     …
     (dry run: nothing written)
@@ -1333,17 +1333,23 @@ The old CLI refused this ("Do not set 'blocks' relationships between two issues 
 
 ### Reopen several tickets in one call
     was: lit open 2bs 2bs.tsm 2bs.99c   (refused: usage: lit open <id>)
-    $ lit set 2bs.tsm/status open 2bs.99c/status open
-    2bs.tsm/status   done → open
-    2bs.99c/status   done → open
+    $ lit set 2bs.tsm/status backlog 2bs.99c/status backlog
+    2bs.tsm/status   done → backlog
+    2bs.99c/status   done → backlog
 
-### Archive every child of an abandoned epic
+### Park every child of an abandoned epic in a terminal column
+There is no archive flag; out of the flow is a terminal column, and `obsolete` requires a reason.
+
     was: for id in …; do lit archive $id --reason "voice dropped"; done
-    $ lit set 'voice-r7y.*/archived' true --dry-run
+    $ lit set 'voice-r7y.*/status' obsolete 'voice-r7y.*/reason' "voice dropped" --dry-run
     voice-r7y.* = [voice-r7y.8rr, voice-r7y.ux7, voice-r7y.k2q]
-    voice-r7y.8rr/archived   false → true
-    voice-r7y.ux7/archived   false → true
-    voice-r7y.k2q/archived   false → true
+    voice-r7y.8rr/status   backlog → obsolete
+    voice-r7y.8rr/reason   (none) → voice dropped
+    voice-r7y.ux7/status   backlog → obsolete
+    voice-r7y.ux7/reason   (none) → voice dropped
+    voice-r7y.k2q/status   impl → obsolete
+    voice-r7y.k2q/reason   (none) → voice dropped
+    ⇒ voice-r7y/stage = terminal
     (dry run: nothing written)
 
 ### Delete two probe tickets
@@ -1417,20 +1423,22 @@ The old CLI refused this ("Do not set 'blocks' relationships between two issues 
 ## Lanes
 
 ### Three new tickets that must be worked in order, as one lane
-Three tickets in a row, one call. Order on stdin is the order in the lane.
+Tickets are created under their parent; a lane's members are ids. Two calls, and
+the order given is the order in the lane. A new lane ranks last.
 
-    $ lit add /lanes/datetime - <<'EOF'
-    [{title:"dateInZone accepts zone names in any letter case" type:bug parent:792a},
-     {title:"dateInZone accepts fixed offsets like +05:30" type:task parent:792a},
-     {title:"date parses RFC 3339 with fractional seconds" type:task parent:792a}]
+    $ lit add 792a/children - <<'EOF'
+    [{title:"dateInZone accepts zone names in any letter case"},
+     {title:"dateInZone accepts fixed offsets like +05:30"},
+     {title:"date parses RFC 3339 with fractional seconds"}]
     EOF
     + 792a.dee
     + 792a.b64
     + 792a.fw9
+    $ lit add /lanes/datetime '[dee, b64, fw9]'
     + /lanes/datetime  [dee, b64, fw9]
     ⇒ b64/blocked_by = dee
     ⇒ fw9/blocked_by = b64
-    ⇒ /lanes/datetime/rank = 9
+    ⇒ /lanes/datetime ranks last (9 of 9)
 
 ### A lane from three existing tickets
     was: for t in 9r8 hf4 a53; do lit update 3k6u.$t --lane store-bugs --reason "independent of the checkpoint chain"; done
@@ -1467,7 +1475,7 @@ It lives at `/lanes/<id>`, so it has a rank path like any other lane.
     7a2
     $ lit get /lanes/7a2
     /lanes/7a2  rank 6
-      7a2   open
+      7a2   backlog
 
 ### Reorder within a lane
 `b64` turned out to be the foundation `dee` builds on.
@@ -1523,21 +1531,21 @@ A ticket is in at most one lane, so adding it to another moves it, and the echo 
     (dry run: nothing written)
 
 ### Rerank a whole lane
-Everything in the lane moves together.
+Everything in the lane moves together. Rank is written as a relation to another
+lane, `above`, `below`, `top` or `bottom`, so two writers reranking offline both
+still mean what they said.
 
     was: lit rank 3k6u.9r8 --top; lit rank 3k6u.hf4 --below 3k6u.9r8; lit rank 3k6u.a53 --below 3k6u.hf4
-    $ lit set /lanes/store-bugs/rank 2
-    /lanes/store-bugs/rank   5 → 2
+    $ lit set /lanes/store-bugs/rank '{above: /lanes/datetime}'
+    /lanes/store-bugs/rank   5 → 2  (above /lanes/datetime)
     ⇒ /lanes/datetime/rank     2 → 3
     ⇒ /lanes/help/rank         3 → 4
     ⇒ /lanes/checkpoint/rank   4 → 5
 
 ### Rank one lane just below another
     was: lit rank links-scale-dy46.aof --below links-scale-dy46.48k
-    $ lit get /lanes/scale-48k/rank
-    3
-    $ lit set /lanes/scale-aof/rank 4
-    /lanes/scale-aof/rank   7 → 4
+    $ lit set /lanes/scale-aof/rank '{below: /lanes/scale-48k}'
+    /lanes/scale-aof/rank   7 → 4  (below /lanes/scale-48k)
     ⇒ /lanes/help/rank      4 → 5
     …
 
@@ -1557,7 +1565,7 @@ The session's 13-call `rank --top` / `--below` chain was an ordered list.
 The ten-call variant ranked epics, which are not a sequence. Each epic's lane gets its own rank.
 
     was: lit rank kg2 --top; lit rank xu4 --below kg2; lit rank bue --below xu4; …
-    $ lit set /lanes/kg2/rank 1 /lanes/xu4/rank 2 /lanes/bue/rank 3 /lanes/lm3/rank 4
+    $ lit set /lanes/kg2/rank top /lanes/xu4/rank '{below: /lanes/kg2}' /lanes/bue/rank '{below: /lanes/xu4}' /lanes/lm3/rank '{below: /lanes/bue}'
     /lanes/kg2/rank   6 → 1
     /lanes/xu4/rank   1 → 2
     /lanes/bue/rank   9 → 3
@@ -1568,11 +1576,11 @@ The ten-call variant ranked epics, which are not a sequence. Each epic's lane ge
 ### Read the whole backlog
     was: lit backlog | head -150
     $ lit get /lanes
-    /lanes/release-pin    rank 1  pin        open                    1/1  urgent
-    /lanes/store-bugs     rank 2  3k6u.9r8   open                    1/4
+    /lanes/release-pin    rank 1  pin        backlog                    1/1  urgent
+    /lanes/store-bugs     rank 2  3k6u.9r8   backlog                    1/4
     /lanes/datetime       rank 3  b64        impl  this checkout     1/3
     /lanes/checkpoint     rank 4  3k6u.l1x   impl  stream ufijgjuy   1/3
-    /lanes/7a2            rank 5  7a2        open                    1/1
+    /lanes/7a2            rank 5  7a2        backlog                    1/1
     …
 
 ### Which top lanes are claimed
@@ -1591,20 +1599,21 @@ The ten-call variant ranked epics, which are not a sequence. Each epic's lane ge
     $ lit get rin/lanes
     rin/lanes/parser  rank 6
       rin.2ae   review
-      rin.k3x   open
+      rin.k3x   backlog
     rin/lanes/eval  rank 7
-      rin.9u9   open
-      rin.m0p   open
-      rin.t7c   open
+      rin.9u9   backlog
+      rin.m0p   backlog
+      rin.t7c   backlog
 
 ### An urgent ticket as a one-ticket lane ranked top
 Nothing had published since v1.156.4.
 
     was: lit new --type bug --topic release --top --title "Nothing has published since v1.156.4"
-    $ lit add /lanes/release-pin '[{title:"Nothing has published since v1.156.4" type:bug parent:792a priority:urgent}]'
+    $ lit add 792a/children '{title:"Nothing has published since v1.156.4" priority:urgent}'
     + 792a.pin
+    $ lit add /lanes/release-pin pin
     + /lanes/release-pin  [pin]
-    $ lit set /lanes/release-pin/rank 1
+    $ lit set /lanes/release-pin/rank top
     /lanes/release-pin/rank   12 → 1
     ⇒ /lanes/store-bugs/rank  1 → 2
     ⇒ /lanes/datetime/rank    2 → 3
@@ -1628,8 +1637,8 @@ A higher lane whose head is not urgent does not pull it away.
 ### Drop a lane claim without finishing
 The checkout is leaving the lane mid-way. The only way to do that is a write that says so.
 
-    $ lit rm b64/claim
-    - b64/claim
+    $ lit rm /lanes/datetime/claim
+    - /lanes/datetime/claim
     ⇒ /lanes/datetime   claim this checkout → (none)
     ⇒ /next   3k6u.9r8   /lanes/store-bugs
 
@@ -1639,8 +1648,8 @@ The plan phase had sat for ~12 hours with no commits or branch.
     was: lit open etg.bci --reason "Plan phase ~12h, no commits or branch; dead session's claim released"
     $ lit add etg.bci/comments "Plan phase ~12h, no commits or branch; dead session's claim released."
     + etg.bci/comments/r8v
-    $ lit set etg.bci/status open
-    etg.bci/status   plan → open
+    $ lit set etg.bci/status backlog
+    etg.bci/status   plan → backlog
     ⇒ etg.bci/claim   claude_f335… → (none)
 
 ## Lanes at the edges
@@ -1674,8 +1683,8 @@ The plan phase had sat for ~12 hours with no commits or branch.
     $ lit get /lanes/datetime
     /lanes/datetime  rank 4
       dee   done
-      b64   open   this checkout   blocked_by bryp (bryp/blocks)
-      fw9   open
+      b64   backlog   this checkout   blocked_by bryp (bryp/blocks)
+      fw9   backlog
 
 ### An edge that closes a cycle through a lane
 
@@ -1687,7 +1696,7 @@ The plan phase had sat for ~12 hours with no commits or branch.
 ### 1. Read every open ticket cheaply
 Two lines per ticket, instead of the 270 KB the `show` loop printed.
 
-    $ lit get '(status=open)/title' '(status=open)/lane'
+    $ lit get '(status=backlog)/title' '(status=backlog)/lane'
     792a.b64/title   dateInZone accepts fixed offsets like +05:30
     792a.b64/lane    datetime
     rin.k3x/title    template with no pipeline passes nil dot
@@ -1696,7 +1705,7 @@ Two lines per ticket, instead of the 270 KB the `show` loop printed.
 
 ### 2. Read the backlog in served order
     $ lit get /lanes
-    /lanes/store-bugs   rank 2  3k6u.9r8   open                  1/4
+    /lanes/store-bugs   rank 2  3k6u.9r8   backlog                  1/4
     /lanes/datetime     rank 9  792a.dee   impl  this checkout   1/3
     …
 
@@ -1711,13 +1720,13 @@ The canonical body is the merged text on stdin. The duplicate closes against it.
 
     $ lit set lq3.9od/body - 2d80.d66/status dup 2d80.d66/of lq3.9od < /tmp/groom/9od-merged.md
     lq3.9od/body      v2 → v3  (+6 −0 lines)
-    2d80.d66/status   open → dup
+    2d80.d66/status   backlog → dup
     2d80.d66/of       (none) → lq3.9od
 
 ### 5. Close a ticket whose work is already done
     was: lit close links-error-output-ckk7 --resolution obsolete --reason "groom: already satisfied - stderr now prints …"
     $ lit set ckk7/status obsolete ckk7/reason "groom: already satisfied; stderr prints the code and reason since #811"
-    ckk7/status   open → obsolete
+    ckk7/status   backlog → obsolete
     ckk7/reason   (none) → groom: already satisfied; stderr prints the code and reason since #811
 
 ### 6. Rewrite a description the reader would misread
@@ -1734,39 +1743,35 @@ The canonical body is the merged text on stdin. The duplicate closes against it.
     ⇒ 792a.fw9/blocked_by = 792a.b64
 
 ### 8. Rank the lanes
-    $ lit set /lanes/datetime/rank 2 /lanes/store-bugs/rank 3
-    /lanes/datetime/rank     9 → 2
-    /lanes/store-bugs/rank   2 → 3
+    $ lit set /lanes/datetime/rank '{above: /lanes/store-bugs}'
+    /lanes/datetime/rank     9 → 2  (above /lanes/store-bugs)
+    ⇒ /lanes/store-bugs/rank   2 → 3
 
-### 9. Check integrity
+### 9. Read the advisories
+`/integrity` lists what the fold could not settle silently; nothing on it is a repair
+lit runs. Each line names the write that clears it.
+
     was: lit doctor
     $ lit get /integrity
-    /integrity   3 problems
-      /lanes/help/rank        rank 4 shared with /lanes/eval
-      3k6u.ckq/blocks/l1x     cycle: 3k6u.l1x/blocks/3k6u.ckq
-      jcj.l1e/blocks/ob5      ob5 is deleted
+    /integrity   2 advisories
+      /lanes/help/rank        placed at the bottom: its anchor /lanes/eval no longer exists   lit set /lanes/help/rank '{below: …}'
+      jcj.l1e/blocks/ob5      ob5 is deleted                                                  lit rm jcj.l1e/blocks/ob5
 
-### 10. Fix integrity, shown before it is done
+### 10. Clear them, shown before it is done
     was: lit doctor --fix
-    $ lit set /integrity ok --dry-run
-    /integrity   3 problems → ok
-    ⇒ /lanes/eval/rank   4 → 5
-    ⇒ /lanes/scale-aof/rank   5 → 6
-    ⇒ - 3k6u.ckq/blocks/3k6u.l1x
-    ⇒ - jcj.l1e/blocks/ob5
+    $ lit set /lanes/help/rank '{below: /lanes/scale-aof}' --dry-run
+    /lanes/help/rank   12 → 6  (below /lanes/scale-aof)
     (dry run: nothing written)
-    $ lit set /integrity ok
-    /integrity   3 problems → ok
-    ⇒ /lanes/eval/rank   4 → 5
-    ⇒ /lanes/scale-aof/rank   5 → 6
-    ⇒ - 3k6u.ckq/blocks/3k6u.l1x
-    ⇒ - jcj.l1e/blocks/ob5
+    $ lit set /lanes/help/rank '{below: /lanes/scale-aof}'
+    /lanes/help/rank   12 → 6  (below /lanes/scale-aof)
+    $ lit rm jcj.l1e/blocks/ob5
+    - jcj.l1e/blocks/ob5
 
 ### 11. Report what changed
 The echoes above are the grooming report. A session that saved them has the whole diff.
 
     $ lit get /integrity
-    /integrity   ok
+    /integrity   no advisories
 
 ## Undo
 
@@ -1802,87 +1807,96 @@ The echoes above are the grooming report. A session that saved them has the whol
     yjx/history/e94   body v2 → v3
     9ym/history/e12   title "Status line shows…" → "Status line hides…"
 
-## Workflow as data
+## The model as data
 
-### Which workflow governs this ticket, and where each state comes from
+The column graph, the requirements and the handlers live in `.lit/workspace.toml`. A
+`set` on a model path edits the working-tree draft and says so; the draft is in force
+once it is committed and applied with `lit config commit`.
+
+### Which column graph governs this ticket, and where each column comes from
 
     was: lit workflows show rin.4ou   →   no workflow definition with id "rin.4ou"
-    $ lit get rin.4ou/workflow
-    rin.4ou/workflow  (resolved)
-      open      initial next:[plan]      /workflow
-      plan      next:[audit]  gate:…     rin/workflow (next), /workflow (gate)
-      audit     next:[impl]              rin/workflow
-      impl      next:[review]            /workflow
-      review    next:[merge, impl]       /workflow
-      merge     next:[done]              /workflow
-      done      terminal                 /workflow
-      dup       terminal requires:of     /workflow
-      superseded terminal requires:of    /workflow
-      obsolete  terminal requires:reason /workflow
-      wontfix   terminal requires:reason /workflow
+    $ lit get rin.4ou/columns
+    rin.4ou/columns  (resolved, nearest ancestor per column)
+      backlog     initial next:[plan] exit:[ready]   /columns
+      plan        next:[audit]                       rin/columns
+      audit       next:[impl]                        rin/columns
+      impl        next:[review] entry:[plan/verdict=pass]   /columns
+      review      next:[merge]                       /columns
+      merge       next:[done] entry:[pr/verdict=pass]       /columns
+      done        terminal                           /columns
+      dup         terminal entry:[of]                /columns
+      superseded  terminal entry:[of]                /columns
+      obsolete    terminal entry:[reason]            /columns
+      wontfix     terminal entry:[reason]            /columns
 
-### Add an audit state to one epic
+### Add an audit column to one epic
 
-    $ lit set rin/workflow/states/audit '{next:[impl] guidance:"Run the law audit on the diff before code review."}' rin/workflow/states/plan/next '[audit]'
-    rin/workflow/states/audit      (none) → {next:[impl] guidance:"Run the law audit on the diff before code review."}
-    rin/workflow/states/plan/next  [impl] (from /workflow) → [audit]
-    ⇒ rin/workflow/states/plan/gate = plan/verdict=pass … (from /workflow)
+    $ lit set rin/columns/audit '{next:[impl]}' rin/columns/plan/next '[audit]'
+    rin/columns/audit      (none) → {next:[impl]}       draft: .lit/workspace.toml edited, not applied
+    rin/columns/plan/next  [impl] (from /columns) → [audit]   draft
+    $ git commit -am "rin audits before impl" && lit config commit
+    applied version 7 (blob 3e1a9c0d), replaces version 6
     ⇒ 6 tickets under rin now resolve plan → audit → impl
 
-### Add a gate to a state
+### Add a requirement to a column
 
-Nothing in the live-verification epic merges until it carries the `live-verified` label. A gate on a state guards the transitions out of it.
+Nothing in the live-verification epic merges until it carries the `live-verified`
+label. An `exit` requirement is checked on every forward transition out of the column.
 
-    $ lit set mel/workflow/states/review/gate 'labels~live-verified'
-    mel/workflow/states/review/gate  (none) → labels~live-verified
+    $ lit set mel/columns/review/exit '[{test:"labels=live-verified" severity:error}]'
+    mel/columns/review/exit  (none) → [{test:"labels=live-verified" severity:error}]   draft
+    $ git commit -am "mel: live-verified before merge" && lit config commit
+    applied version 8 (blob 7e0f15c2), replaces version 7
 
-### Refused by that gate
+### Refused by that requirement
 
     $ lit set mel.l1e/status merge
-    error (reason=gate): mel.l1e/status review → merge is gated by mel/workflow/states/review/gate
-      labels~live-verified   mel.l1e/labels = [external]
-    nothing written
+    error (reason=gate): mel.l1e/status review → merge refused by review/exit; nothing written
+      block  labels=live-verified   mel.l1e/labels = [external]
 
-### Change the guidance on a state
+### Read the guidance a ticket in a custom column will see
 
-    $ lit set /workflow/states/merge/guidance - <<'EOF'
-    Once it has merged, close it: lit set $/status done. The echo names the next ticket in your lane.
-    EOF
-    /workflow/states/merge/guidance  v2 → v3
-
-### Read the guidance a ticket in a custom state will see
+Guidance is a handler bound `in <column>`; it prints after the ticket.
 
     was: lit quickstart review
-    $ lit get rin.4ou/workflow/states/audit/guidance
-    Run the law audit on the diff before code review.
+    $ lit get rin.4ou
+    $ = links-hierarchy-rin.4ou
+    $/status   audit
+    …
+    guidance (audit): Run the law audit on the diff before code review.
 
-### Remove a state that tickets are in
+### Remove a column that tickets are in
 
-    $ lit rm /workflow/states/merge
-    error (reason=in_use): /workflow/states/merge is occupied and referenced; nothing written
-      occupied by   0814 s33 tbk               (status=merge)
-      named in      /workflow/states/review/next = [merge, impl]
+The edit lands in the draft; the apply is what refuses, since a version may not drop
+a column a ticket still holds.
+
+    $ lit rm /columns/merge
+    - /columns/merge   draft: .lit/workspace.toml edited, not applied
+    $ git commit -am "drop merge" && lit config commit
+    error (reason=invalid_value): version 9 removes columns.merge while 0814 s33 tbk hold it, and columns.review.next names it; nothing applied
 
 ### Remove an override nobody occupies
 
-    $ lit rm rin/workflow/states/audit rin/workflow/states/plan/next --dry-run
-    - rin/workflow/states/audit
-    - rin/workflow/states/plan/next
-    ⇒ rin/workflow/states/plan/next = [impl] (from /workflow)
+    $ lit rm rin/columns/audit rin/columns/plan/next --dry-run
+    - rin/columns/audit
+    - rin/columns/plan/next
+    ⇒ rin/columns/plan/next = [impl] (from /columns)
     (dry run: nothing written)
 
-### Add a terminal state that requires a field
+### Add a terminal column that requires a field
 
-    $ lit set /workflow/states/superseded '{terminal:true requires:of}'
-    /workflow/states/superseded  (none) → {terminal:true requires:of}
+    $ lit set /columns/superseded '{terminal:true entry:[of]}'
+    /columns/superseded  (none) → {terminal:true entry:[of]}   draft
 
 ### Close as superseded without naming what supersedes it
 
     was: lit close 2ka --resolution superseded --of 6op --reason "…"
     $ lit set 2ka/status superseded
-    error (reason=requires): /workflow/states/superseded requires 2ka/of, which is empty; nothing written
+    error (reason=gate): 2ka/status backlog → superseded refused by superseded/entry; nothing written
+      block  of   2ka/of = (none)
     $ lit set 2ka/status superseded 2ka/of 6op 2ka/reason "user decided: too-large results go whole to a file"
-    2ka/status  open → superseded
+    2ka/status  backlog → superseded
     2ka/of      (none) → 6op
     2ka/reason  (none) → "user decided: too-large results go whole to a file"
 
@@ -1890,14 +1904,15 @@ Nothing in the live-verification epic merges until it carries the `live-verified
 
     was: lit phase tbk --to merge   (from impl)
     $ lit set tbk/status merge
-    error (reason=not_in_next): tbk/status impl → merge; /workflow/states/impl/next = [review]; nothing written
+    error (reason=not_in_next): tbk/status impl → merge; impl/next = [review]; nothing written
 
 ### Park an in-progress ticket, or drop it as obsolete
-The initial state is reachable from every state, and every terminal from every non-terminal; `next` lists only the forward edges.
+A column no `next` names is entered from everywhere: `backlog`, and every terminal
+column, are reached with no edge list. Parking into the initial column ends the hold.
 
     was: lit open 37o --reason "parked behind bryp"; lit close 2m0 --resolution obsolete --reason "…"
-    $ lit set 37o/status open 37o/reason "parked behind bryp"
-    37o/status  impl → open
+    $ lit set 37o/status backlog 37o/reason "parked behind bryp"
+    37o/status  impl → backlog
     37o/reason  (none) → "parked behind bryp"
     ⇒ 37o/claim  this checkout → (none)
     $ lit set 2m0/status obsolete 2m0/reason "ws_client deleted in PR #55"
@@ -1912,22 +1927,26 @@ The live-verification epic defines its own `review`; everything else uses the ro
     $ lit get '(status=review)/title'
     mel.l1e/title    Scene load reports a missing asset with its warning
     sjhy.ju8/title   Menus open on the focused display
-    $ lit get mel/workflow/states/review/next /workflow/states/review/next
-    mel/workflow/states/review/next   [live-verify, impl]
-    /workflow/states/review/next      [merge, impl]
+    $ lit get mel/columns/review/next /columns/review/next
+    mel/columns/review/next   [live-verify]
+    /columns/review/next      [merge]
 
 ### Give one epic's claims a longer life
 
     $ lit set px1f/claim_ttl 12h
-    px1f/claim_ttl  4h (from /) → 12h
-    ⇒ px1f.9u9/claim expires 2026-11-03T22:04Z (was 14:04Z)
+    px1f/claim_ttl  4h (from /) → 12h   draft: .lit/workspace.toml edited, not applied
+    $ git commit -am "px1f: 12h claims" && lit config commit
+    applied version 10 (blob c81e07a2), replaces version 9
+    ⇒ /lanes/px1f claim expires 2026-11-03T22:04Z (was 14:04Z)
 
 ### Where does this claim's expiry come from?
 
-    $ lit get px1f.9u9/claim px1f.9u9/claimed_at px1f.9u9/claim_ttl
+Expiry is measured from the holder's newest event on any member of the lane, against
+the `claim_ttl` resolved by nearest ancestor.
+
+    $ lit get px1f.9u9/claim px1f.9u9/claim_ttl
     $ = promptctl-testing-px1f.9u9
-    $/claim        stream voice-di1 (elsewhere)
-    $/claimed_at   2026-11-03T10:04Z
+    $/claim        stream voice-di1 (elsewhere)   newest event 2026-11-03T10:04Z
     $/claim_ttl    12h (from px1f)
 
 ## Derived fields
@@ -1935,7 +1954,7 @@ The live-verification epic defines its own `review`; everything else uses the ro
 ### Set a derived field
 
     $ lit set dee/claim claude_64e3
-    error (reason=derived): dee/claim is derived, not settable (field table: claim  scalar  derived  stamped by a transition when none is held); nothing written
+    error (reason=derived): dee/claim is derived, not settable (field table: claim  scalar  derived  the lane's holder, from its latest start or finish); nothing written
 
 ### Type the doc's own lane example
 
@@ -1964,113 +1983,78 @@ The live-verification epic defines its own `review`; everything else uses the ro
 ### Reopen a closed epic by reopening a child
 
     was: lit open o3mh   →   cannot open epic: it is closed, and an epic's state derives from its children
-    $ lit set o3mh.avl/status open o3mh.avl/reason "Done-when fails on the second checkout"
-    o3mh.avl/status  done → open
+    $ lit set o3mh.avl/status backlog o3mh.avl/reason "Done-when fails on the second checkout"
+    o3mh.avl/status  done → backlog
     o3mh.avl/reason  (none) → "Done-when fails on the second checkout"
-    ⇒ o3mh/status = open (was done)
+    ⇒ o3mh/stage = active (was terminal)
 
 ### Rank a ticket
 
     was: lit rank aof --below 48k
-    $ lit set aof/rank 3
-    error (reason=unknown_field): a ticket has no field rank; rank is on lanes. aof is in /lanes/scale (rank 6): lit set /lanes/scale/rank <n>
+    $ lit set aof/rank '{below: 48k}'
+    error (reason=unknown_field): a ticket has no field rank; rank is on lanes. aof is in /lanes/scale: lit set /lanes/scale/rank '{below: <lane>}'
 
 ### Change a ticket's topic
 
+`topic` is not a field; an area of focus is a label.
+
     was: lit update bwy.16 --topic context   →   unknown flag: --topic
     $ lit set bwy.16/topic context
-    error (reason=immutable): bwy.16/topic is set at creation only (field table: topic  scalar  immutable); nothing written
+    error (reason=unknown_field): a ticket has no field topic; for an area of focus: lit add bwy.16/labels context; nothing written
 
-### Turn a leaf into an epic
+### Turn a leaf into a node
+
+An item's level is where it sits in the tree, one below its parent, and nothing sets it.
 
     was: lit update hje --type epic   →   cannot change issue_type between container ([epic]) and leaf types
-    $ lit set hje/type epic
-    error (reason=invalid_value): hje/type task → epic crosses leaf and container; nothing written
+    $ lit set hje/level 3
+    error (reason=derived): hje/level is its depth in the tree, not settable; nothing written
 
 ## Integrity
+
+The fold settles every concurrent contradiction deterministically; `/integrity` lists
+what it settled and what it could not apply, each with its writer, and the write that
+would clear it. There is no repair verb.
 
 ### Is the store healthy?
 
     was: lit doctor
     $ lit get /integrity
-    /integrity
-      integrity_check      ok
-      foreign_key_issues   0
-      rank_inversions      2
-      dependency_cycle     none
-      id_collisions        0
+    /integrity   4 advisories
+      stale        last fetch 3h ago; the view may be behind the remote
+      undeclared   lm3.7iy is in column audit, which no version its ancestors declare   lit set lm3.7iy/status plan
+      anchor       /lanes/lm3 placed at the bottom: its anchor /lanes/device-sources no longer exists
+      dropped      2 events on 3aj.8k1 from claude_c93e… arrived after its purge and were not applied
 
-### Read one check
+### Two concurrent edges that close a cycle
 
-    $ lit get /integrity/rank_inversions
-    /integrity/rank_inversions
-      /lanes/lm3 (rank 3) waits on /lanes/device-sources (rank 7)
-      /lanes/scale (rank 5) waits on /lanes/sync (rank 9)
+Each writer's edge was acyclic when written. The fold keeps the earlier in total order
+and lists the later; `/next` reads neither as a blocker until someone chooses.
 
-### See what the repair would do
+    $ lit get /integrity
+    /integrity   1 advisory
+      cycle   bryp/blocks/37o (claude_a1c0…) closes a cycle with 37o/blocks/bryp; not applied   lit rm 37o/blocks/bryp  or  lit rm bryp/blocks/37o
 
-    was: lit doctor --fix
-    $ lit set /integrity ok --dry-run
-    /lanes/device-sources/rank   7 → 3
-    /lanes/lm3/rank              3 → 4
-    /lanes/sync/rank             9 → 5
-    /lanes/scale/rank            5 → 6
-    ⇒ /integrity/rank_inversions = 0
-    (dry run: nothing written)
+### Two writers fixed one segment offline
 
-### Do the repair
+Each item keeps its id; the segment resolves to neither, and both are listed.
 
-    $ lit set /integrity ok
-    /lanes/device-sources/rank   7 → 3
-    /lanes/lm3/rank              3 → 4
-    /lanes/sync/rank             9 → 5
-    /lanes/scale/rank            5 → 6
-    ⇒ /integrity/rank_inversions = 0
-    ⇒ /integrity = ok
+    $ lit get bwy.16/title
+    error (reason=ambiguous): bwy.16 names 2 tickets; give more of the id
+      bwy.16   "Context budget reads the model's window"   claude_a1c0…
+      bwy.16   "Speech pipeline drops the first word"      claude_c93e…
 
-### A cycle the repair will not choose how to break
-
-A sync pull merged two edges written in different clones.
-
-    $ lit set /integrity ok
-    error (reason=needs_decision): /integrity/dependency_cycle: 37o → bryp → 37o; the repair cannot choose which edge to drop; nothing written
-      lit rm 37o/blocks/bryp
-      lit rm bryp/blocks/37o
-
-### Two clones minted the same id
-
-    $ lit set /integrity ok
-    error (reason=needs_decision): /integrity/id_collisions: bwy.16 names two tickets; the repair cannot choose which keeps the id; nothing written
-      bwy.16   "Context budget reads the model's window"   claude_a1c0…   clone A
-      bwy.16   "Speech pipeline drops the first word"      claude_c93e…   clone B
-
-## Archive, delete, restore, purge
-
-### Archive an epic's children
-
-    was: for id in …; do lit archive $id --reason "…"; done
-    $ lit set 'r7y.*/archived' true --dry-run
-    r7y.ux7/archived  false → true
-    r7y.8rr/archived  false → true
-    r7y.qg8/archived  false → true
-    (dry run: nothing written)
-
-### Read archived tickets
-
-Globs and selectors pass over archived and deleted tickets unless the selector names them.
-
-    was: lit ls --ids r7y.ux7,r7y.8rr --include-archived
-    $ lit get '(archived=true parent=r7y)/title'
-    r7y.ux7/title   Wake word survives a sleep
-    r7y.8rr/title   Barge-in stops playback within 100ms
+## Delete, restore, purge
 
 ### Delete a ticket filed in error
+
+`rm x` is a reversible tombstone: the events stay, the ticket leaves every listing.
 
     was: lit delete fko --reason "made in error: a doc edit, committed to master"
     $ lit add fko/comments "Deleted: made in error, a doc edit committed to master."
     + fko/comments/a210
     $ lit rm fko
-    fko/deleted  false → true
+    - fko   (tombstone; the events stay)
 
 ### Restore a deleted ticket
 
@@ -2110,28 +2094,29 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
 
     $ lit get /
     /
-      children    14 epics
+      children    14 top-level items
       lanes       23
-      workflow    9 states
+      columns     10
       claim_ttl   4h
-      integrity   ok
+      config      version 7 in force; .lit/workspace.toml matches
+      integrity   no advisories
       next        b64
 
-### The root workflow
+### The root column graph
 
     was: lit workflows
-    $ lit get /workflow
-    /workflow/states
-      open        initial  next:[plan]
-      plan        next:[impl]          gate:plan/verdict=pass   guidance:v4
-      impl        next:[review]                                 guidance:v2
-      review      next:[merge, impl]                            guidance:v3
-      merge       next:[done]                                   guidance:v3
+    $ lit get /columns
+    /columns
+      backlog     initial  next:[plan]  exit:[ready]
+      plan        next:[impl]
+      impl        next:[review]  entry:[plan/verdict=pass]
+      review      next:[merge]   entry:[plan/verdict=pass (warning)]
+      merge       next:[done]    entry:[pr/verdict=pass]
       done        terminal
-      dup         terminal  requires:of
-      superseded  terminal  requires:of
-      obsolete    terminal  requires:reason
-      wontfix     terminal  requires:reason
+      dup         terminal  entry:[of]
+      superseded  terminal  entry:[of]
+      obsolete    terminal  entry:[reason]
+      wontfix     terminal  entry:[reason]
 
 ### Every lane's rank
 
@@ -2156,7 +2141,7 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
 ### `--json` on a glob
 
     $ lit get '792a.*/status' --json
-    {"792a.dee/status":"done","792a.b64/status":"impl","792a.fw9/status":"open"}
+    {"792a.dee/status":"done","792a.b64/status":"impl","792a.fw9/status":"backlog"}
 
 ### Two paths under one ancestor
 
@@ -2174,20 +2159,16 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
     $/status   merge
     $/lane     datetime
     $/claim    this checkout
+    guidance (merge): Once it has merged, close it: lit set $/status done. The echo names the next ticket in your lane.
 
-    /workflow/states/merge/guidance
-    Once it has merged, close it: lit set $/status done. The echo names the next ticket in your lane.
-
-### A ticket in a subtree with its own state
+### A ticket in a subtree with its own column
 
     $ lit get rin.4ou
     $ = links-hierarchy-rin.4ou
     $/title    Ancestors resolve workflow by walking up
     $/status   audit
     $/claim    this checkout
-
-    rin/workflow/states/audit/guidance
-    Run the law audit on the diff before code review.
+    guidance (audit): Run the law audit on the diff before code review.
 
 ### A multi-line value in path-tab-value output
 
@@ -2201,7 +2182,7 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
     /lanes/datetime  rank 4
       dee   done
       b64   impl   this checkout
-      fw9   open
+      fw9   backlog
 
 ### Read, edit, write without JSON
 
@@ -2215,7 +2196,7 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
     was: lit log 9uht   →   a2292fc4 2026-10-21 feat(daemon): a fed bar shows the pace…
     $ lit get 9uht/history
     9uht/history
-      e01  2026-10-15T05:11Z  claude_214f…  status open → plan   ⇒ claim = claude_214f…
+      e01  2026-10-15T05:11Z  claude_214f…  status backlog → plan   ⇒ claim = claude_214f…
       e02  2026-10-15T06:02Z  claude_214f…  plan/revisions + 1
       e07  2026-10-21T19:40Z  claude_214f…  status merge → done
 
@@ -2253,10 +2234,10 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
 
     was: lit show jsh --field comments   →   unknown --field "comments"; valid fields: assignee, created_at, …
     $ lit get dee/phase
-    error (reason=unknown_field): a ticket has no field phase; phases are states: lit get dee/status
-      ticket fields: archived blocked_by blocks body children claim claimed_at claim_ttl comments
-                     created_at deleted history labels lane of parent plan priority prompt reason
-                     status title topic type updated_at workflow
+    error (reason=unknown_field): a ticket has no field phase; phases are columns: lit get dee/status
+      ticket fields: blocked_by blockers blocks body checklist claim claim_ttl columns comments
+                     created_at held history labels lane of parent plan pr priority prompt reason
+                     stage status tier title updated_at
 
 ### A glob that matches nothing
 
@@ -2269,19 +2250,19 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
     $ lit get '(state=open)/title'
     error (reason=unknown_field): selector key state is not a field; did you mean status; nothing printed
 
-### A selector value no workflow defines
+### A selector value no column graph defines
 
     was: lit ls --status closed,open,in_progress,blocked --search b2q.   (four times, unchanged)
     $ lit get '(status=blocked)/title'
-    error (reason=invalid_value): no resolved workflow has a state blocked
-      states: open plan impl review merge done dup obsolete superseded; audit under rin; live-verify under mel
+    error (reason=invalid_value): no resolved column graph has a column blocked
+      columns: backlog plan impl review merge done dup obsolete superseded wontfix; audit under rin; live-verify under mel
       blocked is the derived field blocked_by
     nothing printed
 
 ### Stdin twice in one command
 
-    $ lit set 8ro6/body - 8ro6/plan - < /tmp/8ro6/both.md
-    error (reason=usage): - reads stdin once per command; it appears twice (8ro6/body, 8ro6/plan); nothing written
+    $ lit set 8ro6/body - 8ro6/prompt - < /tmp/8ro6/both.md
+    error (reason=usage): - reads stdin once per command; it appears twice (8ro6/body, 8ro6/prompt); nothing written
 
 ### A `.` where a `/` belongs
 
@@ -2306,10 +2287,10 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
 ### A title with a colon and quotes in it
 
     was: lit import --path /tmp/cb-breakdown/vocab.yaml   →   yaml: line 2: mapping values are not allowed in this context
-    $ lit add unfiled/children '{title:daemon.log is mostly unknown-field lines type:bug}'
+    $ lit add unfiled/children '{title:daemon.log is mostly unknown-field lines}'
     error (reason=parse): value {…}: "is" is not k:v; quote a value that holds spaces; nothing written
     $ lit add unfiled/children - <<'EOF'
-    {title:"daemon.log is ~90% 'schema: unknown field' lines" type:bug topic:daemon}
+    {title:"daemon.log is ~90% 'schema: unknown field' lines"}
     EOF
     + unfiled.k4e
     ⇒ /lanes/k4e = [k4e]   rank 24
@@ -2317,7 +2298,7 @@ Globs and selectors pass over archived and deleted tickets unless the selector n
 ### A write where one path of three is refused
 
     $ lit set 2ku/status done 207/status done oq5/status done
-    error (reason=not_in_next): oq5/status impl → done; /workflow/states/impl/next = [review]
+    error (reason=not_in_next): oq5/status impl → done; /columns/impl/next = [review]
       2ku/status  merge → done   not written
       207/status  merge → done   not written
     nothing written
@@ -2364,7 +2345,7 @@ The old `comment rm` took only the comment id; the new path needs both.
 
     was: lit show orange-devices-bue.1e6 orange-devices-bue.chz orange-devices-bue.hqi
     $ lit get 1e6/status chz/status hqi/status
-    1e6/status   open
+    1e6/status   backlog
     chz/status   impl
     hqi/status   done
 
@@ -2398,7 +2379,7 @@ The old `comment rm` took only the comment id; the new path needs both.
 ### Filter by a field there was no flag for
 
     was: lit ls --topic devices
-    $ lit get '(topic=devices)/title'
+    $ lit get '(labels=devices)/title'
     orange-devices-bue.1e6/title   The device list shows a sweep in progress
     orange-devices-bue.k7r/title   A connected device sweeps with an empty name
 
@@ -2414,14 +2395,14 @@ The old `comment rm` took only the comment id; the new path needs both.
     $ lit get '(parent=cjt)/status'
     orange-alerts-cjt.3ns/status   done
     orange-alerts-cjt.7pq/status   impl
-    orange-alerts-cjt.v2a/status   open
+    orange-alerts-cjt.v2a/status   backlog
 
 ### Next, scoped to one epic
 
     was: lit next --epic orange-admin-helper-b2q
     $ lit get b2q/lanes
     b2q/lanes
-      /lanes/admin-helper   3cn   open
+      /lanes/admin-helper   3cn   backlog
 
 ### A reason given to a dependency
 
@@ -2436,7 +2417,7 @@ The old `comment rm` took only the comment id; the new path needs both.
 
     was: lit done orange-alerts-cjt
     $ lit set cjt/status done
-    error (reason=derived): cjt is an epic; cjt/status is derived from cjt.*/status; nothing written
+    error (reason=unknown_field): cjt is a node and has no status; its stage derives from cjt.*/status; nothing written
 
 ### Phase given positionally
 
@@ -2447,15 +2428,15 @@ The old `comment rm` took only the comment id; the new path needs both.
 ### Status changed through update
 
     was: lit update brandon-menus-sjhy.ju8 --status open
-    $ lit set ju8/status open
-    ju8/status  plan → open
+    $ lit set ju8/status backlog
+    ju8/status  plan → backlog
     ⇒ ju8/claim  this checkout → (none)
 
 ### A resolution that is not a state
 
     was: lit close houdini-install-aby.80r --resolution fixed
     $ lit set 80r/status fixed
-    error (reason=invalid_value): no resolved workflow has a state fixed; terminal states: done dup superseded obsolete wontfix; nothing written
+    error (reason=invalid_value): no resolved column graph has a column fixed; terminal columns: done dup superseded obsolete wontfix; nothing written
 
 ### A priority level that does not exist
 
@@ -2479,43 +2460,49 @@ The old `comment rm` took only the comment id; the new path needs both.
     $ lit get /lanes
     …
     was: lit create --type epic --title E1 --topic t1
-    $ lit add /children '{title:E1 type:epic}'
+    $ lit add /children '{title:E1}'
     + links-v3p
     was: lit comments candybar-isolated-daemon-bfab.agt
     $ lit get agt/comments
     …
     was: lit epics
-    $ lit get '(type=epic)/title'
+    $ lit get /children
     …
 
-## The admin boundary and the store lock
+## The admin boundary
 
-### Push the backlog
+### Publish the backlog
 
-`stores`, `snapshots`, `lifeboat`, `upgrade`, `downgrade`, `prefix` and `backup` answer the same way.
+`init`, `sync`, `backup`, `upgrade` and the rest of the maintenance surface live under
+`lit admin`, so the four-verb table stays legible.
 
     was: lit sync push
     $ lit sync push
     error (reason=unknown_verb): lit has four verbs: get set add rm; sync is lit admin sync
-    $ lit admin sync push
-    pushed
+    $ lit admin sync
+    sealed 1 segment, published; fetched 2 writers, verified
 
-### Write while an admin sync holds the store
+### Write while a sync is running
+
+A command appends to this checkout's log and touches nothing else; sync seals and
+publishes. Neither waits on the other, and there is no lock.
 
     was: lit verdict rm9w … --law single-enforcer   →   workspace_busy: held by pid 95859 (lit sync push --remote origin)
     $ lit add rm9w/plan/reviews '{of:3 how:"/plan-review" result:"single-enforcer: …" verdict:pass}'
-    lit: waiting for the store; held by pid 95859 (lit admin sync push --remote origin) since 2s
-    error (reason=workspace_busy): store held by pid 95859 (lit admin sync push --remote origin) for 30s; nothing written; rerun unchanged
+    + rm9w/plan/reviews/k0d
+    ⇒ rm9w/plan/verdict = pass
 
-### Start a workspace in a repo whose name yields no prefix
+### Start a workspace
+
+`admin init` writes the default profile to `.lit/workspace.toml` and applies the same
+bytes as version one; the prefix is a line in that file.
 
     was: lit init   →   issue prefix refused: repository name "ws" yields none … run lit init --prefix <prefix>
     $ lit get /
     error (reason=not_initialized): no lit workspace in this repository; lit admin init
     $ lit admin init
-    error (reason=invalid_value): repository name "ws" yields no prefix; lit admin init --prefix <3+ chars>
-    $ lit admin init --prefix links
-    initialized  prefix links
+    initialized  .lit/workspace.toml written (default profile) and applied as version 1; prefix ws
+    recovery phrase: …
 
 ## What the examples could not say
 
@@ -2523,19 +2510,19 @@ Writing the examples above against the design found places the grammar has no
 spelling. Each was tried, by a session in the transcripts or by a writer here, and
 written as far as the grammar goes. The design doc already absorbed the ones that
 were contradictions inside it or conventions every writer reached independently
-(quoting, `stage`, the edges `next` never lists, `/lanes/<id>`, all-or-nothing
+(quoting, `stage`, the columns no `next` names, `/lanes/<id>`, all-or-nothing
 writes, the refusal and dry-run shapes, `--json` keyed by path, short ids, `rm x` as
-`set x/deleted true`, `lit admin init`). What remains is open.
+a reversible tombstone, `lit admin init`). What remains is open.
 
 **Selectors and globs**
 
-- No negation (`type!=epic`), no OR on one key (`status=open,impl`), no `>` or
-  absolute dates (`updated>2026-11-02`), no existence or count predicate (`has
-  comments`), no sort, no limit. Sessions used every one of these through `ls --query`
-  and `grep -v`.
+- No OR on one key (`status=backlog,impl`), no `>` or absolute dates
+  (`updated>2026-11-02`), no existence or count predicate (`has comments`), no sort,
+  no limit. Sessions used every one of these through `ls --query` and `grep -v`.
 - Which fields `text~` searches; whether `labels=focus` means the list contains it;
-  whether a selector matches closed, archived, and deleted tickets by default. The
-  examples assume every status, and archived or deleted only when named.
+  whether a selector matches terminal and deleted tickets by default. The examples
+  assume every column, and deleted only when named.
+- No selector names a level, so "every epic" has no spelling beyond `get /children`.
 - Nothing selects below the ticket: comments by author, history events by writer.
   `rm '*/comments/*'` "filtered by author" in the design has no spelling.
 - No recursive glob, no alternation, no multi-field path, no way to name an arbitrary
@@ -2572,33 +2559,25 @@ writes, the refusal and dry-run shapes, `--json` keyed by path, short ids, `rm x
   only `path=literal`.
 - Appending a revision to the plan of a ticket already in `impl` empties the verdict
   `impl` was entered on. What happens to the ticket, and what the echo says.
-- The echo on a review cannot say whether the gate now passes.
-- Guidance is one field per state, but `plan` has two readers, the author and the
-  reviewer, and `quickstart review` was the reviewer's own text. Whether a transition
-  prints the guidance of the state it enters: the old `start` printed "write its plan"
-  and that line is what sent sessions to write one.
+- The echo on a review cannot say whether the requirement now passes.
 - `/next` exists only at the root. `b2q/next`, by nearest-ancestor, is undefined.
 
 **Claims and lanes**
 
-- A claim is one scalar, so a contested lane (two checkouts started tickets in it
-  before either saw the other, today's `contested by stream …`) has no representation.
-- No node holds the computed expiry, so "claim expired" has no selector key.
-- A reorder that puts a held, in-flight ticket behind an open one.
-- `next` when the held lane's head is blocked by an edge from outside the lane:
-  serve it, print nothing, or fall through.
-- Rank is absolute. "Below that lane" is a read, then a write, with a race between.
-- Where a ticket created through a lane `add` lives when its object names no parent.
-- Nearest-ancestor wins per state or per field: overriding `plan/next` in an epic
-  either keeps the root's `plan/gate` or replaces the whole state.
-- The writer has no node. `--by` and the session id decide it, and "this checkout"
-  in an echo is the only place it shows.
+- "Claim expired" has no selector key; an expired claim prints as none.
+- A reorder that puts a held, in-flight ticket behind a backlog one.
+- Taking over work left mid-flight: a hold is established only by a start or a finish,
+  so a checkout that releases a lane and moves its head `impl → review` holds nothing
+  until it finishes a member, and `/next` serves that head to anyone.
+- `get /me` prints the writer; "this checkout" in an echo is the only other place it
+  shows.
 
 **Fields**
 
-- `topic`: immutable today, absent from the path list. `follows_up`: the `followup`
-  mapping drops the link. A comment's body: settable or append-only; sessions
-  appended corrections on purpose. Where "only an epic lives at the root" is declared.
+- `follows_up`: the `followup` mapping drops the link. A comment's body: settable or
+  append-only; sessions appended corrections on purpose.
 - Commits and PRs that name a ticket are not nodes; `lit log` has no path.
-- Two clones that minted the same id: every path names one node, so neither ticket
-  can be read, renamed, or removed on its own.
+- Two writers who fixed one segment: both are listed, each keeps its id, and how one
+  of them is then addressed on its own has no spelling.
+- Restoring a tombstoned ticket: `rm x` is reversible by design, and the verb that
+  reverses it has no spelling here; the examples write `set x/deleted false`.

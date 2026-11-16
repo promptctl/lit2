@@ -105,10 +105,12 @@ row; the architecture test fails on one without.
 The decisions the layout needed and the design documents did not make.
 
 - **D1 Module path** `github.com/promptctl/lit2`: v1's org, the binary's name.
-- **D2 Go and tooling.** `go 1.26`; the one third-party module linked is
-  go-git, with its go-billy filesystem, in `git` alone, for lit's objects
-  and refs (architecture.md decision B); none of its transport packages is
-  imported. Tests are
+- **D2 Go and tooling.** `go 1.26`; the third-party modules are the ones
+  the `dependencies` block names, each in one unit: go-git with its go-billy
+  filesystem in `git` alone, for lit's objects and refs (architecture.md
+  decision B), none of its transport packages imported; edwards25519 in
+  `events` for the signature check; the TOML parser and `x/mod` in
+  `config`. Tests are
   the standard `testing` package. Lint is golangci-lint v2 as a `tool`
   directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums
@@ -147,6 +149,7 @@ The decisions the layout needed and the design documents did not make.
 - **D14 Rows with no body yet** parse, appear in help, and end internal (70)
   naming the ticket that builds them, from one unexported function in
   `root` that the lint forces out once the last body is bound. Bare `lit2`
-  is help.
+  is `get /`, the orientation handler after the board (design §3.12); until
+  that row has a body it is help.
 - **D15 This file** is the codemap at the root; its concern table places
   what the design leaves unnamed.

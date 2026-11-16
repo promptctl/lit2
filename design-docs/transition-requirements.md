@@ -18,7 +18,7 @@ A column declares, in the workspace configuration beside its flags and its
 it may leave along a forward edge, and `entry`, what it needs before it may
 arrive by any edge. A requirement is one test over one path of the ticket, a
 scope, and a severity. The tests are evaluated in exactly one place, the
-transition write `set x/status <column>`, against the workflow the ticket
+transition write `set x/status <column>`, against the column graph the ticket
 resolves. A blocking requirement that fails refuses the write and nothing is
 written; an advisory one that fails is printed and the write proceeds. Every
 other surface that talks about readiness, `/next` first among them, reports
@@ -92,8 +92,8 @@ Anything else is expressed as data, never as a new atom
 `[LAW:types-are-the-program]`. Either someone writes the fact (a field, a label,
 a verdict, a comment) and a requirement reads it, or the engine exposes a new
 derived field in the field table, which is engine code in one listed place, and
-a requirement reads that. A checklist, when one lands, exposes
-`checklist/unchecked` and the requirement is `!checklist/unchecked`. The test
+a requirement reads that. The checklist exposes `checklist/pending`, its count
+of pending items, and the requirement is `checklist/pending=0`. The test
 grammar does not grow.
 
 The configuration parse refuses, naming the key, a `test` whose path names a
@@ -105,10 +105,10 @@ some level but not on this ticket's level reads as absent; that is what makes
 
 ## The declaration
 
-Requirements live in the workflow section of the workspace configuration
-document ([workspace-configuration.md](workspace-configuration.md)), the same
-document `/columns` reads and writes, so there is one source whether the
-author edits TOML or runs `add /columns/backlog/exit '{…}'`. The
+Requirements live on the columns of `.lit/workspace.toml`, the same file
+`/columns` reads and whose working-tree draft it writes, so there is one source
+whether the author edits TOML or runs `add /columns/backlog/exit '{…}'`; either
+way the version in force is the one applied with `config commit`. The
 shipped default, in full (the file is `internal/assets/workspace/default.toml`):
 
 ```toml
@@ -204,7 +204,7 @@ add /columns/backlog/exit '{test:points severity:warning}'
 ## One enforcer
 
 Requirements are evaluated by one pure function, from the ticket's folded
-state, the resolved workflow and the edge, to a list of verdicts, one per
+state, the resolved column graph and the edge, to a list of verdicts, one per
 requirement. It reads no clock and performs no I/O
 `[LAW:effects-at-boundaries]`. The transition write is the only caller that
 acts on its result: it evaluates the source column's exit list when the edge is
@@ -284,7 +284,7 @@ the label's arrival and removal are in the history with a writer and a time.
 What becomes of grooming.md's two pieces: the `ready-to-pull` label is carried
 as data and only as data. There is no reserved label, no constant in code, no
 `ungroomed` classifier kind; the name `ready` appears once, in the default
-workflow's `test`, and a workspace that wants `groomed` or `ready-to-pull`
+profile's `test`, and a workspace that wants `groomed` or `ready-to-pull`
 edits the string. `lit groom` is dropped. Its purpose, printing what grooming
 means here, is the initial column's `guidance`, which `get <ticket>` prints for
 any ticket sitting there, which every refusal and every held `/next` ends with,
@@ -302,14 +302,15 @@ column. It is the dry-run of the forward transition exposed as a path, so
 A lane head with a non-empty `held` is held, and the lane with it, since lane
 order is sequence.
 
-`/next` then follows path-addressed-cli.md's two clauses with one reading each.
-The lane this checkout holds: if its head is held, `/next` prints the head, its
-`held` lines and the column's guidance, and serves nothing else. Commitment is
-the first clause; the only way off a lane mid-way is `rm` on the claim, a
-write, echoed, and the agent that filed the stub is usually the agent that can
-finish it. No lane held: `/next` serves the head of the top-ranked lane whose
-head is not held, and lists every held lane ranked above it with its reason, so
-nothing ranked higher goes unseen `[LAW:nothing-unseen]`:
+`/next` then serves the heads of the lanes this checkout holds, in rank order.
+A held head is printed with its `held` lines and the column's guidance and
+passed over; a checkout whose held work is all stuck is never trapped, so
+`/next` then falls through the rank order to the first lane head that is not
+held elsewhere and whose `held` is empty, labeled as outside the commitment.
+Starting it holds a second lane; a checkout may hold several. Leaving a lane
+on purpose is `rm` on the claim, a write, echoed. Every lane passed over is
+named with its reason, so nothing ranked higher goes unseen
+`[LAW:nothing-unseen]`:
 
 ```
 $ lit get /next
@@ -318,9 +319,7 @@ held above it:
   /lanes/datetime  b64   plan ← backlog/exit  description empty; labels=ready absent on b64 and its ancestors (rin)
 ```
 
-`get /lanes` prints `held` beside each head the same way, and a cross-repository
-reader computes the same `held` from the same store document, so the backlog
-counts agree inside and outside the repository.
+`get /lanes` prints `held` beside each head the same way.
 
 ## v1's holds, mapped
 
@@ -350,13 +349,13 @@ requirement in the default above or a derivation it reads; none is engine code.
 ## Requirements and the hierarchy
 
 Requirements bind to level 1 only, because level 1 is the only level with a
-stored status and so the only level with a transition to write. A level-2 or
-level-3 item's state derives from its children and is never set, so it has
+stored status and so the only level with a transition to write. A node above
+level 1 derives its stage from its children and is never set, so it has
 nothing to enter or leave; its facts reach requirements through
 `scope = "ancestors"`.
 
-A level-2 item carries requirements its tickets inherit the way
-path-addressed-cli.md already says: it carries a `columns` child, and
+A node carries requirements its tickets inherit the way
+path-addressed-cli.md already says: it carries a `columns` section, and
 descendants resolve by walking up to the nearest one. Resolution is per column
 and whole: the nearest ancestor that declares a column at all supplies that
 column's flags, `next`, `entry`, `exit` and `guidance`, and nothing is merged
@@ -364,7 +363,7 @@ across levels. An epic that wants one more exit requirement on `backlog`
 redeclares `backlog` with the full list. Merging lists would need a rule for
 order, for replacement and for removal, and every such rule is a second way
 for the configuration to say one thing `[LAW:no-mode-explosion]`. The command
-event records which node's workflow each column resolved to.
+event records which node's section each column resolved to.
 
 ## Observability
 
@@ -395,20 +394,13 @@ writes it made.
 
 ## Decisions for the owner
 
-1. The label's name. Recommended: `ready`, the shorter word for the agents who
-   will type it; it is one string in the default workflow and nothing else
-   changes if it is `ready-to-pull`.
-2. `!blockers` ships as `error`, inside `ready`, which backlog's exit checks at
+1. `!blockers` ships as `error`, inside `ready`, which backlog's exit checks at
    `error`. Recommended, because a lane's order and a `blocks` edge are both
    statements that this cannot be done before that. The alternative is
    `warning`, which lets an agent start the next lane member while the previous
    sits in review; either is one word in the default.
-3. The `required` key on a field declaration is removed in favor of a
+2. The `required` key on a field declaration is removed in favor of a
    requirement on the column where it bites. Recommended, for one source; the
    alternative keeps the key as shorthand that the configuration parse expands
    into an initial-column exit requirement, which is the same rule in two
    spellings.
-4. `/next` does not fall through when the held lane is the one this checkout
-   holds. Recommended, for commitment; the alternative serves the next open
-   lane and prints the held one above it, which moves an agent off its unit
-   without a write saying so.

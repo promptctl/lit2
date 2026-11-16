@@ -15,17 +15,19 @@ primitive set and the rule that functionality is composed from it.
 
 ## 1. What lit2 is
 
-lit2 keeps a repository's backlog as a tree of nodes inside the repository's
-own git object database, synced through the remote the code already uses,
-with no server. An agent works it with four verbs on paths: `get`, `set`,
+lit2 keeps a repository's backlog as a tree of nodes in a git object database
+of its own under the repository's git common dir, adding nothing to the code
+repository's refs or objects, synced through the remote the code already
+uses, with no server. An agent works it with four verbs on paths: `get`, `set`,
 `add`, `rm`. Every write is one or more immutable events appended to the
 writing checkout's own ref; the state everyone reads is a deterministic fold
 of every checkout's events, so two machines holding the same events agree on
 the backlog with nothing to merge. The workspace's model, its levels, fields,
-columns, transition requirements, link types, lanes, and the guidance it
-speaks to an agent, is data in the same store, edited with the same four
-verbs. The engine knows a small fixed set of things and the content of none
-of them.
+columns, transition requirements, link types, and the guidance it speaks to
+an agent, is a file in the repository, applied into the same store as a
+version (§3.15); lanes and everything else a tracker holds are events in it,
+written with the same four verbs. The engine knows a small fixed set of
+things and the content of none of them.
 
 ## 2. The substrate and what it can do natively
 
@@ -179,7 +181,7 @@ is entered only along those edges; a column no `next` names is entered from
 everywhere, which is how parking, reopening and closing without finishing
 work with no edge list.
 
-A resolved column graph is checked on every write that changes it: one
+A resolved column graph is checked when a version is applied (§3.15): one
 `initial`, at least one `terminal`, every `next` target present, no column
 removed while a ticket in its subtree holds it. Two concurrent writers can
 still produce a ticket in a column its ancestors no longer declare; the fold
@@ -205,7 +207,7 @@ prints and proceeds. The same evaluation, run as a dry run of each forward edge,
 is the derived field `held`.
 
 Anything a workspace wants to require is a fact something wrote (a field, a
-label, a verdict) or a derived field the engine exposes (`blockers`,
+label, a review) or a derived field the engine exposes (`blockers`,
 `plan/verdict`, `pr/verdict`), read by a requirement. The test grammar does not
 grow.
 
@@ -354,10 +356,10 @@ to make it. A draft in the working tree is not in force until it is applied,
 so a draft that does not parse stops no command. `Parse` reads one version's
 bytes into one typed schema. `lit2 admin init` writes the default profile,
 `internal/assets/workspace/default.toml`, to `.lit/workspace.toml` when no
-file exists, and applies the same bytes as version one, the first event of
-every store, so the file and the active version share one blob id from the
-start; an existing file is applied instead, and must parse. Every later event
-can rely on an active version existing.
+file exists, and applies the same bytes as version one at init, right after
+the enrollment (§3.17), so the file and the active version share one blob id
+from the start; an existing file is applied instead, and must parse. Every
+later event can rely on an active version existing.
 
 Every event carries `config-ref`, the git blob id of the active version its writer
 ran under, in the code repository's object format. It is provenance: it names the
@@ -381,7 +383,9 @@ the project's workspace file. Nearest wins per field.
 A writer's events are one append-only **log** under the common dir, one
 record per event in the order minted. A command appends to it and touches
 nothing else in the store; a crash mid-append loses at most the record being
-written. Sync seals the log into **segment** blobs of bounded size and
+written. Sync first squashes this checkout's unpublished events by the rule
+of §3.13, which changes nothing already published and so is not a rewrite,
+then seals the log into **segment** blobs of bounded size and
 publishes one commit per writer: its tree holds the writer's segments. The ref
 `refs/lit/log/<checkout-id>` is replaced on each push, never advanced,
 because only its writer updates it; the events are the history, the ref has
@@ -522,7 +526,7 @@ row is that no primitive learned a new case.
 
 Three functions the source documents asked about and this table answers
 without a new mechanism: "ready to pull" is the initial column's exit list;
-"rework" is a verdict inside `review`; "orphaned" is the selector
+"rework" is a failing review inside `review`; "orphaned" is the selector
 `(stage=active updated<-6h)`.
 
 ## 5. One command, start to finish
@@ -536,9 +540,10 @@ of (events, clock, argv, writer); the rest is the hearth
    common dir, this checkout's and its sibling worktrees'; load the cache
    snapshot keyed by `(fold-version, ref heads, log lengths)`. A miss or a
    torn snapshot is one refold; no lock.
-2. **Parse** the active workspace version (§3.15) into the schema value.
-3. **Fold** the events newer than the snapshot, from the sealed segments
+2. **Fold** the events newer than the snapshot, from the sealed segments
    and the open log, verifying each (§3.20).
+3. **Parse** the active workspace version the fold names (§3.15) into the
+   schema value.
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with tick and the clock. A write
@@ -607,10 +612,10 @@ decided in the body.
   for objects and refs (§6). The first budget run measures go-git's object
   walk on the depth corpus.
 - **C. `topic`.** Not a field; ids are opaque, rendered under the project
-  prefix, and an area of focus is a label (appendix).
+  prefix, and an area of focus is a label.
 - **D. `archived`.** Not a field; a ticket out of the flow is in a terminal
   column, one that should not exist is deleted (tombstone) or purged
-  (rewrite) (appendix).
+  (rewrite).
 - **E. Crypto suite.** Go's standard library and its extended crypto
   packages: Ed25519 for signatures, X25519 for key wrapping,
   ChaCha20-Poly1305 for envelopes, HKDF for the commitment subkey, with the
@@ -625,10 +630,9 @@ decided in the body.
   for push and fetch; go-git never touches the network. The git binary
   runs the credential helpers, honors `~/.ssh/config` and `insteadOf`, and
   speaks every host's dialect, which is what v1 does today and why its
-  authentication works. Event-store charter #4 is amended by this
-  (appendix): its reasons, licensing and foreground latency, do not reach a
-  background push through the user's git, since nothing is linked and no
-  foreground path waits on it.
+  authentication works. Event-store charter #4 admits this: its reasons,
+  licensing and foreground latency, do not reach a background push through
+  the user's git, since nothing is linked and no foreground path waits on it.
 - **H. Configuration and the fold.** The fold reads no configuration;
   `config-ref` is provenance (§3.3, §3.15).
 
@@ -674,91 +678,14 @@ vocabulary of §3, never the shape of the code or the bytes it printed
 
 ## 10. Build order
 
-Each step leaves every layer below it in its final shape; step 2 is the
-walking skeleton.
-
-1. **Skeleton.** The layout of §6, the composition root, the command event,
-   the harness, `lit2 --help` from the field table.
-2. **Events, principal and fold, first facts.** Items, fields, comments,
-   labels; ids; the principal minted at init and every event signed; the
-   local log; every read a replay; `add /children`, `get`, `set`, `add`, `rm`;
-   `lit2 admin init`.
-3. **Policy.** Enrollment at init; the policy document as events; roles
-   and capabilities as path globs in the default profile; the enforcer's
-   capability verdict; membership verbs and the owner threshold;
-   verification as a fold rule and at receive.
-4. **Config and columns.** The active workspace version, the schema parse,
-   `config-ref` on events as provenance; levels and
-   synthetic homes; columns, stage, rollup; transitions with the one
-   enforcer; the checklist and its terminal requirement; the default profile.
-5. **Tiers.** Envelopes encrypted under the default tier; content keys and
-   wrapped epoch keys; `tier` on items and comments; `set x/tier`; grant
-   on admit and rotation on removal; `rm x --destroy`; succession;
-   `get /me`.
-6. **Lanes, rank, claims, next.** Lanes on nodes and the one rank order;
-   rank intents; holders and expiry; `/lanes`, `/next`, `held`.
-7. **Guidance.** Workflows, handlers, the three layers, moments, the managed
-   block, `--dry-run` printing guidance.
-8. **Sync.** Sealing the log into segments, the writer's commit and ref,
-   the background process, verification at receive and re-publishing over
-   a vandalized remote, inbox refs, staleness, `/integrity`.
-9. **Rewrites and speed.** Purge, squash, sweep, the receiver's rule; the
-   budgets harness and the depth corpus; the snapshot, built once the
-   harness measures the replay it replaces.
-10. **Selectors in full, `--json`.**
+The order is the slices of [build-map.md](build-map.md): the frame of the
+house, then the walking skeleton with every layer below it in its final
+shape, then visibility, process, commitment, guidance, sharing, tending, and
+the surface in full. The backlog is a view of that map.
 
 ## Appendix: where this departs from a source document
 
 One line each, so a reader of the older document knows the position moved.
 
-- event-store design §events: no fold-derived child ordinals; ids are the
-  opaque form only, random and carried in the create event, not derived
-  from the event's place in a log.
-- event-store design §fold: determinism is asserted as state equality, not
-  pinned bytes.
-- event-store design §security-and-config (birth requirement 6),
-  workspace-configuration.md, workflows.md decision 1: the configuration is a
-  committed file in the repository as the intent, and the version in force is
-  the one applied into the log, by an event carrying its bytes and blob id.
-  Git supplies the editing, merging and review; the log says what is in
-  force; events cite the active version's blob id. The access-control policy
-  document, when it comes, is read against this.
-- path-addressed-cli.md: kept as written for hierarchy, lanes and rank;
-  `rank` takes relative forms that are the events' own shape.
-- work-claims.md: the routing steps collapse into the walk of the lane
-  order; the holder set replaces the single claim scalar; everything else
-  stands.
-- columns-and-phases.md, transition-requirements.md: the checklist's open
-  count is `checklist/pending`.
-- workspace-schema design and the v1 hierarchy epic
-  `promptctl-hierarchy-6cqf`: levels are configured, one to five, not three
-  fixed in code (decision A). Exact containment, the synthetic homes, the
-  checklist and the retirement of `type` stand as that epic records them.
-- custom-fields.md, workspace-schema: `topic` and `type` are not fields;
-  `archived` is not a field (decisions C, D).
-- schema-reversibility.md: the two rules survive as `INV:preserve-unknown`
-  and the release-only raise of event schema versions; the SQL mechanism
-  does not.
 - MINIMAL-LIT-SKETCH: lanes, claims and priority are kept, as the later
   designs require; its eleven guarantees are all rows of §4.
-- workspace-configuration.md, custom-fields.md: there is no reader of a store
-  from outside its checkout (`--at`, `stores --counts`); lit2 runs in a
-  checkout.
-- event-store design §store: a command appends to a local log, not a
-  commit; a writer publishes one commit whose tree is its sealed segments and
-  replaces its ref on push; nothing on the remote grows with commands, and
-  the number of events never reaches git. The sweep keeps its purpose with
-  one tree to anchor instead of a chain.
-- event-store charter #4: transport through the user's git in the background
-  process (decision G); go-git touches objects and refs only.
-- event-store design `INV:config-versioned`: the fold reads no
-  configuration; `config-ref` is provenance, the enforcer judges a write
-  under the active version its writer ran under, and tick judges state under
-  the active version its reader ran under.
-- access-control design: nothing in it is later; the write layer and the
-  encrypted default tier are in the first release (requirements.md §1).
-  Capabilities name path globs rather than the v1 command table's verbs;
-  the policy document is events in the store, not a Dolt object; replayed-
-  commit re-signing does not arise because nothing is replayed; `start`
-  recording the assignee becomes the `assignee` binding reading the lane's
-  claim holder.

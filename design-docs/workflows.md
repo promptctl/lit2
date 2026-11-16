@@ -127,22 +127,20 @@ Three layers, farthest to nearest:
 2. **user**: `$XDG_CONFIG_HOME/lit/config.toml`, tables
    `[workflows.<name>]` and `[workflows.<name>.handlers.<id>]`; one person,
    every repository.
-3. **project**: nodes in the store. `/workflows` at the root, and
-   `<node>/workflows` on any node, the way
-   [path-addressed-cli.md](path-addressed-cli.md) lets any node carry `lanes`
-   or `claim_ttl`.
+3. **project**: `.lit/workspace.toml`, the same file that holds the columns:
+   `[workflows.<name>]` at the root, and in a per-node section keyed by a
+   node's id for a workflow on an epic, the way the file lets any node carry
+   `columns` or `claim_ttl`. The paths `/workflows/<name>` and
+   `<node>/workflows/<name>` address those sections; a write through the
+   verbs edits the working-tree draft, and the version in force is the one
+   applied with `config commit`.
 
-A workflow is workspace truth. [workspace-configuration.md](workspace-configuration.md)'s
-test asks whether two machines that disagree can both be right about the
-backlog; a workflow refines the test one step, because two clones with
-different handlers are running two processes on one backlog, and the owner's
-requirement is that every clone runs the same one. The deciding fact is what a
-workflow binds to: its moments name columns and its project layer can sit on
-an epic, and both are store nodes. A workflow kept in a file outside the store
-would reference nodes it cannot see from a place the ancestor rule cannot
-reach. That document's table row placing "workflow set adoption" in the project
-config file is superseded. The user layer is a file because it spans
-repositories and no store holds it.
+A workflow is part of the project's model. Two clones with different handlers
+are running two processes on one backlog, and the owner's requirement is that
+every clone runs the same one; every clone running the same applied version
+has the same handlers, and a workflow's moments name columns declared in the
+same file, so a handler cannot bind to a column the version does not have.
+The user layer is a file of its own because it spans repositories.
 
 ### Resolution
 
@@ -163,7 +161,7 @@ A resolved handler must end with `on` and `body`. A record for a handler no
 farther layer defines is refused at the write unless it carries both; v1 loaded
 an inert definition and warned, v2 does not let one exist
 `[LAW:parse-dont-validate]`. A handler whose `on` names a column absent from
-the frame it is resolved in is legal (the user layer spans repositories whose
+the node it is resolved in is legal (the user layer spans repositories whose
 columns differ) and the listing reports it as `unbound`.
 
 ### The layers view
@@ -171,9 +169,10 @@ columns differ) and the listing reports it as `unbound`.
 Every workflow and handler node has a derived child, `layers`, holding each
 layer's raw record at that address: `…/handlers/impl/layers/shipped`,
 `…/layers/user`, `…/layers/project`. The resolved path is the default write
-target and writes the project layer, as every path does; `…/layers/user/<f>`
-is the write target for the user layer; `…/layers/shipped` is derived, so
-`set` on it fails at parse like `set x/claim` does.
+target and writes the project layer, the draft of `.lit/workspace.toml`, as
+every model path does; `…/layers/user/<f>` is the write target for the user
+layer; `…/layers/shipped` is derived, so `set` on it fails at parse like
+`set x/claim` does.
 
 `rm` on a resolved path removes the project record at that address and nothing
 else; what remains is what the farther layers say. `rm` where no project record
@@ -196,7 +195,7 @@ reads `base unknown`.
 put a `guidance` field on the column node and had `get x` print it after the
 ticket. That text is a handler bound `in <column>`, and `/columns/<c>/guidance`
 is derived: the bodies of the enabled handlers bound `in <c>`, in address
-order, for the frame it is read in. It is not settable; the write is `set
+order, for the node it is read in. It is not settable; the write is `set
 /workflows/<w>/handlers/<h>/body`. One mechanism prints after a ticket, and
 the column still answers "what do I do here" at the address the CLI doc gave
 it.
@@ -274,7 +273,7 @@ false (shadows shipped)`.
 
 ## Inspection
 
-`get /workflows` lists every resolved workflow in the frame it is run from,
+`get /workflows` lists every resolved workflow in the node it is run from,
 one line per workflow and per handler: name, on or off, the moments and
 selector, then the origin. The origin is `shipped` when every field is
 shipped, else each overridden field with its layer and, where it applies,
@@ -330,8 +329,4 @@ its eight assets, `--eject` and `--refresh`; `<id>` substitution, which is
 
 ## Decisions for the owner
 
-1. The project layer's home. Recommended: the store, as above. The alternative
-   is a committed `.lit/workflows.toml`, which keeps
-   [workspace-configuration.md](workspace-configuration.md)'s table as drafted
-   and loses workflows on epics and lit-recorded shadow digests.
-2. The shipped list and names above.
+1. The shipped list and names above.

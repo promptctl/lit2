@@ -1,39 +1,29 @@
-# Workspace configuration lives in the store
+# Workspace configuration: the file is the intent, the applied version is the model in force
 
 Status: draft / proposal. Written 2026-10-27 for owner review. This is the
 foundation the four designs written the same day stand on
 ([custom-fields.md](custom-fields.md), and three since superseded by
 [transition-requirements.md](transition-requirements.md), [workflows.md](workflows.md) and [columns-and-phases.md](columns-and-phases.md)),
 and it answers one rule the owner set that day: *"Whatever we did today should
-be cross-repo capable."*
-
-Revised 2026-10-28: the storage design follows the
-[event-store design's §migration](event-store/design.md), and this document
-was revised to match the decisions recorded there.
+be cross-repo capable."* The storage model is
+[architecture.md](architecture.md) §3.15; this document records the
+classification and the reasons.
 
 ## The rule, made concrete
 
-A lit store can be read from outside its repository. `lit ls --at <dir>` lists
-a discovered store, and `lit stores --counts` rolls up ready / in-flight /
-blocked counts across every store under a root. Both open the storage
-directory, `<git-common-dir>/links`, and nothing else: no repository root, no
-working tree. The model in force is in that directory too, since `lit config commit` records each version in the log. Anything lit needs in order to say what a
-backlog *is* has to be inside that directory, or the outside reader computes a
-different answer than the repository's own `lit backlog` does.
+Two replicas of one store must compute the same backlog. A replica is a clone
+with the store's events and nothing else promised: it may not hold the
+repository's working tree at the same commit, or at all, when it folds. So
+anything lit needs in order to say what a backlog *is* has to be in the log,
+or two replicas holding the same events compute two different answers.
 
-Today one such value lives outside: `ready.required_fields`. The CLI reference
-documents the consequence as a caveat on both commands: readiness across the
-boundary is "store-intrinsic", so a ticket the repository's own lit calls
-blocked for a missing description is ready from outside. Two more values are
-about to join it. The hierarchy epic puts level
-names in a `[levels]` table and strategy declarations in a `[strategies]` table,
-both in `.lit/workspace.toml`. An outside reader would render `L2` where the
-repository says `epic`, and could not tell a strategy label from any other
-label, which makes a cross-repository strategy report impossible to compute.
-Custom field definitions ([custom-fields.md](custom-fields.md)) would be a
-fourth. The owner's ruling is that this class of limitation is not acceptable,
-so the question this document settles is: which configuration is workspace
-truth, and where does it live so every reader sees it.
+Level names are the first case: a replica without the file would render `L2`
+where the repository says `epic`. Which labels are strategies is the second:
+a report could not tell a strategy label from any other label. Custom field
+definitions ([custom-fields.md](custom-fields.md)) are a third. The owner's
+ruling is that this class of divergence is not acceptable, so the question
+this document settles is: which configuration is workspace truth, and where
+does it live so every replica sees it.
 
 ## Workspace truth versus local preference
 
@@ -41,100 +31,72 @@ A configuration value is **workspace truth** when two machines that disagree
 about it cannot both be right about the backlog. It is a **local preference**
 when they can. The test is that sentence and nothing else.
 
-| Value | Today | Class | Reason |
-|---|---|---|---|
-| the `ready` check (was `ready.required_fields`) | `.lit/workspace.toml`, committed | workspace truth | decides whether a ticket is ready |
-| `[levels]` names | planned for `.lit/workspace.toml` | workspace truth | the name of a level is a fact about the backlog, not about a machine |
-| `[strategies]` | planned for `.lit/workspace.toml` | workspace truth | which labels are strategies decides what a report counts |
-| custom field definitions | new | workspace truth | which fields exist, their kinds, which are required |
-| workflows | new | workspace truth (see [workflows.md](workflows.md), which supersedes the earlier local-preference row) | handlers bind to columns and epics, which are store nodes |
-| plan-review caps | new | local preference | policy for a writer in this clone; the record it produces is in the store either way |
-| `sync.*`, `snapshot.retention_budget`, `claims.freshness_window`, `quickstart.soil_mode` | config files | local preference | how this machine behaves |
+| Value | Class | Reason |
+|---|---|---|
+| the `ready` check, an exit requirement on the initial column | workspace truth | decides whether a ticket is ready |
+| levels and their names | workspace truth | the name of a level is a fact about the backlog, not about a machine |
+| `[strategies]` | workspace truth | which labels are strategies decides what a report counts |
+| custom field definitions | workspace truth | which fields exist, their kinds, which are required |
+| columns, their requirements, link types, labels, `claim_ttl`, `min-reader-version` | workspace truth | each decides what a write may do or how a fact reads |
+| workflows | workspace truth (see [workflows.md](workflows.md), which supersedes the earlier local-preference row) | handlers bind to columns and nodes, which are store nodes |
+| how this machine syncs, caches and speaks | local preference | how this machine behaves; the record it produces is in the store either way |
 
-Everything in the first class moves into the store. Everything in the second
-stays in the two config files it uses today, project layer over global layer.
-A new setting is classified at birth by the same test, in the ticket that adds
-it.
+Everything in the first class is in the workspace file and in force only once
+applied into the log. Everything in the second class stays in the person's own
+configuration. A new setting is classified at birth by the same test, in the
+ticket that adds it.
 
-## The design: one document, versioned, in the store
+## The design: one document, in git as the intent, applied into the log
 
-The workspace document is the event store's config stream: workspace
-configuration *"is itself an event stream with a monotone version"*
-([event-store/design.md](event-store/design.md) §security-and-config). Each
-write appends a new version whose body is the whole document, TOML, recorded
-with its writer and time like every event. The live configuration is the
-current version the fold holds. It adds no Dolt table and no migration, so it
-is available once reads come from the fold (S2 in the event-store design's
-§migration), and not before.
+The workspace model is written in `.lit/workspace.toml`, one TOML document
+with every section above. The file in git is the **intent**: a person edits
+it in an editor, git versions and merges it, and the team reviews it however
+it reviews any change to the repository. A write such as `set
+/columns/backlog/exit '[…]'` edits the working-tree draft and says so in the
+echo; committing it is the person's act, like any other file. The file itself
+never becomes an event.
 
-One document rather than one table per concern, for three reasons. It is the
-exact payload the event-store design reserves for its config stream, so the
-document is the config event's body and nothing is redesigned. It gives the
-parse a single boundary: the body is parsed into one typed value once, on read, and every
-consumer takes fields off that value rather than re-reading rows
-(`[LAW:parse-dont-validate]`). And it keeps the human's experience whole: the
-document reads like `.lit/config.toml`, same syntax, same table names, so a
-user who learned one has learned the other.
+The model in force is the **active version**: the last one applied with `lit2
+config commit`. Applying is an event that carries the version's bytes and its
+git blob id and names the version it replaces, so the log is self-sufficient
+and the file is never read to learn what is in force; a replica holding the
+same events has the same model without having the file. Apply names a
+committed blob and refuses a dirty or untracked file, and refuses a version
+that does not parse or whose column graph fails its check, naming every fault
+with its key path. `lit2 admin init` writes the default profile to the file
+when none exists and applies the same bytes as version one, the first event of
+every store, so there is no store without an active version and no version 0.
 
-The document's sections are owned by the designs that need them: `[levels]`
-and `[strategies]` by the hierarchy epic, `[levels.<n>.fields.<name>]` by
-custom fields. This document owns the container
-and the rules below, not the sections.
+One document rather than one table per concern, for three reasons. It gives
+the parse a single boundary: `Parse` reads one version's bytes into one typed
+schema value once, and every consumer takes fields off that value
+(`[LAW:parse-dont-validate]`). It gives the applied version one blob id, which
+is what every event records as `config-ref`. And it keeps the human's
+experience whole: the document is a file in their repository, in the syntax
+they already know.
+
+The document's sections are owned by the designs that need them: levels and
+`[strategies]` by the hierarchy work, `[levels.<n>.fields.<name>]` by custom
+fields, columns by [columns-and-phases.md](columns-and-phases.md). This
+document owns the container and the rules here, not the sections.
 
 ## Reading and writing it
 
-Every command that opens the store reads the live document once and carries
-the typed value, so an outside reader (`--at`, `stores --counts`) and the
-repository's own lit evaluate the same definitions. A store with no document is
-a store at version 0, which parses to the defaults the binary ships; absent is
-a legitimate state, never an error.
+Every command runs on the active version, read from the fold, so every
+replica evaluates the same definitions. A draft in the working tree is not in
+force until it is applied, so a draft that does not parse stops no command.
+The file and the active version drift apart whenever one is edited or the
+other applied; `lit2 config status` reports the drift, and whether the active
+blob is in HEAD's history, and the board carries one line for it. No other
+command mentions it.
 
-Writing is through lit, because the home is the store:
-
-- `lit workspace config show` prints the live body, its version, writer and
-  time.
-- `lit workspace config edit` opens the live body in `$EDITOR` (the one
-  subprocess the workflows subsystem already allows itself), parses the result,
-  refuses an invalid document naming the key and the error, and appends version
-  N+1.
-- `lit workspace config set <key> <value>` changes one key for scripts and
-  agents, through the same parse and the same append.
-
-This changes a stance the workspace-schema draft took: *"no lit command mutates
-it"*. That stance assumed a file in the repository. With the store as the home,
-lit is the only thing that can write it, and the version stream is the review
-trail a file would have had in git. The document stays human-authored in the
-sense that matters: a person decides its content, lit only validates and
-records.
-
-## Moving the three values that exist or are planned
-
-`ready.required_fields` is now the `ready` check, an exit requirement on the
-initial column ([transition-requirements.md](transition-requirements.md)). The hierarchy epic's two
-tickets that write config, level names and strategies, are re-pointed at the
-document before they are built; their text today says `.lit/config.toml`. The grooming rule needs nothing here: a label is already
-store-resident.
-
-A repository that already carries workspace-truth keys in `.lit/config.toml`
-is not left with two sources. The first lit that knows the document reads
-those keys, writes them as version 1 if no document exists, and prints that it
-did so and which keys moved. From then on lit never reads them from the file,
-and `lit doctor` names any that remain there, the way the workflow epic has
-doctor name template overrides lit no longer reads. There is no fallback read
-of the file: a fallback is a second source wearing a transition's clothes, and
-transitions end.
+Two people who edit the file concurrently meet in a git merge, which is where
+people already resolve concurrent edits to a file. Two applies that name one
+parent are a conflict value on the workspace in the fold, resolved by an apply
+that names both: git merges the file, lit merges which version is in force.
 
 ## Observability
 
-The command event records the config version read and whether it came from the
-store or from the shipped defaults; a write records the version from and to
-and the keys that changed, zero included `[LAW:nothing-unseen]`.
-
-## Decisions for the owner
-
-1. The classification table above.
-2. Re-pointing the hierarchy epic's level-name and strategy tickets at the
-   store document now, before they are built. Recommended: the alternative is building them against
-   the file and moving them in a later ticket.
-3. The edit surface: `edit` through `$EDITOR` plus `set` for one key, as
-   proposed, or `set` alone.
+Every event carries `config-ref`, the blob id of the active version its writer
+ran under; the command event records the version a run read and, for an
+apply, the version from and to `[LAW:nothing-unseen]`.

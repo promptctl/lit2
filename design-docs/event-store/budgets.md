@@ -55,7 +55,7 @@ foreground at all.
 | Any command, warm cache | < 300 ms | the everyday case; p95 |
 | Any command, cold cache (incremental fold from snapshot) | < 1 s | |
 | Full refold from genesis (fold-version bump; worst case) | < 1 s | can occur inside any command; sets the codec + snapshot bar |
-| First-adopt verification compute | < 1 s | the riskiest budget; forces design OPEN #3 (batch verify vs signed snapshot) |
+| First-adopt verification compute | < 1 s | the riskiest budget; adoption verifies the full history (design §sync), so this is what that verification must meet |
 | Staleness check (read all writer ref heads) | < 20 ms | component profile within the command ceilings above |
 | Background receive/mirror, per occasion | ≤ 1 CPU-second | and machine-wide background CPU ≤ 5% of one core averaged over any 60 s window on the breadth fleet |
 

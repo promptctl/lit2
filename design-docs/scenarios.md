@@ -12,7 +12,7 @@ the contract is the behavior stated under "relies on", never the text.
 
 | id | scenario | strain | resolution |
 |---|---|---|---|
-| S-1 | 3 | a verdict with no `of` could pass a plan the reviewer never read | `of` is required on a plan verdict (architecture §3.6, §4) |
+| S-1 | 3 | a review with no `of` could pass a revision the reviewer never read | a review names the revision it judged, `of` required; a review of an older revision lands and derives nothing (architecture §4) |
 | S-2 | 3 | "the reviewer is not the author" compares two paths; no atom says it | not enforced by the engine; the `brief` handler says it; left as data |
 | S-3 | 3, 11 | a held lane whose head is held traps the checkout | `/next` reports the held head and falls through, labeled (architecture §4) |
 | S-4 | 2 | guidance at "an epic finishes" has no moment | a selector may read through `parent`; `(stage=terminal parent/stage=terminal)` on `enter *` |
@@ -103,7 +103,7 @@ where the process says so, and is handed the next ticket when it finishes.
 
 **Walk.**
 
-1. `set s4l/status plan`. `backlog/exit` evaluates five requirements, all met;
+1. `set s4l/status plan`. `backlog/exit` evaluates the `ready` check's tests, all met;
    the summary line prints the counts. Derivations: `⇒ s4l/claim = this
    checkout`, `⇒ m2q/lanes/history held by this checkout`. The
    `plan-review/plan` handler fires on `enter plan`.
@@ -145,17 +145,16 @@ revision is still a fact worth keeping, so it lands; only the derived verdict
 ignores it, and the echo says which revision is latest. One more token for the
 reviewer, who has the number from the read in step 4. Adopted.
 
-**Strain S-2.** "The reviewer is not the plan's author" compares the verdict's
-writer with the plan version's writer. No requirement atom compares two
+**Strain S-2.** "The reviewer is not the plan's author" compares the review's
+writer with the revision's writer. No requirement atom compares two
 paths, and adding one grows the test grammar for one rule. Not enforced by
 the engine; the `brief` handler states it; a workspace that wants it enforced
 is the signal to revisit. Left as data.
 
 **Strain S-3.** Suppose `7ka` carried a `blocks` edge from a ticket in another
-epic that is still open. Its `held` is non-empty. transition-requirements.md
-recommends `/next` print the head and serve nothing else; work-claims.md
-records the owner's ruling of 2026-09-29 that a checkout whose held work is
-all blocked is never trapped and leaving is never silent. The ruling wins:
+epic that is still open. Its `held` is non-empty. The owner's ruling of
+2026-09-29, recorded in work-claims.md: a checkout whose held work is all
+blocked is never trapped and leaving is never silent. So
 `/next` prints the held head with its `held` lines, then falls through the
 rank order to the next eligible lane and labels it as outside the held lane.
 Starting it holds a second lane; a checkout may hold several, and `/next`
@@ -189,14 +188,15 @@ without being briefed, and never silently duplicate.
 
 1. Both run `get /next` within a second. Both read the same store under the
    common dir; neither holds a lane; both are served `s4l`.
-2. A runs `set s4l/status plan`; the commit lands on A's ref; A's snapshot is
-   rewritten by atomic rename.
-3. B runs `set s4l/status plan` a moment later. B's open reads the ref heads,
-   sees A's new head, folds A's event, and finds the lane held by A. Refused:
-   `s4l is the head of m2q/lanes/history, held by <A> · 2s`. Nothing written.
-   B's `get /next` now passes that lane over, naming A, and serves the next.
-4. The genuine race: both write within the same open. Both commits land on
-   their own refs; no lock, no loss. The next fold on either side computes
+2. A runs `set s4l/status plan`; the event is appended to A's log under the
+   common dir; A's snapshot is rewritten by atomic rename.
+3. B runs `set s4l/status plan` a moment later. B's open reads every open log
+   under the common dir, sees A's new event, folds it, and finds the lane held
+   by A. Refused: `s4l is the head of m2q/lanes/history, held by <A> · 2s`.
+   Nothing written. B's `get /next` now passes that lane over, naming A, and
+   serves the next.
+4. The genuine race: both write within the same open. Both events land in
+   their own logs; no lock, no loss. The next fold on either side computes
    the lane's holders as `{A, B}`; `claim` is whichever the total order puts
    last and `contested` names the other. Both agents' next command prints the
    advisory from `/integrity`, and the one named in `contested` runs
@@ -252,22 +252,23 @@ how the team works.
 **Walk.**
 
 1. A edits `.lit/workspace.toml` to add `{ test = "points", severity = "error" }`
-   to `columns.backlog.exit`, tries it in the working tree, commits, and the
-   team reviews the diff as it reviews any change. Once it is on the branch,
-   A runs `lit2 config commit`, which applies that committed blob.
-2. B, on a branch without it, runs `set b64/status plan`. B's file has no
-   such requirement; the write lands, citing the blob id of B's active version.
-3. After both sync events and merge the file, the transition stands: it
-   was judged at B's write under B's file, the event names that file's
-   blob, and the fold applies it as written; `b64` is in `plan` with
-   no `points`. A requirement guards a transition, and this one happened
-   before the requirement existed anywhere B could see.
+   to `columns.backlog.exit`, commits, and the team reviews the diff as it
+   reviews any change. Once it is on the branch, A runs `lit2 config commit`,
+   which applies that committed blob as the next active version.
+2. B, who has not yet synced, runs `set b64/status plan`. B's active version
+   has no such requirement; the write lands, citing that version's blob id.
+3. After both sync and merge the file, the transition stands: it was judged
+   at B's write under B's active version, the event names that version's
+   blob, and the fold applies it as written; `b64` is in `plan` with no
+   `points`. A requirement guards a transition, and this one happened before
+   the requirement existed anywhere B could see.
 4. Two people edit the file concurrently. They meet in a git merge conflict
    on the file, which is where concurrent edits to a file are already
-   resolved, with the full diff in front of them.
-5. A's merged file removes `rin`'s `audit` column while `rin.4ou`, started on
-   another machine, sits in `audit`. The local `in_use` check saw no such
-   ticket at edit time.
+   resolved, with the full diff in front of them. Two applies naming one
+   parent are a conflict value in the fold, resolved by an apply naming both.
+5. A applies a merged version that removes `rin`'s `audit` column while
+   `rin.4ou`, started on another machine, sits in `audit`. The check at apply
+   saw no such ticket.
 
 **Relies on.** Nothing a writer did legally is undone by a later rule; the
 process is versioned, diffed and reviewed by git; and nothing is hidden:
@@ -293,10 +294,10 @@ its own text for that step, without touching the rest of the workspace.
 1. In `.lit/workspace.toml`, under `[nodes."<rin's id>"]`: `columns.audit.next =
    ["impl"]` and `columns.plan.next = ["audit"]`. The same edit through the
    verbs is `set rin/columns/audit '{next:[impl]}' rin/columns/plan/next
-   '[audit]'`, which edits the file and echoes that it did. The parse checks
-   the resolved graph for `rin`'s tickets: one initial, terminal reachable,
-   every `next` present. The change is committed and reviewed with the diff
-   in view.
+   '[audit]'`, which edits the file and echoes that it did. The change is
+   committed, reviewed with the diff in view, and applied with `lit2 config
+   commit`, which checks the resolved graph for `rin`'s tickets: one initial,
+   terminal reachable, every `next` present.
 2. In the same section, a workflow `audit` with one handler: `on = ["enter
    audit", "in audit"]`, `body = "Run the law audit on the diff."`. Handlers
    resolve from the ticket up, so the body prints for `rin`'s tickets and no
@@ -354,18 +355,18 @@ happened around it is silently lost.
 
 1. A runs `rm 3aj --purge --dry-run`: the subtree, each item's comment and
    edge counts, the lane that will have no members. Then without the flag: a
-   rewrite event on A's ref naming the items.
+   rewrite event appended to A's log naming the items.
 2. B, offline, had commented on `3aj.8k1` an hour earlier and comments again
    after. After sync, the fold drops every event whose subject is a purged id,
    both of B's comments included; `3aj.8k1/blocks/x` on another item folds to
    no edge; a mention in prose stays prose.
-3. Each checkout, on its next write, rebuilds its own ref without the purged
-   events and pushes the new head as a compare-and-swap. A receiver accepts
-   the non-fast-forward move because the rewrite accounts for every missing
-   event. Objects die at the next `gc`.
+3. Each writer, on its next sync, re-seals its segments without the purged
+   events and replaces its ref with the new tree. A receiver accepts the new
+   tree because the events it lacks are the ones the rewrite names. Objects
+   die at the next `gc`.
 
 **Relies on.** One command, one echo, convergence everywhere; the purged id
-is never reused because ids derive from writer and position.
+is never reused because an id is random bits minted once.
 
 **Strain S-9.** B's second comment was written to an item B still saw. It is
 dropped, correctly, and B should learn that. The fold counts events whose
@@ -388,8 +389,8 @@ cleaning up, and a live holder is never robbed by a clock.
    shows the holder and the expiry.
 4. Taking over before expiry is a deliberate write: `rm <lane>/claim`, echoed,
    then the transition.
-5. A later sweep anchors W's ref under a live ref and deletes it; a W that
-   reappears with commits past the anchor is alive and kept.
+5. A later sweep anchors W's tree under a live ref and deletes W's ref; a W
+   that reappears with events the anchor lacks is alive and kept.
 
 **Relies on.** No heartbeat, no release verb in the common path, and the
 override of fresh evidence is always a visible act.
@@ -450,8 +451,8 @@ mistake.
 
 **Walk.** `lit2` prints the root and the orientation handler. `lit2 --help`
 is the verb table and the field table. `lit2 get /lanes` is the backlog in
-served order. `lit2 set m2q/rank 1` reads as a position and compiles to the
-relative intent; the echo shows the resulting order. `lit2 set '(…)'`
+served order. `lit2 set m2q/lanes/history/rank top` moves that lane, and its
+members with it; the echo shows the resulting order. `lit2 set '(…)'`
 unquoted in zsh fails before lit2 runs, and the orientation text says to
 quote. A wrong title is undone from its own echo. `--json` on one scalar
 prints the scalar; on many paths, one object.

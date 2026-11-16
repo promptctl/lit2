@@ -72,8 +72,9 @@ lit is built around one loop, and every piece of guidance attaches to a step of 
 1. **See the order.** `get /lanes` is the backlog in rank order: lanes, each a row of
    tickets worked in sequence.
 2. **Get the one ticket.** `get /next` serves the head of the lane this checkout
-   holds, or the head of the top-ranked lane if it holds none. One ticket, not a list
-   to triage.
+   holds, else the head of the top-ranked lane that is not held elsewhere and
+   whose `held` is empty, naming every lane it passed over. One ticket, not a
+   list to triage.
 3. **Take it.** The transition out of the initial column. The claim is derived from
    the transition and echoed with it; there is nothing to remember.
 4. **Work it through its columns.** Each column entered prints its guidance. A

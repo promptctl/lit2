@@ -56,11 +56,14 @@ These are settled. Do not reopen them in the design.
    in [budgets.md](budgets.md). Network transfer is excluded only where
    physics demands (first-clone download); network never sits on a command's
    foreground path.
-4. **Permissive licensing only; no subprocesses.** No copyleft dependencies;
-   linked libraries must be permissive. lit reads and writes git objects and
-   refs in-process through such a library and never runs the `git` binary or
-   any other subprocess to do it. Where prior art is non-permissive, rewrite
-   from behavior, never from code.
+4. **Permissive licensing only; the user's git for transport, in the
+   background.** No copyleft dependencies; linked libraries must be
+   permissive. lit reads and writes git objects and refs in-process through
+   such a library, which never touches the network. Push and fetch run the
+   user's own `git` binary, only from the background sync process, so the
+   credential helpers, `~/.ssh/config` and every host's dialect work as they
+   do for the code, and no foreground path waits on it. Where prior art is
+   non-permissive, rewrite from behavior, never from code.
 5. **Local enforcement stays; cross-machine conflicts resolve at the fold.**
    A machine validates its own writes against its own current fold exactly as
    strictly as today. Contradictions that only concurrent offline machines can
@@ -70,12 +73,14 @@ These are settled. Do not reopen them in the design.
    coexisting events until resolved.
 6. **Birth requirements.** The event schema carries from its first shipped
    version: a signature slot and principal reference on every event; prose
-   payloads opaque-envelope-capable; a versioned, signed configuration stream
-   that events reference by version; and validation as a generic engine over
-   that config, not hand-coded rules. These are primitives for the
-   access-control layers and the user-defined hierarchy feature; retrofitting
-   any of them is a fleet migration, so they ship in v1 even where v1 leaves
-   them inert.
+   payloads as opaque envelopes; on every event, the blob id of the workspace
+   version its writer ran under and the policy version in force, as
+   provenance; a signed, versioned policy as events in the store; and the
+   workspace model as data a committed file declares and an event applies,
+   enforced by one generic engine at the write, not hand-coded rules. These
+   are primitives for the access-control layers and the user-defined
+   hierarchy feature; retrofitting any of them is a fleet migration, so they
+   ship in the first release.
 7. **Rewriting history is a first-class, common operation.** Any event may
    be dropped, have its content replaced, or be squashed with others into one,
    by a rewrite: itself an event, authorized like any write, that names what
@@ -110,7 +115,8 @@ These are settled. Do not reopen them in the design.
 ## Calibration
 
 120% of the primitives, 80% of the features: the primitive layer (event shape,
-config stream, signature slots, fold engine) carries headroom beyond every
+the applied workspace version and the policy events, signature slots, fold
+engine) carries headroom beyond every
 identified consumer; the feature layer covers the main body of uses and leaves
 the tail unbuilt. For future lit features, do not predict them — document the
 constraints this design imposes on them, so evolution is burdened knowingly or
@@ -137,3 +143,8 @@ is a second thing to keep true.
   subprocess; #7 admits purge.
 - 2026-11-03: owner amendment: #7 makes rewriting history first-class and
   the append-only audit trail an opt-in guarantee; #2 follows.
+- 2026-11-05: amended by [architecture.md](../architecture.md) decisions G
+  and H: #4 admits the user's `git` binary for push and fetch from the
+  background sync process; #6 states the workspace model as a committed file
+  applied by an event, the policy as events, and both versions on every event
+  as provenance the fold does not read.

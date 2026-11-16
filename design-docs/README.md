@@ -1,10 +1,10 @@
 # Design docs
 
 Start with `architecture.md`: the one strategy for building `lit2`, the
-primitives, how the functionality composes from them, and the decisions still
-open. `scenarios.md` walks the common situations through it and records where
-it strained. Where `architecture.md` and another document here disagree,
-`architecture.md` wins; its appendix lists each departure.
+primitives, how the functionality composes from them, and the decisions it
+settled. `scenarios.md` walks the common situations through it and records
+where it strained. The other documents are the detailed designs it composes,
+each owning its own concern in the vocabulary `architecture.md` fixes.
 
 ## Written for v2 (2026-11-05)
 
@@ -18,8 +18,9 @@ it strained. Where `architecture.md` and another document here disagree,
 - `constraints.md`: every constraint the charters and the event-store design
   impose, with what each implies, buys and costs, and which are load-bearing.
 - `columns-and-phases.md`: column, phase and workflow state are one concept; the
-  column is the one stored fact, labels are computed; rework is verdicts inside
-  review. Owns the column graph at `/columns`.
+  column is the one stored fact, labels are applied by people; rework is
+  reviews on the PR's revisions inside `review`. Owns the column graph at
+  `/columns`.
 - `transition-requirements.md`: entry and exit requirements on a column, one
   shape, one enforcer on the transition write. "Ready to pull" is the initial
   column's exit list.

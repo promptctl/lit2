@@ -9,47 +9,49 @@ one of them, not an automatic win for either.
 ## Summary
 
 One shared backlog serves many parallel lines of work: several worktrees on one
-machine, several clones across machines, several people. Selection (`lit next`)
+machine, several clones across machines, several people. Selection (`/next`)
 answers "what should be worked now" — but with only global state to consult, it
 gives every checkout the *same* answer, so parallel streams collide on a single
 cursor and users fight over rank to steer it.
 
 This design introduces the **claim**: a lane of work belongs, temporarily and
 advisorily, to the **checkout** that most recently worked it. Claims are
-**purely derived** from work records already in the shared database. They are
+**purely derived** from work events already in the shared store. They are
 never stored, never synchronized as their own state, and never cleaned up —
-there are no claim objects, no claim commands, and no claim lifecycle. The
-entire state footprint is: work events carry an opaque attribution, and each
-checkout keeps one identity token in its private git directory. Who holds
-what, what is contested, and where `next` should route are all computed at
-read time from facts the system already synchronizes.
+there are no claim objects and no claim lifecycle. The entire state footprint
+is: every event carries an opaque attribution, and each checkout keeps one
+identity token in its private git directory. Who holds what, what is
+contested, and where `/next` should route are all computed at read time from
+facts the system already synchronizes.
 
-Claiming is implicit — starting a ticket in a lane claims the lane. Release is
-implicit — finishing the lane, the claim expiring, or deleting the checkout
-releases it, and a released claim is gone: nothing records that it existed. Focus and unfocus are not modes: a checkout with live claims is focused on
-them; a checkout without claims sees the global backlog. The global case is the
-natural zero state, not a second layer.
+Claiming is implicit — a transition out of the initial column on a ticket in a
+lane claims the lane. Release is implicit — finishing the lane, parking a
+member back into the initial column, or the claim expiring releases it — or
+one explicit write, `rm <lane>/claim`, which the fold reads as ending the hold
+until the next establishing transition. A released claim is gone: nothing
+records that it existed. Focus and unfocus are not modes: a checkout with live
+claims is focused on them; a checkout without claims sees the global backlog.
+The global case is the natural zero state, not a second layer.
 
 ## The problem
 
-The backlog is one shared, synchronized truth with one total order: a
-hierarchical composite rank in which an epic's position carries all of its
-children. That is a strength — every machine sees the same backlog — but it
-makes "the top of the backlog" a single shared slot, and `next` a single global
+The backlog is one shared, synchronized truth with one rank order over its
+lanes. That is a strength — every machine sees the same backlog — but it makes
+"the top of the backlog" a single shared slot, and `/next` a single global
 cursor. Two symptoms follow:
 
 - **Parallel checkouts pull the wrong work.** A second worktree is opened to
   run a different epic in parallel. Any fresh agent session there follows the
-  standard workflow and runs `next` — which serves the *project's* next ticket,
-  i.e. the other worktree's epic. Every new session must be re-briefed by hand,
-  and an unbriefed one silently works the wrong stream.
-- **Users fight over rank.** Two people each rank their own tickets "to top."
-  Rank moves are single-row fractional-index writes, and sync merges them
-  cell-wise without loss — both writes survive. The fight is not a merge bug
-  and no representation change can fix it: two "before everything" intents are
-  mutually exclusive *by meaning*. Each user reached for the only lever that
-  steers `next` — project-level priority — to express something that was never
-  a priority statement at all: "I am working on these now."
+  standard workflow and reads `/next` — which serves the *project's* next
+  ticket, i.e. the other worktree's epic. Every new session must be re-briefed
+  by hand, and an unbriefed one silently works the wrong stream.
+- **Users fight over rank.** Two people each rank their own lanes to the top.
+  Rank moves are intents, and the fold places both — both writes survive. The
+  fight is not a merge bug and no representation change can fix it: two
+  "before everything" intents are mutually exclusive *by meaning*. Each user
+  reached for the only lever that steers `/next` — project-level priority — to
+  express something that was never a priority statement at all: "I am working
+  on these now."
 
 The general question underneath both: **how do distributed checkouts of one
 repository coordinate work such that the shared backlog stays meaningful?**
@@ -86,42 +88,47 @@ itself nowhere — it is a reading, not a record.
   and humans come and go inside a checkout; the checkout persists. Informally:
   the *worktree is the identity*; the *workstream* (an epic or lane) is what
   it currently carries; the claim is the derived binding between the two.
-- **Lane** — the declared unit of serialization inside an epic: tickets in one
-  lane are sequential, tickets in different lanes may proceed in parallel. An
-  epic that declares no lanes is one lane. A parentless ticket is its own
-  lane. The lane is the claimable unit.
-- **Evidence** — work records in the shared database attributed to a checkout:
-  which tickets it started or completed, and when it last touched them.
+- **Lane** — the declared unit of serialization: an ordered list on any node,
+  whose members are leaves from anywhere in the tree. Tickets in one lane are
+  sequential, tickets in different lanes may proceed in parallel. A leaf in no
+  declared lane is its own one-member lane; a node worked as a unit is a folder
+  holding one lane. The lane is the claimable unit.
+- **Evidence** — events in the shared store attributed to a checkout: which
+  tickets it moved out of the initial column or into a terminal one, and when
+  it last touched them.
 - **Claim** — the derived relation "lane L is held by checkout S," recomputed
   from evidence on every read.
-- **Freshness window (T)** — the configured age beyond which evidence no
-  longer supports a claim.
+- **Freshness window (`claim_ttl`)** — the configured age beyond which evidence
+  no longer supports a claim, declared in the workspace file and resolved by
+  nearest ancestor.
 
 ### The claim predicate
 
 A lane **L** is claimed by checkout **S** exactly when all of the following
 hold:
 
-1. **L is unfinished** — open or in-progress tickets remain in it.
-2. **S produced the latest establishing event on L.** Only ticket lifecycle
-   transitions establish or transfer a claim: starting a ticket
-   (open → in progress) and completing one. Grooming edits, comments,
-   ranking, and label changes never establish a claim — a drive-by comment
-   from another checkout must not capture an epic. "Latest" is stamp order,
-   and a write is stamped past the history of every ticket that can share
-   its lane, as the write saw it: a takeover made on a clock that runs
-   behind still outranks the start it took over. Under the event store,
-   ordering and stamping follow event-store design §events instead, which
-   also states how clock skew then reaches leg 3.
-3. **The claim is fresh.** Once established, *any* mutation by S on L's
-   tickets refreshes it — ordinary working commentary keeps a claim alive
-   through a long stretch on a single ticket. A claim whose last refresh is
-   older than T no longer holds.
+1. **L is unfinished** — a member whose stage is not terminal remains in it.
+2. **S produced the latest establishing event on L.** Only transitions
+   establish or transfer a claim: a move out of the initial column and a move
+   into a terminal one, on any member. Grooming edits, comments, ranking, and
+   label changes never establish a claim — a drive-by comment from another
+   checkout must not capture a lane. "Latest" is the fold's total order,
+   `(causal-position, writer, event id)`, so a takeover made on a clock that
+   runs behind still outranks the start it took over. The fold computes the
+   holder set in that order; `claim` is the last and `contested` the rest. A
+   release write, `rm <lane>/claim`, ends the hold until the next
+   establishing transition, and so does parking a member into the initial
+   column.
+3. **The claim is fresh.** Once established, *any* event by S on L's members
+   refreshes it — ordinary working commentary keeps a claim alive through a
+   long stretch on a single ticket. A claim whose newest event is older than
+   `claim_ttl` no longer holds. Expiry is tick's: computed on every read
+   against `now`, never stored.
 4. **S is live, as far as this machine can tell.** See the liveness prune
    below; machines that cannot check assume liveness and rely on freshness.
    The prune answers with what it found, not merely whether to void, and a
-   worktree the holder has locked carries its claim past T — leg 3 defers to
-   leg 4 in that one case, and in no other.
+   worktree the holder has locked carries its claim past `claim_ttl` — leg 3
+   defers to leg 4 in that one case, and in no other.
 
 Derived annotations accompany the predicate:
 
@@ -130,72 +137,59 @@ Derived annotations accompany the predicate:
   annotation, not a state: routing stays deterministic (the latest
   establishing event holds the claim), both sides are notified the next time
   they look, and sync reconciliation surfaces it for judgment.
-There is no annotation for a claim whose evidence has aged past T. An
-expired claim is not a claim, and it is not the record of one either: the
+There is no annotation for a claim whose evidence has aged past `claim_ttl`.
+An expired claim is not a claim, and it is not the record of one either: the
 lane derives **unclaimed**, exactly as a lane nobody ever started does, and no
 surface says anything about the claim that used to be there. The design once
 carried a third standing here, *Stale*, described as "the record that a claim
 existed", and every consumer gave it a meaning — a "(stale)" badge on the
-claim line, a provenance printout on `lit start`, a takeover verdict in
+claim line, a provenance printout on the start, a takeover verdict in
 routing. That was a grade of claim wearing a disclaimer, and it produced the
 report links-claims-y6yz: a lane whose claim had lapsed six hours earlier
-still printed as claimed on every `lit next`, and nothing the user could do
+still printed as claimed on every `/next`, and nothing the user could do
 touched it, because there was nothing there to touch (owner ruling,
-2026-09-26). Routing step 6.
+2026-09-26). See "An expired claim is no claim" under Routing.
 
-A claim dissolves by the predicate ceasing to hold: the lane finishes, the
-evidence ages out, or the holder's checkout is locally known to be gone.
-Nothing is stored, so nothing is released, transferred, or cleaned up — and
-nothing is remembered.
+A claim dissolves by the predicate ceasing to hold: the lane finishes, a
+member is parked, the evidence ages out, or the holder's checkout is locally
+known to be gone; or it is released by the one write. Nothing else is stored,
+so nothing is transferred or cleaned up — and nothing is remembered.
 
 ### Identity and attribution
 
-Each checkout lazily mints a **stream id** — a short opaque token — on its
-first mutation, and stores it in the checkout's private git directory (the
-same per-worktree private area where git keeps HEAD; git guarantees one per
-worktree and deletes it with the worktree). The token is write-once local
-state and is never synchronized as configuration.
+Each checkout holds a **checkout id** — a 128-bit opaque token — in the
+checkout's private git directory, `<git-dir>/lit/checkout/id` (the same
+per-worktree private area where git keeps HEAD; git guarantees one per worktree
+and deletes it with the worktree). The token is write-once local state and is
+never synchronized as configuration. It is the thing claims and writer refs key
+on.
 
-Work events carry an append-only attribution pair: **(stream id, workspace
-id)** — the checkout's token plus the already-existing per-store workspace
-identifier. Both are opaque. Attribution is historical fact and is never
+Every event carries an attribution triple: **(checkout, principal, agent)** —
+the checkout's token, the key that signed the event, and an optional opaque
+agent label. All three are opaque. Attribution is historical fact and is never
 rewritten.
 
-An event carrying no pair belongs to the **public checkout**: the single holder
-every unattributed write in a workspace shares. It is a holder like any other —
-it takes lanes, ages out, and can be contested — with one difference that
-follows from having no token: nothing can address it, so no machine's liveness
-prune can void it and no claim line can walk you over to it. It is also never
-the checkout reading it. Only a mutating command records events, and it mints a
-token first, so a checkout that has minted no token has recorded nothing and no
-public-checkout lane is its own. Lanes are unaffected — the public checkout
-occupies ordinary lanes on ordinary terms.
-
-The price is that two writers with no token are indistinguishable, so they never
-contest each other. That is the definition of the bucket rather than a defect in
-it: an identity nobody minted is one nobody can tell apart.
-
-Sessions, agent identities, and user names play no role in claims. Many
+Sessions, agent labels, and user names play no role in claims. Many
 sessions in one checkout are one claimant; a new session inherits its
 checkout's claims with no re-briefing, which is precisely the behavior the
 design exists to produce.
 
 **Local liveness prune** (the `git worktree prune` pattern): when deriving
-claims, a machine enumerates its own live worktrees and their stream ids.
-Evidence whose workspace id matches this store but whose stream id matches no
-live local worktree comes from a checkout that no longer exists — it is
-treated as void, immediately, on this machine. Remote machines cannot see
-this filesystem, so for them the same claim ends by aging out. The asymmetry
-is deliberate and honest: deletion is a local fact, and only its owner can
-observe it instantly. A different clone on the same machine has a different
-workspace id and is never pruned by this one.
+claims, a machine enumerates its own live worktrees and their checkout ids.
+Evidence from this store whose checkout id matches no live local worktree
+comes from a checkout that no longer exists — it is treated as void,
+immediately, on this machine. Remote machines cannot see this filesystem, so
+for them the same claim ends by aging out. The asymmetry is deliberate and
+honest: deletion is a local fact, and only its owner can observe it instantly.
+A different clone on the same machine has its own store and is never pruned by
+this one.
 
 The enumeration answers with more than a yes or no. The finding is one of
 four: *gone* (this machine enumerated and the worktree is absent — the void
 above), *present*, *locked* (`git worktree lock`), or *unprovable* (another
-clone, or the public checkout, which names no worktree to look for). Two of
+clone, which names no worktree here to look for). Two of
 the four decide anything. *Gone* voids. *Locked* is the one finding that
-outranks the clock: it carries the claim past T, so the lane is **held** —
+outranks the clock: it carries the claim past `claim_ttl`, so the lane is **held** —
 routed around and gated exactly as a fresh one is, with no separate word for
 it. Every other signal here says a worktree EXISTS, which a dead session leaves
 behind just as readily; a lock is the holder speaking, and nobody sets it by
@@ -207,7 +201,7 @@ git withholds `prunable` from a locked record, so a stream missing from the
 listing is gone whatever it once claimed about itself, and reading it the
 other way would make a lock an unkillable claim.
 
-*Present* and *unprovable* change nothing: past T, with no lock, the claim has
+*Present* and *unprovable* change nothing: past `claim_ttl`, with no lock, the claim has
 expired and the lane is unclaimed whatever this machine can see of the
 worktree. The enumeration once decided what an expired claim was called —
 "stale, worktree present" against "orphaned" — which presupposed that an
@@ -231,222 +225,122 @@ conflict in waiting.
   *that ticket's own lane* — working a dependency never swallows the
   neighboring epic.
 
-The lane stays the *claim* unit exactly as above — several checkouts may
-still legitimately share one epic across lanes, and a multi-lane epic is
-claimable lane by lane. What the GRANULARITY RULING below adds is the
-*serving order* around that unit: epic-major, not lane-major. The two are
-different questions — "what does one act of starting a ticket claim" versus
-"in what order does routing offer a checkout its own work" — and only the
-second changes.
-
 ### GRANULARITY RULING (owner, 2026-08-24)
-
-Recorded against links-claims-1ihf.5 and folded back here on that ticket's
-landing, superseding the lane-granular reading of Routing steps 1→3 below.
 
 **The rule, in the owner's words**: "ALL LANES IN AN EPIC SHOULD BE SURFACED
 BEFORE ANY LANE FROM THE NEXT EPIC." One checkout works an entire epic to
-completion before moving on, no exceptions. Never more epics in_progress
-than worktrees.
+completion before moving on, no exceptions. Never more epics in progress than
+worktrees.
 
-**Why this is the rule and not a tuning knob**: the pre-claims selector's
-`--continue` bias (see "Relationship to adjacent mechanisms" below) tried to
-approximate this with a stable partial sort gated by a flag —
-`sortByContinueBias`, promoting leaves under *any* in_progress epic. That
-mechanism is self-defeating under exactly the failure it exists to prevent:
-each hop to a new epic enlarges the promoted set, weakening the bias for the
-*next* hop, so six in_progress epics in one checkout is the loop's fixed
-point, not a pathology of it. The fix cannot be another nudge in the same
-shape; it has to be a total order whose most significant component is epic
-affinity, so every in-epic leaf precedes every out-of-epic leaf as residue of
-the ordering rather than as a rule someone can forget to apply.
+**Why this is the rule and not a tuning knob**: v1's selector tried to
+approximate it with a stable partial sort gated by a flag, promoting leaves
+under *any* in-progress epic. That mechanism is self-defeating under exactly
+the failure it exists to prevent: each hop to a new epic enlarges the promoted
+set, weakening the bias for the *next* hop, so six in-progress epics in one
+checkout is the loop's fixed point, not a pathology of it. The fix cannot be
+another nudge in the same shape; it has to fall out of the ordering, so every
+in-epic leaf precedes every out-of-epic leaf as residue of the structure rather
+than as a rule someone can forget to apply.
+
+**How the model meets it.** The lane is the unit a checkout commits to, and a
+node worked as a unit is one lane: an epic's leaves in one ordered list on the
+epic. Holding that lane is holding the epic, and `/next` serves the held lane's
+head until the lane has no member left whose stage is not terminal. An epic
+whose work may be shared declares several lanes and is held lane by lane. The
+ruling is therefore a question of how a workspace declares its lanes, not a
+routing step.
 
 ## Routing
 
-Selection consults claims in a fixed precedence. Two rules hold across every
-step, so each step below says only which lanes it looks in:
+`/next` is the walk of the lane order under the claims:
 
-- **What a step may take** — the tickets that are ready, the tickets
-  abandoned in flight (step 6), and, in a lane of the checkout's own, the work
-  already in flight there, which is resumed rather than started. A lane
-  another checkout holds offers none of the three (step 5).
-- **What a pick says** — `next` reports a pick; `start` takes it. So a pick
-  whose start *would* establish a claim names the lane that start would lock,
-  in the conditional and naming the command: "run `lit start B.1` to claim lane
-  one of epic B". Where the ticket was abandoned in flight the line says so
-  first — "B.1 is in progress and nobody holds it — run `lit start B.1` to
-  claim lane one of epic B" — and says nothing about who left it: a lane
-  nobody holds has no claim to describe, and the ticket's own history is
-  `lit show`'s to tell. A ready ticket reads as a fresh start whatever its
-  lane's history.
+1. **The checkout's own held lanes come first**, in rank order: each lane's
+   head, the first member whose stage is not terminal. A head whose own `held`
+   is non-empty — a blocker still open, an unmet exit requirement — is printed
+   with its reasons and passed.
+2. **Then the first lane head in rank order that is not held elsewhere and
+   whose `held` is empty**, labeled as outside the commitment, so the
+   commitment is visible before it is made rather than discovered after. A
+   checkout holding no live claims reaches this directly: unfocus is the zero
+   state, not a hop through step 1.
+3. **Every lane passed over is named with its reason** — held by another
+   checkout, its head held by a blocker, its column undeclared — so the
+   diagnostic never recommends what the transition would refuse and never
+   asserts a standing it did not read. Exhaustion is loud and not a wall: a
+   checkout whose every held lane is blocked is told so and served the next
+   lane in rank order beside the reason (owner ruling, links-next-5sxz,
+   2026-09-29; scenarios.md strain S-3). Leaving is never silent.
+4. **An urgent head ranks above the held lane**: `priority: urgent` on a
+   ticket serves its lane's head first, labeled as the interrupt it is.
 
-  A pick that continues the checkout's own epic (step 2) closes on a qualifier
-  naming why it was reached — "… to claim lane one of epic B (a second lane of
-  an epic you already hold a lane in)" — which the same ticket drawn from the
-  global pool does not carry.
+Two rules hold across the walk:
 
-  The qualifier is keyed to the step, not to the fact it states, and an on-path
-  dependency (step 1b) does not carry it even when its lane belongs to an epic
-  this checkout holds another lane in — which `gatingDependencies` permits,
-  since it scopes the blocked rows and not the dependencies it collects from
-  them. The clause answers "why was I handed a lane I do not hold?", and step
-  1b's answer is that the row gates work of ours — "(gates B.2, which is on
-  your path)", or "(it is in epic A, which gates B.2 on your path)"
-  when the dependency is an epic the row sits under — which is the more
-  specific reason and the one worth saying; the epic it happens to share would explain
-  the pick less well, not better.
+- **What a pick says.** `/next` reports a pick; the transition takes it. So a
+  pick whose start *would* establish a claim says so in the conditional,
+  naming the write: "`set B.1/status plan` claims lane one of epic B". Nothing
+  is said in the perfect tense. A line that reports a start or a claim
+  describes a side effect a read does not have, and an agent that believes it
+  holds a claim it does not either works unclaimed or spends a turn proving
+  the tool wrong — both observed (links-next-output-5aee). A lane of one is not
+  named at all; there is nothing to say about it that the ticket has not
+  already said.
+- **Lanes another checkout holds are routed around, not hidden.** `/next`
+  passes them, naming the reason; `get /lanes` shows everything with its
+  holder. Visibility is not pullability.
 
-  A pick from the global pool under a `focus` label closes on a clause naming
-  the focus it was drawn under — "… to claim lane one of epic B (focused on G:
-  picked from the focus path alone — `lit next --all` to route over the
-  whole queue)". The focus narrows the pool and nothing else, so a ticket ranked
-  above the pick but off the path was never asked about, and a pick that said
-  nothing would read as a ranking bug. The clause rides on the pool's row
-  wherever it is printed: the route step 3 offers past an exhausted epic or
-  past the ticket a filter hid, and the pool's ticket a filter hid when
-  dropping the filter is the route named. A row steps 1 and 2 serve never
-  carries it, since no scope narrowed them, and neither does a row from a pool
-  over the whole queue.
+**An expired claim is no claim.** A lane whose claim has aged past
+`claim_ttl` is admitted on the same terms as a lane that never carried one,
+and a lane another checkout holds is not. That distinction is the entire
+content of the rule. What makes an in-flight ticket takeable is that nobody
+holds its lane. The older exclusion — an aged-out lane withheld exactly as a
+live foreign hold is — is retired because it was never coherent, not because a
+tradeoff shifted. A claim is evidence of ownership, and expiry is the evidence
+running out; letting an expired claim veto a ticket means trusting the claim
+over the proof that the claim is dead (owner ruling, links-claims-1b0p,
+2026-09-03). An expired claim on the checkout's *own* lane is no different:
+the checkout holds nothing, and the lane is reached by rank like any other. It
+was once read the other way — the age of your own lane as evidence you stepped
+away from work still yours, handed back to resume — and under that reading a
+checkout that finished one ticket of an epic and walked away was routed back to
+that epic ahead of the entire backlog for as long as the epic stayed open; with
+one checkout in the repository, forever, since nothing it could do released a
+claim that no longer existed (owner ruling, links-claims-em7h, 2026-09-26). The
+step between those two rulings — an expired claim admitted, but still printed,
+still called a takeover, still gating the start with a provenance line — is
+retired with links-claims-y6yz: an expired claim is over, not demoted, and
+nothing about it is shown. Overriding a claim that is live is a deliberate
+transition on a member of that lane. A claim is a well-founded default, never
+a lock.
 
-  Nothing here may be said in the perfect tense. A line that reports a start or
-  a claim describes a side effect `next` does not have, and an agent that
-  believes it holds a claim it does not either works unclaimed or spends a turn
-  proving the tool wrong — both observed (links-next-output-5aee).
-
-  The lane is named in words, not in `LaneID.String()`'s "epic#lane" grammar:
-  that spelling exists so a lane never reads as its epic in a log line, and in a
-  sentence the words "epic" and "lane" already draw that distinction. Two of the
-  three lane shapes rendered badly through it — an epic's default lane trailed a
-  bare "#", and a solo lane, which *is* its ticket, spelled the ticket's own id,
-  so the line read "starting X claims X". A lane of one is therefore not named
-  at all; there is nothing to say about it that the ticket has not already said.
-
-1. **The checkout's own live claims come first**: ready tickets within claimed
-   lanes and the work already in flight there — a ticket in progress in the
-   checkout's own lane is handed back to resume rather than started fresh —
-   in backlog order, including its prerequisites: a dependency outside the
-   claimed lane that gates it, at any depth, is on the path and is offered on
-   the same terms, announced as the second lane its start claims. A dependency
-   that cannot be started is cleared by clearing its own prerequisites — its
-   dependencies and the earlier ticket of its lane — so the walk descends it to
-   theirs; a ticket already in flight is past its prerequisites and is not
-   descended. The announcement names each prerequisite between the pick and
-   the row it gates, an epic by the ticket under it the walk went through —
-   "(gates B.2, which is on your path, through C.1)", or "through C.1 under
-   C" when C is an epic.
-   Each row of the lane is taken in backlog order and its chain walked to the
-   end before the next row's, nearest dependency first within it, so the pick
-   serves the highest-ranked blocked row. An epic cannot be started, so a
-   dependency that is an epic is offered as the ticket under it, at any depth,
-   and the announcement names the epic.
-2. **Then the rest of its epic**: the claimed lane's epic's other lanes,
-   before any lane of any other epic — the GRANULARITY RULING above, expressed
-   as a routing step rather than a bias. Then the whole epic's prerequisites:
-   a dependency outside it that gates any of its lanes, at any depth, is
-   offered as step 1's is, ahead of anything outside the epic, because clearing
-   it is how the epic moves again. A parentless (solo) claim has no epic to
-   continue into and falls straight to step 3 once its own lane has nothing
-   left to serve or resume.
-3. **Exhaustion is loud, and it is not a wall.** When steps 1 and 2 have both
-   found nothing, `next` says why, and how far the epic had come: "no ready
-   work in epic(s) E (5/9 done) — blocked on E.4 (on your path but claimed by
-   another checkout right now)". Each blocker
-   is named by what it is to this checkout — held by another checkout, not
-   startable yet, or outside the view this run gathered — so the diagnostic
-   never recommends what `lit start` would refuse, and never asserts a
-   standing it did not read. Beneath the reason it names the ways on and
-   serves step 4's pick: stay, by filing the ticket that clears a blocker and
-   making the blocker wait on it, or move on, by starting the ticket served.
-   The ticket goes under the epic, ranked first — even when the block is
-   declared on the epic itself, since an epic's blocker never holds back a
-   child it waits on. The agent chooses. Staying is named only
-   against a block a new ticket could clear — not an epic whose remaining work
-   is only underway elsewhere, nor one whose every chain ends at an event
-   outside the repository, since a blocker waiting on the next link clears
-   only when that link does. Only when the global pool has nothing
-   ready either is the diagnostic the whole answer; under a `focus` label it
-   then names the rows outside the epic that the focus withheld, since those
-   were never asked about. It once never fell through to a leaf outside the
-   epic, and since routing is deterministic a
-   checkout whose epic held only blocked work was answered the same way on
-   every `next` until its claim expired — trapped in an epic with nothing to
-   do (owner ruling, links-next-5sxz, 2026-09-29). Leaving is still never
-   silent: the pick is announced beside the reason the epic stopped.
-   Completing the last ticket announces the epic's completion; the claim has
-   dissolved by predicate, and the checkout is global again. Unfocus is not an
-   action.
-4. **Then the global pool**: the top-ranked candidate in any lane, labeled as
-   what it is, so the commitment is visible before it is made rather than
-   discovered after. Reached directly, with no detour through steps 1–3, by a
-   checkout that holds no live claims at all — unfocus is the zero state, not
-   a hop through the earlier steps — and past an exhausted epic by step 3.
-   An active `focus` label narrows this pool — and only this pool — to the
-   focused goal's unfinished prerequisite
-   chain, with `lit next --all` or removing the label as the escapes. Steps
-   1–3 never read it, so a lane this checkout already holds is served whether
-   or not it sits on the path: focus decides where a fresh session goes, not
-   whether work in flight is still yours.
-5. **Lanes another checkout holds are routed around, not hidden.**
-   `next` skips them silently; listings show everything with claim
-   annotations. Visibility is not pullability. A lane whose claim has expired
-   is not one of these — see step 6.
-6. **An expired claim is no claim.** Wherever a step looks outside the
-   checkout's own lanes, a lane whose claim has aged past T is admitted on the
-   same terms as a lane that never carried one, and a lane another checkout
-   holds is not. That distinction is the entire content of the rule. What
-   makes an in-flight ticket takeable is that nobody holds its lane.
-   The older exclusion — an aged-out lane withheld from bare `next` exactly
-   as a live foreign hold is — is retired because it was never coherent, not
-   because a tradeoff shifted. A claim is evidence of ownership, and expiry is
-   the evidence running out; letting an expired claim veto a ticket means
-   trusting the claim over the proof that the claim is dead (owner ruling,
-   links-claims-1b0p, 2026-09-03). An expired claim on the checkout's *own*
-   lane is no different: the checkout holds nothing, and the lane is reached
-   by rank from the pool like any other. It was once read the other way — the
-   age of your own lane as evidence you stepped away from work still yours,
-   handed back to resume — and under that reading a checkout that finished one
-   ticket of an epic and walked away was routed back to that epic ahead of the
-   entire backlog for as long as the epic stayed open; with one checkout in
-   the repository, forever, since nothing it could do released a claim that no
-   longer existed (owner ruling, links-claims-em7h, 2026-09-26). The step
-   between those two rulings — an expired claim admitted, but still printed,
-   still called a takeover, still gating `lit start` with a provenance line —
-   is retired with links-claims-y6yz: an expired claim is over, not
-   demoted, and nothing about it is shown. Overriding a claim that is live
-   requires the deliberate act of `lit start` on that ticket, with explicit
-   confirmation. A claim is a well-founded default, never a lock.
-7. **Contested lanes** keep deterministic routing (latest establishing event
-   holds), while the other party's selection stands down and says why:
-   "claim on A#1 moved to 7f3a at 14:02 — coordinate or stand down."
+**Contested lanes** keep deterministic routing: the latest establishing event
+in total order holds, `contested` names the rest, and the other party's
+`/next` stands down and says why.
 
 Priority composes predictably: urgency reorders *within* eligible sets, and
-claims define eligibility. An urgent ticket landing in a claimed lane hoists
-for its claimant, not for everyone.
+claims define eligibility. An urgent ticket landing in a held lane hoists for
+its holder, not for everyone.
 
 ## Release and abandonment
 
-A claim ends three ways, none of them a command:
+A claim ends four ways:
 
 1. **Completion** — the lane finishes; the predicate no longer holds anywhere.
-2. **Local prune** — the checkout is deleted; its machine voids the claim
-   instantly, everyone else ages it out.
-3. **Age-out** — the safety net for silent abandonment anywhere: evidence
-   older than T stops supporting the claim.
+2. **Parking** — a member is moved back into the initial column.
+3. **Release** — the one explicit write, `rm <lane>/claim`, read by the fold
+   as ending the hold until the next establishing transition.
+4. **Age-out** — the safety net for silent abandonment anywhere: evidence
+   older than `claim_ttl` stops supporting the claim.
 
-There are deliberately no release verbs. Agents do not announce that they are
-stopping — they just stop — so an explicit release would be ceremony that the
-common case never performs, and the design refuses to depend on it. (A
-ticket-lifecycle "stop"/put-it-back verb was considered and deferred: it would
-give deliberate, even distributed, release for free if the lifecycle ever
-wants it for its own reasons. One honest residual: a checkout whose latest
-act was *completing* a ticket, then walking away mid-epic, has nothing to put
-back; that claim waits out T or dies with the worktree.)
+The common case performs none of the deliberate ones. Agents do not announce
+that they are stopping — they just stop — so the design never depends on a
+release being written; age-out is what the common case relies on, and the
+release write exists for the checkout that knows it is leaving.
 
 Abandonment needs no bookkeeping of its own because **everything worth
-knowing about an abandoned lane is in the shared work records**, and none of
-it is in the claim:
+knowing about an abandoned lane is in the shared events**, and none of it is
+in the claim:
 
-- *Nothing completed, claim expired* — the lane is unclaimed, and `next`
+- *Nothing completed, claim expired* — the lane is unclaimed, and `/next`
   offers its tickets like any other; a ticket left in progress is offered as
   abandoned work in flight, and the ticket's own history names whoever
   started it.
@@ -456,7 +350,7 @@ it is in the claim:
   proceeding; the quickstart says so. Judgment stays with the caller closest
   to the context.
 - *Half the lane completed, then abandoned* — completed tickets are completed
-  in the shared database; the claim carried no work-state of its own, so
+  in the shared store; the claim carried no work-state of its own, so
   picking the lane up inherits a half-done lane with nothing to transfer and
   nothing lost.
 
@@ -465,8 +359,8 @@ it is in the claim:
 Interrogation has two tiers, and only one requires locality:
 
 - **The dossier travels with the data.** The evidence *is* the shared
-  database: which tickets the claimant started and finished, when it last
-  acted. Any machine renders "claimed: stream 7f3a (elsewhere) · 2h ago ·
+  store: which tickets the claimant started and finished, when it last
+  acted. Any machine renders "claimed: checkout 7f3a (elsewhere) · 2h ago ·
   pgct.11 in progress, 5/9 done" — most of what "who has this and how is it
   going" means, available everywhere.
 - **The address is resolved where it exists.** For claimants that are live
@@ -497,132 +391,55 @@ not by silent policy. The worst case under partition is *visible duplicate
 effort*, never blocked work — the correct failure mode for coordination
 metadata.
 
-Cold start is graceful by construction, but by freshness rather than by
-absence. Historical events carry no attribution, so a freshly upgraded
-repository derives claims held by the **public checkout**. Nearly all of that
-history is older than the freshness window, so those claims have expired and
-their lanes are unclaimed. A pre-attribution `start` still inside the window
-reads as a live hold and is routed around until it ages out, like any live
-hold.
-
-No checkout reads a public-checkout lane as its own. A checkout that has
-minted no token computes the *same* zero attribution as that history — `next`
-opens read-only, and the read path never mints — so equality between the two
-proves only that both are unaddressable. Read as identity, it would adopt
-every live public-checkout lane on its first `next`.
+Cold start is trivial: every event carries its attribution from the store's
+first event, so there is no unattributed history to derive claims from.
 
 ## The privacy invariant
 
-**Only opaque discriminators enter the shared database.** No hostnames, no
-usernames, no directory names, no paths, no device details — the database
-syncs to shared remotes and this archive itself is public. Resolution from
+**Only opaque discriminators enter the shared store.** No hostnames, no
+usernames, no directory names, no paths, no device details — the store syncs
+to shared remotes and may itself be public. Display names live in the
+policy's member entries and are rendered from there. Resolution from
 discriminator to physical context (path, branch, machine) happens only at
 render time, only on the machine that owns that context. Nothing needs to be
 redacted because nothing identifying is ever copied away from its owner.
 
 This is the locality principle finishing its own thought: each fact lives
-where it is authoritative and therefore travels nowhere. A standing flag
-follows from adopting the invariant: any attribution that predates it —
-user-name-shaped actor fields, for example — deserves the same review.
-
-An **opt-in, user-chosen stream label** (chosen, never harvested) remains
-open as a future nicety for teams that want friendlier remote rendering than
-an opaque token.
-
-### PRE-INVARIANT ATTRIBUTION AUDIT (2026-08-26)
-
-The standing flag above — "any attribution that predates the invariant
-deserves the same review" — was discharged against links-claims-1ihf.11 by
-exporting the live backlog (`lit export`: 941 events, 503 issues) and
-counting every distinct value the actor and assignee columns hold. Every
-value found a disposition; none needed redaction, because the invariant
-only ever governed what enters *from here forward*.
-
-**Actor column, counted:**
-
-| Value                     | Count | Disposition |
-|---------------------------|-------|--------------|
-| `links`                   | 345   | ALIGNED — a literal tool-name constant (`store.go`), not a person/host/path |
-| `bmf`                     | 280   | DOCUMENTED EXCEPTION — see below |
-| `claude_<session-uuid>`   | 138 distinct | ALIGNED — opaque, mints from `CLAUDE_CODE_SESSION_ID` |
-| `smoke-agent`              | 4     | ALIGNED — a literal role label, not harvested from any environment |
-| `unknown`                  | 2     | ALIGNED — the store's existing empty-actor sentinel (`store.go`, `Apply`) |
-| `claude_local`             | 1     | ALIGNED — a literal label, not harvested |
-
-**Assignee column**: already clean — `claude_<session-uuid>` values, plus
-the literal labels `claude` and `codex_xyz789`. No host-, path-, or
-device-shaped value anywhere. The stream-id and workspace-id columns
-links-claims-1ihf.2 added are ALIGNED for the same reason the design always
-claimed: a 13-character opaque token and a UUID, neither derived from
-anything user-, host-, or path-shaped.
-
-**The one gap, and its fix.** Every one of the 280 `bmf` rows traces to
-exactly one line: `registerActor`'s `--by` fallback default was
-`os.Getenv("USER")` — the OS username, entering the shared, synced database
-raw, whenever a mutating command ran without `CLAUDE_CODE_SESSION_ID` set
-and without an explicit `--assignee`/`--by`. `--assignee`'s own default
-(`startSpec`, `internal/cli/cli.go`) was already `""`, resolving through the
-same empty-actor sentinel as the `unknown` rows above — `--by` was the only
-fallback still answering "what identity applies with no session" with a
-username instead. Fixed in links-claims-1ihf.11 by making `--by`'s default
-`""` too (`registerActor`, `internal/cli/cli.go`): one line, because
-`registerActor` was already the sole caller of the `$USER` default across
-every mutating command.
-
-**Disposition for the already-committed 280 rows: DOCUMENTED EXCEPTION.**
-They predate the fix, this database's history does not rewrite, and the set
-is now closed — no code path can add to it after links-claims-1ihf.11 lands.
-An OS username is a weaker identifier than the durable, syncing history
-already carries elsewhere (workspace paths in commit messages, real names in
-authored code) — treated here as a bounded, historical artifact rather than
-a live leak, and left exactly as recorded rather than scrubbed, since
-scrubbing a synced history is a materially bigger and riskier undertaking
-than the value it launders. Any future rewrite of this history should carry
-the same disposition forward rather than re-litigate it.
+where it is authoritative and therefore travels nowhere.
 
 ## State inventory
 
-- **Shared, synchronized**: work records, now carrying the append-only
-  attribution pair (stream id, workspace id). Nothing else is added.
-- **Local, per checkout**: one write-once stream-id token in the checkout's
+- **Shared, synchronized**: events, each carrying its attribution triple
+  (checkout, principal, agent). Nothing else is added.
+- **Local, per checkout**: one write-once checkout id in the checkout's
   private git directory.
 - **Derived at read time**: claims, freshness, staleness, contest, liveness,
   routing, and every rendering of "who has what."
 
-There is no shared mutable state between worktrees outside the database — the
-database is the one concurrency-safe shared medium, and this design adds no
+There is no shared mutable state between worktrees outside the store — the
+store is the one concurrency-safe shared medium, and this design adds no
 second one. There are no claim tables, no registries, no lockfiles, no
 sidecar maps.
 
 ## Relationship to adjacent mechanisms
 
-- **Ticket assignment and session identity** (see
-  [agent-identity-and-ownership.md](agent-identity-and-ownership.md)): that
-  model holds that the unit of *ticket execution* is the agent session. This
-  design does not revise it — it adds a second, coarser level: the session
-  executes a ticket; the **checkout carries a workstream**. Both are true at
-  once, and claims are derived from checkout attribution precisely because
-  sessions are too ephemeral to carry a multi-session line of work. Claims do
-  **not** resurrect that document's deferred process-liveness phase: there
-  are no heartbeats and no liveness probes here, only staleness heuristics —
-  the same family as orphan detection, applied one level up (lane instead of
-  ticket, T instead of the orphan threshold).
-- **The focus label** — the shared label that scopes a goal's prerequisite
-  chain for everyone — is orthogonal and unchanged: it expresses *project*
-  intent ("this goal matters most"), a statement to all streams. A claim
-  expresses *stream* commitment ("this lane is being executed here").
-- **The continue bias** on selection (prefer leaves under in-progress epics)
-  is subsumed: claim routing is that bias made correct, automatic, and
-  per-checkout.
+- **Ticket execution and session identity**: the unit of *ticket execution*
+  is the agent session, recorded as the agent label on each event. This design
+  adds a second, coarser level: the session executes a ticket; the **checkout
+  carries a workstream**. Both are true at once, and claims are derived from
+  checkout attribution precisely because sessions are too ephemeral to carry a
+  multi-session line of work. There are no heartbeats and no liveness probes
+  here, only staleness heuristics — the same family as orphan detection,
+  applied one level up (lane instead of ticket, `claim_ttl` instead of the
+  orphan threshold).
 - **Rank** remains the shared default agenda — what a zero-context checkout
-  should do — and ranking-to-top returns to being a genuine project-priority
-  statement, because "I'm working this" no longer needs it. Companion
-  decision, accepted with this design: **new tickets default to
-  bottom-of-frame placement** rather than top, so filing work stops being an
-  implicit claim on the project's attention.
-- **Lanes** gain a second consumer: the same declaration that orders work
-  within an epic now scopes possession of it. One vocabulary for both facts,
-  by design.
+  should do — and ranking a lane to the top returns to being a genuine
+  project-priority statement, because "I'm working this" no longer needs it.
+  Companion decision, accepted with this design: **a new lane ranks last**
+  rather than first, so filing work stops being an implicit claim on the
+  project's attention.
+- **Lanes** gain a second consumer: the same declaration that orders work now
+  scopes possession of it. One vocabulary for both facts, by design.
 
 ## Alternatives considered and rejected
 
@@ -677,28 +494,26 @@ sidecar maps.
 
 ## Parameters and open edges
 
-- **Freshness window T**: default 6 hours, per-repository configurable.
-  Repositories where humans idle over weekends may prefer ~72h; agent-heavy
-  repositories may tighten it further. It was 24 hours until the routing defect
-  in links-claims-1b0p was fixed: while every consumer read a stale claim of a
+- **Freshness window `claim_ttl`**: default 6 hours, declared in the workspace
+  file at the root or on any node, nearest ancestor winning. Repositories
+  where humans idle over weekends may prefer ~72h; agent-heavy repositories
+  may tighten it further. It was 24 hours until the routing defect in
+  links-claims-1b0p was fixed: while every consumer read a stale claim of a
   checkout's own differently, the long window was armor against that
   inconsistency rather than a considered reading of when a claim goes cold.
   With the defect gone, the own-lane reading corrected in links-claims-em7h,
   and the expired standing removed in links-claims-y6yz, expiry means "no
   longer a claim, and nothing to say about it", and 6 hours of lane-wide
-  silence — measured from the holder's last event anywhere in the lane, so
+  silence — measured from the holder's newest event on any member, so
   finishing a ticket restarts the clock — is the weaker claim of activity it
-  was always meant to be. T equals the orphaned-ticket threshold in value only: separate policies
-  over separate subjects (an abandoned claim vs. an abandoned ticket), derived
-  separately, deliberately not backed by a shared constant.
+  was always meant to be. `claim_ttl` equals the orphaned-ticket threshold in
+  value only: separate policies over separate subjects (an abandoned claim vs.
+  an abandoned ticket), derived separately, deliberately not backed by a
+  shared constant.
 - **Takeover confirmation shape** for fresh-claim override (interactive
   confirm vs. explicit flag for non-interactive agents): decide at
   implementation; the invariant is that overriding fresh evidence is always
   a deliberate act.
-- **Opt-in stream labels** for remote display: open, low priority.
-- **The residual release gap** (completed-then-walked-away mid-epic): lives
-  with age-out and prune; if it turns out to bite in practice, the deferred
-  lifecycle "stop" verb is the natural door.
 
 ## Alignment with project intent
 

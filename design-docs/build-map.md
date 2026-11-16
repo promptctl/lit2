@@ -74,8 +74,9 @@ ever, because each of those makes the things around it expensive to replace.
 **work**
 - ▶ columns in the workspace file; one enforcer on the write reading
   requirement lists and the writer's capabilities; `stage`, `rollup`,
-  `held` in tick; labels declared in the workspace file and applied by people, none computed; verdicts as children on paths; the
-  checklist on the leaf, its final state kept
+  `held` in tick; labels declared in the workspace file and applied by people, none computed; `plan` and `pr` as reviewables, their
+  revisions and reviews as lists on paths; the checklist on the leaf, its
+  final state kept
 - a status enum in code with a switch per transition; permission checks
   scattered per command
 
@@ -104,7 +105,7 @@ ever, because each of those makes the things around it expensive to replace.
 
 **tend**
 - ▶ rewrites as events (purge, squash, sweep, destroy); the snapshot keyed
-  by `(fold-version, heads)`; unknown and unverified events carried and
+  by `(fold-version, ref heads, log lengths)`; unknown and unverified events carried and
   counted; `min-reader-version` in the workspace file; `/integrity` as a path
 - a `gc` that edits history in place; configuration read from the code's
   own repository
@@ -118,8 +119,8 @@ it needs.
 |---|---|---|
 | 1 first contact | arrive, file, look at marked depth; guidance for the orientation text | 1, 5 |
 | 2 filing and grooming | file, look; requirements for "ready"; levels and templates | 1, 3 |
-| 3 start to done | work, finish; claims; verdicts; column guidance | 3, 4, 5 |
-| 4 plan changes after pass | versioned text nodes; verdicts citing a digest | 3 |
+| 3 start to done | work, finish; claims; the reviewable's revisions and reviews; column guidance | 3, 4, 5 |
+| 4 plan changes after pass | the reviewable: a new revision empties the derived verdict until a review names it | 3 |
 | 5 two worktrees | one store under the common dir; per-checkout refs and claims | 1, 4 |
 | 6 two machines offline | share; conflicts as values; staleness; `/integrity` | 1, 6 |
 | 7 process changes under running work | `config-ref` as provenance; the enforcer at the write; undeclared-column rule | 1, 3 |
@@ -182,8 +183,9 @@ grant on admit, rotation on removal; `rm x --destroy`; succession;
 
 **Slice 3, process.** Requirements and `held`; levels with their fields
 and templates; the checklist and its terminal requirement; links; per-epic sections and the nearest-ancestor
-rule; versioned text nodes, verdicts, terminal columns with reasons;
-history and undo. Scenarios 2, 3, 4, 7, 8.
+rule; versioned text nodes, the reviewables with their revisions and
+reviews, terminal columns with reasons; history and undo. Scenarios 2, 3,
+4, 7, 8.
 
 **Slice 4, commitment.** Lanes on nodes and the one rank order; rank
 intents; claims, expiry and release; `/lanes`, `/next` in full, the urgent interrupt; blockers from

@@ -8,10 +8,9 @@ by reinterpretation.
 
 ## Why this exists
 
-lit's current security model is none. The Dolt store syncs through
-`refs/dolt/data` on the code repo's git remote, so anyone who can read the repo
-can pull the entire ticket history, and anyone who can push can rewrite or
-delete it. That is a major barrier to real adoption: people are not always
+lit v1's security model was none. Its store synced through a ref on the code
+repo's git remote, so anyone who could read the repo could pull the entire
+ticket history, and anyone who could push could rewrite or delete it. That is a major barrier to real adoption: people are not always
 comfortable having every ticket public even when the repo itself is public, and
 tickets routinely carry things the code doesn't — internal implementation
 details of machines and networks, in the owner's own current backlog. Users

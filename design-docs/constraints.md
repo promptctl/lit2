@@ -73,10 +73,9 @@ and access control.
     growth except rewrites (D1) and host gc.
   - Some hosts restrict pushes to non-branch namespaces; the design has not
     verified GitHub, GitLab and plain ssh remotes all accept `refs/lit/*`.
-- **Note:** the design's current layout puts a commit per command on each
-  writer's ref (B3), so the objects on the remote are the whole command
-  history of every writer, forever, and that history is unbounded.
-  Constraint A3 does not require it; B3 does.
+- **Note:** each writer's ref points at one commit over its sealed segments
+  (B3), so the objects on the remote track writers and segments, never
+  commands, and compaction re-seals history into fewer segments.
 
 ### A4. Per-writer refs: each checkout appends to exactly one ref, and no checkout writes another's.
 *Design §store, `INV:single-writer-ref`; refs `refs/lit/log/<checkout-id>` and `refs/lit/inbox/*`.*
@@ -86,7 +85,7 @@ and access control.
   remote filing. Reading is a union over all refs. Dead checkouts' refs are
   pruned by the sweep (D3).
 - **Buys:** a push that can never conflict, because the remote is only ever
-  asked to fast-forward a ref one writer owns. No retry loop, no merge, no
+  asked to replace a ref one writer owns. No retry loop, no merge, no
   lock, no "diverged" state. The design's rejected-alternatives list names
   the alternative, one shared ref with a compare-and-swap retry, and
   rejects it for serializing all writers and putting the remote's
@@ -115,7 +114,7 @@ and access control.
   (C1) and the fold's cost grows with history unless cached (E2) and
   compacted (D1). Removing anything is a rewrite (D1), never a delete.
 
-### B2. The event is `(type, schema-version, subject, payload, attribution, config-ref, causal-position, recorded-at, signature-slot)`, with the signature over the header and a salted hash of the payload, not the payload.
+### B2. The event is `(type, schema-version, subject, payload, attribution, config-ref, policy-version, causal-position, recorded-at, signature-slot)`, with the signature over the header and a salted hash of the payload, not the payload.
 *Design §events; charter #6 birth requirements.*
 
 - **Implies:** the shape is fixed at the first shipped event. The signature
@@ -129,26 +128,21 @@ and access control.
   attribution triple is fixed by the access-control design before any
   access control exists.
 
-### B3. A command batches all its events into one commit; the commit's first parent is the writer's previous head; the ref is fast-forward-only and linear in first-parent history.
-*Design §store.*
+### B3. A command appends to the writer's local log; sync seals the log into segment blobs and publishes one commit per writer, whose ref is replaced on push, never advanced.
+*`architecture.md` §3.16.*
 
-- **Implies:** one commit, one tree and the event blobs per command, chained
-  forever on the writer's ref. The chain is what the remote holds (A3, A4).
-  A refold from genesis walks the chain.
-- **Buys:** atomicity per command (one ref update); an incremental fold can
-  take "events since my last head" as "commits since my last head"; the
-  receiver's rewrite check (D1) can compare chains.
-- **Costs:** this is the unbounded growth. Tens of thousands of commits and
-  trees per writer over a project's life, all on the remote, all walked on a
-  refold, all fetched at adoption. The sweep anchor (D3) adds merge parents
-  to the chain. None of what B3 buys needs the chain: atomicity needs one
-  ref update, not ancestry; "events since" is a set difference; the rewrite
-  check is a set comparison. This is a design decision, not a charter
-  constraint, and it fails requirement 4 (`requirements.md`). **Departure
-  made:** `architecture.md` §3.15 replaces it with a local append-only log
-  per writer, sealed into a few segment blobs at sync, published as one
-  commit per writer whose ref is replaced on push. Nothing on the remote
-  grows with commands and the number of events never reaches git.
+- **Implies:** a command touches one file in the store and nothing in git;
+  the remote holds, per live writer, one commit, one tree and a few segment
+  blobs. A refold reads sealed segments plus the open log.
+- **Buys:** atomicity per command (one append); an incremental fold reads
+  only what was appended since the snapshot; nothing on the remote grows
+  with commands, and the number of events never reaches git, which is what
+  requirement 4 (`requirements.md`) asks.
+- **Costs:** a push sends the delta of the open segment, so a writer that
+  never syncs holds an unbounded open log; compaction (D1) is what bounds a
+  segment set over a project's life. The chain of one commit per command
+  that the carried design laid out bought nothing this does not, and its
+  tens of thousands of commits per writer are why it is not built.
 
 ### B4. No network on any foreground path.
 *Charter #3 last sentence; design §sync, `INV:no-foreground-network`.*
@@ -196,9 +190,9 @@ and access control.
   with no crime scene". Every derivation must be sorted into fold (pure) or
   tick (clocked), and some wanted behaviors split in two. Every rule change
   is a fold-version bump and a fleet-wide refold.
-- **Departure already made:** the design pins `fold(corpus)` byte-for-byte
-  with golden fixtures. `architecture.md` §3.3 tests determinism as state
-  equality between independent folds instead.
+- **Tested as:** state equality between independent folds of one event set,
+  in any arrival order, from genesis or from a snapshot (`architecture.md`
+  §3.3); never a pinned serialization.
 
 ### C2. Total order is `(causal-position, writer-id, event-id)`, with the real Lamport advance rule: next = 1 + max(own last, highest seen).
 *Design §events.*
@@ -230,39 +224,34 @@ and access control.
   concurrent reparenting). Readers must be shown contradictions and handle
   them. The fold is sequential over the whole set.
 
-### C4. Every event names the configuration version it was authored under, and validation judges it against that version.
-*Charter #6; design `INV:config-versioned`.*
+### C4. Every event names the configuration version it was authored under; the one enforcer judged it under that version at the write, and the fold reads no configuration.
+*Charter #6; `architecture.md` §3.15 and decision H.*
 
-- **Implies:** the configuration is versioned and every version stays
-  resolvable forever. The validation engine is generic over configuration,
-  not hand-coded rules.
-- **Buys:** two machines straddling a process change fold identically; the
-  process can change under running work without a migration (scenarios 7
-  and 8); the model is data.
-- **Costs:** every cited version must travel with the events, so every
-  version a writer ever ran under, committed or not, is kept forever. The
-  revocation seam the design leaves OPEN (#6) follows
-  from citing versions: a revoked writer can keep citing the version that
-  allowed it.
-- **Departure already made:** the charter and design say a "versioned,
-  signed configuration stream" of events. `architecture.md` §3.15 makes it
-  a committed file, `.lit/workspace.toml`, versioned by git; the model in
-  force is the active version a person commits, or the shipped default
-  before any is committed. **Departure made:** decision H. The fold reads no
-  configuration; `config-ref` stays on the event as provenance, the git blob
-  id of the active version its writer ran under; the one enforcer judges a
-  write under that version at the write, and tick applies the reader's
-  active version at the read. Nothing travels with the events but the id,
-  and the stream and its quorum-by-events signing are gone.
+- **Implies:** the model is a committed file, `.lit/workspace.toml`,
+  versioned by git; the version in force is the last one applied into the
+  log by `lit2 config commit`, an event carrying the version's bytes and
+  blob id, and `lit2 admin init` applies the default profile as version one.
+  Every event carries `config-ref`, the active version's blob id, as
+  provenance. The validation engine is generic over configuration, not
+  hand-coded rules.
+- **Buys:** two machines straddling a process change fold identically,
+  because the fold applies every legally written event as written and tick
+  judges state under the reader's active version; the process can change
+  under running work without a migration (scenarios 7 and 8); the model is
+  data a team reviews in a pull request.
+- **Costs:** every applied version is in the log forever, since the apply
+  event carries its bytes. A revoked writer can keep citing the policy
+  version that allowed it; §3.20 resolves that as a deterministic rule plus
+  an advisory.
 
-### C5. Ids derive from `(writer, causal-position, content)`; they are opaque; sequential numbering is presentation only.
-*Design §events "Issue identity".*
+### C5. An id is 128 random bits minted at its create and carried in the create event; it is opaque, rendered by a segment fixed at mint under the project prefix of the active version.
+*`architecture.md` §3.2.*
 
 - **Buys:** no id collision without coordination; ids never reused, so a
-  purge is final.
-- **Costs:** no human-friendly sequential ids as identity; the carried design
-  derives display ordinals that can renumber when a late sibling syncs in.
-  `architecture.md` drops the ordinals entirely.
+  purge is final; a create replayed into another log keeps its id, so a
+  squash leaves creates alone; changing the prefix rewrites nothing.
+- **Costs:** no sequential ids; two writers offline can fix one segment for
+  two items, and that segment then resolves to neither until typed wider.
 
 ### C6. Unknown events are carried and surfaced, never dropped; schema upcasters are kept forever.
 *Design §events, `INV:preserve-unknown`.*
@@ -282,18 +271,18 @@ and access control.
 *Charter #7 (owner amendments 2026-10-09 and 2026-11-03); design §store.*
 
 - **Implies:** purge, erasure and compaction are one mechanism. A receiver
-  accepts a non-fast-forward ref move only when rewrite events account for
-  every difference. Each writer rebuilds its own ref without the rewritten
-  material when it next runs.
+  accepts a writer's new tree only when the events it lacks are the ones
+  rewrite events name. Each writer re-seals its segments without the
+  rewritten material and replaces its ref at its next sync.
 - **Buys:** content can actually leave; stores can be compacted; one
   mechanism instead of three; the strict audit guarantee can be added by
   policy to a store that rewrites, where the reverse is impossible.
-- **Costs:** the receiver's verification of non-fast-forward moves is real
+- **Costs:** the receiver's verification of a replaced tree is real
   work and is on the critical path of every fetch; rewrites reach only
   replicas that sync, so true erasure of stale copies needs encryption (F2);
   the remote keeps unreachable objects until its host collects.
 
-### D2. The cache is scaffolding: derived local state keyed by `(fold-version, ref heads)`, deletable at any moment, never locked, atomic-rename only.
+### D2. The cache is scaffolding: derived local state keyed by `(fold-version, ref heads, log lengths)`, deletable at any moment, never locked, atomic-rename only.
 *Charter #2 last sentence; design §cache, `INV:disposable-cache`.*
 
 - **Buys:** no shared mutable state anywhere but the event log; no lock
@@ -302,18 +291,15 @@ and access control.
   drives the codec and snapshot design; two worktrees racing on
   the cache waste a fold.
 
-### D3. Dead checkouts' refs are swept: a live checkout appends a sweep event with the dead head as a second parent, then deletes the dead ref locally and remotely by compare-and-swap.
-*Design §store "Ref hygiene".*
+### D3. Dead checkouts' refs are swept: a live checkout anchors the dead writer's tree under its own ref with a sweep event, then deletes the dead ref.
+*Design §store "Ref hygiene"; `architecture.md` §3.16 and appendix.*
 
 - **Buys:** the ref count on the remote stays "live checkouts + unswept
-  inbox refs" (A4) without any heartbeat (D4); a resurrected ref is
-  distinguishable from a stale one by its position relative to the anchor.
-- **Costs:** the most intricate mechanism in the design: merge parents on
-  otherwise linear chains, a liveness proof that only the dead checkout's
-  own machine can make instantly, remote ref deletion by CAS, and a rule for
-  a swept checkout that wakes up. It exists entirely to bound A4's ref count
-  under B3's chains. With one tree per writer (`architecture.md` §3.15)
-  the anchor is one tree, not a chain, and most of the intricacy goes.
+  inbox refs" (A4) without any heartbeat (D4); a writer that reappears with
+  events the anchor lacks is alive and kept.
+- **Costs:** a liveness proof that only the dead checkout's own machine can
+  make instantly, remote ref deletion, and a rule for a swept checkout that
+  wakes up. With one tree per writer the anchor is one tree, not a chain.
 
 ### D4. No heartbeats, no liveness probes, anywhere.
 *Charter #8; `work-claims.md`.*
@@ -399,8 +385,9 @@ Removing any of these collapses something the others stand on:
 These are choices the charter made that lit2 could make differently
 without touching the above:
 
-- **B3, one commit per command chained forever.** Replaced in
-  `architecture.md` §3.15; see B3 above.
+- **B3, one commit per writer over its sealed segments.** The carried
+  design's chain of one commit per command bought nothing this does not;
+  see B3 above.
 - **A4, per-writer refs on the code's remote.** Kept. The design's
   rejected-alternatives list rules out one shared ref for the workspace,
   because two writers must then agree on it. What each ref points at is
