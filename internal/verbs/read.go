@@ -266,7 +266,7 @@ func tree(w World, n address.Node, path string, children field.Path) ([]line, *r
 }
 
 // summary is a node as one line of a view reads it, its parts joined by
-// ` · `: removed, when rm removed it; a leaf's column, or a node's stage
+// ` · `: removed, when rm removed it or a node above it; a leaf's column, or a node's stage
 // and rollup; then its title. A home has no stage row and reads as a home.
 func summary(w World, n address.Node) (string, error) {
 	it, isItem := n.(address.Item)
@@ -275,7 +275,7 @@ func summary(w World, n address.Node) (string, error) {
 	}
 	var parts []string
 	facts := w.item(it.ID).Facts
-	if evaluate.Removed(facts) {
+	if w.Gone(it.ID) {
 		parts = append(parts, "(deleted)")
 	}
 	if w.Leaf(it.ID) {

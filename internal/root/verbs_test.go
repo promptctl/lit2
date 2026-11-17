@@ -410,6 +410,26 @@ func TestTheBoardIsTheTreeTheLanesAndNext(t *testing.T) {
 	}
 }
 
+// TestARemovedFeaturesLeavesReadAsRemoved: rm on a feature removes the
+// work below it, so the board marks its leaves deleted in the tree and the
+// lanes, and next serves past them.
+func TestARemovedFeaturesLeavesReadAsRemoved(t *testing.T) {
+	s := newSession(t)
+	feature := filed(t, s.ok("add", "unfiled/children", "{title: board}"))
+	leaf := filed(t, s.ok("add", feature+"/children", "{title: tree}"))
+	s.ok("rm", feature)
+	want := "$ = /\n" +
+		"$/children\tunassigned · home\n" +
+		"$/children\tunfiled · home\n" +
+		"unfiled/children\t" + feature + " · (deleted) · initial · backlog 1 · board\n" +
+		feature + "/children\t" + leaf + " · (deleted) · backlog · tree\n" +
+		"$/lanes\t" + leaf + " · (deleted) · backlog · tree\n" +
+		"$/next\tlanes considered: 1\n"
+	if got := s.ok("get", "/"); got != want {
+		t.Errorf("get / prints\n%s\nwant\n%s", got, want)
+	}
+}
+
 // TestTheBoardsRowsAreDerived: lanes and next are the engine's, so a
 // write to either is refused as derived and nothing is written.
 func TestTheBoardsRowsAreDerived(t *testing.T) {

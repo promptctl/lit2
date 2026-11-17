@@ -56,7 +56,7 @@ func (v View) Next() (Next, error) {
 	for _, lane := range v.state.Lanes() {
 		n.Considered++
 		for _, id := range lane.Members {
-			if v.gone(id) {
+			if v.Gone(id) {
 				continue
 			}
 			c, err := v.Column(id)
@@ -77,15 +77,15 @@ func (v View) Next() (Next, error) {
 	return n, nil
 }
 
-// gone is whether rm removed id or a node above it: a removed subtree is
-// no work, as Stage and Rollup read it.
-func (v View) gone(id events.ItemID) bool {
+// Gone is whether rm removed id or a node above it: a removed subtree is
+// no work, as Stage and Rollup read it, and every view marks it so.
+func (v View) Gone(id events.ItemID) bool {
 	if Removed(v.item(id).Facts) {
 		return true
 	}
 	switch in := v.state.Container(id).(type) {
 	case fold.Under:
-		return v.gone(in.Parent)
+		return v.Gone(in.Parent)
 	case fold.Home:
 	}
 	return false
