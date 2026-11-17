@@ -244,10 +244,11 @@ column's requirements stop holding afterwards, a description deleted, a verdict
 emptied by a new plan revision, stays where it is; the facts are in the history and in
 any selector that asks. Nothing re-evaluates a requirement on read: what the
 facts say about a ticket afterwards is a derived field such as `held`, or a
-label declared with a `where` selector (architecture.md §3.11). Where
-[custom-columns.md](custom-columns.md)
-computed a ticket's position from rules on every read, this design keeps the
-sibling's stored `status` and puts the rule at the one write that changes it.
+label declared with a `where` selector (architecture.md §3.11). Computing a
+ticket's position from rules on every read is a future
+[columns-and-phases.md](columns-and-phases.md) keeps open; this design keeps
+the sibling's stored `status` and puts the rule at the one write that changes
+it.
 
 ## Severity
 

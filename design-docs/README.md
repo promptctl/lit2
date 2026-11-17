@@ -38,9 +38,6 @@ first-class).
 - `path-addressed-cli.md` came from that repo's working tree; it was never
   committed there. The accepted CLI design; corrected in part by the v2 docs
   above, as its status line says.
-- `custom-columns.md`: corrected in part by the v2 docs above, as its note
-  says.
-- `MINIMAL-LIT-SKETCH-2026-09-29.md`: provisional; the v2 feature baseline.
 - `project-intent.md`, `work-claims.md`, `event-store/`, `access-control/`.
 
 Not carried as files, because they exist only as ticket text in the v1 store:

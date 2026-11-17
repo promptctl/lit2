@@ -764,10 +764,3 @@ The order is the slices of [build-map.md](build-map.md): the frame of the
 house, then the walking skeleton with every layer below it in its final
 shape, then visibility, process, commitment, guidance, sharing, tending, and
 the surface in full. The backlog is a view of that map.
-
-## Appendix: where this departs from a source document
-
-One line each, so a reader of the older document knows the position moved.
-
-- MINIMAL-LIT-SKETCH: lanes, claims and priority are kept, as the later
-  designs require; its eleven guarantees are all rows of §4.

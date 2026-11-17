@@ -1,7 +1,8 @@
 # Columns: the one concept behind status, phase and workflow state
 
-Status: draft, 2026-11-05. Aligns [custom-columns.md](custom-columns.md),
-the v1 phases-and-rework proposal (since removed) and
+Status: draft, 2026-11-05; amended 2026-11-17 to carry the computed-position
+model as a future to explore. Aligns two earlier proposals, computed columns
+and phases-and-rework, both since removed, with
 [path-addressed-cli.md](path-addressed-cli.md) on one concept, under the owner's
 ruling: *"phases and rework are equivalent to custom columns. rework is not a
 separate phase, it's just part of review. each column is a phase. this probably
@@ -18,13 +19,13 @@ and the field a reader gets back `[LAW:domain-language]`.
 
 ## The column is stored; everything else is computed
 
-This is the tension between the two later documents, and it is settled here, not
-split. [custom-columns.md](custom-columns.md) says a ticket's column is a
-function of stored facts, configuration and the clock, written nowhere.
-[path-addressed-cli.md](path-addressed-cli.md) says `set x/status <column>` is a
-stored transition, validated against the resolved column graph at the write. The
-CLI document is right about the column. The custom-columns document is right
-about everything else.
+Two models were on the table, and the choice is settled here, not split. One
+computes a ticket's column from stored facts, configuration and the clock and
+writes it nowhere. The other, [path-addressed-cli.md](path-addressed-cli.md),
+stores `set x/status <column>` as a transition validated against the resolved
+column graph at the write. This design stores the column and computes
+everything else. The computed model is kept in the last section as a future to
+explore, not decided against.
 
 **What `set x/status review` stores.** One event: this ticket moved from `impl`
 to `review`, by this writer, at this time. The write is accepted only if
@@ -37,7 +38,7 @@ its trail, and nothing else. Not configuration, not the clock, not another
 ticket. The fold answers it; two clones with the same events agree on it with
 no rule to evaluate.
 
-**What tick computes.** Everything custom-columns.md computes except position:
+**What tick computes.** Everything but position:
 `held`, stage, claim expiry, staleness, the rollup of a node above level 1.
 `view = tick(fold(events), config, now)`, writing nothing, cached if wanted,
 never the source of truth. What the facts say about a ticket is a derived
@@ -50,36 +51,35 @@ Conditional guidance is a handler with a selector
 Why the column is the one thing not computed:
 
 - `[LAW:one-source-of-truth]`. If a stored move and a rule can both decide the
-  column, "which one is lying" has no answer. custom-columns.md's decision 2
-  (drag versus rule) is that missing answer; with one authority the question
-  does not arise.
+  column, "which one is lying" has no answer. The computed model's open
+  question of a drag against a rule is that missing answer; with one authority
+  the question does not arise.
 - `[LAW:parse-dont-validate]`. The requirements are checked once, on the transition, and
   the stored column is the stamp. Re-checking entry conditions on every read is
-  validation that never ends, and custom-columns.md's own cost section says what
-  it costs: replaying tick over history to learn whether a ticket is at a
-  column's door or inside it.
+  validation that never ends, and the computed model pays for it by replaying
+  tick over history to learn whether a ticket is at a column's door or inside
+  it.
 - `[LAW:no-silent-failure]`, and the feedback stance in
   [project-intent.md](project-intent.md). A drag that is recorded and does not
   take effect is a write whose failure surfaces later, somewhere else. A refusal
   at the write, naming the requirement and the fact it read, is the early feedback the
   intent asks for, and the echo `impl → review` is true at the moment it prints.
 
-What custom-columns.md wanted from automatic settling is kept, as derived
+What the computed model wanted from automatic settling is kept, as derived
 fields. A ticket in `impl` whose blocker reopens stays in `impl` and its
 `blockers` reads `4ou`; `/next` passes its lane over naming the reason; when the
 blocker closes the field is empty on the next read, arrival order irrelevant, no
 merge rule. The ticket's column is where its author put it; the derived field is
 what the facts say about it there. `get x/held` names each unmet test, so "why
 is this ticket stuck" is answered on the line, and "why is this ticket in
-`impl`" is answered by `get x/history`, which makes custom-columns.md's `lit
-why` unnecessary.
+`impl`" is answered by `get x/history`, so no `why` command is needed.
 
-Two of custom-columns.md's constraints become structural. Derivations never
+Two constraints the computed model needed become structural. Derivations never
 write facts: there is no action that could. Derivations never loop: a derived
 field reads stored facts, stored columns and the clock, never another rule's
-output, so its decisions 3 and 5 (which configuration tick applies, how
-competing placements resolve) have nothing left to decide. Derived fields under
-the active version, columns from the trail.
+output, so which configuration tick applies and how competing placements
+resolve have nothing left to decide. Derived fields under the active version,
+columns from the trail.
 
 ## v1's three axes are one list of columns
 
@@ -299,3 +299,63 @@ A review names what it judged: `of` is required and names a revision of the
 reviewable, and a PR's revision is the head commit the author records with
 `add x/pr/revisions`. lit sees no pushes, so a push the author does not record
 is not a revision.
+
+## A future to explore: position computed by rules
+
+Not decided against. The proposal this document superseded on 2026-11-05
+computed a ticket's column rather than storing it, and the owner wants that
+option kept open, so the model is stated here in enough detail to pick up.
+
+**The model.** A column is a name in configuration and nothing else. Behavior
+comes from rules of one kind: when a condition holds for a ticket entering,
+leaving or sitting in a column, produce an action, and the action places the
+ticket in a column, shows a label or prints guidance. A ticket's column is not
+stored. Every read computes the board, `board = tick(state, config, now)`, and
+writes nothing; a ticket sits in the first column in configuration order until
+a drag or a rule puts it elsewhere.
+
+```toml
+[[rule]]
+when = "blockers not closed"
+entering = "doing"
+then = { place = "backlog" }
+
+[[rule]]
+when = "no update in 72h"
+in = "doing"
+then = { place = "backlog" }
+```
+
+**What it buys.** Tickets settle. A written move is a stored reaction that
+outlives its condition: a demotion written because a blocker reopened survives
+the blocker closing again, and moves cascade. A computed position has neither
+problem; when the blocker closes the ticket is back on the next read, arrival
+order irrelevant, no merge rule. Entry rules hold a ticket at the door until
+they pass and nothing has to drag it again. A drag is a fact rules read, never
+an override, so a column whose only rules are labels always accepts one.
+
+**What it costs.** Position stops being a command. Whether a ticket is at a
+column's door or inside it depends on whether its entry rules passed since the
+drag, so a read replays tick over past moments for every ticket shown and every
+ticket their rules read; a cache makes that affordable and is never the source
+of truth. "Why is this ticket in backlog" becomes the common question and wants
+a command that prints each rule that placed it and the facts it read.
+
+**What it would have to settle before it could be built.** A drag against a
+rule: the proposal recommended rules win, with the drag labeled with why,
+because an absence such as "no PR" has no event to be newer than. Competing and
+looping rules: first match in configuration order, placement repeated until
+nothing moves, a loop stopped at the first column reached and labeled. Which
+configuration tick applies: the current one, so editing a rule re-settles every
+ticket, a different choice from validation's. Which past moments the replay
+visits and which `now` each uses, given that recorded times are not monotonic
+across writers. Two implementations that choose differently give two boards
+from the same facts, so all of it is fixed first.
+
+**Where today's design already meets it.** `view = tick(fold(events), config,
+now)` is the evaluation it needs. A label with a `where` selector
+(architecture.md §3.11) is its label action; `held`, `blockers` and staleness
+are its conditions, as derived fields; a handler with a selector is its
+guidance action. The step this design did not take is a rule whose action is
+`place`, and the question it leaves is what a computed column means beside the
+stored `status`, or instead of it.

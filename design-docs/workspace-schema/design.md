@@ -4,8 +4,7 @@ Status: draft, rewritten 2026-11-05 for lit v2 from the 2026-08-27 draft,
 amended 2026-11-11 for configured levels and 2026-11-16 to take in the fields
 design. The hierarchy, the fields, the link types and the templates are
 stated below; columns and their transitions are
-[columns-and-phases.md](../columns-and-phases.md),
-[custom-columns.md](../custom-columns.md) and
+[columns-and-phases.md](../columns-and-phases.md) and
 [transition-requirements.md](../transition-requirements.md); how a version of
 the file comes into force is [architecture.md](../architecture.md) §3.15.
 
@@ -35,7 +34,7 @@ node edits the working-tree draft.
 | issue type hierarchy | the levels and exact containment | this document |
 | field, field configuration | a field declared per level with a kind | this document |
 | required field | an entry or exit requirement on a column that names the field | [transition-requirements.md](../transition-requirements.md) |
-| status, status category | a column and its stage; phase, column and workflow state are one concept | [columns-and-phases.md](../columns-and-phases.md), [custom-columns.md](../custom-columns.md) |
+| status, status category | a column and its stage; phase, column and workflow state are one concept | [columns-and-phases.md](../columns-and-phases.md) |
 | workflow (statuses and transitions), conditions and validators | columns with entry and exit requirements | [transition-requirements.md](../transition-requirements.md) |
 | issue link type (Blocks, Relates) | a link type with a kind and the level pairs it may join | this document |
 | work item template (Azure DevOps), description template (GitLab) | a creation template per level | this document |
@@ -160,8 +159,7 @@ in configuration, a ticket's column is the one stored fact about its position
 while a label is declared in the workspace file and applied by a person or
 computed from a `where` selector (architecture.md §3.11), and
 what Jira calls a status category is the column's stage
-([columns-and-phases.md](../columns-and-phases.md),
-[custom-columns.md](../custom-columns.md)). What Jira calls conditions and
+([columns-and-phases.md](../columns-and-phases.md)). What Jira calls conditions and
 validators are the entry and exit requirements on a column
 ([transition-requirements.md](../transition-requirements.md)). This document
 does not define a column or a requirement.
