@@ -212,8 +212,8 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 	stored := func(k Kind, m Multiplicity, at Places) FieldDecl {
 		return FieldDecl{Kind: k, Multi: m, Origin: Builtin, Writability: Settable, At: at}
 	}
-	derived := func(k Kind, m Multiplicity) FieldDecl {
-		return FieldDecl{Kind: k, Multi: m, Origin: Builtin, Writability: Derived, At: items}
+	derived := func(k Kind, m Multiplicity, at Places) FieldDecl {
+		return FieldDecl{Kind: k, Multi: m, Origin: Builtin, Writability: Derived, At: at}
 	}
 	return map[Path]FieldDecl{
 		Title:          stored(Text{}, One, items),
@@ -225,11 +225,12 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 		"comments":     stored(Text{}, Elements, items),
 		"body":         stored(Text{}, One, comments),
 		"children":     stored(ItemRef{}, Children, containers),
-		"level":        derived(Level{}, One),
-		"parent":       derived(ItemRef{}, One),
-		"of":           derived(Text{}, Set),
-		"blockers":     derived(Text{}, Set),
-		"pr/verdict":   derived(verdict, One),
-		"plan/verdict": derived(verdict, One),
+		"by":           derived(Text{}, One, comments),
+		"level":        derived(Level{}, One, items),
+		"parent":       derived(ItemRef{}, One, items),
+		"of":           derived(Text{}, Set, items),
+		"blockers":     derived(Text{}, Set, items),
+		"pr/verdict":   derived(verdict, One, items),
+		"plan/verdict": derived(verdict, One, items),
 	}
 }

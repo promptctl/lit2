@@ -181,8 +181,11 @@ func node(st fold.State, schema config.Schema, head string) (Node, field.Place, 
 }
 
 // target reads the steps after a's node against the table at its place.
+// When no run of the steps is a row, the refusal is the whole steps',
+// which names a field at another place as such.
 func target(t config.Table, a Address, it fold.Item, steps string) (Address, Refusal) {
-	if r, err := t.Find(a.Place, field.Path(steps)); err == nil {
+	r, whole := t.Find(a.Place, field.Path(steps))
+	if whole == nil {
 		a.Target = Field{Path: field.Path(steps), Row: r}
 		return a, nil
 	}
@@ -192,9 +195,7 @@ func target(t config.Table, a Address, it fold.Item, steps string) (Address, Ref
 			return keyed(t, a, it, path, r, steps[i+1:])
 		}
 	}
-	first, _, _ := strings.Cut(steps, "/")
-	_, err := t.Find(a.Place, field.Path(first))
-	return Address{}, found(err)
+	return Address{}, found(whole)
 }
 
 // keyed reads the steps after row r of a's node: a member of a set, which

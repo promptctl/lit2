@@ -82,8 +82,8 @@ func filed(t *testing.T, echo string) string {
 func appends(e command.Event) int { return len(e.Store.Appends) }
 
 // TestAPersonFilesAndWorksATicketByPath is the ticket's done-when: file a
-// ticket, read it, retitle it, comment on it, label it, ask whether ready
-// holds, remove it and restore it.
+// ticket, read it, retitle it, comment on it and edit the comment, label
+// it, ask whether ready holds, remove it and restore it.
 func TestAPersonFilesAndWorksATicketByPath(t *testing.T) {
 	s := newSession(t)
 	echo := s.ok("add", "unfiled/children", `{title: "History reads come from one store"}`)
@@ -110,8 +110,14 @@ func TestAPersonFilesAndWorksATicketByPath(t *testing.T) {
 		t.Fatalf("add comment echoes %q", comment)
 	}
 	note := id + "/comments/" + seg
-	if got := s.ok("get", note); got != "$ = "+note+"\n$/body\tthe read path is in fold\n" {
-		t.Errorf("get the comment = %q; want its fields", got)
+	if got := s.ok("get", note); got != "$ = "+note+"\n$/body\tthe read path is in fold\n$/by\t"+twinKey().Principal().String()+"\n" {
+		t.Errorf("get the comment = %q; want its fields, its writer among them", got)
+	}
+	if got := s.ok("set", note+"/body", "the read path is in the fold"); got != note+"/body \"the read path is in fold\" → \"the read path is in the fold\"\n" {
+		t.Errorf("editing the comment echoes %q", got)
+	}
+	if got := s.ok("get", note+"/body"); got != "the read path is in the fold\n" {
+		t.Errorf("the edited comment's body = %q; want the edit alone", got)
 	}
 	if got := s.ok("rm", note); got != note+"/deleted (unset) → true\n" {
 		t.Errorf("rm the comment echoes %q", got)
@@ -122,7 +128,7 @@ func TestAPersonFilesAndWorksATicketByPath(t *testing.T) {
 	if got := s.ok("rm", note); got != "" {
 		t.Errorf("a second rm of the comment echoes %q; want nothing drafted", got)
 	}
-	if got := s.ok("get", id+"/comments"); !strings.HasPrefix(got, "(deleted) [") || !strings.HasSuffix(got, "] the read path is in fold\n") {
+	if got := s.ok("get", id+"/comments"); !strings.HasPrefix(got, "(deleted) [") || !strings.HasSuffix(got, "] the read path is in the fold\n") {
 		t.Errorf("a removed comment lists as %q; want it listed, marked", got)
 	}
 	if got := s.ok("set", note+"/deleted", "false"); got != note+"/deleted true → false\n" {

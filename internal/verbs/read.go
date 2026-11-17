@@ -41,7 +41,7 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 		if !ok {
 			panic(fmt.Sprintf("verbs: %s is derived and has no derivation", path))
 		}
-		return derive(w, w.item(n.(address.Item).ID)), nil
+		return derive(w, n), nil
 	case d.Multi == field.Elements:
 		var out []string
 		for _, e := range elements(w.item(n.(address.Item).ID), events.MustName(string(path))) {
@@ -49,31 +49,19 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 		}
 		return out, nil
 	}
-	h := w.held(n)
-	return stored(w.Schema, h.facts, h.in, path, d)
+	_, in, facts := w.held(n)
+	return stored(w.Schema, facts, in, path, d)
 }
 
-// held is a node the state holds, as a write and a read of its stored
-// fields take it: as its events name it, its path, the ancestry it is
-// judged under, which a comment reads through its item's, and its facts.
-type held struct {
-	at       events.About
-	rendered string
-	in       config.Ancestry
-	facts    fold.Facts
-}
-
-// held is the node n names, which exists: an item or an element of one.
-func (w World) held(n address.Node) held {
+// held is the node n names, which exists, as a write and a read of its
+// stored fields take it: as its events name it, the ancestry it is judged
+// under, which a comment reads through its item's, and its facts.
+func (w World) held(n address.Node) (Existing, config.Ancestry, fold.Facts) {
 	switch n := n.(type) {
 	case address.Item:
-		return held{at: events.Item{ID: n.ID}, rendered: n.Rendered, in: tick.ItemAncestry(w.State, w.Schema, n.ID), facts: w.item(n.ID).Facts}
+		return Existing{At: events.Item{ID: n.ID}, Rendered: n.Rendered}, tick.ItemAncestry(w.State, w.Schema, n.ID), w.item(n.ID).Facts
 	case address.Element:
-		for _, e := range w.item(n.Of).Elements {
-			if e.ID == n.ID {
-				return held{at: events.Element{Of: n.Of, ID: n.ID}, rendered: n.Rendered, in: tick.ItemAncestry(w.State, w.Schema, n.Of), facts: e.Facts}
-			}
-		}
+		return Existing{At: events.Element{Of: n.Of, ID: n.ID}, Rendered: n.Rendered}, tick.ItemAncestry(w.State, w.Schema, n.Of), w.element(n).Facts
 	case address.Root, address.Home:
 	}
 	panic(fmt.Sprintf("verbs: %#v holds no stored field", n))
@@ -242,18 +230,28 @@ func children(w World, n address.Node) []string {
 // review is not folded at this slice, so of and blockers are truthfully
 // empty and the verdicts truthfully unset; a test holds every Derived
 // row to having one here.
-var derivations = map[field.Path]func(World, fold.Item) []string{
-	"level": func(_ World, it fold.Item) []string {
+var derivations = map[field.Path]func(World, address.Node) []string{
+	"level": ofItem(func(_ World, it fold.Item) []string {
 		if l, ok := it.Level.(fold.Leveled); ok {
 			return []string{strconv.Itoa(l.Level.Int())}
 		}
 		return nil
+	}),
+	"parent":       ofItem(func(w World, it fold.Item) []string { return []string{w.container(w.State.Container(it.ID))} }),
+	"of":           ofItem(func(World, fold.Item) []string { return nil }),
+	"blockers":     ofItem(func(World, fold.Item) []string { return nil }),
+	"pr/verdict":   ofItem(func(World, fold.Item) []string { return nil }),
+	"plan/verdict": ofItem(func(World, fold.Item) []string { return nil }),
+	"by": func(w World, n address.Node) []string {
+		c, _ := fold.CreateOf(w.element(n.(address.Element)).Origin) // an element a path names is created
+		return []string{writer(c.Stamp.By)}
 	},
-	"parent":       func(w World, it fold.Item) []string { return []string{w.container(w.State.Container(it.ID))} },
-	"of":           func(World, fold.Item) []string { return nil },
-	"blockers":     func(World, fold.Item) []string { return nil },
-	"pr/verdict":   func(World, fold.Item) []string { return nil },
-	"plan/verdict": func(World, fold.Item) []string { return nil },
+}
+
+// ofItem is a derivation of an item's, read on the item n names: only an
+// item's table has its row.
+func ofItem(derive func(World, fold.Item) []string) func(World, address.Node) []string {
+	return func(w World, n address.Node) []string { return derive(w, w.item(n.(address.Item).ID)) }
 }
 
 // container is where a thing sits, as a path names it: an item, a home, or
@@ -281,6 +279,16 @@ func (w World) render(id events.ItemID) string {
 // item is the folded item an address resolved, which exists.
 func (w World) item(id events.ItemID) fold.Item {
 	return w.State.Item(id).(fold.Found).Item
+}
+
+// element is the folded element an address resolved, which exists.
+func (w World) element(n address.Element) fold.Element {
+	for _, e := range w.item(n.Of).Elements {
+		if e.ID == n.ID {
+			return e
+		}
+	}
+	panic(fmt.Sprintf("verbs: %s is no element of its item", n.Rendered))
 }
 
 // Judge is the tests of tests that do not hold on item id: the one

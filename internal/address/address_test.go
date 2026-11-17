@@ -106,6 +106,8 @@ func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
 		note + "/nope":          "unknown_field",
 		note + "/title":         "not_on_level",
 		note + "/body/x":        "names_no_element",
+		"/pr/verdict":           "not_on_level",
+		note + "/pr/verdict":    "not_on_level",
 	} {
 		_, r := address.Parse(s, schema, text)
 		if r == nil || r.Reason() != reason {

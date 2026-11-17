@@ -2,7 +2,7 @@ package command
 
 // VerbsFacts is what a verb's body did, which the root alone records
 // `[LAW:nothing-unseen]`: each operand in order, the drafts by kind, how
-// many deleted an item, whether it was a dry run, the events it minted, and
+// many deleted a node, whether it was a dry run, the events it minted, and
 // the field table it read by origin. A value's text is never in it.
 type VerbsFacts struct {
 	Operands []OperandFacts

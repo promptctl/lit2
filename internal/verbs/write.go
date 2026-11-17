@@ -442,8 +442,8 @@ func (x *expanded) rm(w World) *refusal {
 	panic(fmt.Sprintf("verbs: %T is not a Target", x.addr.Target))
 }
 
-// Deletes is whether p deletes an item: its deleted flag set true, the
-// one way rm writes.
+// Deletes is whether p deletes a node, an item or a comment: its deleted
+// flag set true, the one way rm removes a node.
 func Deletes(p events.Payload) bool {
 	s, ok := p.(events.FieldSet)
 	if !ok || s.Field.String() != string(field.Deleted) {
@@ -455,8 +455,8 @@ func Deletes(p events.Payload) bool {
 
 // existing is the subject an address names: a node the state holds.
 func existing(w World, a address.Address) Subject {
-	h := w.held(a.Node)
-	return Subject{At: Existing{At: h.at, Rendered: h.rendered}, Place: a.Place, In: h.in, Facts: h.facts}
+	at, in, facts := w.held(a.Node)
+	return Subject{At: at, Place: a.Place, In: in, Facts: facts}
 }
 
 // shapeOf is what verb does to a field of d's shape, and false when it
