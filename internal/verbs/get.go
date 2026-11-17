@@ -41,9 +41,9 @@ func Get(w World, paths []string) Got {
 			g.Operands = append(g.Operands, Refused{Text: p, Reason: r.Reason(), Err: r, Detail: r.Error()})
 			continue
 		}
-		ls, err := read(w, a)
-		if err != nil {
-			g.Operands = append(g.Operands, Refused{Text: p, Reason: "configuration", Err: err})
+		ls, no := read(w, a)
+		if no != nil {
+			g.Operands = append(g.Operands, Refused{Text: p, Reason: no.reason, Err: no.err})
 			continue
 		}
 		g.Operands = append(g.Operands, Accepted{Text: p, Canon: a.String(), Values: len(ls)})
@@ -77,31 +77,40 @@ func Get(w World, paths []string) Got {
 	return g
 }
 
-// read is the lines the address holds, each at its canonical path, or the
-// configuration's refusal of a value it reads.
-func read(w World, a address.Address) ([]line, error) {
+// read is the lines the address holds, each at its canonical path: a
+// node's fields, then its lists' elements. A member it does not hold reads
+// as nothing, and one its kind refuses is refused, which is how a typo
+// shows, as rm's is.
+func read(w World, a address.Address) ([]line, *refusal) {
 	base := strings.TrimSuffix(a.String(), "/")
 	switch t := a.Target.(type) {
 	case address.Whole:
-		var out []line
+		var fields, lists []line
 		for _, r := range w.Schema.Table().Rows(a.Place) {
-			ls, err := rowLines(w, a, base, r.Path(), r)
-			if err != nil {
-				return nil, err
+			ls, no := rowLines(w, a, base, r.Path(), r)
+			if no != nil {
+				return nil, no
 			}
-			out = append(out, ls...)
+			if f, ok := r.(config.FieldRow); ok && f.Decl.Multi == field.Elements {
+				lists = append(lists, ls...)
+			} else {
+				fields = append(fields, ls...)
+			}
 		}
-		return out, nil
+		return append(fields, lists...), nil
 	case address.Field:
 		return rowLines(w, a, strings.TrimSuffix(base, "/"+string(t.Path)), t.Path, t.Row)
 	case address.Element:
 		switch k := t.Key.(type) {
 		case address.Member:
-			held, err := Read(w, a.Node, a.Place, t.Path, config.FieldRow{At: t.Path, Decl: t.Decl})
+			held, _ := Read(w, a.Node, t.Path, config.FieldRow{At: t.Path, Decl: t.Decl}) // a set reads no status
 			if slices.Contains(held, k.Name.String()) {
-				return []line{{at: base, value: k.Name.String()}}, err
+				return []line{{at: base, value: k.Name.String()}}, nil
 			}
-			return nil, err
+			if _, err := t.Decl.Kind.Parse(k.Name.String()); err != nil {
+				return nil, refuse("value", "%s: %v", t.Path, err)
+			}
+			return nil, nil
 		case address.ElementKey:
 			for _, e := range elements(w.item(a.Node.(address.Item).ID), events.MustName(string(t.Path))) {
 				if e.key == k.Rendered {
@@ -115,7 +124,7 @@ func read(w World, a address.Address) ([]line, error) {
 
 // rowLines is one row's values on a node, each at the row's path, and a
 // list's elements each at its own key.
-func rowLines(w World, a address.Address, node string, path field.Path, r config.Row) ([]line, error) {
+func rowLines(w World, a address.Address, node string, path field.Path, r config.Row) ([]line, *refusal) {
 	at := node + "/" + string(path)
 	if f, ok := r.(config.FieldRow); ok && f.Decl.Multi == field.Elements {
 		var out []line
@@ -124,10 +133,13 @@ func rowLines(w World, a address.Address, node string, path field.Path, r config
 		}
 		return out, nil
 	}
-	values, err := Read(w, a.Node, a.Place, path, r)
+	values, err := Read(w, a.Node, path, r)
+	if err != nil {
+		return nil, refuse("configuration", "%v", err)
+	}
 	var out []line
 	for _, v := range values {
 		out = append(out, line{at: at, value: v})
 	}
-	return out, err
+	return out, nil
 }

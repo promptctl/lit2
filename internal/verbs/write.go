@@ -134,15 +134,14 @@ func (newElement) piece() {}
 
 // claim is what a write overwrites, which one command writes once: a
 // whole field, a register or a set replaced; a set's member; or standard
-// input.
+// input. A command has one verb: set claims whole fields, add members, and
+// rm a member or the deleted flag, so no command claims a set whole and a
+// member of it.
 type claim struct {
 	who    events.ItemID
 	path   field.Path
 	member string
 }
-
-// field is the whole field k is a claim on.
-func (k claim) field() claim { return claim{who: k.who, path: k.path} }
 
 var stdinClaim = claim{path: "-"}
 
@@ -200,17 +199,15 @@ func Compile(w World, verb Verb, operands []Operand, stdin func() (string, error
 		r, claims[i] = c.operand(w, verb, op, read, &created)
 		c.Operands = append(c.Operands, r)
 	}
-	// [LAW:single-enforcer] the one pass that refuses a repeat: a claim
-	// meets the same claim, and a whole field meets any claim on it
-	seen, touched := map[claim]bool{}, map[claim]bool{}
+	// [LAW:single-enforcer] the one pass that refuses a repeat
+	seen := map[claim]bool{}
 	for i, ks := range claims {
 		for _, k := range ks {
-			whole := k.field()
-			if seen[k] || seen[whole] || (k == whole && touched[whole]) {
+			if seen[k] {
 				c.Operands[i] = Refused{Text: operands[i].Path, Reason: "twice", Err: k.twice(operands[i].Path)}
 				break
 			}
-			seen[k], touched[whole] = true, true
+			seen[k] = true
 		}
 	}
 	if _, refused := c.Refusal(); refused {
@@ -288,9 +285,6 @@ func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string,
 	// the item they are about
 	about := map[int][]Change{}
 	for _, wr := range x.writes {
-		if err := field.Writable(wr.decl); err != nil {
-			return no(refuse("derived", "%s: %v", wr.path, err))
-		}
 		pieces, chs, ks, r := compile(w, wr)
 		if r != nil {
 			if t, ok := wr.source.(FromTemplate); ok && r.reason != "configuration" {
@@ -360,15 +354,15 @@ func expand(w World, verb Verb, op Operand, stdin func() (string, error), create
 	if !isField {
 		return expanded{}, wrongVerb(verb, "", nil)
 	}
-	row, isField := t.Row.(config.FieldRow)
-	if !isField {
-		return expanded{}, refuse("derived", "%s is a check: the engine computes it", t.Path)
+	decl, no := fieldOf(t.Row, t.Path)
+	if no != nil {
+		return expanded{}, no
 	}
-	sh, ok := shapeOf(verb, row.Decl)
+	sh, ok := shapeOf(verb, decl)
 	if !ok {
 		return expanded{}, wrongVerb(verb, t.Path, t.Row)
 	}
-	value, no := x.value(op, stdin, row.Decl)
+	value, no := x.value(op, stdin, decl)
 	if no != nil {
 		return expanded{}, no
 	}
@@ -376,8 +370,18 @@ func expand(w World, verb Verb, op Operand, stdin func() (string, error), create
 	if sh == addChild {
 		return x, x.children(w, value, created)
 	}
-	x.writes = []write{{subject: existing(w, a), path: t.Path, decl: row.Decl, value: value, source: FromOperand{}, shape: sh}}
+	x.writes = []write{{subject: existing(w, a), path: t.Path, decl: decl, value: value, source: FromOperand{}, shape: sh}}
 	return x, nil
+}
+
+// fieldOf is the field a row is, which a write takes: a check is the
+// engine's verdict, which nothing writes.
+func fieldOf(r config.Row, path field.Path) (field.FieldDecl, *refusal) {
+	row, isField := r.(config.FieldRow)
+	if !isField {
+		return field.FieldDecl{}, refuse("derived", "%s is a check: the engine computes it", path)
+	}
+	return row.Decl, nil
 }
 
 // value reads an operand's value. `-` is standard input, which the literal
@@ -630,15 +634,12 @@ func keyed(w World, p field.Place, path field.Path) (field.FieldDecl, *refusal) 
 		}
 		return field.FieldDecl{}, refuse("not_on_level", "%v", err)
 	}
-	row, ok := r.(config.FieldRow)
-	if !ok {
-		return field.FieldDecl{}, refuse("derived", "%s is a check: the engine computes it", path)
+	decl, no := fieldOf(r, path)
+	if no != nil {
+		return field.FieldDecl{}, no
 	}
-	if err := field.Writable(row.Decl); err != nil {
-		return field.FieldDecl{}, refuse("derived", "%s: %v", path, err)
-	}
-	if err := field.Keyable(row.Decl); err != nil {
+	if err := field.Keyable(decl); err != nil {
 		return field.FieldDecl{}, refuse("value", "%s: %v", path, err)
 	}
-	return row.Decl, nil
+	return decl, nil
 }

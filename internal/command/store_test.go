@@ -53,6 +53,15 @@ func TestAnEventThatNeverUsedItsStoreHasNoStoreBlock(t *testing.T) {
 	}
 }
 
+// TestAnInitSaysWhichIdentityFilesItCreated: the block names each file
+// created or found, both readings visible.
+func TestAnInitSaysWhichIdentityFilesItCreated(t *testing.T) {
+	in := first(t, storeBlockOf(t, StoreFacts{Inits: []Fresh{{Checkout: store.Created, Key: store.Existing}}}), "init")
+	if in["checkout_created"] != true || in["key_created"] != false {
+		t.Errorf("the init line is %v; want the checkout created and the key found", in)
+	}
+}
+
 func TestAFreshStoresHeadsAreZeros(t *testing.T) {
 	s := memoryStore()
 	h := must[store.Heads](t)(s.Heads())

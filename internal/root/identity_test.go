@@ -68,7 +68,7 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 	t.Run("two worktrees minting at once sign with one key", func(t *testing.T) {
 		c := fresh(t)
 		var got [2]command.Minted
-		var made [2]Fresh
+		var made [2]command.Fresh
 		var wg sync.WaitGroup
 		for i := range 2 {
 			wg.Go(func() {
@@ -97,7 +97,7 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 		if err != nil || again.Checkout != first.Checkout || again.Key.Principal() != first.Key.Principal() {
 			t.Errorf("a second mint is %v, %v; want the first, %v", again, err, first)
 		}
-		if made != (Fresh{Checkout: store.Existing, Key: store.Existing}) {
+		if made != (command.Fresh{Checkout: store.Existing, Key: store.Existing}) {
 			t.Errorf("a second mint made %+v; want both files existing", made)
 		}
 		if read := readIdentity(c.shared, c.worktree[0]); read != command.Identity(first) {

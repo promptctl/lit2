@@ -20,13 +20,13 @@ type World struct {
 	Schema config.Schema
 }
 
-// Read is the values the row at path holds on node n, at place p: the one
+// Read is the values the row at path holds on node n: the one
 // reader get and a check's tests call `[LAW:single-enforcer]`. A stored
 // field reads through stored; comments read the item's elements; children
 // what is placed there; a derived field its derivation; a check its
 // verdict. A status the configuration cannot judge is its refusal, as a
 // write's is.
-func Read(w World, n address.Node, p field.Place, path field.Path, row config.Row) ([]string, error) {
+func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, error) {
 	if c, ok := row.(config.CheckRow); ok {
 		unmet, err := Judge(w, n.(address.Item).ID, c.Check.Tests)
 		return verdict(unmet), err
@@ -289,7 +289,7 @@ func holds(w World, atom field.Atom, scope []events.ItemID) (bool, error) {
 			if f, ok := r.(config.FieldRow); ok {
 				kind = f.Decl.Kind
 			}
-			if found, err = Read(w, address.Item{ID: id, Rendered: w.render(id)}, place, atom.Path(), r); err != nil {
+			if found, err = Read(w, address.Item{ID: id, Rendered: w.render(id)}, atom.Path(), r); err != nil {
 				return false, err
 			}
 		}

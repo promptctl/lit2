@@ -70,6 +70,10 @@ func (Filed) change()     {}
 // what it writes over is named, for the twice pass, only for an item that
 // exists, since what a create writes is new by construction.
 func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
+	// [LAW:single-enforcer] the one gate every write passes
+	if err := field.Writable(wr.decl); err != nil {
+		return nil, nil, nil, refuse("derived", "%s: %v", wr.path, err)
+	}
 	var pieces []piece
 	var changes []Change
 	var keys []claim
@@ -89,7 +93,7 @@ func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 		keys = []claim{{path: wr.path, member: wr.value.(field.Scalar).Text}}
 	case setMembers:
 		pieces, changes, r = replace(wr)
-		keys = []claim{{path: wr.path}} // the whole set, so it meets every member's claim
+		keys = []claim{{path: wr.path}}
 	case addComment:
 		pieces, changes, r = comment(wr)
 		keys = nil

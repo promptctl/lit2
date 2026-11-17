@@ -25,7 +25,12 @@ type StoreFacts struct {
 	Folds     []fold.FoldFacts
 	Appends   []store.Appended
 	Publishes []store.Publishing
+	Inits     []Fresh
 }
+
+// Fresh is what admin init did to each identity file: created it, or
+// found it there already.
+type Fresh struct{ Checkout, Key store.Made }
 
 // Read is one range a fold read and what the scan found in it.
 type Read struct {
@@ -54,7 +59,7 @@ func (Opened) opening()   {}
 func (Unopened) opening() {}
 
 func (f StoreFacts) empty() bool {
-	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Folds)+len(f.Appends)+len(f.Publishes) == 0
+	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Folds)+len(f.Appends)+len(f.Publishes)+len(f.Inits) == 0
 }
 
 // The store block as the line spells it: one object per step that ran,
@@ -66,6 +71,11 @@ type (
 		Read    *readLine     `json:"read,omitempty"`
 		Append  []appendLine  `json:"append,omitempty"`
 		Publish []publishLine `json:"publish,omitempty"`
+		Init    []initLine    `json:"init,omitempty"`
+	}
+	initLine struct {
+		CheckoutCreated bool `json:"checkout_created"`
+		KeyCreated      bool `json:"key_created"`
 	}
 	openLine struct {
 		State        string `json:"state"`
@@ -136,6 +146,9 @@ func storeBlock(f StoreFacts) *storeLine {
 	}
 	for _, p := range f.Publishes {
 		l.Publish = append(l.Publish, publish(p))
+	}
+	for _, in := range f.Inits {
+		l.Init = append(l.Init, initLine{CheckoutCreated: created(in.Checkout), KeyCreated: created(in.Key)})
 	}
 	return l
 }

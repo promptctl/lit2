@@ -18,37 +18,34 @@ func identityFiles(c git.Checkout) (shared, private store.Files) {
 	return store.FilesAtMode(command.DirOf(command.PrincipalFile{}, c), 0o600), store.FilesAtMode(command.DirOf(command.IDFile{}, c), 0o600)
 }
 
-// Fresh is what MintIdentity did to each file: created it, or found it
-// there already. init prints the recovery phrase only for a Created key.
-type Fresh struct{ Checkout, Key store.Made }
-
 // MintIdentity creates the checkout id in private and the principal's key
 // in shared, each once, then reads both back, so a worktree that loses a
 // race to create the clone's key signs with the winner's. It is init's
-// call; it prints nothing.
-func MintIdentity(shared, private store.Files, entropy io.Reader) (command.Minted, Fresh, error) {
+// call; it prints nothing. init prints the recovery phrase only for a
+// Created key.
+func MintIdentity(shared, private store.Files, entropy io.Reader) (command.Minted, command.Fresh, error) {
 	var id store.CheckoutID
 	if _, err := io.ReadFull(entropy, id[:]); err != nil {
-		return command.Minted{}, Fresh{}, fmt.Errorf("drawing the checkout id: %w", err)
+		return command.Minted{}, command.Fresh{}, fmt.Errorf("drawing the checkout id: %w", err)
 	}
 	key, err := events.NewKey(entropy)
 	if err != nil {
-		return command.Minted{}, Fresh{}, err
+		return command.Minted{}, command.Fresh{}, err
 	}
-	var fresh Fresh
+	var fresh command.Fresh
 	if fresh.Checkout, err = private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()); err != nil {
-		return command.Minted{}, Fresh{}, fmt.Errorf("creating the checkout id file: %w", err)
+		return command.Minted{}, command.Fresh{}, fmt.Errorf("creating the checkout id file: %w", err)
 	}
 	if fresh.Key, err = shared.CreateOnce(command.NameOf(command.PrincipalFile{}), key.FileText()); err != nil {
-		return command.Minted{}, Fresh{}, fmt.Errorf("creating the key file: %w", err)
+		return command.Minted{}, command.Fresh{}, fmt.Errorf("creating the key file: %w", err)
 	}
 	switch got := readIdentity(shared, private).(type) {
 	case command.Minted:
 		return got, fresh, nil
 	case command.Unminted:
-		return command.Minted{}, Fresh{}, fmt.Errorf("the identity files created are not there: %d missing", len(got.Files()))
+		return command.Minted{}, command.Fresh{}, fmt.Errorf("the identity files created are not there: %d missing", len(got.Files()))
 	case command.Unreadable:
-		return command.Minted{}, Fresh{}, fmt.Errorf("an identity file does not read: %w", got.Err)
+		return command.Minted{}, command.Fresh{}, fmt.Errorf("an identity file does not read: %w", got.Err)
 	}
 	panic("root: readIdentity answered no Identity")
 }

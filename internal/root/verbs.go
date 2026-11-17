@@ -54,12 +54,15 @@ func (r body) write(f fold.Folded, verb verbs.Verb, ops []verbs.Operand, flags c
 		r.told(r.facts(c.Operands, c.Drafts, false, nil))
 		return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("minting: %w", err)}}
 	}
-	r.told(r.facts(c.Operands, c.Drafts, false, m.Events))
+	// the minted ids are told once the store holds them, so the block never
+	// names an event the store does not
+	r.told(r.facts(c.Operands, c.Drafts, false, nil))
 	appended, err := opened.Store.Append(m.Batch)
 	if err != nil {
 		return cli.Failed{Failure: storeFailure{err: err}}
 	}
 	r.stored.Appends = append(r.stored.Appends, appended)
+	r.told(r.facts(c.Operands, c.Drafts, false, m.Events))
 	st := f.State
 	for _, checked := range fold.Check(r.p.Fold, m.Events) {
 		st = fold.Step(r.p.Fold.Registry(), st, checked)
@@ -80,6 +83,7 @@ func (r body) init() cli.Outcome {
 	if err != nil {
 		return cli.Failed{Failure: storeFailure{err: err}}
 	}
+	r.stored.Inits = append(r.stored.Inits, fresh)
 	out := fmt.Sprintf("principal %s\n", minted.Key.Principal())
 	if fresh.Key == store.Created {
 		out += fmt.Sprintf("recovery phrase: %s\nwrite it down: it is the one way to restore this key\n", minted.Key.Phrase())

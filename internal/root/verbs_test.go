@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/store"
 )
 
 // session is one twin run many times, as a person in one checkout does.
@@ -141,7 +142,7 @@ func TestADryRunWritesNothingAndEchoesWhatARunMints(t *testing.T) {
 		t.Fatalf("the real run appended %d frames; want one", appends(real.event))
 	}
 	a, b := filed(t, real.out), filed(t, strings.SplitN(real.out, "\n", 4)[3])
-	named := strings.NewReplacer(a+"/", "(new)/", "+ "+a, "+ (new)", b+"/", "(new)/", "+ "+b, "+ (new)").Replace(real.out)
+	named := strings.NewReplacer(a+"/", "(new 1)/", "+ "+a, "+ (new 1)", b+"/", "(new 2)/", "+ "+b, "+ (new 2)").Replace(real.out)
 	if dry.out != named+"(dry run: nothing written)\n" {
 		t.Errorf("the dry run echoed\n%s\nthe run\n%s", dry.out, real.out)
 	}
@@ -309,14 +310,34 @@ func TestHelpAndAnUnknownFieldListTheSameRows(t *testing.T) {
 }
 
 // TestInitPrintsThePrincipal: admin init in a minted checkout finds its
-// key and prints its principal, and no phrase.
+// key and prints its principal, and no phrase, and its event says it found
+// both files.
 func TestInitPrintsThePrincipal(t *testing.T) {
 	s := newSession(t)
-	out := s.ok("admin", "init")
-	if out != "principal "+twinKey().Principal().String()+"\n" {
-		t.Errorf("admin init printed %q", out)
+	r := s.lit("admin", "init")
+	if r.out != "principal "+twinKey().Principal().String()+"\n" {
+		t.Errorf("admin init printed %q", r.out)
 	}
-	if again := s.ok("admin", "init"); again != out {
-		t.Errorf("a second init printed %q; want %q", again, out)
+	if got := r.event.Store.Inits; len(got) != 1 || got[0] != (command.Fresh{Checkout: store.Existing, Key: store.Existing}) {
+		t.Errorf("admin init's event records %+v; want both files found", got)
+	}
+	if again := s.ok("admin", "init"); again != r.out {
+		t.Errorf("a second init printed %q; want %q", again, r.out)
+	}
+}
+
+// TestAnItemReadsItsFieldsThenItsComments, and a member its kind refuses
+// is a typo, refused as rm refuses it.
+func TestAnItemReadsItsFieldsThenItsComments(t *testing.T) {
+	s := newSession(t)
+	id := filed(t, s.ok("add", "unfiled/children", `{title: a}`))
+	s.ok("add", id+"/comments", "a note")
+	item := s.ok("get", id)
+	if c, ti := strings.Index(item, "$/comments/"), strings.Index(item, "$/title\t"); c < ti {
+		t.Errorf("get %s prints a comment before a field:\n%s", id, item)
+	}
+	s.refused("value", "get", id+"/labels/reday")
+	if got := s.ok("get", id+"/labels/ready"); got != "" {
+		t.Errorf("a declared label not held reads %q", got)
 	}
 }
