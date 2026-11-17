@@ -63,12 +63,14 @@ var (
 func (w writer) ref() store.Ref { return store.WriterRef{Checkout: w.checkout} }
 
 // world is the streams of one store as a fold reads them: each ref's
-// batches, in append order, under one log.
+// batches, in append order, under one log. base is the state its founding
+// leaves, which a test mints from as a writer that read only it.
 type world struct {
 	t       testing.TB
 	entropy *rand.ChaCha8
 	order   []store.Ref
 	streams map[store.Ref]*stream
+	base    fold.State
 }
 
 type stream struct {
@@ -76,15 +78,56 @@ type stream struct {
 	batches []store.Batch
 }
 
+// The policy every world is founded under: the owner role, and the
+// contributor role of the default profile.
+var (
+	owner       = name("owner")
+	contributor = name("contributor")
+	roles       = map[events.Name][]events.Capability{contributor: capabilities(
+		"add */children", "add own/*", "set own/*", "set */status", "add */comments", "rm own/* (level=1)")}
+	// founder enrolls every world, under A's key, on a ref of its own, and
+	// founderB approves B into it, so the founding sorts before any test's
+	// event
+	founder  = writer{checkout: store.CheckoutID{0xf}, signer: keyA.Signer()}
+	founderB = writer{checkout: store.CheckoutID{0xf, 0xb}, signer: keyB.Signer()}
+)
+
+func capabilities(texts ...string) []events.Capability {
+	var cs []events.Capability
+	for _, t := range texts {
+		cs = append(cs, events.MustCapability(t))
+	}
+	return cs
+}
+
+// newWorld is a store founded with A and B its owners: A enrolls, proposes
+// B as an owner and approves, and B approves, so version 2 is in force.
 func newWorld(t testing.TB) *world {
+	wd := unfounded(t)
+	wd.mint(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))
+	both := events.Propose{Base: 1, Members: map[events.PrincipalID]events.Name{keyA.Principal(): owner, keyB.Principal(): owner}, Threshold: events.Majority{}}
+	wd.mint(founder, wd.state(), root(both), root(events.Approve{Proposal: both.Digest()}))
+	wd.mint(founderB, wd.state(), root(events.Approve{Proposal: both.Digest()}))
+	wd.base = wd.state()
+	if p, ok := wd.base.Policy().(fold.Enrolled); !ok || p.Policy.Version() != 2 {
+		t.Fatalf("the founding left %#v in force, want version 2", wd.base.Policy())
+	}
+	return wd
+}
+
+// unfounded is a store with no enrollment.
+func unfounded(t testing.TB) *world {
 	return &world{t: t, entropy: rand.NewChaCha8([32]byte{'f', 'o', 'l', 'd'}), streams: map[store.Ref]*stream{}}
 }
 
+func root(p events.Payload) events.Draft { return events.Act{About: events.Root{}, Payload: p} }
+
 // mint mints ds as w, at the frontier and with the names of seen, the
-// state w folded, and appends them to w's stream as one command.
+// state w folded, citing its policy version, and appends them to w's
+// stream as one command.
 func (wd *world) mint(w writer, seen fold.State, d events.Draft, more ...events.Draft) []events.Event {
 	wd.t.Helper()
-	m, err := events.Mint(events.Context{Writer: w.checkout, Agent: events.Unlabeled{}, ConfigRef: configRef, Policy: 1,
+	m, err := events.Mint(events.Context{Writer: w.checkout, Agent: events.Unlabeled{}, ConfigRef: configRef, Policy: seen.Cites(),
 		Frontier: seen.Frontier(), Known: seen.Known(), Now: t0}, events.NewDrafts(d, more...), w.signer, wd.entropy)
 	if err != nil {
 		wd.t.Fatal(err)

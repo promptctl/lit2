@@ -109,7 +109,7 @@ func TestSmokeWorksATicket(t *testing.T) {
 	tmp := t.TempDir()
 	bin, dir := build(t, tmp), checkout(t, filepath.Join(tmp, "work"), "")
 	lit := func(args ...string) string { t.Helper(); return run(t, bin, dir, tmp, 0, args...) }
-	if out := lit("admin", "init"); !strings.HasPrefix(out, "principal did:key:") || !strings.Contains(out, "recovery phrase: ") || !strings.Contains(out, "applied as version one") {
+	if out := lit("admin", "init"); !strings.HasPrefix(out, "principal did:key:") || !strings.Contains(out, "recovery phrase: ") || !strings.Contains(out, "enrolled: policy v1, owner did:key:") || !strings.Contains(out, "applied as version one") {
 		t.Fatalf("admin init printed %q", out)
 	}
 	first, _, _ := strings.Cut(lit("add", "unfiled/children", "{title: a}"), "\n")

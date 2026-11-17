@@ -11,7 +11,7 @@ import (
 
 func TestAParentlessLeafIsInTheHomeOfLevelOne(t *testing.T) {
 	w := newWorld(t)
-	leaf := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0])
+	leaf := idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(1)}))[0])
 	s := w.state()
 	it := found(t, s, leaf)
 	created, ok := it.Origin.(fold.Created)
@@ -28,7 +28,7 @@ func TestAParentlessLeafIsInTheHomeOfLevelOne(t *testing.T) {
 
 func TestAChildIsOneLevelBelowItsParentAndUnderIt(t *testing.T) {
 	w := newWorld(t)
-	epic := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(3)}))[0])
+	epic := idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(3)}))[0])
 	child := idOf(w.mint(a, w.state(), createUnder(epic))[0])
 	second := idOf(w.mint(b, w.state(), createUnder(epic))[0])
 	s := w.state()
@@ -43,7 +43,7 @@ func TestAChildIsOneLevelBelowItsParentAndUnderIt(t *testing.T) {
 
 func TestEachPlacedLeafIsALaneInTheOrderOfItsCreate(t *testing.T) {
 	w := newWorld(t)
-	epic := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(2)}))[0])
+	epic := idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(2)}))[0])
 	first := idOf(w.mint(a, w.state(), createUnder(epic))[0])
 	second := idOf(w.mint(b, w.state(), create(events.AtLevel{Level: level(1)}))[0])
 	idOf(w.mint(a, w.state(), createUnder(second))[0]) // under a leaf: placed nowhere
@@ -58,7 +58,7 @@ func TestEachPlacedLeafIsALaneInTheOrderOfItsCreate(t *testing.T) {
 
 func TestAChildOfALeafIsUnderLeaf(t *testing.T) {
 	w := newWorld(t)
-	leaf := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0])
+	leaf := idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(1)}))[0])
 	child := idOf(w.mint(a, w.state(), createUnder(leaf))[0])
 	grandchild := idOf(w.mint(a, w.state(), createUnder(child))[0])
 	s := w.state()
@@ -75,7 +75,7 @@ func TestAChildOfALeafIsUnderLeaf(t *testing.T) {
 func TestAChildOfANeverCreatedIDIsOrphaned(t *testing.T) {
 	w := newWorld(t)
 	ghost := ghost("z")
-	child := idOf(w.mint(a, fold.State{}, createUnder(ghost))[0])
+	child := idOf(w.mint(a, w.base, createUnder(ghost))[0])
 	s := w.state()
 	if got := found(t, s, child).Level; got != (fold.Orphaned{Missing: ghost}) {
 		t.Errorf("a child of a never-created id is %#v; want Orphaned{%s}", got, ghost)
@@ -93,7 +93,7 @@ func TestAChildOfANeverCreatedIDIsOrphaned(t *testing.T) {
 
 func TestACreateIsAboutWhatItCreatesAndNothingElse(t *testing.T) {
 	w := newWorld(t)
-	epic := w.mint(a, fold.State{}, create(events.AtLevel{Level: level(3)}))[0]
+	epic := w.mint(a, w.base, create(events.AtLevel{Level: level(3)}))[0]
 	recreated := w.mint(a, w.state(), events.Act{About: events.Item{ID: idOf(epic)}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})[0]
 	written := w.mint(a, w.state(), events.Act{About: events.NewItem{ID: ghost("w"), Width: 3}, Payload: events.FieldSet{Field: title, Value: prose("t")}})[0]
 	s := w.state()
@@ -113,12 +113,12 @@ func TestACreateIsAboutWhatItCreatesAndNothingElse(t *testing.T) {
 
 func TestACreateReplayedIntoAnotherLogKeepsItsIDAndSegment(t *testing.T) {
 	src := newWorld(t)
-	original := src.mint(a, fold.State{}, create(events.AtLevel{Level: level(2)}))[0]
+	original := src.mint(a, src.base, create(events.AtLevel{Level: level(2)}))[0]
 	made := original.Header().About().(events.NewItem)
 	// another store, another writer, a later position: the create replayed
 	dst := newWorld(t)
 	dst.entropy = rand.NewChaCha8([32]byte{'d', 's', 't'})
-	dst.mint(b, fold.State{}, create(events.AtLevel{Level: level(1)}), create(events.AtLevel{Level: level(1)}))
+	dst.mint(b, dst.base, create(events.AtLevel{Level: level(1)}), create(events.AtLevel{Level: level(1)}))
 	replayed := dst.mint(b, dst.state(), events.Act{About: made, Payload: original.Body().(events.Readable).Payload})[0]
 	if replayed.ID() == original.ID() || replayed.Header().Position() == original.Header().Position() {
 		t.Fatal("the replay is the original event; the test replays nothing")
@@ -131,7 +131,7 @@ func TestACreateReplayedIntoAnotherLogKeepsItsIDAndSegment(t *testing.T) {
 
 func TestAnItemRendersUnderItsParentsSegments(t *testing.T) {
 	w := newWorld(t)
-	epic := w.mint(a, fold.State{}, create(events.AtLevel{Level: level(3)}))[0]
+	epic := w.mint(a, w.base, create(events.AtLevel{Level: level(3)}))[0]
 	child := w.mint(a, w.state(), createUnder(idOf(epic)))[0]
 	orphan := w.mint(a, w.state(), createUnder(ghost("z")))[0]
 	s := w.state()
@@ -155,7 +155,7 @@ func TestAnItemRendersUnderItsParentsSegments(t *testing.T) {
 func TestAParentCreatedAfterItsChildIsNoLinkAndTheWalkEnds(t *testing.T) {
 	w := newWorld(t)
 	p := ghost("p")
-	child := w.mint(a, fold.State{}, createUnder(p))[0]
+	child := w.mint(a, w.base, createUnder(p))[0]
 	// a forged create of p, under its own child, sorting after the child's
 	w.mint(a, w.state(), events.Act{About: events.NewItem{ID: p, Width: 3}, Payload: events.ItemCreate{Place: events.BelowParent{Parent: idOf(child)}}})
 	s := w.state()
@@ -190,10 +190,10 @@ func TestAParentCreatedAfterItsChildIsNoLinkAndTheWalkEnds(t *testing.T) {
 
 func TestTwoCreatesOfOneIDCollideAndTheFirstPlacesIt(t *testing.T) {
 	w := newWorld(t)
-	first := w.mint(a, fold.State{}, create(events.AtLevel{Level: level(2)}))[0]
+	first := w.mint(a, w.base, create(events.AtLevel{Level: level(2)}))[0]
 	id := idOf(first)
 	// B never folded A's create, and names the same id at its own level
-	again := w.mint(b, fold.State{}, events.Act{About: events.NewItem{ID: id, Width: 3}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})[0]
+	again := w.mint(b, w.base, events.Act{About: events.NewItem{ID: id, Width: 3}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})[0]
 	s := w.state()
 	it := found(t, s, id)
 	c, ok := it.Origin.(fold.Collided)
@@ -221,7 +221,7 @@ func TestTwoCreatesOfOneIDCollideAndTheFirstPlacesIt(t *testing.T) {
 // a value that is no column's name.
 func TestOnlyATransitionWritesStatus(t *testing.T) {
 	w := newWorld(t)
-	id := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0])
+	id := idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(1)}))[0])
 	w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.Transition{From: name("backlog"), To: name("plan")}})
 	forged := w.mint(b, w.state(), set(id, fold.Status, plain("Not A Name")))[0]
 	s := w.state()
@@ -241,7 +241,7 @@ func TestOnlyATransitionWritesStatus(t *testing.T) {
 // settled value shows as one: a write over Live retires both.
 func TestLiveHoldsEveryLiveWriteAndAWriteOverItRetiresThem(t *testing.T) {
 	w := newWorld(t)
-	id := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0])
+	id := idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(1)}))[0])
 	seen := w.state()
 	w.mint(a, seen, set(id, priority, plain("high")))
 	w.mint(b, seen, set(id, priority, plain("high")))

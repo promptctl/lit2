@@ -69,8 +69,9 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 			return x.At.(events.Item).ID // only an item has a status
 		case Created:
 			return filed[x.N]
+		case Member:
 		}
-		panic(fmt.Sprintf("verbs: %T is not a Who", x))
+		panic(fmt.Sprintf("verbs: %T has no status", x))
 	}
 	var errs []error
 	refused := map[int]*refusal{}
@@ -94,7 +95,7 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 			ch.Judged, r = judge(w, arrival{who: Created{N: ch.N}, id: id}, whoOf)
 			changes[i], op = ch, ch.Op
 			c.Tally = c.Tally.plus(ch.Judged.tally())
-		case Wrote, Added, Removed, Commented:
+		case Wrote, Added, Removed, Commented, Proposed, Approved:
 			continue // no arrival
 		}
 		if r != nil {

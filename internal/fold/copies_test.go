@@ -43,7 +43,7 @@ func withBody(t *testing.T, rec store.Record, body []byte) store.Record {
 func minted(t *testing.T, d events.Draft) store.Record {
 	t.Helper()
 	src := newWorld(t)
-	src.mint(a, fold.State{}, d)
+	src.mint(a, src.base, d)
 	return src.streams[a.ref()].batches[0].Records()[0]
 }
 
@@ -130,7 +130,7 @@ func TestTheIntegrityRecordGrowsLinearly(t *testing.T) {
 			for i := range ds {
 				ds[i] = events.Act{About: events.Root{}, Payload: unknown{}}
 			}
-			w.mint(wr, fold.State{}, ds[0], ds[1:]...)
+			w.mint(wr, w.base, ds[0], ds[1:]...)
 		}
 	}
 	junk := make([]store.Record, n)

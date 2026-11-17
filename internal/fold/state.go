@@ -11,11 +11,13 @@ import (
 )
 
 // State is the folded backlog: the item table, the workspace's applied
-// versions, the frontier and the integrity record. It is immutable; Step
-// returns the next one, and the zero State is the fold of nothing.
+// versions, the policy, the frontier and the integrity record. It is
+// immutable; each step returns the next one, and the zero State is the
+// fold of nothing.
 type State struct {
 	items     table[events.ItemID, *item, byItem]
 	workspace versions
+	policy    policyState
 	frontier  events.Frontier
 	integrity integrity
 }
@@ -295,8 +297,48 @@ type BadSignature struct{}
 // newer binary that has it verifies it when it replays.
 type UnknownSuite struct{}
 
-func (BadSignature) reason() {}
-func (UnknownSuite) reason() {}
+// NoPolicyInForce is an event sorting before the enrollment: verification
+// seeds there and never walks before it (§3.17).
+type NoPolicyInForce struct{}
+
+// EnrollmentYielded is an enrollment after the first, which To is.
+type EnrollmentYielded struct{ To events.EventID }
+
+// CitesFutureVersion is an event citing a policy version not yet in force
+// at its position.
+type CitesFutureVersion struct{ Cited, InForce events.PolicyVersion }
+
+// VersionRegressed is an event citing a version older than its writer last
+// cited (§3.20).
+type VersionRegressed struct{ Cited, Previous events.PolicyVersion }
+
+// Unauthorized is an event whose Intent the policy in force at its position
+// refused.
+type Unauthorized struct {
+	Intent  PathWrite
+	Refused Refused
+}
+
+// NotAnApprover is an approval by a principal the proposal's requirement
+// does not count.
+type NotAnApprover struct{ Proposal events.Digest }
+
+// UnknownProposal is an approval of a proposal no folded event made.
+type UnknownProposal struct{ Proposal events.Digest }
+
+// Inadmissible is a proposal no policy can be, Why as NewPolicy says.
+type Inadmissible struct{ Why string }
+
+func (BadSignature) reason()       {}
+func (UnknownSuite) reason()       {}
+func (NoPolicyInForce) reason()    {}
+func (EnrollmentYielded) reason()  {}
+func (CitesFutureVersion) reason() {}
+func (VersionRegressed) reason()   {}
+func (Unauthorized) reason()       {}
+func (NotAnApprover) reason()      {}
+func (UnknownProposal) reason()    {}
+func (Inadmissible) reason()       {}
 
 // Unapplied is a verified event whose facts the fold did not apply.
 type Unapplied struct {

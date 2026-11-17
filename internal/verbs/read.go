@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,9 @@ import (
 type World struct {
 	evaluate.View
 	File File
+	// Me is the principal this checkout writes as, whose approval a
+	// governed write gives when it alone suffices.
+	Me events.PrincipalID
 }
 
 // Read is the values the row at path holds on node n: the one
@@ -41,6 +45,8 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 	switch {
 	case d.Multi == field.Children:
 		return children(w, n), nil
+	case d.Writability == field.Governed:
+		return governedReads[path](w, n), nil
 	case d.Writability == field.Derived:
 		derive, ok := derivations[path]
 		if !ok {
@@ -73,7 +79,7 @@ func (w World) held(n address.Node) (Existing, config.Ancestry, fold.Facts) {
 		// the root stores no field, so a write to one reaches compile's
 		// gate, which refuses what it names as derived
 		return Existing{At: events.Root{}, Rendered: "/"}, nil, fold.Facts{}
-	case address.Home:
+	case address.Home, address.Principal:
 	}
 	panic(fmt.Sprintf("verbs: %#v holds no stored field", n))
 }
@@ -94,7 +100,7 @@ func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path fie
 		}
 		return out, nil
 	case field.One:
-	case field.Elements, field.Children:
+	case field.Elements, field.Children, field.Principals:
 		panic(fmt.Sprintf("verbs: %s holds %s, which no register stores", path, d.Multi))
 	}
 	if _, column := d.Kind.(field.Column); column {
@@ -220,8 +226,8 @@ func below(w World, n address.Node) []address.Node {
 		ids = w.State().Children(fold.Home{Holds: n.Level})
 	case address.Item:
 		ids = w.State().Children(fold.Under{Parent: n.ID})
-	case address.Element:
-		panic("verbs: a comment's table has no children row")
+	case address.Element, address.Principal:
+		panic(fmt.Sprintf("verbs: %T's table has no children row", n))
 	}
 	for _, id := range ids {
 		out = append(out, w.node(id))
@@ -241,7 +247,7 @@ func name(n address.Node) string {
 		return n.Name
 	case address.Item:
 		return n.Rendered
-	case address.Root, address.Element:
+	case address.Root, address.Element, address.Principal:
 	}
 	panic(fmt.Sprintf("verbs: %#v is placed nowhere", n))
 }
@@ -391,6 +397,8 @@ var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 		return append(out, fmt.Sprintf("lanes considered: %d", n.Considered)), nil
 	},
 }
+
+func init() { maps.Copy(derivations, policyDerivations) }
 
 // stage is an item's stage, evaluate's.
 func stage(w World, n address.Node) ([]string, error) {

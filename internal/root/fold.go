@@ -35,12 +35,20 @@ type opened struct {
 }
 
 // open opens the run's store and folds it, or fails as an environment that
-// has none.
+// has none, or whose store no enrollment founded: only admin init, which
+// founds it, reads such a store.
 func (r body) open() (opened, error) {
 	switch o := r.p.Store.(type) {
 	case command.Opened:
 		in := r.p.Place.(command.InCheckout) // a store opens only for a minted checkout
-		return r.openAs(o, in.Checkout, in.Identity.(command.Minted))
+		op, err := r.openAs(o, in.Checkout, in.Identity.(command.Minted))
+		if err != nil {
+			return opened{}, err
+		}
+		if _, unfounded := op.folded.State.Policy().(fold.Unenrolled); unfounded {
+			return opened{}, unenrolled{}
+		}
+		return op, nil
 	case command.Unopened:
 		return opened{}, storeFailure{err: o.Why}
 	}
@@ -53,6 +61,7 @@ func (r body) openAs(o command.Opened, c git.Checkout, id command.Minted) (opene
 	if err != nil {
 		return opened{}, storeFailure{err: err}
 	}
+	r.rec.Policy.Under = folded.State.Policy()
 	return opened{body: r, store: o, checkout: c, id: id, folded: folded}, nil
 }
 
@@ -92,7 +101,7 @@ func replay(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Fold
 // mint signs drafts as one frame of events after the folded state,
 // written under the version ref names.
 func (o opened) mint(drafts []events.Draft, ref git.ObjectID) (events.Minted, error) {
-	ctx := events.Context{Writer: o.id.Checkout, Agent: o.p.Agent, ConfigRef: ref, Policy: 1,
+	ctx := events.Context{Writer: o.id.Checkout, Agent: o.p.Agent, ConfigRef: ref, Policy: o.folded.State.Cites(),
 		Frontier: o.folded.State.Frontier(), Known: o.folded.State.Known(), Now: o.now}
 	m, err := events.Mint(ctx, events.NewDrafts(drafts[0], drafts[1:]...), o.id.Key.Signer(), o.p.Entropy)
 	if err != nil {
@@ -118,3 +127,13 @@ type storeFailure struct{ err error }
 func (f storeFailure) Error() string     { return "the store: " + f.err.Error() }
 func (storeFailure) Class() reason.Class { return reason.ClassEnvironment }
 func (storeFailure) Reason() string      { return "store" }
+
+// unenrolled is a store no enrollment founded: no verb reads it until
+// admin init founds it, the environment's step to take.
+type unenrolled struct{}
+
+func (unenrolled) Error() string {
+	return "this store has no enrollment, so no policy says who may write: lit2 admin init founds it"
+}
+func (unenrolled) Class() reason.Class { return reason.ClassEnvironment }
+func (unenrolled) Reason() string      { return "policy" }

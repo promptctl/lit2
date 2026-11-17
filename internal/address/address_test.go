@@ -32,7 +32,7 @@ func made2(e events.Event) events.NewElement { return e.Header().About().(events
 // or its segments, a field, a slashed field, a member and a comment each
 // parse to what they name, rendered canonically.
 func TestEveryPathFormNamesItsNode(t *testing.T) {
-	var s fold.State
+	s := founded
 	s, ev := mint(t, s, s, 0xa, top(2), [16]byte{0x10})
 	feature := made(ev)
 	s, ec := mint(t, s, s, 0xa, comment(feature.ID), [16]byte{0x30})
@@ -88,7 +88,7 @@ func isCheck(a address.Address) bool {
 // and an unknown field lists the rows the place has, which are the rows
 // help prints there.
 func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
-	var s fold.State
+	s := founded
 	s, ev := mint(t, s, s, 0xa, top(2), [16]byte{0x10})
 	seg := made(ev).Segment().String()
 	s, ec := mint(t, s, s, 0xa, comment(made(ev).ID), [16]byte{0x30})
@@ -142,7 +142,7 @@ func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
 // TestAnAmbiguousCommentListsBoth: two writers offline can fix one segment
 // for two comments of one item, as for two items, and it names neither.
 func TestAnAmbiguousCommentListsBoth(t *testing.T) {
-	var s fold.State
+	s := founded
 	s, ev := mint(t, s, s, 0xa, top(2), [16]byte{0x10})
 	feature := made(ev)
 	view := s
@@ -162,7 +162,7 @@ func TestAnAmbiguousCommentListsBoth(t *testing.T) {
 // TestAnItemTheFoldCannotPlaceIsUnplaced: a fact about an id nothing
 // created reads Orphaned, so it has no place and no fields.
 func TestAnItemTheFoldCannotPlaceIsUnplaced(t *testing.T) {
-	var s fold.State
+	s := founded
 	ghost := must(events.ParseItemID("g0000000000000000000000000"))
 	forged := events.CreateItem{Payload: events.ItemCreate{Place: events.BelowParent{Parent: ghost}}}
 	s, ec := mint(t, s, s, 0xa, forged, [16]byte{0x20})
@@ -177,7 +177,7 @@ func TestAnItemTheFoldCannotPlaceIsUnplaced(t *testing.T) {
 func TestADeclaredFieldIsAddressable(t *testing.T) {
 	text := []byte("prefix = \"lit\"\nclaim_ttl = \"6h\"\n[levels.1]\nname = \"story\"\n[levels.1.fields.points]\nkind = \"enum\"\nvalues = [\"1\", \"2\", \"3\", \"5\", \"8\"]\n[levels.2]\nname = \"feature\"\nhome = \"unfiled\"\n[columns.backlog]\ninitial = true\nnext = [\"done\"]\n[columns.done]\nterminal = true\n")
 	declared := must(config.Parse(text, "workspace.toml", running))
-	var s fold.State
+	s := founded
 	s, ev := mint(t, s, s, 0xa, top(1), [16]byte{0x10})
 	a, r := parse(s, declared, made(ev).Segment().String()+"/points")
 	if r != nil {

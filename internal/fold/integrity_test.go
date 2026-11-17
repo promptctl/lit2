@@ -65,7 +65,7 @@ func TestAForgedSignatureIsCarriedUnappliedAndUnobserved(t *testing.T) {
 
 func TestAnUnknownKindIsUnreadWithItsNameKept(t *testing.T) {
 	w := newWorld(t)
-	e := w.mint(a, fold.State{}, events.Act{About: events.NewItem{ID: ghost("v"), Width: 3}, Payload: unknown{}})[0]
+	e := w.mint(a, w.base, events.Act{About: events.NewItem{ID: ghost("v"), Width: 3}, Payload: unknown{}})[0]
 	s := w.state()
 	un := s.Integrity().Unapplied
 	if len(un) != 1 || un[0].Stamp.Event != e.ID() || un[0].Kind != "test.unknown" || un[0].Why != (fold.Unread{Why: events.UnknownKind{}}) {
@@ -74,7 +74,7 @@ func TestAnUnknownKindIsUnreadWithItsNameKept(t *testing.T) {
 	if _, ok := s.Item(idOf(e)).(fold.NotFound); !ok {
 		t.Errorf("an unknown kind made an item")
 	}
-	if s.Frontier() == (fold.State{}).Frontier() {
+	if s.Frontier() == w.base.Frontier() {
 		t.Errorf("an unread event's header did not feed the frontier")
 	}
 	if !s.Known().Holds(idOf(e)) {

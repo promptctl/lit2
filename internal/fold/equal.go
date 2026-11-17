@@ -12,7 +12,7 @@ import (
 // determinism is tested through this and never through a serialization
 // `[LAW:behavior-not-structure]`.
 func (s State) Equal(o State) bool {
-	if s.frontier != o.frontier || !s.integrity.equal(o.integrity) || !s.workspace.equal(o.workspace) {
+	if s.frontier != o.frontier || !s.integrity.equal(o.integrity) || !s.workspace.equal(o.workspace) || !s.policy.equal(o.policy) {
 		return false
 	}
 	a, b := s.records(), o.records()
@@ -62,7 +62,7 @@ func valueEqual(a, b events.Value) bool {
 func (in integrity) equal(o integrity) bool {
 	return slices.EqualFunc(in.carriedList(), o.carriedList(), func(a, b carriedAt) bool {
 		return a.order == b.order && a.carried.Event == b.carried.Event && a.carried.Writer == b.carried.Writer &&
-			a.carried.Principal == b.carried.Principal && a.carried.RecordedAt.Equal(b.carried.RecordedAt) && a.carried.Reason == b.carried.Reason
+			a.carried.Principal == b.carried.Principal && a.carried.RecordedAt.Equal(b.carried.RecordedAt) && ReasonEqual(a.carried.Reason, b.carried.Reason)
 	}) && slices.EqualFunc(in.unappliedList(), o.unappliedList(), func(a, b Unapplied) bool {
 		return a.Stamp.equal(b.Stamp) && a.Kind == b.Kind && a.About == b.About && whyEqual(a.Why, b.Why)
 	}) && slices.Equal(in.malformedList(), o.malformedList())
@@ -85,4 +85,56 @@ func whyEqual(a, b UnappliedWhy) bool {
 		return u.Why == v.Why
 	}
 	return false
+}
+
+// ReasonEqual is whether two carried reasons say the same: a refusal
+// compares by its intent's path and each miss's capability and failures,
+// which hold lists, and every other reason by value.
+func ReasonEqual(a, b Reason) bool {
+	u, ok := a.(Unauthorized)
+	if !ok {
+		return a == b
+	}
+	v, ok := b.(Unauthorized)
+	return ok && u.Intent.String() == v.Intent.String() && u.Refused.As == v.Refused.As &&
+		slices.EqualFunc(u.Refused.Misses, v.Refused.Misses, func(x, y Miss) bool {
+			return x.Capability.String() == y.Capability.String() && slices.EqualFunc(x.Failed, y.Failed, failureEqual)
+		})
+}
+
+func failureEqual(a, b Failure) bool {
+	c, ok := a.(ConditionUnmet)
+	if !ok {
+		return a == b
+	}
+	d, ok := b.(ConditionUnmet)
+	return ok && c.Condition == d.Condition
+}
+
+func (p policyState) equal(o policyState) bool {
+	if (p.active == nil) != (o.active == nil) {
+		return false
+	}
+	if p.active != nil && (!policyEqual(p.active.Policy, o.active.Policy) || !p.active.Since.equal(o.active.Since) || p.active.Enrollment != o.active.Enrollment) {
+		return false
+	}
+	byDigest := func(a, b pendingRec) int { return slices.Compare(a.digest[:], b.digest[:]) }
+	return slices.EqualFunc(p.pending.sorted(byDigest), o.pending.sorted(byDigest), func(x, y pendingRec) bool {
+		return x.digest == y.digest && x.by.equal(y.by) && x.activated == y.activated && slices.Equal(sortedPrincipals(x.approvals), sortedPrincipals(y.approvals))
+	}) && slices.EqualFunc(p.requests.sorted(byPrincipalKey), o.requests.sorted(byPrincipalKey), func(x, y requestRec) bool {
+		return x.principal == y.principal && x.stamp.equal(y.stamp)
+	}) && slices.Equal(p.cited.sorted(byCheckoutKey), o.cited.sorted(byCheckoutKey))
+}
+
+func policyEqual(a, b events.Policy) bool {
+	return a.Version() == b.Version() && a.Owner() == b.Owner() && slices.Equal(a.Members(), b.Members()) &&
+		events.ThresholdText(a.Threshold()) == events.ThresholdText(b.Threshold())
+}
+
+func byPrincipalKey(a, b requestRec) int { return events.ComparePrincipals(a.principal, b.principal) }
+
+func byCheckoutKey(a, b citedRec) int { return slices.Compare(a.checkout[:], b.checkout[:]) }
+
+func sortedPrincipals(ps []events.PrincipalID) []events.PrincipalID {
+	return slices.SortedFunc(slices.Values(ps), events.ComparePrincipals)
 }

@@ -54,23 +54,81 @@ type ItemRef struct{}
 // Level is a level, 1 to 5.
 type Level struct{}
 
-func (Text) isKind()    {}
-func (Number) isKind()  {}
-func (Date) isKind()    {}
-func (Enum) isKind()    {}
-func (Pattern) isKind() {}
-func (Column) isKind()  {}
-func (ItemRef) isKind() {}
-func (Level) isKind()   {}
+// Principal is a principal, as its did:key.
+type Principal struct{}
 
-func (Text) Name() string    { return "text" }
-func (Number) Name() string  { return "number" }
-func (Date) Name() string    { return "date" }
-func (Enum) Name() string    { return "enum" }
-func (Pattern) Name() string { return "pattern" }
-func (Column) Name() string  { return "column" }
-func (ItemRef) Name() string { return "item" }
-func (Level) Name() string   { return "level" }
+// Role is a role's name. Which roles exist is the policy's to say, at the
+// write.
+type Role struct{}
+
+// Threshold is how many owners a change of the owners needs: majority, or
+// a number.
+type Threshold struct{}
+
+// Digest is a proposal's digest, or a prefix of its hex that names one.
+// Which proposals exist is the fold's to say, at the write.
+type Digest struct{}
+
+func (Text) isKind()      {}
+func (Number) isKind()    {}
+func (Date) isKind()      {}
+func (Enum) isKind()      {}
+func (Pattern) isKind()   {}
+func (Column) isKind()    {}
+func (ItemRef) isKind()   {}
+func (Level) isKind()     {}
+func (Principal) isKind() {}
+func (Role) isKind()      {}
+func (Threshold) isKind() {}
+func (Digest) isKind()    {}
+
+func (Text) Name() string      { return "text" }
+func (Number) Name() string    { return "number" }
+func (Date) Name() string      { return "date" }
+func (Enum) Name() string      { return "enum" }
+func (Pattern) Name() string   { return "pattern" }
+func (Column) Name() string    { return "column" }
+func (ItemRef) Name() string   { return "item" }
+func (Level) Name() string     { return "level" }
+func (Principal) Name() string { return "principal" }
+func (Role) Name() string      { return "role" }
+func (Threshold) Name() string { return "threshold" }
+func (Digest) Name() string    { return "digest" }
+
+// Parse reads a principal's did:key.
+func (Principal) Parse(raw string) (string, error) {
+	p, err := events.ParsePrincipalID(raw)
+	if err != nil {
+		return "", err
+	}
+	return p.String(), nil
+}
+
+// Parse reads a role's name.
+func (Role) Parse(raw string) (string, error) {
+	n, err := events.ParseName(raw)
+	if err != nil {
+		return "", fmt.Errorf("a role: %w", err)
+	}
+	return n.String(), nil
+}
+
+// Parse reads a threshold.
+func (Threshold) Parse(raw string) (string, error) {
+	t, err := events.ParseThreshold(raw)
+	if err != nil {
+		return "", err
+	}
+	return events.ThresholdText(t), nil
+}
+
+// Parse reads a digest's hex, whole or a prefix of it.
+func (Digest) Parse(raw string) (string, error) {
+	if raw == "" || len(raw) > 64 || strings.Trim(raw, "0123456789abcdef") != "" {
+		return "", fmt.Errorf("%q is not a digest: its hex, or a prefix of it", raw)
+	}
+	return raw, nil
+}
 
 // Parse reads a column's name.
 func (Column) Parse(raw string) (string, error) {

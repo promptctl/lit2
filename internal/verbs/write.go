@@ -106,6 +106,10 @@ const (
 	addComment
 	// addChild expands to creates and their writes, never to one payload
 	addChild
+	// the governed shapes write the policy: a proposal or an approval
+	governSet
+	governAdd
+	governRm
 )
 
 // write is the unit of compilation: one value written to one field of one
@@ -312,6 +316,10 @@ func (c *Compiled) operand(w World, verb Verb, n int, op Operand, stdin func() (
 			}
 		}
 		switch who := wr.subject.At.(type) {
+		case Member:
+			for _, p := range pieces {
+				drafts = append(drafts, events.Act{About: events.Root{}, Payload: p.(fact).payload})
+			}
 		case Existing:
 			for _, p := range pieces {
 				switch p := p.(type) {
@@ -440,10 +448,16 @@ func count(v field.Literal) int {
 
 // rm is the writes of removing the node at x's address: a node's is its
 // deleted flag set true, so a node is removable where the table gives it
-// one, an item and a comment; and a set's member its removal.
+// one, an item and a comment; a member of the policy the policy without
+// it; and a set's member its removal.
 func (x *expanded) rm(w World) *refusal {
 	switch t := x.addr.Target.(type) {
 	case address.Whole:
+		if _, member := x.addr.Node.(address.Principal); member {
+			r, _ := w.Schema().Table().Find(field.Root{}, membersPath) // a built-in of every table
+			x.writes = []write{{subject: existing(w, x.addr), path: membersPath, decl: r.(config.FieldRow).Decl, source: FromOperand{}, shape: governRm}}
+			return nil
+		}
 		r, err := w.Schema().Table().Find(x.addr.Place, field.Deleted)
 		if err != nil {
 			return refuse("not_removable", "%s has no deleted flag: the root and a home are the tree's, and rm removes an item, a comment or a member", x.addr)
@@ -470,8 +484,12 @@ func Deletes(p events.Payload) bool {
 	return plain && v.Canonical == "true"
 }
 
-// existing is the subject an address names: a node the state holds.
+// existing is the subject an address names: a node the state holds, or a
+// member of the policy, which holds no fact.
 func existing(w World, a address.Address) Subject {
+	if m, ok := a.Node.(address.Principal); ok {
+		return Subject{At: Member(m), Place: a.Place}
+	}
 	at, in, facts := w.held(a.Node)
 	return Subject{At: at, Place: a.Place, In: in, Facts: facts}
 }
@@ -481,6 +499,12 @@ func existing(w World, a address.Address) Subject {
 // `[LAW:one-source-of-truth]`.
 func shapeOf(verb Verb, d field.FieldDecl) (shape, bool) {
 	switch {
+	case d.Writability == field.Governed && verb == Set && d.Multi == field.One:
+		return governSet, true
+	case d.Writability == field.Governed && verb == Add && (d.Multi == field.Set || d.Multi == field.Principals):
+		return governAdd, true
+	case d.Writability == field.Governed:
+		return 0, false
 	case verb == Set && d.Multi == field.One:
 		return setOne, true
 	case verb == Set && d.Multi == field.Set:
@@ -510,9 +534,14 @@ func VerbsOf(r config.Row) []string {
 	}
 	switch f.Decl.Multi {
 	case field.Set:
-		out = append(out, "rm "+string(f.At)+"/<member>")
+		// a governed set's members are the policy's: an approval stands
+		if f.Decl.Writability != field.Governed {
+			out = append(out, "rm "+string(f.At)+"/<member>")
+		}
 	case field.Elements:
 		out = append(out, "rm "+string(f.At)+"/<id>")
+	case field.Principals:
+		out = append(out, "rm "+string(f.At)+"/<principal>")
 	case field.One, field.Children:
 	}
 	return out
@@ -591,8 +620,8 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 		above := x.addr.Place.(field.Node).Level
 		level, _ = above.Below()
 		placement, in = events.BelowParent{Parent: node.ID}, fold.Under{Parent: node.ID}
-	case address.Element:
-		panic("verbs: a comment's table has no children row")
+	case address.Element, address.Principal:
+		panic(fmt.Sprintf("verbs: %T's table has no children row", node))
 	}
 	sub := Subject{At: Created{N: n}, Place: field.ItemPlace(level), In: evaluate.AncestryOf(w.State(), w.Schema(), in)}
 	x.creates = append(x.creates, creation{n: n, placement: placement, in: in})

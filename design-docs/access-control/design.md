@@ -151,7 +151,7 @@ not restated stronger here), spelled as path globs in the default profile:
 | Role | Capabilities (beyond the previous row) |
 |---|---|
 | observer | `get` (holds the tier keys granted to them; no write verbs) |
-| contributor | `add */children`; `set */status` out of the initial column, bound `all` (pulling the top of the shared queue regardless of creator *is* the agent workflow); `set own/*`; `add */comments`; `rm own/*/comments/*`; `set */status` into a terminal column bound `own-or-assignee` (so an agent who claimed a ticket can finish it — the market's author-or-assignee disjunction, R V-d); `rm own/*` at level 1 |
+| contributor | `add */children`; `set */status` out of the initial column, bound `all` (pulling the top of the shared queue regardless of creator *is* the agent workflow); `add own/*`; `set own/*`; `add */comments`; `rm own/*/comments/*`; `set */status` into a terminal column bound `own-or-assignee` (so an agent who claimed a ticket can finish it — the market's author-or-assignee disjunction, R V-d); `rm own/*` at level 1 |
 | editor | `set */*` and `rm */*` bound `all` at level 1 and above; `set */rank`; `add */blocks`, `add */relates`; `set */tier` |
 | owner | everything, including `rm * --purge`, `rm * --destroy`, `member.admin`, `policy.admin`, `set /policy/*` |
 
@@ -185,10 +185,10 @@ permissive one afterward; a demoted principal's later events are judged
 against the version in force at their position whatever they cite, which is
 what makes the revocation bite.
 
-Every receiver runs that rule over a writer's published segments before
-accepting them, so a forged or unauthorized publication never reaches a
-replica's fold and the local copy stays; a valid replica re-publishes over a
-vandalized remote. The local fold is the rollback defense: a remote serving
+Every receiver runs that rule over a writer's published segments as it
+accepts them: a forged or unauthorized publication is held and its events
+carried unapplied, so two clones holding the same events fold equal, and the
+local copy stays; a valid replica re-publishes over a vandalized remote. The local fold is the rollback defense: a remote serving
 an older-than-known or diverging history for a writer is refused, not
 adopted (R IV). Witness cosigning against split-view (the remote showing
 different members different histories) is acknowledged as the full CT-style

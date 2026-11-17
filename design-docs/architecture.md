@@ -526,11 +526,12 @@ over paths, and a binding of `own`, `assignee`, `own-or-assignee` or `all`.
 holding its lane's claim. A role is a named bundle of capabilities, and the
 default profile ships the access-control design's four, observer,
 contributor, editor and owner, spelled as path globs: contributor is
-`add */children`, `set own/*`, `set */status` out of the initial column,
-`add */comments`, `rm own/*` at level 1, the leaf. The enforcer that judges a
-transition also judges, for every intent a command would mint, the writer's
-principal against the policy version in force at the writer's current fold;
-refusal of any path refuses the whole. Membership is paths too:
+`add */children`, `add own/*`, `set own/*`, `set */status` out of the
+initial column, `add */comments`, `rm own/*/comments/*`, `rm own/*` at level
+1, the leaf. The capability verdict is the fold's (§3.20): a command folds
+the events it would mint onto the writer's current fold, and if the fold
+would carry any of them, it writes none, naming each capability of the
+verb with what the write missed. Membership is paths too:
 `add /members '{principal, role}'`, `set /members/<id>/role editor`,
 `rm /members/<id>`, `set /policy/threshold 2`, each compiling to a proposal
 and, where the writer's own signature suffices, its approval.
@@ -565,9 +566,12 @@ the policy in force at the event's causal position; an event that fails is
 carried, counted on `/integrity` with its writer, and never applied, and an
 event whose cited policy version is lower than its writer's previous one
 fails the same way. Every receiver runs that rule over a writer's published
-segments before accepting them, so a forged or unauthorized publication
-never reaches a replica's fold and the local copy stays; a valid replica
-re-publishes over a vandalized remote. A revoked principal that stays
+segments as it accepts them: a forged or unauthorized publication is held
+and its events carried unapplied, so two clones holding the same events
+fold equal whatever order they received them in, and the local copy
+stays; a valid replica re-publishes over a vandalized remote. A write
+runs the rule over its own events before appending them, so lit2 never
+writes what every replica would carry. A revoked principal that stays
 offline from its revocation can mint events whose positions sort before it;
 the fold applies them, as it applies any offline work made before the news
 arrived, and reports them with their `recorded-at` so an owner can judge

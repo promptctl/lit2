@@ -24,7 +24,7 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 		return unwritten(x)
 	}
 	var b strings.Builder
-	for _, ch := range c.Changes {
+	for i, ch := range c.Changes {
 		switch ch := ch.(type) {
 		case Filed:
 			id := who(Created{N: ch.N})
@@ -67,6 +67,14 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 				key = e.Segment().String()
 			}
 			fmt.Fprintf(&b, "+ %s/%s/%s\n", who(ch.Who), ch.Path, key)
+		case Proposed:
+			fmt.Fprintf(&b, "~ policy version %d proposed as %s: %s\n", ch.Base+1, shortDigest(ch.Digest), writes(w, ch.Writes))
+			// the approval the same command gives says what became of it
+			if i+1 == len(c.Changes) || c.Changes[i+1] != Change(Approved{Digest: ch.Digest, Base: ch.Base}) {
+				b.WriteString(w.standing(ch.Digest, ch.Base))
+			}
+		case Approved:
+			fmt.Fprintf(&b, "+ /%s/%s\n%s", approvalsPath, shortDigest(ch.Digest), w.standing(ch.Digest, ch.Base))
 		}
 	}
 	if minted == nil {
@@ -102,6 +110,8 @@ func unwritten(x Who) string {
 		return x.Rendered
 	case Created:
 		return fmt.Sprintf("(new %d)", x.N)
+	case Member:
+		return x.Rendered
 	}
 	panic(fmt.Sprintf("verbs: %T is not a Who", x))
 }

@@ -48,12 +48,8 @@ func (v inForce) write(verb verbs.Verb, ops []verbs.Operand, flags cli.Flags) cl
 		v.rec.Told(v.facts(c, flags.DryRun, nil))
 		return failed(err)
 	}
-	st := v.folded.State
-	for _, checked := range fold.Check(v.p.Fold, m.Events) {
-		st = fold.Step(v.p.Fold.Registry(), st, checked)
-	}
-	after := v.world(st)
-	c = verbs.Gate(after, c, m.Events)
+	after, c, outcomes := verbs.Folded(v.p.Fold, v.world(v.folded.State), c, m.Events)
+	v.rec.Policy.Verdicts = command.Verdicts(m.Events, outcomes)
 	if no, refused := c.Refusal(); refused {
 		v.rec.Told(v.facts(c, flags.DryRun, nil))
 		return cli.Failed{Failure: refusal{no}}
@@ -73,7 +69,7 @@ func (v inForce) write(verb verbs.Verb, ops []verbs.Operand, flags cli.Flags) cl
 }
 
 func (v inForce) world(st fold.State) verbs.World {
-	return verbs.World{View: evaluate.Of(st, v.schema, v.now), File: v.file}
+	return verbs.World{View: evaluate.Of(st, v.schema, v.now), File: v.file, Me: v.id.Key.Principal()}
 }
 
 // facts is the verbs block of what a body did.

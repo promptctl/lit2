@@ -76,9 +76,9 @@ row; the architecture test fails on one without.
 | §3.15 The workspace file | `config`, `fold`, `evaluate`, `verbs`, `root`, `assets` | the one schema parse of an applied version in config; the applies and which version is in force folded; the §3.5 check against every live version in evaluate; the one judge of an apply, `Admit`, and the board's `workspace` line in verbs; `config commit`, `config status` and init's version one in root; the default profile in assets |
 | §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs through git |
 | §3.17 Principal and policy | `events`, `fold` | the key, signature and suite in events; the policy as events folded |
-| §3.18 Capability | `verbs`, `fold` | the capability verdict at the one enforcer; roles from the folded policy |
+| §3.18 Capability | `verbs`, `fold` | the capability verdict in fold's step, the one enforcer, over roles from the folded policy; the default roles, membership paths compiled to proposals and a refusal's rendering in verbs |
 | §3.19 Tier and envelope | `events`, `verbs` | the envelope and suite in events; prose sealed in verbs, so no layer below sees it |
-| §3.20 Verification | `fold`, `store` | one fold rule via the suite in events; run by store at receive |
+| §3.20 Verification | `fold`, `store` | one fold rule, signature then policy, in fold's step via the suite in events; run by store at receive |
 | §5.1 Open | `store` | ref heads, every open log under the common dir and the snapshot read |
 | §5.2 Fold | `fold` | events newer than the snapshot, verified |
 | §5.3 Parse | `config` | the active workspace version the fold names, into the schema value |
@@ -92,7 +92,7 @@ row; the architecture test fails on one without.
 | exit classes and statuses | `reason`, `cli` | the four classes in reason; each layer's failure names its own reasons; statuses in cli |
 | checkout discovery | `git` | the work tree, private git dir and common dir |
 | the code repository's HEAD and history | `git` | the blob HEAD holds at a path and whether one was ever there, read, never written |
-| the one enforcer and the in-use check | `verbs` | requirements and capabilities judged once, at the write |
+| the one enforcer and the in-use check | `verbs`, `fold` | requirements judged once by verbs' gate, at the write; capabilities by fold's step, which every replica runs and a write runs over its own events before appending |
 | the snapshot | `store`, `fold` | its bytes in store; its content and key in fold |
 | `/next`, `/lanes`, `/integrity`, `/me` | `fold`, `evaluate`, `address`, `cli` | computed by fold and evaluate, named by address, rendered by cli |
 | the managed block in AGENTS.md | `guidance`, `root` | its text in guidance; written by init in root |

@@ -101,7 +101,7 @@ func kindOf(r config.Row) string {
 			return r.Decl.Kind.Name()
 		case field.Set:
 			return "set-of-" + r.Decl.Kind.Name()
-		case field.Elements, field.Children:
+		case field.Elements, field.Children, field.Principals:
 			return "list-of-" + r.Decl.Kind.Name()
 		}
 		panic(fmt.Sprintf("cli: %d is not a Multiplicity", r.Decl.Multi))

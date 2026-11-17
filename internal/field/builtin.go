@@ -19,19 +19,23 @@ const (
 	Declared
 )
 
-// Writability is whether a person may write a field. It is independent
-// of Origin: a built-in field can be settable, and a declared one derived
-// `[LAW:types-are-the-program]`.
+// Writability is whether a person may write a field, and how. It is
+// independent of Origin: a built-in field can be settable, and a declared
+// one derived `[LAW:types-are-the-program]`. A governed field is written
+// through the policy, as a proposal of its next version, and is never a
+// fact of a node.
 type Writability uint8
 
 const (
 	Settable Writability = iota + 1
 	Derived
+	Governed
 )
 
 // Multiplicity is how a field holds its values: one value; a set of
 // members, each a name; an item's elements, such as its comments, each
-// keyed by the id minted for it; or the items placed below a node.
+// keyed by the id minted for it; the items placed below a node; or the
+// policy's members, each keyed by its principal.
 type Multiplicity uint8
 
 const (
@@ -39,6 +43,7 @@ const (
 	Set
 	Elements
 	Children
+	Principals
 )
 
 func (m Multiplicity) String() string {
@@ -51,6 +56,8 @@ func (m Multiplicity) String() string {
 		return "a list of elements"
 	case Children:
 		return "the items below"
+	case Principals:
+		return "the members, by principal"
 	}
 	panic(fmt.Sprintf("field: %d is not a Multiplicity", uint8(m)))
 }
@@ -89,11 +96,16 @@ type Node struct{ Level events.Level }
 // fields, as a set's member is not.
 type Comment struct{}
 
-func (Root) place()    {}
-func (Home) place()    {}
-func (Leaf) place()    {}
-func (Node) place()    {}
-func (Comment) place() {}
+// MemberEntry is one member of the policy, by its principal: a node of its
+// own, whose role is its field.
+type MemberEntry struct{}
+
+func (Root) place()        {}
+func (Home) place()        {}
+func (Leaf) place()        {}
+func (Node) place()        {}
+func (Comment) place()     {}
+func (MemberEntry) place() {}
 
 // ItemPlace is the place of an item at level l: a leaf at level 1, a node
 // above it. It is the one reading of a level as a place
@@ -126,7 +138,7 @@ type Places interface {
 }
 
 // PlaceSet is a built-in field's places: every place of each kind it names.
-type PlaceSet struct{ Root, Home, Leaf, Node, Comment bool }
+type PlaceSet struct{ Root, Home, Leaf, Node, Comment, MemberEntry bool }
 
 // OnLevel is a declared field's place: the items of the level that declares
 // it.
@@ -148,6 +160,8 @@ func (s PlaceSet) Holds(p Place) bool {
 		return s.Node
 	case Comment:
 		return s.Comment
+	case MemberEntry:
+		return s.MemberEntry
 	}
 	panic(fmt.Sprintf("field: %T is not a Place", p))
 }
@@ -166,7 +180,7 @@ func (o OnLevel) Holds(p Place) bool {
 		return !below
 	case Node:
 		return p.Level == o.Level
-	case Root, Home, Comment:
+	case Root, Home, Comment, MemberEntry:
 		return false
 	}
 	panic(fmt.Sprintf("field: %T is not a Place", p))
@@ -214,6 +228,7 @@ var (
 	containers = PlaceSet{Root: true, Home: true, Node: true}
 	comments   = PlaceSet{Comment: true}
 	removable  = PlaceSet{Leaf: true, Node: true, Comment: true}
+	members    = PlaceSet{MemberEntry: true}
 )
 
 // The built-in fields the verbs name: the title every new item carries,
@@ -236,27 +251,38 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 	derived := func(k Kind, m Multiplicity, at Places) FieldDecl {
 		return FieldDecl{Kind: k, Multi: m, Origin: Builtin, Writability: Derived, At: at}
 	}
+	governed := func(k Kind, m Multiplicity, at Places) FieldDecl {
+		return FieldDecl{Kind: k, Multi: m, Origin: Builtin, Writability: Governed, At: at}
+	}
 	return map[Path]FieldDecl{
-		Title:          stored(Text{}, One, items),
-		"description":  stored(Text{}, One, items),
-		"reason":       stored(Text{}, One, items),
-		"labels":       stored(labels, Set, items),
-		Deleted:        stored(deleted, One, removable),
-		"status":       stored(Column{}, One, leaves),
-		"comments":     stored(Text{}, Elements, items),
-		"body":         stored(Text{}, One, comments),
-		"children":     stored(ItemRef{}, Children, containers),
-		"by":           derived(Text{}, One, comments),
-		"level":        derived(Level{}, One, items),
-		"parent":       derived(ItemRef{}, One, items),
-		"of":           derived(Text{}, Set, items),
-		"blockers":     derived(Text{}, Set, items),
-		"stage":        derived(stage, One, items),
-		"rollup":       derived(Text{}, One, nodes),
-		"lanes":        derived(Text{}, One, root),
-		"next":         derived(Text{}, One, root),
-		"workspace":    derived(Text{}, One, root),
-		"pr/verdict":   derived(verdict, One, items),
-		"plan/verdict": derived(verdict, One, items),
+		Title:              stored(Text{}, One, items),
+		"description":      stored(Text{}, One, items),
+		"reason":           stored(Text{}, One, items),
+		"labels":           stored(labels, Set, items),
+		Deleted:            stored(deleted, One, removable),
+		"status":           stored(Column{}, One, leaves),
+		"comments":         stored(Text{}, Elements, items),
+		"body":             stored(Text{}, One, comments),
+		"children":         stored(ItemRef{}, Children, containers),
+		"by":               derived(Text{}, One, comments),
+		"level":            derived(Level{}, One, items),
+		"parent":           derived(ItemRef{}, One, items),
+		"of":               derived(Text{}, Set, items),
+		"blockers":         derived(Text{}, Set, items),
+		"stage":            derived(stage, One, items),
+		"rollup":           derived(Text{}, One, nodes),
+		"lanes":            derived(Text{}, One, root),
+		"next":             derived(Text{}, One, root),
+		"workspace":        derived(Text{}, One, root),
+		"integrity":        derived(Text{}, One, root),
+		"members":          governed(Principal{}, Principals, root),
+		"role":             governed(Role{}, One, members),
+		"members/requests": derived(Principal{}, Set, root),
+		"policy":           derived(Text{}, One, root),
+		"policy/threshold": governed(Threshold{}, One, root),
+		"policy/proposals": derived(Text{}, One, root),
+		"policy/approvals": governed(Digest{}, Set, root),
+		"pr/verdict":       derived(verdict, One, items),
+		"plan/verdict":     derived(verdict, One, items),
 	}
 }

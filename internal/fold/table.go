@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/store"
 )
 
 // table is a persistent hash array mapped trie (a CHAMP, Steindorff and
@@ -62,6 +63,13 @@ type (
 	byEvent struct{}
 	// byRecord is the malformed record's digest's first eight bytes.
 	byRecord struct{}
+	// byDigest is a proposal's digest's first eight bytes: the digest is a
+	// hash, as an event id is.
+	byDigest struct{}
+	// byPrincipal is the principal under seed.
+	byPrincipal struct{}
+	// byCheckout is the checkout id under seed.
+	byCheckout struct{}
 )
 
 // seed keys the hashes of the keys a writer chooses, ids and names, which
@@ -79,6 +87,12 @@ func (byName) hash(name string) uint64 { return maphash.String(seed, name) }
 func (byEvent) hash(id events.EventID) uint64 { return binary.LittleEndian.Uint64(id[:8]) }
 
 func (byRecord) hash(k recordAt) uint64 { return binary.LittleEndian.Uint64(k.digest[:8]) }
+
+func (byDigest) hash(d events.Digest) uint64 { return binary.LittleEndian.Uint64(d[:8]) }
+
+func (byPrincipal) hash(p events.PrincipalID) uint64 { return maphash.Comparable(seed, p) }
+
+func (byCheckout) hash(c store.CheckoutID) uint64 { return maphash.Comparable(seed, c) }
 
 func slot(h uint64, shift uint) uint32 { return 1 << ((h >> shift) & fanMask) }
 

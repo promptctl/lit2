@@ -28,7 +28,7 @@ type Address struct {
 }
 
 // Node is what a path names before its field: the root, a home, an item,
-// or an element of an item's list.
+// an element of an item's list, or a member of the policy.
 //
 //sumtype:decl
 type Node interface{ node() }
@@ -57,10 +57,18 @@ type Element struct {
 	Rendered string
 }
 
-func (Root) node()    {}
-func (Home) node()    {}
-func (Item) node()    {}
-func (Element) node() {}
+// Principal is a member of the policy in force, by its principal: a node
+// of its own, whose role is its field. Rendered is its path.
+type Principal struct {
+	ID       events.PrincipalID
+	Rendered string
+}
+
+func (Root) node()      {}
+func (Home) node()      {}
+func (Item) node()      {}
+func (Element) node()   {}
+func (Principal) node() {}
 
 // Target is what of a node a path names: the whole node, one row of it,
 // or one member of a set.
@@ -100,6 +108,8 @@ func (a Address) String() string {
 	case Item:
 		b.WriteString(n.Rendered)
 	case Element:
+		b.WriteString(n.Rendered)
+	case Principal:
 		b.WriteString(n.Rendered)
 	}
 	switch t := a.Target.(type) {
@@ -150,7 +160,7 @@ func Parse(v evaluate.View, text string) (Address, Refusal) {
 		a.Target = Whole{}
 		return a, nil
 	}
-	return target(schema.Table(), a, it, steps)
+	return target(st, schema.Table(), a, it, steps)
 }
 
 // node reads a path's first step: a declared home's name, or an item's id
@@ -186,7 +196,7 @@ func node(st fold.State, schema config.Schema, known events.Prefixes, head strin
 // target reads the steps after a's node against the table at its place.
 // When no run of the steps is a row here, the refusal is the longest run
 // that is a field at another place, or else the first step's.
-func target(t config.Table, a Address, it fold.Item, steps string) (Address, Refusal) {
+func target(st fold.State, t config.Table, a Address, it fold.Item, steps string) (Address, Refusal) {
 	r, refusal := t.Find(a.Place, field.Path(steps))
 	if refusal == nil {
 		a.Target = Field{Path: field.Path(steps), Row: r}
@@ -196,7 +206,7 @@ func target(t config.Table, a Address, it fold.Item, steps string) (Address, Ref
 		path := field.Path(steps[:i])
 		r, err := t.Find(a.Place, path)
 		if err == nil {
-			return keyed(t, a, it, path, r, steps[i+1:])
+			return keyed(st, t, a, it, path, r, steps[i+1:])
 		}
 		if _, elsewhere := refusal.(config.NotOnLevel); !elsewhere {
 			refusal = err
@@ -206,8 +216,9 @@ func target(t config.Table, a Address, it fold.Item, steps string) (Address, Ref
 }
 
 // keyed reads the steps after row r of a's node: a member of a set, which
-// is the last step, or an element of a list, whose own steps follow it.
-func keyed(t config.Table, a Address, it fold.Item, path field.Path, r config.Row, steps string) (Address, Refusal) {
+// is the last step, or an element of a list or a member of the policy,
+// whose own steps follow it.
+func keyed(st fold.State, t config.Table, a Address, it fold.Item, path field.Path, r config.Row, steps string) (Address, Refusal) {
 	row, isField := r.(config.FieldRow)
 	if !isField {
 		return Address{}, NoElement{Path: path, Holds: "a verdict"}
@@ -237,11 +248,34 @@ func keyed(t config.Table, a Address, it fold.Item, path field.Path, r config.Ro
 		if !deeper {
 			return el, nil
 		}
-		return target(t, el, it, rest)
+		return target(st, t, el, it, rest)
+	case field.Principals:
+		id, err := events.ParsePrincipalID(key)
+		if err != nil {
+			return Address{}, Syntax{Text: key, Why: fmt.Sprintf("a member of %s is named by its principal: %v", path, err)}
+		}
+		if !member(st, id) {
+			return Address{}, NotFound{ID: key}
+		}
+		m := Address{Node: Principal{ID: id, Rendered: fmt.Sprintf("/%s/%s", path, id)}, Place: field.MemberEntry{}, Target: Whole{}}
+		if !deeper {
+			return m, nil
+		}
+		return target(st, t, m, it, rest)
 	case field.One, field.Children:
 		return Address{}, NoElement{Path: path, Holds: row.Decl.Multi.String()}
 	}
 	panic(fmt.Sprintf("address: %d is not a Multiplicity", row.Decl.Multi))
+}
+
+// member is whether id is a member of the policy in force.
+func member(st fold.State, id events.PrincipalID) bool {
+	p, ok := st.Policy().(fold.Enrolled)
+	if !ok {
+		return false
+	}
+	_, held := p.Policy.Role(id)
+	return held
 }
 
 // found is the table's refusal as a path's.

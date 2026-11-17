@@ -97,6 +97,8 @@ func PlaceName(p field.Place) string {
 		return fmt.Sprintf("an item at level %d", p.Level.Int())
 	case field.Comment:
 		return "a comment"
+	case field.MemberEntry:
+		return "a member of the policy"
 	}
 	panic(fmt.Sprintf("config: %T is not a Place", p))
 }
@@ -151,8 +153,9 @@ func (t Table) Rows(p field.Place) []Row {
 }
 
 // Places is every place the version has, top first: the root, then each
-// level from the top, its home if it declares one and then its items, and
-// last a comment, which an item of any level holds.
+// level from the top, its home if it declares one and then its items, a
+// comment, which an item of any level holds, and last a member of the
+// policy, which the root holds.
 func (t Table) Places() []field.Place {
 	out := []field.Place{field.Root{}}
 	for n := len(t.levels); n >= 1; n-- {
@@ -162,7 +165,7 @@ func (t Table) Places() []field.Place {
 		}
 		out = append(out, field.ItemPlace(l))
 	}
-	return append(out, field.Comment{})
+	return append(out, field.Comment{}, field.MemberEntry{})
 }
 
 // Origins is how many rows each origin gives: built-in fields, declared

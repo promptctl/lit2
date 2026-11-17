@@ -9,6 +9,7 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
@@ -138,9 +139,23 @@ func (o opened) apply(version []byte, blob, ref git.ObjectID, said string) cli.O
 	if err != nil {
 		return failed(err)
 	}
-	m, err := o.mint([]events.Draft{act}, ref)
+	return o.judged([]events.Draft{act}, ref, said)
+}
+
+// judged mints drafts as one frame under ref and, unless the fold carries
+// any of its events, appends it and says said: a frame every replica would
+// carry is never written `[LAW:single-enforcer]`. Its drafts write the
+// root, which names no item or home, so a refusal reads no schema.
+func (o opened) judged(drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
+	m, err := o.mint(drafts, ref)
 	if err != nil {
 		return failed(err)
+	}
+	seen := verbs.World{View: evaluate.Of(o.folded.State, config.Schema{}, o.now)}
+	outcomes := fold.Extend(o.p.Fold, o.folded.State, m.Events).Outcomes
+	o.rec.Policy.Verdicts = command.Verdicts(m.Events, outcomes)
+	if no, carried := verbs.Carried(seen, outcomes); carried {
+		return cli.Failed{Failure: refusal{no}}
 	}
 	if err := o.append(m); err != nil {
 		return failed(err)
@@ -207,15 +222,50 @@ func (r body) init() cli.Outcome {
 	if err != nil {
 		return failed(err)
 	}
+	me := minted.Key.Principal()
+	var drafts []events.Draft
+	said, member := "", true
+	switch s := verbs.Bootstrap(o.folded.State, me).(type) {
+	case verbs.Found:
+		r.rec.Policy.Bootstrap = "enroll"
+		drafts, said = append(drafts, events.Act{About: events.Root{}, Payload: s.Enroll}), fmt.Sprintf("enrolled: policy v1, owner %s\n", me)
+	case verbs.Listed:
+		r.rec.Policy.Bootstrap = "already_member"
+	case verbs.Ask:
+		r.rec.Policy.Bootstrap = "request"
+		drafts, member = append(drafts, events.Act{About: events.Root{}, Payload: events.Request{}}), false
+		said = fmt.Sprintf("membership requested: an owner admits you with lit2 add /members '{principal: %q, role: contributor}'\n", me.String())
+	case verbs.Asked:
+		r.rec.Policy.Bootstrap = "already_requested"
+		return written(fmt.Fprintf(r.p.Out, "membership requested: no owner has admitted %s yet\n", me))
+	}
+	// the version the frame is written under: the one in force, or the
+	// work tree's, which a member applies as version one in the same frame
+	var ref git.ObjectID
 	if _, ok := o.folded.State.Workspace().(fold.InForce); ok {
+		v, err := o.load()
+		if err != nil {
+			return failed(err)
+		}
+		ref = v.ref
+	} else {
+		b, err := versionOne(r.p.WorkTree(in.Checkout))
+		if err != nil {
+			return cli.Failed{Failure: workspaceFailure{err: err}}
+		}
+		ref = git.HashBlob(so.Format, b)
+		if member {
+			act, err := verbs.Admit(o.folded.State, b, so.Format, r.p.Reader)
+			if err != nil {
+				return failed(err)
+			}
+			drafts, said = append(drafts, act), said+fmt.Sprintf("workspace %s applied as version one\n", ref)
+		}
+	}
+	if len(drafts) == 0 {
 		return cli.Done{}
 	}
-	b, err := versionOne(r.p.WorkTree(in.Checkout))
-	if err != nil {
-		return cli.Failed{Failure: workspaceFailure{err: err}}
-	}
-	blob := git.HashBlob(so.Format, b)
-	return o.apply(b, blob, blob, fmt.Sprintf("workspace %s applied as version one\n", blob))
+	return o.judged(drafts, ref, said)
 }
 
 // versionOne is the file in the work tree, the default profile created

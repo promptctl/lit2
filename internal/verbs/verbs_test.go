@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
+	"github.com/promptctl/lit2/internal/fold/foldtest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/verbs"
@@ -28,8 +29,10 @@ var (
 	registry = fold.NewRegistry(fold.FirstFacts()...)
 	env      = must(fold.NewEnv(registry, events.NewSuites(events.Ed25519()), 1))
 	key      = must(events.NewKey(bytes.NewReader(bytes.Repeat([]byte{1}, 32))))
-	running  = must(config.ReadReaderVersion("v0.4.0"))
-	ref      = must(git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e"))
+	// founded is a store key founded, the state every test writes onto
+	founded = foldtest.Enrolled(env, key.Signer())
+	running = must(config.ReadReaderVersion("v0.4.0"))
+	ref     = must(git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e"))
 
 	// one and two are two checkouts writing one store
 	one, two = store.CheckoutID{1}, store.CheckoutID{2}
@@ -77,25 +80,23 @@ func newBook(t *testing.T, toml string) *book {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &book{t: t, schema: s, entropy: rand.NewChaCha8([32]byte{'v'})}
+	return &book{t: t, schema: s, st: founded, entropy: rand.NewChaCha8([32]byte{'v'})}
 }
 
 func (b *book) world(st fold.State) verbs.World {
-	return verbs.World{View: evaluate.Of(st, b.schema, time.Date(2026, time.November, 17, 9, 0, 0, 0, time.UTC))}
+	return verbs.World{View: evaluate.Of(st, b.schema, time.Date(2026, time.November, 17, 9, 0, 0, 0, time.UTC)), Me: key.Principal()}
 }
 
 // mint mints ds as w, having read seen, and folds them onto the book.
 func (b *book) mint(w store.CheckoutID, seen fold.State, ds []events.Draft) []events.Event {
 	b.t.Helper()
-	m, err := events.Mint(events.Context{Writer: w, Agent: events.Unlabeled{}, ConfigRef: ref, Policy: 1,
+	m, err := events.Mint(events.Context{Writer: w, Agent: events.Unlabeled{}, ConfigRef: ref, Policy: seen.Cites(),
 		Frontier: seen.Frontier(), Known: seen.Known(), Now: time.Date(2026, time.November, 17, 9, 0, 0, 0, time.UTC)},
 		events.NewDrafts(ds[0], ds[1:]...), key.Signer(), b.entropy)
 	if err != nil {
 		b.t.Fatal(err)
 	}
-	for _, c := range fold.Check(env, m.Events) {
-		b.st = fold.Step(registry, b.st, c)
-	}
+	b.st = fold.Extend(env, b.st, m.Events).State
 	for _, e := range m.Events {
 		if n, ok := e.Header().About().(events.NewItem); ok {
 			b.created = n.ID
@@ -132,11 +133,8 @@ func (b *book) run(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops []v
 	}
 	before := b.st
 	minted := b.mint(w, seen, c.Drafts)
-	after := seen // the writer's state its own events fold onto, as the root judges
-	for _, checked := range fold.Check(env, minted) {
-		after = fold.Step(registry, after, checked)
-	}
-	c = verbs.Gate(b.world(after), c, minted)
+	// judged on the writer's state its own events fold onto, as the root judges
+	_, c, _ = verbs.Folded(env, b.world(seen), c, minted)
 	if no, refused := c.Refusal(); refused {
 		b.st = before
 		if len(c.Drafts) != 0 {

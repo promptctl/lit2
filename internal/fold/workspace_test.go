@@ -35,7 +35,7 @@ func TestAStoreWithNoApplyHasNoVersion(t *testing.T) {
 
 func TestAnApplyOverTheActiveVersionReplacesIt(t *testing.T) {
 	w := newWorld(t)
-	one := w.mint(a, fold.State{}, apply("v1"))[0]
+	one := w.mint(a, w.base, apply("v1"))[0]
 	two := w.mint(a, w.state(), apply("v2", one.ID()))[0]
 	in := inForce(t, w.state())
 	if !bytes.Equal(in.Active.Bytes, []byte("v2")) || in.Active.Blob != git.HashBlob(git.SHA1, []byte("v2")) || in.Active.Stamp.Event != two.ID() {
@@ -56,7 +56,7 @@ func TestAnApplyOverTheActiveVersionReplacesIt(t *testing.T) {
 // total order, the other contends, and an apply naming both resolves it.
 func TestTwoAppliesOverOneParentContendUntilAnApplyNamesBoth(t *testing.T) {
 	w := newWorld(t)
-	one := w.mint(a, fold.State{}, apply("v1"))[0]
+	one := w.mint(a, w.base, apply("v1"))[0]
 	seen := w.state()
 	fromA := w.mint(a, seen, apply("A's", one.ID()))[0]
 	fromB := w.mint(b, seen, apply("B's", one.ID()))[0]
@@ -85,8 +85,8 @@ func TestTwoAppliesOverOneParentContendUntilAnApplyNamesBoth(t *testing.T) {
 // default as version one are not in conflict.
 func TestLiveAppliesOfOneBlobAgree(t *testing.T) {
 	w := newWorld(t)
-	w.mint(a, fold.State{}, apply("default"))
-	w.mint(b, fold.State{}, apply("default"))
+	w.mint(a, w.base, apply("default"))
+	w.mint(b, w.base, apply("default"))
 	in := inForce(t, w.state())
 	if len(in.Contending) != 0 || len(in.Live) != 2 {
 		t.Errorf("two applies of one blob are %+v; want both live and none contending", in)
@@ -96,7 +96,7 @@ func TestLiveAppliesOfOneBlobAgree(t *testing.T) {
 // A blob two live applies hold contends once, whichever blob is active.
 func TestAContendingBlobAppliedTwiceContendsOnce(t *testing.T) {
 	w := newWorld(t)
-	one := w.mint(a, fold.State{}, apply("v1"))[0]
+	one := w.mint(a, w.base, apply("v1"))[0]
 	seen := w.state()
 	w.mint(a, seen, apply("B", one.ID()))
 	w.mint(b, seen, apply("B", one.ID()))
@@ -110,7 +110,7 @@ func TestAContendingBlobAppliedTwiceContendsOnce(t *testing.T) {
 // write's does, so the order applies arrive in decides nothing.
 func TestAnApplyRetiresWhatItNamesInAnyArrivalOrder(t *testing.T) {
 	w := newWorld(t)
-	one := w.mint(a, fold.State{}, apply("v1"))[0]
+	one := w.mint(a, w.base, apply("v1"))[0]
 	w.mint(b, w.state(), apply("v2", one.ID()))
 	stale := w.view(map[store.Ref]int{a.ref(): 0})
 	if in := inForce(t, stale); !bytes.Equal(in.Active.Bytes, []byte("v2")) {
@@ -136,7 +136,7 @@ func TestAnApplyAboutAnItemIsMisaddressed(t *testing.T) {
 
 func TestAFieldWriteAboutTheRootIsMisaddressed(t *testing.T) {
 	w := newWorld(t)
-	w.mint(a, fold.State{}, events.Act{About: events.Root{}, Payload: events.FieldSet{Field: title, Value: plain("x")}})
+	w.mint(a, w.base, events.Act{About: events.Root{}, Payload: events.FieldSet{Field: title, Value: plain("x")}})
 	if un := w.state().Integrity().Unapplied; len(un) != 1 || un[0].Why != (fold.Misaddressed{Want: "an item or an element of one"}) {
 		t.Errorf("a field.set about the root is %+v; want it unapplied, misaddressed", un)
 	}

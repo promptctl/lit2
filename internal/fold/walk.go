@@ -81,11 +81,11 @@ func Replay(e Env, scans []Scanned) Folded {
 		}
 	}
 	slices.SortFunc(located, func(a, b events.Event) int { return events.Compare(a.Order(), b.Order()) })
-	checked := Check(e, located)
+	checked := check(e, located)
 	facts.Checked = len(checked)
 	for _, c := range checked {
 		facts.Verdicts.count(c.verdict)
-		var out outcome
+		var out Outcome
 		s, out = e.registry.step(s, c)
 		facts.count(out)
 	}
@@ -150,11 +150,22 @@ type VerdictCounts struct{ Valid, Invalid, UnknownSuite int }
 type StateCounts struct {
 	Items, Comments, Members, Versions                                       int
 	ProseConflicts, Overruled, MixedForms, Collisions, Uncreated, Contending int
+	Policy                                                                   PolicyCounts
+}
+
+// PolicyCounts is the policy folded: whether it is enrolled, the version
+// in force, its members, and the proposals and requests waiting. Unenrolled
+// is its own fact, never version 0 `[LAW:nothing-unseen]`.
+type PolicyCounts struct {
+	Enrolled                     bool
+	Version                      events.PolicyVersion
+	Members, Proposals, Requests int
 }
 
 func newFacts() FoldFacts {
 	f := FoldFacts{Decoded: DecodeCounts{Unread: map[string]int{}}, Carried: map[string]int{}, Unapplied: map[string]int{}}
-	for _, r := range []Reason{BadSignature{}, UnknownSuite{}} {
+	for _, r := range []Reason{BadSignature{}, UnknownSuite{}, NoPolicyInForce{}, EnrollmentYielded{}, CitesFutureVersion{},
+		VersionRegressed{}, Unauthorized{}, NotAnApprover{}, UnknownProposal{}, Inadmissible{}} {
 		f.Carried[ReasonName(r)] = 0
 	}
 	for _, w := range []UnappliedWhy{Unread{}, Erased{}, Uncommitted{}, Misaddressed{}} {
@@ -187,14 +198,14 @@ func (v *VerdictCounts) count(verdict events.SignatureVerdict) {
 	}
 }
 
-func (f *FoldFacts) count(o outcome) {
+func (f *FoldFacts) count(o Outcome) {
 	switch o := o.(type) {
-	case applied:
+	case Applied:
 		f.Applied++
-	case carriedFor:
-		f.Carried[ReasonName(o.why)]++
-	case unappliedFor:
-		f.Unapplied[WhyName(o.why)]++
+	case CarriedFor:
+		f.Carried[ReasonName(o.Why)]++
+	case LeftFor:
+		f.Unapplied[WhyName(o.Why)]++
 	}
 }
 
@@ -205,6 +216,22 @@ func ReasonName(r Reason) string {
 		return "bad_signature"
 	case UnknownSuite:
 		return "unknown_suite"
+	case NoPolicyInForce:
+		return "no_policy_in_force"
+	case EnrollmentYielded:
+		return "enrollment_yielded"
+	case CitesFutureVersion:
+		return "cites_future_version"
+	case VersionRegressed:
+		return "version_regressed"
+	case Unauthorized:
+		return "unauthorized"
+	case NotAnApprover:
+		return "not_an_approver"
+	case UnknownProposal:
+		return "unknown_proposal"
+	case Inadmissible:
+		return "inadmissible"
 	}
 	panic(fmt.Sprintf("fold: %T is not a Reason", r))
 }
@@ -261,6 +288,12 @@ func countsOf(s State) StateCounts {
 	case InForce:
 		c.Versions, c.Contending = len(w.Applied), len(w.Contending)
 	}
+	switch p := s.Policy().(type) {
+	case Unenrolled:
+	case Enrolled:
+		c.Policy = PolicyCounts{Enrolled: true, Version: p.Policy.Version(), Members: len(p.Policy.Members())}
+	}
+	c.Policy.Proposals, c.Policy.Requests = len(s.Proposals()), len(s.Requests())
 	return c
 }
 

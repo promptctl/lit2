@@ -2,11 +2,15 @@ package root
 
 import (
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/assets"
+	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/verbs"
@@ -16,6 +20,16 @@ import (
 func freshSession(t *testing.T) session {
 	twin := NewFreshTwin()
 	return session{t: t, twin: &twin}
+}
+
+// enrolledOnly is a session whose store holds the twin's enrollment and
+// no version: a store founded by a release that applied none.
+func enrolledOnly(t *testing.T) session {
+	s := freshSession(t)
+	m := must(events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: blob(noPlan), Policy: 1, Now: s.twin.Process.Clock.Now()},
+		events.NewDrafts(events.Act{About: events.Root{}, Payload: events.Enroll{Owner: verbs.Owner, Roles: verbs.DefaultRoles()}}), twinKey().Signer(), rand.NewChaCha8([32]byte{9})))
+	must(s.twin.Process.Store.(command.Opened).Store.Append(m.Batch))
+	return s
 }
 
 // file makes b the work tree's .lit/workspace.toml, or no file when b is
@@ -58,10 +72,25 @@ func TestTheConfigBlockNamesTheVersionInForce(t *testing.T) {
 	}
 }
 
+// TestWithNoEnrollmentEveryVerbIsRefusedNamingAdminInit: no policy says
+// who may write a store no enrollment founded, so only init reads it.
+func TestWithNoEnrollmentEveryVerbIsRefusedNamingAdminInit(t *testing.T) {
+	s := freshSession(t)
+	for _, args := range [][]string{{}, {"get", "/"}, {"add", "unfiled/children", "{title: a}"}, {"config", "commit"}, {"config", "status"}} {
+		r := s.lit(args...)
+		if r.status != 78 || reasonOf(r.event) != "policy" || !strings.Contains(r.err, "lit2 admin init") || appends(r.event) != 0 {
+			t.Errorf("lit2 %q with no enrollment: status %d, stderr %q; want refused as the environment's, naming admin init", args, r.status, r.err)
+		}
+	}
+	if help := s.ok("--help"); strings.Contains(help, "fields of ") || !strings.Contains(help, "fields: ") || !strings.Contains(help, "lit2 admin init") {
+		t.Errorf("help with no enrollment:\n%s", help)
+	}
+}
+
 // TestWithNoVersionEveryVerbIsRefusedNamingConfigCommit: nothing stands
 // in for a version not applied; help says why it has no fields.
 func TestWithNoVersionEveryVerbIsRefusedNamingConfigCommit(t *testing.T) {
-	s := freshSession(t)
+	s := enrolledOnly(t)
 	for _, args := range [][]string{{}, {"get", "/"}, {"add", "unfiled/children", "{title: a}"}} {
 		r := s.lit(args...)
 		if r.status != 78 || reasonOf(r.event) != "workspace" || !strings.Contains(r.err, "lit2 config commit") || r.event.Config != nil {
@@ -80,8 +109,9 @@ func TestInitAppliesTheDefaultAsVersionOne(t *testing.T) {
 	s := freshSession(t)
 	def := assets.DefaultWorkspace.Bytes()
 	r := s.lit("admin", "init")
-	if r.status != 0 || !strings.Contains(r.out, "workspace "+blob(def).String()+" applied as version one\n") || appends(r.event) != 1 {
-		t.Fatalf("admin init: status %d, out %q, %d appends", r.status, r.out, appends(r.event))
+	enrolled := "enrolled: policy v1, owner " + twinKey().Principal().String() + "\n"
+	if r.status != 0 || !strings.Contains(r.out, enrolled+"workspace "+blob(def).String()+" applied as version one\n") || appends(r.event) != 1 {
+		t.Fatalf("admin init: status %d, out %q, %d appends; want the enrollment and version one in one frame", r.status, r.out, appends(r.event))
 	}
 	if got := must(read(s.twin.Tree, verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })); string(got) != string(def) {
 		t.Errorf("init wrote %q; want the default profile", got)
@@ -89,7 +119,15 @@ func TestInitAppliesTheDefaultAsVersionOne(t *testing.T) {
 	if got := s.ok("get", "/workspace"); !strings.Contains(got, blob(def).String()[:7]+" in force · .lit/workspace.toml matches") {
 		t.Errorf("the board says %q", got)
 	}
-	if again := s.lit("admin", "init"); again.status != 0 || appends(again.event) != 0 || strings.Contains(again.out, "applied") {
+	if p := r.event.Policy; p.Under != (fold.Unenrolled{}) || p.Bootstrap != "enroll" || len(p.Verdicts) != 2 {
+		t.Errorf("init's policy block is %+v; want it run unenrolled, enrolling, both events judged", p)
+	}
+	for i, v := range r.event.Policy.Verdicts {
+		if _, ok := v.Outcome.(fold.Applied); !ok {
+			t.Errorf("init's event %d is %+v; want applied", i, v.Outcome)
+		}
+	}
+	if again := s.lit("admin", "init"); again.status != 0 || appends(again.event) != 0 || strings.Contains(again.out, "applied") || strings.Contains(again.out, "enrolled") {
 		t.Errorf("a second init: status %d, out %q, %d appends; want identity only", again.status, again.out, appends(again.event))
 	}
 }
@@ -108,8 +146,8 @@ func TestInitAppliesTheFileThereOrRefusesIt(t *testing.T) {
 	if r.status != 1 || reasonOf(r.event) != "workspace" || appends(r.event) != 0 {
 		t.Errorf("init over a file that does not parse: status %d, stderr %q, %d appends; want refused, nothing applied", r.status, r.err, appends(r.event))
 	}
-	if r := bad.lit("get", "/"); reasonOf(r.event) != "workspace" {
-		t.Errorf("after a refused init get / is %q; want no version", r.err)
+	if r := bad.lit("get", "/"); reasonOf(r.event) != "policy" {
+		t.Errorf("after a refused init get / is %q; want no enrollment, the founding written whole or not at all", r.err)
 	}
 }
 
@@ -184,7 +222,7 @@ func TestConfigStatusSaysTheDriftAndTheHistory(t *testing.T) {
 	if got := other.ok("config", "status"); !strings.Contains(got, "in HEAD's history: no") {
 		t.Errorf("status of a version never committed:\n%s", got)
 	}
-	if got := freshSession(t).ok("config", "status"); got != "no version in force: lit2 config commit applies one\n" {
+	if got := enrolledOnly(t).ok("config", "status"); got != "no version in force: lit2 config commit applies one\n" {
 		t.Errorf("status with no version: %q", got)
 	}
 }
@@ -306,4 +344,25 @@ func must[T any](v T, err error) T {
 		panic(err)
 	}
 	return v
+}
+
+// TestConfigCommitByAContributorIsRefusedNamingSetWorkspace: applying a
+// version writes the root, which only an owner may; the refusal says so
+// and nothing is written.
+func TestConfigCommitByAContributorIsRefusedNamingSetWorkspace(t *testing.T) {
+	s := newSession(t)
+	beside := NewTwinBeside(*s.twin)
+	joiner := session{t: t, twin: &beside}
+	joiner.ok("admin", "init")
+	s.ok("add", "/members", "{principal: \""+besideKey().Principal().String()+"\", role: contributor}")
+	next := append(assets.DefaultWorkspace.Bytes(), "# the next version\n"...)
+	joiner.file(next)
+	joiner.commit(next)
+	r := joiner.lit("config", "commit")
+	if r.status == 0 || !strings.Contains(r.err, "set /workspace refused: role contributor") || appends(r.event) != 0 {
+		t.Errorf("a contributor's config commit: status %d, stderr %q, %d appends; want refused naming set /workspace", r.status, r.err, appends(r.event))
+	}
+	if v := r.event.Policy.Verdicts; len(v) != 1 {
+		t.Errorf("the refused commit's verdicts are %+v; want its one event", v)
+	}
 }

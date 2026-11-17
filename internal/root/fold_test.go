@@ -15,7 +15,7 @@ import (
 )
 
 // three appends three item creates, drawn from seed, to the twin's store as
-// its own writer.
+// its own writer, at the frontier of what the store holds.
 func three(t *testing.T, twin Twin, seed byte) {
 	t.Helper()
 	config, err := git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e")
@@ -27,7 +27,12 @@ func three(t *testing.T, twin Twin, seed byte) {
 		t.Fatal(err)
 	}
 	create := events.CreateItem{Payload: events.ItemCreate{Place: events.AtLevel{Level: level}}}
-	m, err := events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: config, Policy: 1, Now: twin.Process.Clock.Now()},
+	held, err := replay(twin.Process.Fold, twin.Process.Store.(command.Opened).Store, &command.StoreFacts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: config, Policy: held.State.Cites(),
+		Frontier: held.State.Frontier(), Known: held.State.Known(), Now: twin.Process.Clock.Now()},
 		events.NewDrafts(create, create, create), twinKey().Signer(), rand.NewChaCha8([32]byte{seed}))
 	if err != nil {
 		t.Fatal(err)
@@ -47,24 +52,24 @@ func folded(t *testing.T, e command.Event) fold.FoldFacts {
 }
 
 // TestEveryOpenFoldsEveryRecord: each open reads and checks every record,
-// version one's apply among them.
+// the enrollment and version one's apply among them.
 func TestEveryOpenFoldsEveryRecord(t *testing.T) {
 	twin := NewTwin()
 	three(t, twin, 1)
 	_, first := run(t, twin, "get", "lit-abc/title")
-	if f := folded(t, first); f.Records != 4 || f.Checked != 4 || f.Counts.Items != 3 || f.Counts.Versions != 1 {
-		t.Errorf("the first open folds %+v; want the 4 records, each checked", f)
+	if f := folded(t, first); f.Records != 5 || f.Checked != 5 || f.Counts.Items != 3 || f.Counts.Versions != 1 {
+		t.Errorf("the first open folds %+v; want the 5 records, each checked", f)
 	}
 	twin.Commands.Events = nil
 	_, second := run(t, twin, "get", "lit-abc/title")
-	if g := folded(t, second); g.Records != 4 || g.Checked != 4 || g.Counts.Items != 3 {
-		t.Errorf("the second open folds %+v; want the same 4 records read and checked again", g)
+	if g := folded(t, second); g.Records != 5 || g.Checked != 5 || g.Counts.Items != 3 {
+		t.Errorf("the second open folds %+v; want the same 5 records read and checked again", g)
 	}
 	three(t, twin, 2)
 	twin.Commands.Events = nil
 	_, third := run(t, twin, "get", "lit-abc/title")
-	if g := folded(t, third); g.Records != 7 || g.Checked != 7 || g.Counts.Items != 6 {
-		t.Errorf("the open after a write folds %+v; want all 7 records", g)
+	if g := folded(t, third); g.Records != 8 || g.Checked != 8 || g.Counts.Items != 6 {
+		t.Errorf("the open after a write folds %+v; want all 8 records", g)
 	}
 }
 
@@ -86,8 +91,8 @@ func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 	}
 	three(t, twin, 2)
 	_, e := run(t, twin, "get", "lit-abc/title")
-	if f := folded(t, e); f.Records != 7 || f.Torn != 1 || f.Counts.Items != 6 {
-		t.Errorf("an open over a torn span folds %+v; want version one, the 6 creates and one torn span", f)
+	if f := folded(t, e); f.Records != 8 || f.Torn != 1 || f.Counts.Items != 6 {
+		t.Errorf("an open over a torn span folds %+v; want the enrollment, version one, the 6 creates and one torn span", f)
 	}
 	// the body ran: only it records a verbs block
 	if failed, ok := e.Outcome.(cli.Failed); ok && failed.Failure.Reason() == "store" || e.Verbs == nil {

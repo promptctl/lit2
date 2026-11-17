@@ -65,18 +65,21 @@ type Event struct {
 	Store    StoreFacts
 	Config   *ConfigFacts
 	Verbs    *VerbsFacts
+	Policy   PolicyFacts
 	Outcome  cli.Outcome
 }
 
 // Recorder is where a body says what it did, each fact as soon as it is
 // known, so a panic keeps the facts given before it: what was asked, each
 // store step, the version in force, and what the verb did, the last of
-// each kept.
+// each kept; and the policy the store folded under, set as each part of
+// it is known.
 type Recorder struct {
 	Asked      func(cli.Summary)
 	Stored     *StoreFacts
 	Configured func(ConfigFacts)
 	Told       func(VerbsFacts)
+	Policy     *PolicyFacts
 }
 
 // Place is where an invocation ran.
@@ -135,15 +138,17 @@ func Record(c Clock, inv Invocation, work func(now time.Time, r Recorder) cli.Ou
 	var facts StoreFacts
 	var config *ConfigFacts
 	var did *VerbsFacts
+	var policy PolicyFacts
 	outcome := recovered(func() cli.Outcome {
 		return work(started, Recorder{
 			Asked:      func(s cli.Summary) { summary = s },
 			Stored:     &facts,
 			Configured: func(c ConfigFacts) { config = &c },
 			Told:       func(v VerbsFacts) { did = &v },
+			Policy:     &policy,
 		})
 	})
-	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Config: config, Verbs: did, Outcome: outcome}
+	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Config: config, Verbs: did, Policy: policy, Outcome: outcome}
 }
 
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {

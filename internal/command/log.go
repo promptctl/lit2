@@ -119,6 +119,7 @@ type line struct {
 	Store      *storeLine   `json:"store,omitempty"`
 	Fold       []foldLine   `json:"fold,omitempty"`
 	Verbs      *verbsLine   `json:"verbs,omitempty"`
+	Policy     *policyLine  `json:"policy,omitempty"`
 	Place      any          `json:"place"`
 	Agent      string       `json:"agent,omitempty"`
 }
@@ -181,6 +182,7 @@ func encode(e Event) ([]byte, error) {
 		Store:      storeBlock(e.Store),
 		Fold:       foldBlock(e.Store.Folds),
 		Verbs:      verbsBlock(e.Verbs, len(e.Store.Appends) > 0),
+		Policy:     policyBlock(e.Policy),
 		Place:      placeLine(e.Place),
 	}
 	switch o := e.Outcome.(type) {

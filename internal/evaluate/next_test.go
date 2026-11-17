@@ -38,7 +38,7 @@ func TestAnEmptyBacklogServesNothingAndConsideredNone(t *testing.T) {
 // and a removed leaf have no head, a head in an undeclared column is
 // passed over by name, and the walk stops at the first head it serves.
 func TestNextServesTheFirstLaneWithAHeadAndNamesWhatItPassed(t *testing.T) {
-	s := fold.Replay(env, nil).State
+	s := founded
 	s, _ = leafIn(t, s, 1, [2]string{"status", "done"})
 	s, _ = leafIn(t, s, 2, [2]string{"deleted", "true"})
 	s, stray := leafIn(t, s, 3, [2]string{"status", "limbo"})
@@ -59,7 +59,7 @@ func TestNextServesTheFirstLaneWithAHeadAndNamesWhatItPassed(t *testing.T) {
 // TestALeafUnderARemovedNodeIsNoHead: rm on a feature removes the work
 // below it, so next serves the next lane, not the feature's live leaf.
 func TestALeafUnderARemovedNodeIsNoHead(t *testing.T) {
-	s := fold.Replay(env, nil).State
+	s := founded
 	s, feature := mint(t, s, s.Known(), create(events.AtLevel{Level: must(events.ParseLevel(2))}), [16]byte{1})
 	s, _ = mint(t, s, s.Known(), create(events.BelowParent{Parent: feature}), [16]byte{2})
 	s, _ = mint(t, s, s.Known(), events.Act{About: events.Item{ID: feature}, Payload: events.FieldSet{Field: events.MustName("deleted"), Value: events.Plain{Canonical: "true"}}}, [16]byte{1, 1})

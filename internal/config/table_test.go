@@ -41,8 +41,9 @@ func TestFindIsTheOnePlaceRule(t *testing.T) {
 	if _, err := tbl.Find(field.Root{}, "nope"); !errors.As(err, &unknown) {
 		t.Fatalf("nope = %v, want UnknownField", err)
 	}
-	if !reflect.DeepEqual(unknown.Known, []field.Path{"children", "lanes", "next", "workspace"}) {
-		t.Errorf("the root's rows are %v, want children, lanes, next and workspace", unknown.Known)
+	root := []field.Path{"children", "integrity", "lanes", "members", "members/requests", "next", "policy", "policy/approvals", "policy/proposals", "policy/threshold", "workspace"}
+	if !reflect.DeepEqual(unknown.Known, root) {
+		t.Errorf("the root's rows are %v, want %v", unknown.Known, root)
 	}
 	if b, d, c := tbl.Origins(); d != 1 || c != 1 || b == 0 {
 		t.Errorf("origins = %d built-in, %d declared, %d checks; want 1 declared and 1 check", b, d, c)
@@ -50,14 +51,15 @@ func TestFindIsTheOnePlaceRule(t *testing.T) {
 }
 
 // TestPlacesNameOnlyDeclaredHomes: a level without a home has no home
-// place, so help never lists fields of a node that cannot exist.
+// place, so help never lists fields of a node that cannot exist; a member
+// of the policy is a place of every version.
 func TestPlacesNameOnlyDeclaredHomes(t *testing.T) {
 	s, err := parseText(t, minimal)
 	if err != nil {
 		t.Fatal(err)
 	}
 	two, _ := events.ParseLevel(2)
-	want := []field.Place{field.Root{}, field.Home{Level: two}, field.Node{Level: two}, field.Leaf{}, field.Comment{}}
+	want := []field.Place{field.Root{}, field.Home{Level: two}, field.Node{Level: two}, field.Leaf{}, field.Comment{}, field.MemberEntry{}}
 	if got := s.Table().Places(); !slices.Equal(got, want) {
 		t.Errorf("places = %#v, want %#v", got, want)
 	}

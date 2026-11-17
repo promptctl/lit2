@@ -11,7 +11,7 @@ import (
 // item is a world with one leaf in it, and the leaf.
 func item(t *testing.T) (*world, events.ItemID) {
 	w := newWorld(t)
-	return w, idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0])
+	return w, idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(1)}))[0])
 }
 
 func TestTwoProseSetsOverOnePriorAreConflictedUntilASetNamesBoth(t *testing.T) {

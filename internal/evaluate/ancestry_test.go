@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
+	"github.com/promptctl/lit2/internal/fold/foldtest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
@@ -25,8 +26,10 @@ var (
 	registry = fold.NewRegistry(fold.FirstFacts()...)
 	env      = must(fold.NewEnv(registry, events.NewSuites(events.Ed25519()), 1))
 	key      = must(events.NewKey(bytes.NewReader(bytes.Repeat([]byte{1}, 32))))
-	running  = must(config.ReadReaderVersion("v0.4.0"))
-	schema   = must(config.Load(assets.DefaultWorkspace.Bytes(), running))
+	// founded is a store key founded, the state every test writes onto
+	founded = foldtest.Enrolled(env, key.Signer())
+	running = must(config.ReadReaderVersion("v0.4.0"))
+	schema  = must(config.Load(assets.DefaultWorkspace.Bytes(), running))
 )
 
 // mint folds d onto s as a writer that has folded s but knows only known,
@@ -41,9 +44,7 @@ func mint(t *testing.T, s fold.State, known events.Known, d events.Draft, id [16
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range fold.Check(env, m.Events) {
-		s = fold.Step(registry, s, c)
-	}
+	s = fold.Extend(env, s, m.Events).State
 	switch a := m.Events[0].Header().About().(type) {
 	case events.NewItem:
 		return s, a.ID
@@ -61,7 +62,7 @@ func create(p events.Placement) events.Draft {
 // TestAncestryIsTheItemThenWhatItSitsIn: a story under a feature filed in
 // unfiled reads through itself, the feature, and the home.
 func TestAncestryIsTheItemThenWhatItSitsIn(t *testing.T) {
-	var s fold.State
+	s := founded
 	s, feature := mint(t, s, s.Known(), create(events.AtLevel{Level: must(events.ParseLevel(2))}), [16]byte{0x10})
 	s, story := mint(t, s, s.Known(), create(events.BelowParent{Parent: feature}), [16]byte{0x20})
 	got := ItemAncestry(s, schema, story)
@@ -80,7 +81,7 @@ func TestAncestryIsTheItemThenWhatItSitsIn(t *testing.T) {
 func TestAForgedCycleEnds(t *testing.T) {
 	a, b := [16]byte{0x10}, [16]byte{0x20}
 	_, later := mint(t, fold.State{}, events.Known{}, create(events.AtLevel{Level: must(events.ParseLevel(2))}), b) // b's id, learned
-	var s fold.State
+	s := founded
 	s, idA := mint(t, s, s.Known(), create(events.BelowParent{Parent: later}), a)
 	s, idB := mint(t, s, events.Known{}, create(events.BelowParent{Parent: idA}), b)
 	if idB != later {

@@ -43,5 +43,8 @@ func (v View) Prefixes() events.Prefixes { return v.prefixes }
 // State is the folded state the view derives from.
 func (v View) State() fold.State { return v.state }
 
+// Of is the same reader's view of s: its schema, at its now.
+func (v View) Of(s fold.State) View { return Of(s, v.schema, v.now) }
+
 // Schema is the reader's file the view judges under.
 func (v View) Schema() config.Schema { return v.schema }

@@ -115,6 +115,8 @@ func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 	case addComment:
 		pieces, changes, r = comment(wr)
 		keys = nil
+	case governSet, governAdd, governRm:
+		pieces, changes, keys, r = govern(w, wr)
 	case addChild:
 		panic("verbs: an add of children expands to creates and their writes, never one write")
 	default:

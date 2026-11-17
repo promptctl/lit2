@@ -135,26 +135,31 @@ func (a Aim) misaddressed() Misaddressed {
 	panic(fmt.Sprintf("fold: %d is not an Aim", uint8(a)))
 }
 
-// Kind is one kind of event: its decoders and its rule. Only On builds
-// one, so the row and the rule name one payload type.
+// Kind is one kind of event: its decoders, its rule and its intent. Only
+// On builds one, so the row, the rule and the intent name one payload
+// type.
 type Kind struct {
 	row   events.KindRow
 	aim   Aim
-	apply func(Stamp, Target, events.Payload) Applies
+	apply func(Fact[events.Payload]) (Applies, Intent)
 }
 
-// On is the kind of P: the About shapes it accepts, its rule, and its
-// decoders, decode[i] reading version i+1. Adding a kind is a payload, its
-// decoder and one On line; nothing else changes `[LAW:composability]`.
-func On[P events.Payload](aim Aim, r Rule[P], decode ...func(*wire.Reader) (events.Versioned, error)) Kind {
-	return Kind{row: events.Row[P](decode...), aim: aim, apply: func(st Stamp, at Target, p events.Payload) Applies {
-		payload, ok := p.(P)
+// On is the kind of P: the About shapes it accepts, its rule, what it does
+// on the path surface, and its decoders, decode[i] reading version i+1. The
+// intent is the inverse of the verbs' compile row that mints P, and the
+// policy judges it, so a kind with no intent does not compile. Adding a
+// kind is a payload, its decoder and one On line; nothing else changes
+// `[LAW:composability]`.
+func On[P events.Payload](aim Aim, r Rule[P], intent func(Fact[P]) Intent, decode ...func(*wire.Reader) (events.Versioned, error)) Kind {
+	return Kind{row: events.Row[P](decode...), aim: aim, apply: func(f Fact[events.Payload]) (Applies, Intent) {
+		payload, ok := f.Payload.(P)
 		if !ok {
 			// [LAW:no-silent-failure] the row's decoder returned another type
 			// than its rule reads: a build fault in the kind
-			panic(fmt.Sprintf("fold: %s decodes to %T, which its rule does not read", p.Kind(), p))
+			panic(fmt.Sprintf("fold: %s decodes to %T, which its rule does not read", f.Payload.Kind(), f.Payload))
 		}
-		return r(Fact[P]{Payload: payload, Stamp: st, At: at})
+		fact := Fact[P]{Payload: payload, Stamp: f.Stamp, At: f.At}
+		return r(fact), intent(fact)
 	}}
 }
 
@@ -231,12 +236,36 @@ type Apply struct {
 	Over  []events.EventID
 }
 
+// PolicyAct is what a policy event does: the intent of its kind, which
+// the policy rule judges and applies whole. It is no Change, so no kind
+// that writes a path can make one `[LAW:types-are-the-program]`.
+//
+//sumtype:decl
+type PolicyAct interface{ policyAct() }
+
+// EnrollPolicy founds the policy, its signer the one owner.
+type EnrollPolicy struct{ Enroll events.Enroll }
+
+// ProposePolicy is a proposal of the next policy.
+type ProposePolicy struct{ Propose events.Propose }
+
+// ApprovePolicy is its signer's approval of Proposal.
+type ApprovePolicy struct{ Proposal events.Digest }
+
+// RequestMembership is its signer's request to be a member.
+type RequestMembership struct{}
+
 func (CreateItem) change()    {}
 func (CreateElement) change() {}
 func (Write) change()         {}
 func (Add) change()           {}
 func (Remove) change()        {}
 func (Apply) change()         {}
+
+func (EnrollPolicy) policyAct()      {}
+func (ProposePolicy) policyAct()     {}
+func (ApprovePolicy) policyAct()     {}
+func (RequestMembership) policyAct() {}
 
 // Stamp is which event made a fact, where it sorts, who wrote it and the
 // writer's clock when it did: data, never order (INV:wall-time-is-data).

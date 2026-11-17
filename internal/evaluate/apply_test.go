@@ -39,7 +39,7 @@ terminal = true
 
 // inAudit is a state with one story moved into audit.
 func inAudit(t *testing.T) (fold.State, events.ItemID) {
-	var s fold.State
+	s := founded
 	s, story := mint(t, s, s.Known(), create(events.AtLevel{Level: must(events.ParseLevel(1))}), [16]byte{0x30})
 	s, _ = mint(t, s, s.Known(), events.Act{About: events.Item{ID: story}, Payload: events.Transition{From: events.MustName("backlog"), To: events.MustName("audit")}}, [16]byte{})
 	return s, story
@@ -108,7 +108,7 @@ func TestARemovedTicketHoldsNoColumn(t *testing.T) {
 
 // A ticket under a removed node is no work either, as every view reads it.
 func TestATicketUnderARemovedNodeHoldsNoColumn(t *testing.T) {
-	var s fold.State
+	s := founded
 	s, feature := mint(t, s, s.Known(), create(events.AtLevel{Level: must(events.ParseLevel(2))}), [16]byte{0x10})
 	s, story := mint(t, s, s.Known(), create(events.BelowParent{Parent: feature}), [16]byte{0x30})
 	s, _ = mint(t, s, s.Known(), events.Act{About: events.Item{ID: story}, Payload: events.Transition{From: events.MustName("backlog"), To: events.MustName("audit")}}, [16]byte{})
@@ -121,7 +121,7 @@ func TestATicketUnderARemovedNodeHoldsNoColumn(t *testing.T) {
 // An id typed under a prefix any applied version declared still parses
 // after the prefix changes; a prefix no version declared does not.
 func TestTheViewKnowsEveryPrefixAVersionDeclared(t *testing.T) {
-	var s fold.State
+	s := founded
 	s, _ = mint(t, s, s.Known(), events.Act{About: events.Root{}, Payload: events.NewWorkspaceApply([]byte("prefix = \"old\"\n"), git.SHA1, nil)}, [16]byte{})
 	v := Of(s, version(t, withoutAudit, ""), time.Time{})
 	for text, ok := range map[string]bool{"lit-1f9": true, "old-1f9": true, "rin-1f9": false} {

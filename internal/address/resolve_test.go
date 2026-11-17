@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
+	"github.com/promptctl/lit2/internal/fold/foldtest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
@@ -28,8 +29,10 @@ var (
 	registry = fold.NewRegistry(fold.FirstFacts()...)
 	env      = must(fold.NewEnv(registry, events.NewSuites(events.Ed25519()), 1))
 	key      = must(events.NewKey(bytes.NewReader(bytes.Repeat([]byte{1}, 32))))
-	cfgRef   = must(git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e"))
-	running  = must(config.ReadReaderVersion("v0.4.0"))
+	// founded is a store key founded, the state every test writes onto
+	founded = foldtest.Enrolled(env, key.Signer())
+	cfgRef  = must(git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e"))
+	running = must(config.ReadReaderVersion("v0.4.0"))
 )
 
 // entropy gives each id in order, then a zero salt, per create.
@@ -52,9 +55,7 @@ func mint(t *testing.T, s, view fold.State, w byte, d events.Draft, ids ...[16]b
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range fold.Check(env, m.Events) {
-		s = fold.Step(registry, s, c)
-	}
+	s = fold.Extend(env, s, m.Events).State
 	return s, m.Events[0]
 }
 
@@ -77,7 +78,7 @@ func TestASegmentTwoOfflineWritersFixedIsAmbiguousAndListsBoth(t *testing.T) {
 	// A and B mint offline, neither having folded the other: ids sharing
 	// their first three digits, so both fix the segment 000
 	x, y := [16]byte{0, 0, 0x01}, [16]byte{0, 0, 0x02}
-	var s fold.State
+	s := founded
 	s, ex := mint(t, s, fold.State{}, 0xa, top(2), x)
 	s, ey := mint(t, s, fold.State{}, 0xb, top(2), y)
 	a, b := made(ex), made(ey)
@@ -106,7 +107,7 @@ func TestASegmentTwoOfflineWritersFixedIsAmbiguousAndListsBoth(t *testing.T) {
 
 func TestAFullIDNamesOnlyACreatedItem(t *testing.T) {
 	ghost := events.FullID{ID: must(events.ParseItemID("g0000000000000000000000000"))}
-	s, _ := mint(t, fold.State{}, fold.State{}, 1, events.Act{About: events.Item(ghost),
+	s, _ := mint(t, founded, fold.State{}, 1, events.Act{About: events.Item(ghost),
 		Payload: events.FieldSet{Field: must(events.ParseName("title")), Value: events.Prose{Body: events.SealPlain("t")}}}, [16]byte{})
 	if _, ok := s.Item(ghost.ID).(fold.Found); !ok {
 		t.Fatalf("the fold holds no record of %s, which a fact names", ghost)
@@ -117,7 +118,7 @@ func TestAFullIDNamesOnlyACreatedItem(t *testing.T) {
 }
 
 func TestSegmentsResolveByTheItemsOwnAndItsAncestors(t *testing.T) {
-	var s fold.State
+	s := founded
 	s, epic := mint(t, s, s, 0xa, top(3), [16]byte{0x10})
 	s, child := mint(t, s, s, 0xa, under(made(epic).ID), [16]byte{0x20})
 	own := made(child).Segment().String()
@@ -136,7 +137,7 @@ func TestSegmentsResolveByTheItemsOwnAndItsAncestors(t *testing.T) {
 }
 
 func TestEveryIDRendersUnderTheActiveVersionsPrefix(t *testing.T) {
-	var s fold.State
+	s := founded
 	s, epic := mint(t, s, s, 0xa, top(3), [16]byte{0x10})
 	s, child := mint(t, s, s, 0xa, under(made(epic).ID), [16]byte{0x20})
 	before := s.Items()

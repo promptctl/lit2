@@ -34,7 +34,7 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 			w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.Transition{From: name("backlog"), To: name("plan")}})
 		}},
 		{"a second create", func(w *world, id events.ItemID, _, _ events.Event) {
-			w.mint(b, fold.State{}, events.Act{About: events.NewItem{ID: id, Width: 3}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})
+			w.mint(b, w.base, events.Act{About: events.NewItem{ID: id, Width: 3}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})
 		}},
 		{"a text over the title", func(w *world, id events.ItemID, named, _ events.Event) {
 			w.mint(a, w.state(), set(id, title, prose("u"), named))
@@ -111,11 +111,7 @@ func TestAReplayIsStepsOverTheSortedEvents(t *testing.T) {
 		}
 	}
 	slices.SortFunc(located, func(x, y events.Event) int { return events.Compare(x.Order(), y.Order()) })
-	var s fold.State
-	for _, c := range fold.Check(env, located) {
-		s = fold.Step(env.Registry(), s, c)
-	}
-	if !s.Equal(w.state()) {
+	if s := fold.Extend(env, fold.State{}, located).State; !s.Equal(w.state()) {
 		t.Errorf("stepping the sorted events disagrees with the replay")
 	}
 }

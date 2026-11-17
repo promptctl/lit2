@@ -87,6 +87,14 @@ func appends(e command.Event) int { return len(e.Store.Appends) }
 // force, the file matching it.
 var workspaceRow = "$/workspace\t" + git.HashBlob(git.SHA1, assets.DefaultWorkspace.Bytes()).String()[:7] + " in force · .lit/workspace.toml matches\n"
 
+// The board's policy rows in the twin, in the table's order around the
+// others: nothing carried, the twin its one owner, version one in force.
+var (
+	integrityRow = "$/integrity\tcarried: none\n"
+	membersRow   = "$/members\t" + twinKey().Principal().String() + " owner\n"
+	policyRows   = "$/policy\tversion 1 · 1 members\n$/policy/threshold\tmajority\n"
+)
+
 // TestAPersonFilesAndWorksATicketByPath is the ticket's done-when: file a
 // ticket, read it, retitle it, comment on it and edit the comment, label
 // it, ask whether ready holds, remove it and restore it.
@@ -378,7 +386,7 @@ func TestAnItemReadsItsFieldsThenItsComments(t *testing.T) {
 // is that read (scenarios.md 1).
 func TestABareLit2IsTheBoardOfAnEmptyWorkspace(t *testing.T) {
 	s := newSession(t)
-	want := "$ = /\n$/children\tunassigned · home\n$/children\tunfiled · home\n$/next\tlanes considered: 0\n" + workspaceRow
+	want := "$ = /\n$/children\tunassigned · home\n$/children\tunfiled · home\n" + integrityRow + membersRow + "$/next\tlanes considered: 0\n" + policyRows + workspaceRow
 	if got := s.ok(); got != want {
 		t.Errorf("a bare lit2 prints\n%s\nwant\n%s", got, want)
 	}
@@ -402,10 +410,12 @@ func TestTheBoardIsTheTreeTheLanesAndNext(t *testing.T) {
 		"unfiled/children\t" + feature + " · initial · backlog 2 · board\n" +
 		feature + "/children\t" + first + " · backlog · tree\n" +
 		feature + "/children\t" + second + " · backlog · lanes\n" +
+		integrityRow +
 		"$/lanes\t" + first + " · backlog · tree\n" +
 		"$/lanes\t" + second + " · backlog · lanes\n" +
+		membersRow +
 		"$/next\t" + first + " · backlog · tree\n" +
-		"$/next\tlanes considered: 1\n" + workspaceRow
+		"$/next\tlanes considered: 1\n" + policyRows + workspaceRow
 	if got := s.ok("get", "/"); got != want {
 		t.Errorf("get / prints\n%s\nwant\n%s", got, want)
 	}
@@ -429,8 +439,10 @@ func TestARemovedFeaturesLeavesReadAsRemoved(t *testing.T) {
 		"$/children\tunfiled · home\n" +
 		"unfiled/children\t" + feature + " · (deleted) · initial · backlog 1 · board\n" +
 		feature + "/children\t" + leaf + " · (deleted) · backlog · tree\n" +
+		integrityRow +
 		"$/lanes\t" + leaf + " · (deleted) · backlog · tree\n" +
-		"$/next\tlanes considered: 1\n" + workspaceRow
+		membersRow +
+		"$/next\tlanes considered: 1\n" + policyRows + workspaceRow
 	if got := s.ok("get", "/"); got != want {
 		t.Errorf("get / prints\n%s\nwant\n%s", got, want)
 	}
