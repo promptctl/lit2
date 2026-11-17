@@ -31,6 +31,7 @@ func TestSmoke(t *testing.T) {
 		{[]string{"--help"}, 0, "admin sync", "", false, tmp},
 		{[]string{"--help"}, 0, "admin init", "", false, tmp},
 		{[]string{"frobnicate"}, 64, "", "error (reason=unknown_verb): ", false, tmp},
+		{nil, 78, "", "error (reason=store): ", false, tmp},
 		{[]string{"--help"}, 0, "", "", true, tmp},
 		{[]string{"--help"}, 0, "admin sync", "", false, broken},
 		{[]string{"--help"}, 0, "admin sync", "", false, parses},

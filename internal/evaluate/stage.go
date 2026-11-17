@@ -115,15 +115,13 @@ func (v View) Column(id events.ItemID) (Column, error) {
 	return ColumnIn(eff, v.item(id).Facts), nil
 }
 
-// Leaf is whether item id sits at level 1, the one level with a status:
-// the one reading of leaf or node `[LAW:one-source-of-truth]`.
+// Leaf is whether item id is a leaf, as fold.Leveled reads it.
 func (v View) Leaf(id events.ItemID) bool {
 	l, ok := v.item(id).Level.(fold.Leveled)
 	if !ok {
 		panic(fmt.Sprintf("evaluate: %s is placed at no level", id))
 	}
-	_, below := l.Level.Below()
-	return !below
+	return l.Leaf()
 }
 
 // live is the children of id rm has not removed.

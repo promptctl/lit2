@@ -153,6 +153,13 @@ type LevelOf interface{ levelOf() }
 // Leveled is an item at Level.
 type Leveled struct{ Level events.Level }
 
+// Leaf is whether the item sits at level 1, the one level with a status:
+// the one reading of leaf or node `[LAW:one-source-of-truth]`.
+func (l Leveled) Leaf() bool {
+	_, below := l.Level.Below()
+	return !below
+}
+
 // Orphaned is an item whose chain reaches Missing, an id with no create
 // before its child's in total order: nobody created it, or a create sorting
 // after the child's, which no honest mint makes, since a writer names a
@@ -384,10 +391,8 @@ func (s State) Lanes() []Lane {
 		if r.creates.empty() {
 			return
 		}
-		if l, ok := s.levelOf(r.id).(Leveled); ok {
-			if _, below := l.Level.Below(); !below {
-				leaves = append(leaves, r)
-			}
+		if l, ok := s.levelOf(r.id).(Leveled); ok && l.Leaf() {
+			leaves = append(leaves, r)
 		}
 	})
 	slices.SortFunc(leaves, byCreate)
