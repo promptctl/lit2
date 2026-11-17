@@ -98,6 +98,7 @@ row; the architecture test fails on one without.
 | liveness of a worktree | `git`, `tick` | read by git; decided by tick |
 | budgets | `fold`, `store` | benchmarks beside the code they measure |
 | field kinds, value parsers, built-in fields, the atom | `field` | the field language config and address both read |
+| `@` references in prose | `verbs`, `cli` | normalized to `@<segments>` in verbs before the envelope seals; rendered as `@` plus the current name by cli at Speak |
 | scenarios.md as the acceptance contract | `scenarios` | each scenario walked over root's twin |
 
 ## Decisions

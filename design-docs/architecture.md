@@ -81,18 +81,28 @@ session's comments on `x`, and `'(status=backlog)/history/(by=claude_5c44)'`
 its edits across the backlog. A selector matches items in every column and at
 every level, and a deleted item only when it names `deleted`. `text` is the
 one field nothing stores: `text~re` reads an item's prose fields and its
-comments' bodies together. Matches print in backlog order, lanes by rank and
+comments' bodies together, as display renders them. Matches print in backlog order, lanes by rank and
 members in lane order; `--sort <path>` orders them by a scalar field, `--desc`
 reverses, and `--limit N` keeps the first N. `set` and `add` both take `path
-value` pairs; a list value on `add` appends each element. Inside one `add`,
-`@N` names the Nth object the value declares, counted in document order
-through nested `children`, so items filed together can link to each other:
-`add m2q/children '[{title:"parser"}, {title:"renderer" blocks:[@1]}]'`.
-Every id is minted before any field resolves, so a forward reference is
-fine; `@` is a sigil only where an id is expected, and an id never contains
-one, so a literal `@` in a title needs no escape; `@N` past the count is
-refused at parse naming the count, and a self or cross-level reference is
-refused by the checks every link meets.
+value` pairs; a list value on `add` appends each element. `@` in a value
+refers to an item. Where an id is expected it is the id itself, and inside
+one `add`, `@N` names the Nth object the value declares, counted in document
+order through nested `children`, so items filed together can link to each
+other: `add m2q/children '[{title:"parser"}, {title:"renderer"
+blocks:[@1]}]'`. Every id is minted before any field resolves, so a forward
+reference is fine; `@N` past the count is refused at parse naming the count,
+and a self or cross-level reference is refused by the checks every link
+meets. In prose the same sigil is a stable spelling of an id. A write
+normalizes `@` followed by an id in any form parsing accepts, or `@N` inside
+an add, to `@<segments>` before the prose is sealed, refuses one that names
+no item as `blocks` would, takes `@@` as a literal `@`, and leaves every
+other `@` alone, so an email or a decorator passes untouched. Display
+renders `@<segments>` as `@` plus the item's current rendering (§3.2), sigil
+kept, so a body still names the item the day after its topic changes, and an
+agent that reads a body, edits it and sets it back writes a reference, not
+dead text. A reference carries no type and no direction and is not a link
+(§3.10); `text~` reads the rendered prose, so a mention is found by the
+item's current topic as well as its segments.
 
 ### 3.2 Event and intent
 
@@ -136,7 +146,8 @@ an item sits is display, not identity. The project prefix and the item's
 `<prefix>-<topic>-<segments>`, `lit-bootstrap-1f9.zc7`, the prefix a label
 the active version (§3.15) supplies and the topic the item's own field, so a
 reader can tell otherwise arbitrary segments apart and changing either
-rewrites nothing. Parsing accepts the segments bare, or under any prefix a
+rewrites nothing; a reference in prose is stored as `@<segments>` and
+rendered the same way (§3.1), so prose follows a rename too. Parsing accepts the segments bare, or under any prefix a
 version in this store's log has ever declared and any topic the item has ever
 carried, and refuses a prefix none has, naming it as another project's, or a
 topic the item never had, naming its current rendering.

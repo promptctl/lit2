@@ -190,9 +190,12 @@ stdin (once per command; for a list path, one element per line, so a `get` of id
 pipes in), `[a, b]` for a list, `{k:v k:v}` for an object, `@id` for the
 addressed node's own id, and inside one `add`, `@N` for the Nth object the value
 declares in document order, so `'[{title:A}, {title:B blocks:[@1]}]'` files two
-tickets with the edge between them in one call. `@` is a sigil only where an id is
-expected, and ids never contain it, so a literal `@` elsewhere needs no escape. A
-selector or glob is never a value.
+tickets with the edge between them in one call. In prose, `@` before an id or `@N`
+is a reference: stored as `@<segments>`, shown as `@` plus the item's current name,
+so `"see @2 for the API shape"` in a batch reads `see @lit-ids-1f9.zc7 …` after a
+rename and survives being read, edited and set back. `@@` is a literal `@`; any
+other `@` is itself, so an email or a decorator needs no escape. A selector or
+glob is never a value.
 
 ### The column graph is a node
 
@@ -357,7 +360,7 @@ paths in three escalating forms, none of which is a new verb:
 1. **Many paths.** `set dee/priority urgent b64/priority urgent`. Fine for a handful.
 2. **Globs.** `add 'rin.*/labels' decompose` — every child of the epic. `get '*/title'`
    across the backlog. `set 'unfiled.*/parent' @id` would mean the node's own id; `@id`
-   is the one value sigil. The session's eight `--lane` calls are not a glob at all:
+   is the sigil for the node's own id. The session's eight `--lane` calls are not a glob at all:
    `rm /lanes/unfiled` dissolves the lane and every member becomes its own.
 3. **Selectors.** `set '(status=backlog labels=bug)/priority' urgent`. A query in parens
    expands to ids and the path continues. This is `ls` and `update` fused, and
