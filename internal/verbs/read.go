@@ -1,6 +1,7 @@
 package verbs
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -23,14 +24,16 @@ type World struct {
 // reader get and a check's tests call `[LAW:single-enforcer]`. A stored
 // field reads through stored; comments read the item's elements; children
 // what is placed there; a derived field its derivation; a check its
-// verdict.
-func Read(w World, n address.Node, p field.Place, path field.Path, row config.Row) []string {
+// verdict. A status the configuration cannot judge is its refusal, as a
+// write's is.
+func Read(w World, n address.Node, p field.Place, path field.Path, row config.Row) ([]string, error) {
 	if c, ok := row.(config.CheckRow); ok {
-		return verdict(Judge(w, n.(address.Item).ID, c.Check.Tests))
+		unmet, err := Judge(w, n.(address.Item).ID, c.Check.Tests)
+		return verdict(unmet), err
 	}
 	d := row.(config.FieldRow).Decl
 	if d.Multi == field.Children {
-		return children(w, n)
+		return children(w, n), nil
 	}
 	it := w.item(n.(address.Item).ID)
 	if d.Writability == field.Derived {
@@ -38,16 +41,28 @@ func Read(w World, n address.Node, p field.Place, path field.Path, row config.Ro
 		if !ok {
 			panic(fmt.Sprintf("verbs: %s is derived and has no derivation", path))
 		}
-		return derive(w, it)
+		return derive(w, it), nil
 	}
 	if d.Multi == field.Elements {
 		var out []string
 		for _, e := range elements(it, events.MustName(string(path))) {
 			out = append(out, e.text)
 		}
-		return out
+		return out, nil
 	}
 	return stored(w.Schema, it.Facts, tick.ItemAncestry(w.State, w.Schema, it.ID), path, d)
+}
+
+// effective is the graph an item is judged under, or the configuration's
+// refusal of it: the one call a read and a write make, so a fault in the
+// configuration refuses both alike.
+func effective(schema config.Schema, in config.Ancestry) (config.Effective, error) {
+	eff, err := schema.Effective(in)
+	var refused *config.ResolutionRefused
+	if err != nil && !errors.As(err, &refused) {
+		panic(fmt.Sprintf("verbs: Effective answered %v", err))
+	}
+	return eff, err
 }
 
 // stored is a stored register's or set's values in facts: prose opened,
@@ -55,7 +70,7 @@ func Read(w World, n address.Node, p field.Place, path field.Path, row config.Ro
 // item is judged under, a set as its live members. A write reads the same
 // function on its subject's facts, so what it compares against is what get
 // prints `[LAW:one-source-of-truth]`.
-func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path field.Path, d field.FieldDecl) []string {
+func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path field.Path, d field.FieldDecl) ([]string, error) {
 	n := events.MustName(string(path))
 	switch d.Multi {
 	case field.Set:
@@ -63,24 +78,26 @@ func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path fie
 		for _, m := range facts.Members(n) {
 			out = append(out, m.Name.String())
 		}
-		return out
+		return out, nil
 	case field.One:
 	default:
 		panic(fmt.Sprintf("verbs: %s holds %s, which no register stores", path, d.Multi))
 	}
 	if _, column := d.Kind.(field.Column); column {
-		if eff, err := schema.Effective(in); err == nil {
-			return []string{tick.StatusIn(eff, facts)}
+		eff, err := effective(schema, in)
+		if err != nil {
+			return nil, err
 		}
+		return []string{tick.StatusIn(eff, facts)}, nil
 	}
 	if _, prose := d.Kind.(field.Text); prose {
-		return texts(facts.Text(n))
+		return texts(facts.Text(n)), nil
 	}
 	switch f := facts.Plain(n).(type) {
 	case fold.Unset:
-		return nil
+		return nil, nil
 	case fold.Settled:
-		return []string{f.Value}
+		return []string{f.Value}, nil
 	}
 	panic(fmt.Sprintf("verbs: %T is not a PlainField", facts.Plain(n)))
 }
@@ -223,11 +240,12 @@ func (w World) item(id events.ItemID) fold.Item {
 }
 
 // Judge is the tests of tests that do not hold on item id: the one
-// evaluation of a flat test list a check's read and a transition call
+// evaluation of a flat test list, which a check's read calls
 // `[LAW:single-enforcer]`. A self test reads the item; an ancestors test
 // the item and each ancestor its one ancestry names, a positive test
-// holding when one of them holds it and a negative one when all do.
-func Judge(w World, id events.ItemID, tests []config.Test) []config.Test {
+// holding when one of them holds it and a negative one when all do. A
+// test that reads a status the configuration cannot judge is its refusal.
+func Judge(w World, id events.ItemID, tests []config.Test) ([]config.Test, error) {
 	var unmet []config.Test
 	for _, t := range tests {
 		scope := []events.ItemID{id}
@@ -239,17 +257,21 @@ func Judge(w World, id events.ItemID, tests []config.Test) []config.Test {
 				}
 			}
 		}
-		if !holds(w, t.Atom, scope) {
+		held, err := holds(w, t.Atom, scope)
+		if err != nil {
+			return nil, err
+		}
+		if !held {
 			unmet = append(unmet, t)
 		}
 	}
-	return unmet
+	return unmet, nil
 }
 
 // holds is whether atom holds over scope: on one item for a positive
 // atom, on every item for a negative one. An item whose place has no field
 // at the atom's path holds nothing there.
-func holds(w World, atom field.Atom, scope []events.ItemID) bool {
+func holds(w World, atom field.Atom, scope []events.ItemID) (bool, error) {
 	_, negative := atom.Op().(field.Absent)
 	if _, ne := atom.Op().(field.NotEquals); ne {
 		negative = true
@@ -267,13 +289,15 @@ func holds(w World, atom field.Atom, scope []events.ItemID) bool {
 			if f, ok := r.(config.FieldRow); ok {
 				kind = f.Decl.Kind
 			}
-			found = Read(w, address.Item{ID: id, Rendered: w.render(id)}, place, atom.Path(), r)
+			if found, err = Read(w, address.Item{ID: id, Rendered: w.render(id)}, place, atom.Path(), r); err != nil {
+				return false, err
+			}
 		}
 		if bool(atom.Holds(kind, found)) != negative {
-			return !negative
+			return !negative, nil
 		}
 	}
-	return negative
+	return negative, nil
 }
 
 // verdict is a check's value: holds, or each test that does not, named by

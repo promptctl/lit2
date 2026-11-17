@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/lit2/internal/address"
@@ -40,7 +41,11 @@ func Get(w World, paths []string) Got {
 			g.Operands = append(g.Operands, Refused{Text: p, Reason: r.Reason(), Err: r, Detail: r.Error()})
 			continue
 		}
-		ls := read(w, a)
+		ls, err := read(w, a)
+		if err != nil {
+			g.Operands = append(g.Operands, Refused{Text: p, Reason: "configuration", Err: err})
+			continue
+		}
 		g.Operands = append(g.Operands, Accepted{Text: p, Canon: a.String(), Values: len(ls)})
 		reads = append(reads, ls)
 		_, isWhole := a.Target.(address.Whole)
@@ -72,53 +77,57 @@ func Get(w World, paths []string) Got {
 	return g
 }
 
-// read is the lines the address holds, each at its canonical path.
-func read(w World, a address.Address) []line {
+// read is the lines the address holds, each at its canonical path, or the
+// configuration's refusal of a value it reads.
+func read(w World, a address.Address) ([]line, error) {
 	base := strings.TrimSuffix(a.String(), "/")
 	switch t := a.Target.(type) {
 	case address.Whole:
 		var out []line
-		node := base
 		for _, r := range w.Schema.Table().Rows(a.Place) {
-			out = append(out, rowLines(w, a, node, r.Path(), r)...)
+			ls, err := rowLines(w, a, base, r.Path(), r)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ls...)
 		}
-		return out
+		return out, nil
 	case address.Field:
 		return rowLines(w, a, strings.TrimSuffix(base, "/"+string(t.Path)), t.Path, t.Row)
 	case address.Element:
 		switch k := t.Key.(type) {
 		case address.Member:
-			for _, v := range Read(w, a.Node, a.Place, t.Path, config.FieldRow{At: t.Path, Decl: t.Decl}) {
-				if v == k.Name.String() {
-					return []line{{at: base, value: v}}
-				}
+			held, err := Read(w, a.Node, a.Place, t.Path, config.FieldRow{At: t.Path, Decl: t.Decl})
+			if slices.Contains(held, k.Name.String()) {
+				return []line{{at: base, value: k.Name.String()}}, err
 			}
-			return nil
+			return nil, err
 		case address.ElementKey:
 			for _, e := range elements(w.item(a.Node.(address.Item).ID), events.MustName(string(t.Path))) {
 				if e.key == k.Rendered {
-					return []line{{at: base, value: fmt.Sprintf("[%s] %s", e.by, e.text)}}
+					return []line{{at: base, value: fmt.Sprintf("[%s] %s", e.by, e.text)}}, nil
 				}
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // rowLines is one row's values on a node, each at the row's path, and a
 // list's elements each at its own key.
-func rowLines(w World, a address.Address, node string, path field.Path, r config.Row) []line {
+func rowLines(w World, a address.Address, node string, path field.Path, r config.Row) ([]line, error) {
 	at := node + "/" + string(path)
 	if f, ok := r.(config.FieldRow); ok && f.Decl.Multi == field.Elements {
 		var out []line
 		for _, e := range elements(w.item(a.Node.(address.Item).ID), events.MustName(string(path))) {
 			out = append(out, line{at: at + "/" + e.key, value: fmt.Sprintf("[%s] %s", e.by, e.text)})
 		}
-		return out
+		return out, nil
 	}
+	values, err := Read(w, a.Node, a.Place, path, r)
 	var out []line
-	for _, v := range Read(w, a.Node, a.Place, path, r) {
+	for _, v := range values {
 		out = append(out, line{at: at, value: v})
 	}
-	return out
+	return out, err
 }

@@ -133,12 +133,16 @@ func (fact) piece()       {}
 func (newElement) piece() {}
 
 // claim is what a write overwrites, which one command writes once: a
-// register, a set's member, or standard input.
+// whole field, a register or a set replaced; a set's member; or standard
+// input.
 type claim struct {
 	who    events.ItemID
 	path   field.Path
 	member string
 }
+
+// field is the whole field k is a claim on.
+func (k claim) field() claim { return claim{who: k.who, path: k.path} }
 
 var stdinClaim = claim{path: "-"}
 
@@ -196,15 +200,17 @@ func Compile(w World, verb Verb, operands []Operand, stdin func() (string, error
 		r, claims[i] = c.operand(w, verb, op, read, &created)
 		c.Operands = append(c.Operands, r)
 	}
-	// [LAW:single-enforcer] the one pass that refuses a repeat
-	seen := map[claim]bool{}
+	// [LAW:single-enforcer] the one pass that refuses a repeat: a claim
+	// meets the same claim, and a whole field meets any claim on it
+	seen, touched := map[claim]bool{}, map[claim]bool{}
 	for i, ks := range claims {
 		for _, k := range ks {
-			if seen[k] {
+			whole := k.field()
+			if seen[k] || seen[whole] || (k == whole && touched[whole]) {
 				c.Operands[i] = Refused{Text: operands[i].Path, Reason: "twice", Err: k.twice(operands[i].Path)}
 				break
 			}
-			seen[k] = true
+			seen[k], touched[whole] = true, true
 		}
 	}
 	if _, refused := c.Refusal(); refused {
@@ -584,14 +590,16 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 		if r != nil {
 			return refuse("template", "level %s's template sets %s: %v", lv.Name, path, r.err)
 		}
+		// a set's default is its members, any number of them, and a
+		// register's its one value, which config read as one
 		values := lv.Template[path]
-		var v field.Literal = field.Scalar{Text: values[0]}
-		if decl.Multi == field.Set {
-			items := make([]field.Literal, len(values))
-			for i, s := range values {
-				items[i] = field.Scalar{Text: s}
-			}
-			v = field.List{Items: items}
+		items := make([]field.Literal, len(values))
+		for i, s := range values {
+			items[i] = field.Scalar{Text: s}
+		}
+		var v field.Literal = field.List{Items: items}
+		if decl.Multi == field.One {
+			v = items[0]
 		}
 		x.writes = append(x.writes, write{subject: sub, path: path, decl: decl, value: v, source: FromTemplate{Level: lv.Name, Field: path}, shape: keyShape(decl)})
 		given[path] = true

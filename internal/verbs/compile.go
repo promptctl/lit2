@@ -1,12 +1,10 @@
 package verbs
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
-	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/fold"
@@ -90,11 +88,8 @@ func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 		pieces, changes, r = remove(wr)
 		keys = []claim{{path: wr.path, member: wr.value.(field.Scalar).Text}}
 	case setMembers:
-		var members []events.Name
-		pieces, changes, members, r = replace(wr)
-		for _, m := range members {
-			keys = append(keys, claim{path: wr.path, member: m.String()})
-		}
+		pieces, changes, r = replace(wr)
+		keys = []claim{{path: wr.path}} // the whole set, so it meets every member's claim
 	case addComment:
 		pieces, changes, r = comment(wr)
 		keys = nil
@@ -134,13 +129,9 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 	name := events.MustName(string(wr.path))
 	live := facts.Live(name)
 	if _, column := wr.decl.Kind.(field.Column); column {
-		eff, err := w.Schema.Effective(wr.subject.In)
+		eff, err := effective(w.Schema, wr.subject.In)
 		if err != nil {
-			var refused *config.ResolutionRefused
-			if errors.As(err, &refused) {
-				return nil, nil, refuse("configuration", "%v", err)
-			}
-			panic(fmt.Sprintf("verbs: Effective answered %v", err))
+			return nil, nil, refuse("configuration", "%v", err)
 		}
 		col, ok := eff.Columns.Resolve(canon)
 		if !ok {
@@ -153,7 +144,7 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 		t := events.Transition{From: events.MustName(from), To: events.MustName(col.Name()), Over: live}
 		return []piece{fact{t}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Before: []string{from}, After: col.Name(), Source: wr.source}}, nil
 	}
-	before := stored(w.Schema, facts, wr.subject.In, wr.path, wr.decl)
+	before, _ := stored(w.Schema, facts, wr.subject.In, wr.path, wr.decl) // no status, so nothing the configuration judges
 	if len(before) == 1 && before[0] == canon && len(live) <= 1 {
 		return nil, nil, nil
 	}
@@ -238,25 +229,22 @@ func remove(wr write) ([]piece, []Change, *refusal) {
 
 // replace makes a set hold exactly the members a value names: each one it
 // does not hold added, as add adds it, and each it holds that the value
-// does not name removed, as remove removes it. What it overwrites is every
-// member it names or removes.
-func replace(wr write) ([]piece, []Change, []events.Name, *refusal) {
-	pieces, changes, members, r := add(wr)
+// does not name removed, as remove removes it.
+func replace(wr write) ([]piece, []Change, *refusal) {
+	pieces, changes, named, r := add(wr)
 	if r != nil {
-		return nil, nil, nil, r
+		return nil, nil, r
 	}
-	named := slices.Clone(members)
 	for _, h := range wr.subject.Facts.Members(events.MustName(string(wr.path))) {
 		if slices.Contains(named, h.Name) {
 			continue
 		}
 		rm := wr
 		rm.value = field.Scalar{Text: h.Name.String()}
-		ps, chs, _ := remove(rm)
+		ps, chs, _ := remove(rm) // a held member is removed whatever its kind reads
 		pieces, changes = append(pieces, ps...), append(changes, chs...)
-		members = append(members, h.Name)
 	}
-	return pieces, changes, members, nil
+	return pieces, changes, nil
 }
 
 // comment creates one comment: one non-empty text.

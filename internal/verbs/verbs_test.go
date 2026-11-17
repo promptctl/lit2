@@ -314,6 +314,40 @@ func TestStandardInputIsOneMemberPerLineForASet(t *testing.T) {
 	}
 }
 
+// TestASetWrittenWholeMeetsItsMembers: a set replaced and a member of it
+// written in one command is the set written twice.
+func TestASetWrittenWholeMeetsItsMembers(t *testing.T) {
+	b := newBook(t, twoLabels())
+	id := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
+	if r := b.refused(verbs.Set, op(id+"/labels", "[]"), op(id+"/labels", "ready")); r != "twice" {
+		t.Errorf("set twice on a set is refused as %s; want twice", r)
+	}
+}
+
+// TestAnEmptyTemplateSetFillsNothing: a template that gives a set no
+// members files the item with none.
+func TestAnEmptyTemplateSetFillsNothing(t *testing.T) {
+	b := newBook(t, twoLabels()+"\n[levels.2.template]\nlabels = []\n")
+	id := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
+	if got := b.get(id + "/labels"); got != "" {
+		t.Errorf("an empty template set reads %q", got)
+	}
+}
+
+// TestAStatusTheConfigurationCannotJudgeIsRefusedToARead: get of a status
+// under a broken graph is refused as configuration, as a write is.
+func TestAStatusTheConfigurationCannotJudgeIsRefusedToARead(t *testing.T) {
+	b := newBook(t, profile("\n[nodes.unfiled.columns.intake]\ninitial = true\nnext = [\"done\"]\n"))
+	feature := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
+	story := filed(t, b.do(verbs.Add, op(feature+"/children", "{title: s}")))
+	for _, path := range []string{story + "/status", story} {
+		g := verbs.Get(b.world(b.st), []string{path})
+		if no, refused := g.Refusal(); !refused || no.Reason != "configuration" {
+			t.Errorf("get %s under a broken graph: %+v; want refused as configuration", path, g.Operands)
+		}
+	}
+}
+
 // TestTwiceIsTheRepeatersOwn: an operand refused for itself claims
 // nothing, so the next operand's result is its own; two that both read
 // standard input refuse the second as twice.
