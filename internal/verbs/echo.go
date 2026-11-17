@@ -9,7 +9,8 @@ import (
 
 // Echo is what a write prints: one line per change, rendered after
 // minting from the state the minted events folded onto, so a new item
-// shows by the path it now renders as. minted is nil under --dry-run, and
+// shows by the path it now renders as, each arrival followed by the
+// warnings Gate found unmet and its counts. minted is nil under --dry-run, and
 // then a new item shows as (new N), the Nth the command creates, and a new
 // comment as (new), and the echo ends saying nothing was
 // written. It is the one renderer of a change `[LAW:single-enforcer]`.
@@ -34,7 +35,7 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 		panic(fmt.Sprintf("verbs: %T is not a Who", x))
 	}
 	var b strings.Builder
-	for _, ch := range c.Changes {
+	for i, ch := range c.Changes {
 		switch ch := ch.(type) {
 		case Filed:
 			id := who(Created{N: ch.N})
@@ -54,6 +55,12 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 				before = strings.Join(shownAll, " | ")
 			}
 			fmt.Fprintf(&b, "%s/%s %s → %s\n", who(ch.Who), ch.Path, before, after)
+		case Moved:
+			if _, created := ch.Who.(Created); created {
+				fmt.Fprintf(&b, "⇒ %s/%s = %s%s\n", who(ch.Who), ch.Path, ch.To, tagged(ch.Source))
+				break
+			}
+			fmt.Fprintf(&b, "%s/%s %s → %s\n", who(ch.Who), ch.Path, ch.From, ch.To)
 		case Added:
 			if _, created := ch.Who.(Created); created {
 				fmt.Fprintf(&b, "⇒ %s/%s/%s%s\n", who(ch.Who), ch.Path, ch.Member, tagged(ch.Source))
@@ -70,6 +77,11 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 			}
 			fmt.Fprintf(&b, "+ %s/%s/%s\n", who(ch.Who), ch.Path, key)
 		}
+		j := c.Judged[i]
+		for _, u := range j.Unmet { // an unmet error refused the command, so each is a warning
+			b.WriteString(u.String() + "\n")
+		}
+		b.WriteString(j.summary())
 	}
 	if minted == nil {
 		b.WriteString("(dry run: nothing written)\n")

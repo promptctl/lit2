@@ -6,6 +6,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/reason"
@@ -24,12 +25,12 @@ func (r body) get(f fold.Folded, ps []cli.PathText) cli.Outcome {
 }
 
 // write is a write verb's body, §5 steps 5 and 6: compile every operand,
-// and unless one is refused, there is nothing to write or the run is dry,
-// mint the drafts and append them as one frame, then echo each change from
-// the state they fold onto, so a write lands whole or not at all.
+// mint the drafts and judge them against the state they fold onto, and
+// unless one is refused, there is nothing to write or the run is dry,
+// append them as one frame; then echo each change from that state, so a
+// write lands whole or not at all.
 func (r body) write(f fold.Folded, verb verbs.Verb, ops []verbs.Operand, flags cli.Flags) cli.Outcome {
-	w := r.world(f.State)
-	c := verbs.Compile(w, verb, ops, func() (string, error) {
+	c := verbs.Compile(r.world(f.State), verb, ops, func() (string, error) {
 		b, err := io.ReadAll(r.p.In)
 		return string(b), err
 	})
@@ -37,22 +38,35 @@ func (r body) write(f fold.Folded, verb verbs.Verb, ops []verbs.Operand, flags c
 		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
 		return cli.Failed{Failure: refusal{no}}
 	}
-	if flags.DryRun {
-		r.told(r.facts(c.Operands, c.Drafts, true, nil))
-		return written(io.WriteString(r.p.Out, verbs.Echo(w, c, nil)))
-	}
 	if len(c.Drafts) == 0 {
-		r.told(r.facts(c.Operands, c.Drafts, false, nil))
+		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
+		if flags.DryRun {
+			return written(io.WriteString(r.p.Out, verbs.Echo(r.world(f.State), c, nil)))
+		}
 		return cli.Done{}
 	}
 	opened := r.p.Store.(command.Opened)
-	id := r.p.Place.(command.InCheckout).Identity.(command.Minted)
+	id := r.p.Place.(command.InCheckout).Identity.(command.Minted) // a store opens only for a minted checkout
 	ctx := events.Context{Writer: id.Checkout, Agent: r.p.Agent, ConfigRef: r.loaded.Ref(opened.Format), Policy: 1,
 		Frontier: f.State.Frontier(), Known: f.State.Known(), Now: r.now}
 	m, err := events.Mint(ctx, events.NewDrafts(c.Drafts[0], c.Drafts[1:]...), id.Key.Signer(), r.p.Entropy)
 	if err != nil {
-		r.told(r.facts(c.Operands, c.Drafts, false, nil))
+		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
 		return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("minting: %w", err)}}
+	}
+	st := f.State
+	for _, checked := range fold.Check(r.p.Fold, m.Events) {
+		st = fold.Step(r.p.Fold.Registry(), st, checked)
+	}
+	after := r.world(st)
+	c = verbs.Gate(after, c, m.Events)
+	if no, refused := c.Refusal(); refused {
+		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
+		return cli.Failed{Failure: refusal{no}}
+	}
+	if flags.DryRun {
+		r.told(r.facts(c.Operands, c.Drafts, true, nil))
+		return written(io.WriteString(r.p.Out, verbs.Echo(after, c, nil)))
 	}
 	// the minted ids are told once the store holds them, so the block never
 	// names an event the store does not
@@ -63,11 +77,7 @@ func (r body) write(f fold.Folded, verb verbs.Verb, ops []verbs.Operand, flags c
 	}
 	r.stored.Appends = append(r.stored.Appends, appended)
 	r.told(r.facts(c.Operands, c.Drafts, false, m.Events))
-	st := f.State
-	for _, checked := range fold.Check(r.p.Fold, m.Events) {
-		st = fold.Step(r.p.Fold.Registry(), st, checked)
-	}
-	return written(io.WriteString(r.p.Out, verbs.Echo(r.world(st), c, m.Events)))
+	return written(io.WriteString(r.p.Out, verbs.Echo(after, c, m.Events)))
 }
 
 // init is admin init: the checkout's id and the principal's key, each
@@ -92,7 +102,7 @@ func (r body) init() cli.Outcome {
 }
 
 func (r body) world(st fold.State) verbs.World {
-	return verbs.World{State: st, Schema: r.loaded.Schema()}
+	return verbs.World{View: evaluate.Of(st, r.loaded.Schema(), r.now)}
 }
 
 // facts is the verbs block of what a body did.

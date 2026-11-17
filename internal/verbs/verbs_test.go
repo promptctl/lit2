@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
@@ -78,7 +80,9 @@ func newBook(t *testing.T, toml string) *book {
 	return &book{t: t, schema: s, entropy: rand.NewChaCha8([32]byte{'v'})}
 }
 
-func (b *book) world(st fold.State) verbs.World { return verbs.World{State: st, Schema: b.schema} }
+func (b *book) world(st fold.State) verbs.World {
+	return verbs.World{View: evaluate.Of(st, b.schema, time.Date(2026, time.November, 17, 9, 0, 0, 0, time.UTC))}
+}
 
 // mint mints ds as w, having read seen, and folds them onto the book.
 func (b *book) mint(w store.CheckoutID, seen fold.State, ds []events.Draft) []events.Event {
@@ -101,18 +105,42 @@ func (b *book) mint(w store.CheckoutID, seen fold.State, ds []events.Draft) []ev
 }
 
 // as runs verb on ops as w, having read seen: it compiles against seen,
-// mints onto the book and is the echo.
+// mints onto the book, is judged by the gate on the state it folds onto,
+// and is the echo.
 func (b *book) as(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops ...verbs.Operand) string {
+	b.t.Helper()
+	c, minted, reason := b.run(w, seen, verb, ops)
+	if reason != "" {
+		b.t.Fatalf("%s %+v refused: %s", verb, ops, reason)
+	}
+	if minted == nil {
+		return ""
+	}
+	return verbs.Echo(b.world(b.st), c, minted)
+}
+
+// run is a command as root runs it: compiled, minted and gated. A refused
+// command leaves the book as it was and is its reason and error.
+func (b *book) run(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops []verbs.Operand) (verbs.Compiled, []events.Event, string) {
 	b.t.Helper()
 	c := verbs.Compile(b.world(seen), verb, ops, func() (string, error) { return "", nil })
 	if no, refused := c.Refusal(); refused {
-		b.t.Fatalf("%s %+v refused: %s: %v", verb, ops, no.Reason, no.Err)
+		return c, nil, no.Reason + ": " + no.Err.Error()
 	}
 	if len(c.Drafts) == 0 {
-		return ""
+		return c, nil, ""
 	}
+	before := b.st
 	minted := b.mint(w, seen, c.Drafts)
-	return verbs.Echo(b.world(b.st), c, minted)
+	c = verbs.Gate(b.world(b.st), c, minted)
+	if no, refused := c.Refusal(); refused {
+		b.st = before
+		if len(c.Drafts) != 0 {
+			b.t.Errorf("%s %+v was refused and drafted %d", verb, ops, len(c.Drafts))
+		}
+		return c, nil, no.Reason + ": " + no.Err.Error()
+	}
+	return c, minted, ""
 }
 
 // do runs verb on ops as one, having read everything.
@@ -124,15 +152,19 @@ func (b *book) do(verb verbs.Verb, ops ...verbs.Operand) string {
 // refused is the reason verb on ops is refused, failing t when it is not.
 func (b *book) refused(verb verbs.Verb, ops ...verbs.Operand) string {
 	b.t.Helper()
-	c := verbs.Compile(b.world(b.st), verb, ops, func() (string, error) { return "", nil })
-	no, refused := c.Refusal()
-	if !refused {
+	reason, _, _ := strings.Cut(b.refusal(verb, ops...), ": ")
+	return reason
+}
+
+// refusal is the reason and error verb on ops is refused with, failing t
+// when it is not.
+func (b *book) refusal(verb verbs.Verb, ops ...verbs.Operand) string {
+	b.t.Helper()
+	_, _, reason := b.run(one, b.st, verb, ops)
+	if reason == "" {
 		b.t.Fatalf("%s %+v was not refused", verb, ops)
 	}
-	if len(c.Drafts) != 0 {
-		b.t.Errorf("%s %+v was refused and drafted %d", verb, ops, len(c.Drafts))
-	}
-	return no.Reason
+	return reason
 }
 
 func (b *book) get(path string) string {
@@ -142,6 +174,18 @@ func (b *book) get(path string) string {
 		b.t.Fatalf("get %s refused: %s: %v", path, no.Reason, no.Err)
 	}
 	return g.Out
+}
+
+// under is a story minted below parent with no gate, as another writer
+// under another version could have filed it, by its path.
+func under(b *book, parent string) string {
+	b.t.Helper()
+	a, r := address.Parse(b.st, b.schema, parent)
+	if r != nil {
+		b.t.Fatal(r)
+	}
+	b.mint(one, b.st, []events.Draft{events.CreateItem{Payload: events.ItemCreate{Place: events.BelowParent{Parent: a.Node.(address.Item).ID}}}})
+	return events.Render(b.schema.Prefix(), b.created, b.st.Path(b.created))
 }
 
 func op(path, value string) verbs.Operand { return verbs.Operand{Path: path, Value: value} }
@@ -221,7 +265,8 @@ func TestAStatusUnderAnAliasReadsByItsColumn(t *testing.T) {
 	if echo := b.do(verbs.Set, op(story+"/status", "done")); echo != story+"/status plan → done\n" {
 		t.Errorf("set status echoes %q", echo)
 	}
-	if echo := b.do(verbs.Set, op(story+"/status", "doing")); echo != story+"/status done → plan\n" {
+	other := filed(t, b.do(verbs.Add, op(feature+"/children", "{title: o}")))
+	if echo := b.do(verbs.Set, op(other+"/status", "doing")); echo != other+"/status backlog → plan\n" {
 		t.Errorf("set status by its alias echoes %q", echo)
 	}
 }
@@ -241,11 +286,15 @@ func TestATemplateTheCompileRefusesIsTheTemplates(t *testing.T) {
 }
 
 // TestAGraphTheAncestryBreaksIsTheConfigurations: a section that adds a
-// second initial column refuses a status write under it as configuration.
+// second initial column refuses, as configuration, a leaf filed under it,
+// which has no one column to arrive in, and a status write there.
 func TestAGraphTheAncestryBreaksIsTheConfigurations(t *testing.T) {
 	b := newBook(t, profile("\n[nodes.unfiled.columns.intake]\ninitial = true\nnext = [\"done\"]\n"))
 	feature := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
-	story := filed(t, b.do(verbs.Add, op(feature+"/children", "{title: s}")))
+	if r := b.refused(verbs.Add, op(feature+"/children", "{title: s}")); r != "configuration" {
+		t.Errorf("a leaf filed under a broken graph is refused as %s; want configuration", r)
+	}
+	story := under(b, feature)
 	if r := b.refused(verbs.Set, op(story+"/status", "plan")); r != "configuration" {
 		t.Errorf("a status under a broken graph is refused as %s; want configuration", r)
 	}
@@ -339,7 +388,7 @@ func TestAnEmptyTemplateSetFillsNothing(t *testing.T) {
 func TestAStatusTheConfigurationCannotJudgeIsRefusedToARead(t *testing.T) {
 	b := newBook(t, profile("\n[nodes.unfiled.columns.intake]\ninitial = true\nnext = [\"done\"]\n"))
 	feature := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
-	story := filed(t, b.do(verbs.Add, op(feature+"/children", "{title: s}")))
+	story := under(b, feature)
 	for _, path := range []string{story + "/status", story} {
 		g := verbs.Get(b.world(b.st), []string{path})
 		if no, refused := g.Refusal(); !refused || no.Reason != "configuration" {

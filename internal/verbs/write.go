@@ -197,7 +197,7 @@ func Compile(w World, verb Verb, operands []Operand, stdin func() (string, error
 	claims := make([][]claim, len(operands))
 	for i, op := range operands {
 		var r Result
-		r, claims[i] = c.operand(w, verb, op, read, &created)
+		r, claims[i] = c.operand(w, verb, i, op, read, &created)
 		c.Operands = append(c.Operands, r)
 	}
 	// [LAW:single-enforcer] the one pass that refuses a repeat
@@ -223,6 +223,9 @@ type Compiled struct {
 	Operands []Result
 	Drafts   []events.Draft
 	Changes  []Change
+	// Judged is each arrival's requirements, by the change that made it,
+	// once Gate has run.
+	Judged map[int]Judgment
 }
 
 // Refusal is the first operand's refusal, the command's, and false when
@@ -267,7 +270,7 @@ func (Refused) result()  {}
 
 // operand compiles one operand: its result, and what it overwrites, which
 // the twice pass reads. A refused operand overwrites nothing.
-func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string, error), created *int) (Result, []claim) {
+func (c *Compiled) operand(w World, verb Verb, n int, op Operand, stdin func() (string, error), created *int) (Result, []claim) {
 	no := func(r *refusal) (Result, []claim) {
 		return Refused{Text: op.Path, Reason: r.reason, Err: r.err, Detail: r.detail}, nil
 	}
@@ -294,6 +297,12 @@ func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string,
 			return no(r)
 		}
 		claims = append(claims, ks...)
+		for i, ch := range chs {
+			if m, ok := ch.(Moved); ok {
+				m.Op = n // the operand the gate refuses
+				chs[i] = m
+			}
+		}
 		switch who := wr.subject.At.(type) {
 		case Existing:
 			for _, p := range pieces {
@@ -326,7 +335,7 @@ func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string,
 	all := make([]events.Draft, 0, len(x.creates)+len(drafts))
 	for i, cr := range x.creates {
 		all = append(all, events.CreateItem{Payload: events.ItemCreate{Place: cr.placement}, Then: then[cr.n]})
-		c.Changes = append(c.Changes, Filed{N: cr.n, Draft: base + i, Parent: w.container(cr.in)})
+		c.Changes = append(c.Changes, Filed{N: cr.n, Draft: base + i, Parent: w.container(cr.in), Op: n})
 		c.Changes = append(c.Changes, about[cr.n]...)
 	}
 	all = append(all, drafts...)
@@ -344,7 +353,7 @@ func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string,
 // expand reads an operand into writes: its path, its value, and then what
 // its verb on that target writes.
 func expand(w World, verb Verb, op Operand, stdin func() (string, error), created *int) (expanded, *refusal) {
-	a, r := address.Parse(w.State, w.Schema, op.Path)
+	a, r := address.Parse(w.State(), w.Schema(), op.Path)
 	if r != nil {
 		return expanded{}, &refusal{reason: r.Reason(), err: r, detail: r.Error()}
 	}
@@ -427,7 +436,7 @@ func count(v field.Literal) int {
 func (x *expanded) rm(w World) *refusal {
 	switch t := x.addr.Target.(type) {
 	case address.Whole:
-		r, err := w.Schema.Table().Find(x.addr.Place, field.Deleted)
+		r, err := w.Schema().Table().Find(x.addr.Place, field.Deleted)
 		if err != nil {
 			return refuse("not_removable", "%s has no deleted flag: the root and a home are the tree's, and rm removes an item, a comment or a member", x.addr)
 		}
@@ -549,11 +558,11 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 	pairs := o.Pairs
 	switch node := x.addr.Node.(type) {
 	case address.Root:
-		level, _ = events.ParseLevel(w.Schema.Levels())
+		level, _ = events.ParseLevel(w.Schema().Levels())
 		if i := slices.IndexFunc(pairs, func(p field.Pair) bool { return p.Key == "level" }); i >= 0 {
 			s, ok := pairs[i].Value.(field.Scalar)
 			if !ok {
-				return refuse("value", "level is one value, 1 to %d", w.Schema.Levels())
+				return refuse("value", "level is one value, 1 to %d", w.Schema().Levels())
 			}
 			text, err := (field.Level{}).Parse(s.Text)
 			if err != nil {
@@ -561,8 +570,8 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 			}
 			num, _ := strconv.Atoi(text)
 			l, _ := events.ParseLevel(num)
-			if l.Int() > w.Schema.Levels() {
-				return refuse("value", "level %d is not declared: this workspace has %d", l.Int(), w.Schema.Levels())
+			if l.Int() > w.Schema().Levels() {
+				return refuse("value", "level %d is not declared: this workspace has %d", l.Int(), w.Schema().Levels())
 			}
 			level = l
 			pairs = slices.Delete(slices.Clone(pairs), i, i+1)
@@ -577,7 +586,7 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 	case address.Element:
 		panic("verbs: a comment's table has no children row")
 	}
-	sub := Subject{At: Created{N: n}, Place: field.ItemPlace(level), In: evaluate.AncestryOf(w.State, w.Schema, in)}
+	sub := Subject{At: Created{N: n}, Place: field.ItemPlace(level), In: evaluate.AncestryOf(w.State(), w.Schema(), in)}
 	x.creates = append(x.creates, creation{n: n, placement: placement, in: in})
 	given := map[field.Path]bool{}
 	for _, p := range pairs {
@@ -589,7 +598,7 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 		x.writes = append(x.writes, write{subject: sub, path: path, decl: decl, value: p.Value, source: FromOperand{}, shape: keyShape(decl)})
 		given[path] = true
 	}
-	lv, _ := w.Schema.Level(level.Int())
+	lv, _ := w.Schema().Level(level.Int())
 	for _, path := range slices.Sorted(maps.Keys(lv.Template)) {
 		if given[path] {
 			continue
@@ -630,7 +639,7 @@ func keyShape(d field.FieldDecl) shape {
 // keyed is the field a child object's key or a template default names at
 // a new item's place: found by the table, and one value or a set.
 func keyed(w World, p field.Place, path field.Path) (field.FieldDecl, *refusal) {
-	r, err := w.Schema.Table().Find(p, path)
+	r, err := w.Schema().Table().Find(p, path)
 	if err != nil {
 		var unknown config.UnknownField
 		if errors.As(err, &unknown) {

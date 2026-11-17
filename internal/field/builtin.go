@@ -209,6 +209,7 @@ func Keyable(d FieldDecl) error {
 var (
 	items      = PlaceSet{Leaf: true, Node: true}
 	leaves     = PlaceSet{Leaf: true}
+	nodes      = PlaceSet{Node: true}
 	containers = PlaceSet{Root: true, Home: true, Node: true}
 	comments   = PlaceSet{Comment: true}
 	removable  = PlaceSet{Leaf: true, Node: true, Comment: true}
@@ -227,6 +228,7 @@ const (
 func Builtins(labels Enum) map[Path]FieldDecl {
 	verdict, _ := NewEnum([]string{"pass", "fail"})
 	deleted, _ := NewEnum([]string{"true", "false"})
+	stage, _ := NewEnum([]string{"initial", "active", "terminal"})
 	stored := func(k Kind, m Multiplicity, at Places) FieldDecl {
 		return FieldDecl{Kind: k, Multi: m, Origin: Builtin, Writability: Settable, At: at}
 	}
@@ -248,6 +250,8 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 		"parent":       derived(ItemRef{}, One, items),
 		"of":           derived(Text{}, Set, items),
 		"blockers":     derived(Text{}, Set, items),
+		"stage":        derived(stage, One, items),
+		"rollup":       derived(Text{}, One, nodes),
 		"pr/verdict":   derived(verdict, One, items),
 		"plan/verdict": derived(verdict, One, items),
 	}

@@ -8,8 +8,8 @@ import (
 )
 
 // View is the backlog as one reader sees it at one instant: the folded
-// state, judged under the reader's file, at now. It derives nothing at
-// this slice; stage, rollup, held and expiry land here as derivations.
+// state, judged under the reader's file, at now. Stage and rollup derive
+// here; held and expiry land here too.
 type View struct {
 	state  fold.State
 	schema config.Schema
@@ -24,3 +24,6 @@ func Of(s fold.State, schema config.Schema, now time.Time) View {
 
 // State is the folded state the view derives from.
 func (v View) State() fold.State { return v.state }
+
+// Schema is the reader's file the view judges under.
+func (v View) Schema() config.Schema { return v.schema }

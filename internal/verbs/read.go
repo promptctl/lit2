@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/config"
@@ -13,12 +14,9 @@ import (
 	"github.com/promptctl/lit2/internal/fold"
 )
 
-// World is what a verb reads: the folded state, judged under the schema
-// in force.
-type World struct {
-	State  fold.State
-	Schema config.Schema
-}
+// World is what a verb reads: the view of the folded state under the
+// schema in force at now, so every read is evaluate's (architecture.md §3.3).
+type World struct{ evaluate.View }
 
 // Read is the values the row at path holds on node n: the one
 // reader get and a check's tests call `[LAW:single-enforcer]`. A stored
@@ -42,7 +40,7 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 		if !ok {
 			panic(fmt.Sprintf("verbs: %s is derived and has no derivation", path))
 		}
-		return derive(w, n), nil
+		return derive(w, n)
 	case d.Multi == field.Elements:
 		var out []string
 		for _, e := range elements(w.item(n.(address.Item).ID), events.MustName(string(path))) {
@@ -53,7 +51,7 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 		return out, nil
 	}
 	_, in, facts := w.held(n)
-	return stored(w.Schema, facts, in, path, d)
+	return stored(w.Schema(), facts, in, path, d)
 }
 
 // held is the node n names, which exists, as a write and a read of its
@@ -62,9 +60,9 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 func (w World) held(n address.Node) (Existing, config.Ancestry, fold.Facts) {
 	switch n := n.(type) {
 	case address.Item:
-		return Existing{At: events.Item{ID: n.ID}, Rendered: n.Rendered}, evaluate.ItemAncestry(w.State, w.Schema, n.ID), w.item(n.ID).Facts
+		return Existing{At: events.Item{ID: n.ID}, Rendered: n.Rendered}, evaluate.ItemAncestry(w.State(), w.Schema(), n.ID), w.item(n.ID).Facts
 	case address.Element:
-		return Existing{At: events.Element{Of: n.Of, ID: n.ID}, Rendered: n.Rendered}, evaluate.ItemAncestry(w.State, w.Schema, n.Of), w.element(n).Facts
+		return Existing{At: events.Element{Of: n.Of, ID: n.ID}, Rendered: n.Rendered}, evaluate.ItemAncestry(w.State(), w.Schema(), n.Of), w.element(n).Facts
 	case address.Root, address.Home:
 	}
 	panic(fmt.Sprintf("verbs: %#v holds no stored field", n))
@@ -165,12 +163,6 @@ func (e element) line() string {
 	return fmt.Sprintf("[%s] %s", e.by, e.text)
 }
 
-// removed is whether facts hold the deleted flag rm sets.
-func removed(f fold.Facts) bool {
-	s, ok := f.Plain(events.MustName(string(field.Deleted))).(fold.Settled)
-	return ok && s.Value == "true"
-}
-
 // elements is the created elements of it in the list n, in the order their
 // creates sort.
 func elements(it fold.Item, n events.Name) []element {
@@ -184,7 +176,7 @@ func elements(it fold.Item, n events.Name) []element {
 		if t := texts(e.Facts.Text(fold.Body)); len(t) > 0 {
 			text = t[0]
 		}
-		out = append(out, element{key: c.Segment.String(), by: writer(c.Stamp.By), text: text, deleted: removed(e.Facts)})
+		out = append(out, element{key: c.Segment.String(), by: writer(c.Stamp.By), text: text, deleted: evaluate.Removed(e.Facts)})
 	}
 	return out
 }
@@ -207,19 +199,19 @@ func children(w World, n address.Node) []string {
 	var out []string
 	switch n := n.(type) {
 	case address.Root:
-		for l := w.Schema.Levels(); l >= 1; l-- {
-			lv, _ := w.Schema.Level(l)
+		for l := w.Schema().Levels(); l >= 1; l-- {
+			lv, _ := w.Schema().Level(l)
 			if lv.Home != "" {
 				out = append(out, lv.Home)
 				continue
 			}
 			level, _ := events.ParseLevel(l)
-			ids = append(ids, w.State.Children(fold.Home{Holds: level})...)
+			ids = append(ids, w.State().Children(fold.Home{Holds: level})...)
 		}
 	case address.Home:
-		ids = w.State.Children(fold.Home{Holds: n.Level})
+		ids = w.State().Children(fold.Home{Holds: n.Level})
 	case address.Item:
-		ids = w.State.Children(fold.Under{Parent: n.ID})
+		ids = w.State().Children(fold.Under{Parent: n.ID})
 	case address.Element:
 		panic("verbs: a comment's table has no children row")
 	}
@@ -232,29 +224,57 @@ func children(w World, n address.Node) []string {
 // derivations is every derived built-in's reading. A link, a lane or a
 // review is not folded at this slice, so of and blockers are truthfully
 // empty and the verdicts truthfully unset; a test holds every Derived
-// row to having one here.
-var derivations = map[field.Path]func(World, address.Node) []string{
+// row to having one here. Stage and rollup are evaluate's, read through
+// the view; a graph the configuration refuses is their refusal.
+var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 	"level": ofItem(func(_ World, it fold.Item) []string {
 		if l, ok := it.Level.(fold.Leveled); ok {
 			return []string{strconv.Itoa(l.Level.Int())}
 		}
 		return nil
 	}),
-	"parent":       ofItem(func(w World, it fold.Item) []string { return []string{w.container(w.State.Container(it.ID))} }),
+	"parent":       ofItem(func(w World, it fold.Item) []string { return []string{w.container(w.State().Container(it.ID))} }),
 	"of":           ofItem(func(World, fold.Item) []string { return nil }),
 	"blockers":     ofItem(func(World, fold.Item) []string { return nil }),
 	"pr/verdict":   ofItem(func(World, fold.Item) []string { return nil }),
 	"plan/verdict": ofItem(func(World, fold.Item) []string { return nil }),
-	"by": func(w World, n address.Node) []string {
+	"by": func(w World, n address.Node) ([]string, error) {
 		c, _ := fold.CreateOf(w.element(n.(address.Element)).Origin) // an element a path names is created
-		return []string{writer(c.Stamp.By)}
+		return []string{writer(c.Stamp.By)}, nil
+	},
+	"stage": func(w World, n address.Node) ([]string, error) {
+		s, err := w.Stage(n.(address.Item).ID)
+		if err != nil {
+			return nil, err
+		}
+		return []string{s.String()}, nil
+	},
+	"rollup": func(w World, n address.Node) ([]string, error) {
+		counts, err := w.Rollup(n.(address.Item).ID)
+		if err != nil || len(counts) == 0 {
+			return nil, err
+		}
+		parts := make([]string, len(counts))
+		for i, c := range counts {
+			parts[i] = fmt.Sprintf("%s %d", column(c.Column), c.N)
+		}
+		return []string{strings.Join(parts, " · ")}, nil
 	},
 }
 
-// ofItem is a derivation of an item's, read on the item n names: only an
-// item's table has its row.
-func ofItem(derive func(World, fold.Item) []string) func(World, address.Node) []string {
-	return func(w World, n address.Node) []string { return derive(w, w.item(n.(address.Item).ID)) }
+// column is a column as a reader is shown it: a name the graph no longer
+// declares marked so (scenarios.md S-6).
+func column(c evaluate.Column) string {
+	if c.Declared {
+		return c.Name
+	}
+	return c.Name + " (undeclared)"
+}
+
+// ofItem is a derivation of an item's that cannot fail, read on the item n
+// names: only an item's table has its row.
+func ofItem(derive func(World, fold.Item) []string) func(World, address.Node) ([]string, error) {
+	return func(w World, n address.Node) ([]string, error) { return derive(w, w.item(n.(address.Item).ID)), nil }
 }
 
 // container is where a thing sits, as a path names it: an item, a home, or
@@ -264,7 +284,7 @@ func (w World) container(c fold.Container) string {
 	case fold.Under:
 		return w.render(c.Parent)
 	case fold.Home:
-		if lv, ok := w.Schema.Level(c.Holds.Int()); ok && lv.Home != "" {
+		if lv, ok := w.Schema().Level(c.Holds.Int()); ok && lv.Home != "" {
 			return lv.Home
 		}
 		return "/"
@@ -276,12 +296,12 @@ func (w World) container(c fold.Container) string {
 
 // render is an item as its path renders under the active prefix.
 func (w World) render(id events.ItemID) string {
-	return events.Render(w.Schema.Prefix(), id, w.State.Path(id))
+	return events.Render(w.Schema().Prefix(), id, w.State().Path(id))
 }
 
 // item is the folded item an address resolved, which exists.
 func (w World) item(id events.ItemID) fold.Item {
-	return w.State.Item(id).(fold.Found).Item
+	return w.State().Item(id).(fold.Found).Item
 }
 
 // element is the folded element an address resolved, which exists.
@@ -294,44 +314,55 @@ func (w World) element(n address.Element) fold.Element {
 	panic(fmt.Sprintf("verbs: %s is no element of its item", n.Rendered))
 }
 
+// Unmet is a test that does not hold on an item, and what the item itself
+// holds at the test's path, so a refusal names the value found.
+type Unmet struct {
+	Test  config.Test
+	Found []string
+}
+
 // Judge is the tests of tests that do not hold on item id: the one
-// evaluation of a flat test list, which a check's read calls
-// `[LAW:single-enforcer]`. A self test reads the item; an ancestors test
-// the item and each ancestor its one ancestry names, a positive test
-// holding when one of them holds it and a negative one when all do. A
-// test that reads a status the configuration cannot judge is its refusal.
-func Judge(w World, id events.ItemID, tests []config.Test) ([]config.Test, error) {
-	var unmet []config.Test
+// evaluation of a flat test list, which a check's read and the transition
+// gate call `[LAW:single-enforcer]`. A self test reads the item; an
+// ancestors test the item and each ancestor its one ancestry names, a
+// positive test holding when one of them holds it and a negative one when
+// all do. A test that reads a status the configuration cannot judge is its
+// refusal.
+func Judge(w World, id events.ItemID, tests []config.Test) ([]Unmet, error) {
+	var unmet []Unmet
 	for _, t := range tests {
 		scope := []events.ItemID{id}
 		if t.Scope == config.Ancestors {
 			scope = nil
-			for _, k := range evaluate.ItemAncestry(w.State, w.Schema, id) {
+			for _, k := range evaluate.ItemAncestry(w.State(), w.Schema(), id) {
 				if it, ok := k.Item(); ok {
 					scope = append(scope, it)
 				}
 			}
 		}
-		held, err := holds(w, t.Atom, scope)
+		held, found, err := holds(w, t.Atom, scope)
 		if err != nil {
 			return nil, err
 		}
 		if !held {
-			unmet = append(unmet, t)
+			unmet = append(unmet, Unmet{Test: t, Found: found})
 		}
 	}
 	return unmet, nil
 }
 
-// holds is whether atom holds over scope: on one item for a positive
-// atom, on every item for a negative one. An item whose place has no field
-// at the atom's path holds nothing there.
-func holds(w World, atom field.Atom, scope []events.ItemID) (bool, error) {
+// holds is whether atom holds over scope, whose first item is the one
+// judged: on one item for a positive atom, on every item for a negative
+// one; and what that first item holds at the atom's path. An item whose
+// place has no field at the atom's path holds nothing there.
+func holds(w World, atom field.Atom, scope []events.ItemID) (bool, []string, error) {
 	_, negative := atom.Op().(field.Absent)
 	if _, ne := atom.Op().(field.NotEquals); ne {
 		negative = true
 	}
-	for _, id := range scope {
+	var first []string
+	held := negative
+	for i, id := range scope {
 		it := w.item(id)
 		l, placed := it.Level.(fold.Leveled)
 		if !placed {
@@ -340,30 +371,34 @@ func holds(w World, atom field.Atom, scope []events.ItemID) (bool, error) {
 		place := field.ItemPlace(l.Level)
 		var kind field.Kind = field.Text{}
 		var found field.Found
-		if r, err := w.Schema.Table().Find(place, atom.Path()); err == nil {
+		if r, err := w.Schema().Table().Find(place, atom.Path()); err == nil {
 			if f, ok := r.(config.FieldRow); ok {
 				kind = f.Decl.Kind
 			}
 			if found, err = Read(w, address.Item{ID: id, Rendered: w.render(id)}, atom.Path(), r); err != nil {
-				return false, err
+				return false, nil, err
 			}
 		}
+		if i == 0 {
+			first = found
+		}
 		if bool(atom.Holds(kind, found)) != negative {
-			return !negative, nil
+			held = !negative
+			break
 		}
 	}
-	return negative, nil
+	return held, first, nil
 }
 
 // verdict is a check's value: holds, or each test that does not, named by
 // the check that declared it.
-func verdict(unmet []config.Test) []string {
+func verdict(unmet []Unmet) []string {
 	if len(unmet) == 0 {
 		return []string{"holds"}
 	}
 	var out []string
-	for _, t := range unmet {
-		out = append(out, fmt.Sprintf("unmet %s (%s)", t.Atom, t.DeclaredIn))
+	for _, u := range unmet {
+		out = append(out, fmt.Sprintf("unmet %s (%s)", u.Test.Atom, u.Test.DeclaredIn))
 	}
 	return out
 }

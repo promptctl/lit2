@@ -366,3 +366,21 @@ func TestAnItemReadsItsFieldsThenItsComments(t *testing.T) {
 		t.Errorf("a declared label not held reads %q", got)
 	}
 }
+
+// TestAMoveTheGateRefusesWritesNothing: a dry run asks the gate as a run
+// does, and a refused move appends nothing and records the gate's reason;
+// a move whose requirements the same command meets lands.
+func TestAMoveTheGateRefusesWritesNothing(t *testing.T) {
+	s := newSession(t)
+	feature := filed(t, s.ok("add", "unfiled/children", "{title: f, labels: [ready]}"))
+	story := filed(t, s.ok("add", feature+"/children", "{title: s}"))
+	for _, args := range [][]string{{"set", "--dry-run", story + "/status", "plan"}, {"set", story + "/status", "plan"}} {
+		r := s.refused("gate", args...)
+		if appends(r.event) != 0 || !strings.Contains(r.err, "description (ready)  found (none)") {
+			t.Errorf("lit2 %q: appends %d, stderr %q", args, appends(r.event), r.err)
+		}
+	}
+	if out := s.ok("set", story+"/description", "what", story+"/status", "plan"); !strings.Contains(out, story+"/status backlog → plan\n") {
+		t.Errorf("a move groomed in its own command echoes %q", out)
+	}
+}

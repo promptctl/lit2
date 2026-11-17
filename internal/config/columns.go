@@ -88,13 +88,44 @@ func (c InitialColumn) Exit() []Requirement { return slices.Clone(c.exit) }
 func (c ActiveColumn) Exit() []Requirement  { return slices.Clone(c.exit) }
 func (TerminalColumn) Exit() []Requirement  { return nil }
 
-// ColumnGraph is one column graph: its columns by name, its aliases, and its
-// one initial column. Only buildGraph makes one.
+// ColumnGraph is one column graph: its columns by name, its aliases, its
+// one initial column, and for each column some next names, the columns
+// whose next does. Only buildGraph makes one.
 type ColumnGraph struct {
 	initial string
 	byName  map[string]Column
 	aliases map[string]string
+	entered map[string][]string
 }
+
+// Edge is how a move arrives: along a next the source lists, which the
+// source's exit list guards, or into a column no next names, which every
+// column reaches. Both carry the destination's entry list.
+type Edge uint8
+
+const (
+	Forward Edge = iota + 1
+	Universal
+)
+
+// Reach is the edge from the column recorded as from to the declared
+// column to, and false when there is none: a column some next names is
+// entered only along those edges, and one no next names from every column
+// (columns-and-phases.md). A from the graph does not declare lists no next,
+// so the universal edges are its way out `[LAW:types-are-the-program]`.
+func (g ColumnGraph) Reach(from, to string) (Edge, bool) {
+	if c, ok := g.byName[from]; ok && slices.Contains(c.Next(), to) {
+		return Forward, true
+	}
+	if _, named := g.entered[to]; !named {
+		return Universal, true
+	}
+	return 0, false
+}
+
+// EnteredFrom is the columns whose next names to, sorted: the only columns
+// a move into to may leave.
+func (g ColumnGraph) EnteredFrom(to string) []string { return slices.Clone(g.entered[to]) }
 
 // Resolve reads a recorded column name: a declared column, or an alias of
 // one. A name neither declares nor aliases reports false, which is how a
@@ -127,7 +158,7 @@ func (g ColumnGraph) Names() []string {
 // names each column's key path for its refusals.
 func buildGraph(cs map[string]Column, keyOf func(string) KeyPath) (ColumnGraph, []Refusal) {
 	var refusals []Refusal
-	g := ColumnGraph{byName: map[string]Column{}, aliases: map[string]string{}}
+	g := ColumnGraph{byName: map[string]Column{}, aliases: map[string]string{}, entered: map[string][]string{}}
 	var initials []string
 	terminals := 0
 	for _, name := range sortedKeys(cs) {
@@ -161,6 +192,7 @@ func buildGraph(cs map[string]Column, keyOf func(string) KeyPath) (ColumnGraph, 
 			if _, declared := cs[next]; !declared {
 				refusals = append(refusals, Refusal{Key: keyed(keyOf(name), "next"), Reason: ReasonNextUndeclared, Message: fmt.Sprintf("next names %s, which no column declares", next)})
 			}
+			g.entered[next] = append(g.entered[next], name)
 		}
 		for _, a := range c.Aliases() {
 			if _, declared := cs[a]; declared {

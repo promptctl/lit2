@@ -608,7 +608,7 @@ without a new mechanism: "ready to pull" is the initial column's exit list;
 
 Every verb runs this pipeline on every call; the verb and the paths are
 values `[LAW:dataflow-not-control-flow]`. Steps 2 through 5 are pure functions
-of (events, clock, argv, writer); the rest is the hearth
+of (events, clock, entropy, argv, writer); the rest is the hearth
 `[LAW:effects-at-boundaries]`.
 
 1. **Open.** Read every writer ref head and every open log under the
@@ -622,10 +622,11 @@ of (events, clock, argv, writer); the rest is the hearth
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with evaluate, handed `now`. A write
-   computes a description: the intents it would mint, the requirement and
-   capability verdicts, the derivations, the echo. Refusal of any path
-   refuses the whole.
-6. **Perform.** Sign and append the intents to this checkout's log, or
+   computes a description: the intents it mints, signed, then the requirement
+   and capability verdicts judged against the state those intents fold onto,
+   so a path the same command writes counts, the derivations, the echo.
+   Refusal of any path refuses the whole.
+6. **Perform.** Append the intents to this checkout's log, or
    decline because `--dry-run` was given. Update the snapshot by atomic rename.
 7. **Speak.** Print the echo, then the handlers' bodies for the moments
    raised, after the data; under `--json`, one object keyed by path.

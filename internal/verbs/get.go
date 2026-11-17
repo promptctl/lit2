@@ -36,7 +36,7 @@ func Get(w World, paths []string) Got {
 	var reads [][]line
 	var whole []bool
 	for _, p := range paths {
-		a, r := address.Parse(w.State, w.Schema, p)
+		a, r := address.Parse(w.State(), w.Schema(), p)
 		if r != nil {
 			g.Operands = append(g.Operands, Refused{Text: p, Reason: r.Reason(), Err: r, Detail: r.Error()})
 			continue
@@ -86,7 +86,7 @@ func read(w World, a address.Address) ([]line, *refusal) {
 	switch t := a.Target.(type) {
 	case address.Whole:
 		var fields, lists []line
-		for _, r := range w.Schema.Table().Rows(a.Place) {
+		for _, r := range w.Schema().Table().Rows(a.Place) {
 			ls, no := rowLines(w, a, base, r.Path(), r)
 			if no != nil {
 				return nil, no
@@ -123,6 +123,15 @@ func rowLines(w World, a address.Address, node string, path field.Path, r config
 			out = append(out, line{at: at + "/" + e.key, value: e.line()})
 		}
 		return out, nil
+	}
+	if f, ok := r.(config.FieldRow); ok {
+		if _, status := f.Decl.Kind.(field.Column); status {
+			c, err := w.Column(a.Node.(address.Item).ID) // only a leaf has a status
+			if err != nil {
+				return nil, refuse("configuration", "%v", err)
+			}
+			return []line{{at: at, value: column(c)}}, nil
+		}
 	}
 	values, err := Read(w, a.Node, path, r)
 	if err != nil {

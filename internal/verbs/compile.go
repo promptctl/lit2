@@ -28,6 +28,18 @@ type Wrote struct {
 	Source Source
 }
 
+// Moved is a status written: a move from the column the subject reads to
+// another, which the gate judges once the command's events fold. Op is the
+// operand that wrote it.
+type Moved struct {
+	Who    Who
+	Path   field.Path
+	From   string
+	To     string
+	Source Source
+	Op     int
+}
+
 // Added is a member added to a set.
 type Added struct {
 	Who    Who
@@ -51,15 +63,18 @@ type Commented struct {
 	Draft int
 }
 
-// Filed is the Nth new item, by the draft that creates it, and the
-// container it is placed in.
+// Filed is the Nth new item, by the draft that creates it, the
+// container it is placed in, and the operand that filed it. A leaf's
+// filing is its arrival in the initial column, which the gate judges.
 type Filed struct {
 	N      int
 	Draft  int
 	Parent string
+	Op     int
 }
 
 func (Wrote) change()     {}
+func (Moved) change()     {}
 func (Added) change()     {}
 func (Removed) change()   {}
 func (Commented) change() {}
@@ -135,7 +150,7 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 	name := events.MustName(string(wr.path))
 	live := facts.Live(name)
 	if _, column := wr.decl.Kind.(field.Column); column {
-		eff, err := effective(w.Schema, wr.subject.In)
+		eff, err := effective(w.Schema(), wr.subject.In)
 		if err != nil {
 			return nil, nil, refuse("configuration", "%v", err)
 		}
@@ -148,9 +163,9 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 			return nil, nil, nil
 		}
 		t := events.Transition{From: events.MustName(from), To: events.MustName(col.Name()), Over: live}
-		return []piece{fact{t}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Before: []string{from}, After: col.Name(), Source: wr.source}}, nil
+		return []piece{fact{t}}, []Change{Moved{Who: wr.subject.At, Path: wr.path, From: from, To: col.Name(), Source: wr.source}}, nil
 	}
-	before, _ := stored(w.Schema, facts, wr.subject.In, wr.path, wr.decl) // no status, so nothing the configuration judges
+	before, _ := stored(w.Schema(), facts, wr.subject.In, wr.path, wr.decl) // no status, so nothing the configuration judges
 	if len(before) == 1 && before[0] == canon && len(live) <= 1 {
 		return nil, nil, nil
 	}

@@ -165,17 +165,24 @@ narrates in two clones of one remote:
 ```
 A: lit2 admin init                          → principal, phrase, enrollment
 A: lit2 --help; lit2
-A: lit2 add unfiled/children '{title: "…"}'   → an id, signed
-A: lit2 set <id>/status impl                 → a transition along next
+A: lit2 add unfiled/children '{title: "…", labels: [ready]}'
+A: lit2 add <feature>/children '{title: "…", description: "…"}'  → an id, signed
+A: lit2 set <id>/status impl                 → refused: impl is entered only from plan
+A: lit2 set <id>/status plan                 → a transition along next, backlog/exit met
 A: lit2 admin sync
 B: lit2 admin init                          → joins; membership request pushed
 A: lit2 admin sync; lit2 add /members '{principal: <B>, role: contributor}'
 A: lit2 admin sync
-B: lit2 admin sync; lit2 get /next           → the same ticket, in impl
-B: lit2 set <id>/status done; lit2 admin sync
+B: lit2 admin sync; lit2 get /next           → the same ticket, in plan
+B: lit2 set <id>/status impl                 → refused: impl/entry plan/verdict=pass, no review yet
+B: lit2 set <id>/status obsolete <id>/reason "…"; lit2 admin sync
 B: lit2 rm <epic>                           → refused: a node; contributor has rm own/* at level 1
 A: lit2 admin sync; lit2 get <id>/stage      → terminal; A and B fold equal
 ```
+
+The walk runs under the default profile's lists, so it reaches `done` only
+once slice 2's reviewables give `plan/verdict` and `pr/verdict` a value; until
+then a ticket closes through a terminal column no `next` names.
 
 **Slice 2, visibility.** The default tier encrypted; content keys and
 epoch keys wrapped to members; `tier` on items and comments; `set x/tier`;
