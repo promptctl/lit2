@@ -4,16 +4,18 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/promptctl/lit2/internal/address"
+	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/field"
+	"github.com/promptctl/lit2/internal/verbs"
 )
 
 // Verbs is the verb table: the four verbs on paths.
 func Verbs() Table {
 	return Table{rows: []Row{
-		{Name: "get", Operands: TakesPaths{Make: func(p []PathText) Command { return Get{paths: p} }}, Summary: "read the nodes at these paths"},
-		{Name: "set", Operands: TakesPairs{Make: func(p []Pair) Command { return Set{pairs: p} }}, Summary: "replace the value at each path"},
-		{Name: "add", Operands: TakesPairs{Make: func(p []Pair) Command { return Add{pairs: p} }}, Summary: "append each value to the list at its path"},
-		{Name: "rm", Operands: TakesPaths{Make: func(p []PathText) Command { return Rm{paths: p} }}, Summary: "delete the nodes at these paths"},
+		{Name: "get", Operands: TakesPaths{Make: func(p []PathText, _ Flags) Command { return Get{paths: p} }}, Summary: "read the nodes at these paths"},
+		{Name: "set", Operands: TakesPairs{Make: func(p []Pair, f Flags) Command { return Set{pairs: p, flags: f} }}, DryRun: true, Summary: "replace the value at each path"},
+		{Name: "add", Operands: TakesPairs{Make: func(p []Pair, f Flags) Command { return Add{pairs: p, flags: f} }}, DryRun: true, Summary: "append each value to the list at its path"},
+		{Name: "rm", Operands: TakesPaths{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, DryRun: true, Summary: "delete the nodes at these paths"},
 	}}
 }
 
@@ -26,20 +28,45 @@ func Admin() Table {
 	}}
 }
 
-// HelpText is --help: the two tables and the field table, rendered from the
-// same rows the parser reads.
-func HelpText(verbs, admin Table, fields address.FieldTable) string {
+// HelpText is --help: the two tables, and the field table at each place,
+// rendered from the rows the parser and the paths read, each field with
+// its kind and the verbs that write it.
+func HelpText(verbTable, admin Table, fields config.Table) string {
 	var b strings.Builder
 	b.WriteString("lit2 keeps this repository's backlog as a tree of nodes in its own git object database.\n\n")
 	b.WriteString("usage: lit2 <verb> <operand>...   lit2 admin <command>   lit2 --help\n")
-	b.WriteString("--help anywhere prints this; -- ends the flags; - is a value\n")
-	section(&b, "verbs", "", verbs)
+	b.WriteString("--help anywhere prints this; --dry-run shows what a write would do; -- ends the flags; - is a value\n")
+	section(&b, "verbs", "", verbTable)
 	section(&b, "admin", adminWord+" ", admin)
-	b.WriteString("\nfields:\n")
-	for _, f := range fields.Rows() {
-		fmt.Fprintf(&b, "  %-12s %s\n", f.Name, f.Help)
+	for _, p := range fields.Places() {
+		fmt.Fprintf(&b, "\nfields of %s:\n", config.PlaceName(p))
+		for _, r := range fields.Rows(p) {
+			writers := strings.Join(verbs.VerbsOf(r), ", ")
+			if writers == "" {
+				writers = "derived"
+			}
+			fmt.Fprintf(&b, "  %-14s %-10s %s\n", r.Path(), kindOf(r), writers)
+		}
 	}
 	return b.String()
+}
+
+// kindOf is a row's kind as help names it: a field's kind and how many
+// it holds, or a check.
+func kindOf(r config.Row) string {
+	switch r := r.(type) {
+	case config.FieldRow:
+		switch r.Decl.Multi {
+		case field.Set:
+			return "set-of-" + r.Decl.Kind.Name()
+		case field.Elements, field.Children:
+			return "list-of-" + r.Decl.Kind.Name()
+		}
+		return r.Decl.Kind.Name()
+	case config.CheckRow:
+		return "check"
+	}
+	panic(fmt.Sprintf("cli: %T is not a Row", r))
 }
 
 func section(b *strings.Builder, title, prefix string, t Table) {

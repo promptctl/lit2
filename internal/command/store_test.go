@@ -106,7 +106,7 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 
 func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 	appended := store.Appended{Records: 2, Bytes: 40, Log: store.Existing}
-	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, _ func(cli.Summary), stored *StoreFacts) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, _ func(cli.Summary), stored *StoreFacts, _ func(VerbsFacts)) cli.Outcome {
 		stored.Appends = append(stored.Appends, appended)
 		panic("after the append")
 	})

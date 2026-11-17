@@ -20,13 +20,17 @@ import (
 // the parser knows.
 type Table struct{ rows []Row }
 
-// Row is one command: its name, the operands it takes, and its line in
-// --help.
+// Row is one command: its name, the operands it takes, whether it takes
+// --dry-run, and its line in --help.
 type Row struct {
 	Name     string
 	Operands Operands
+	DryRun   bool
 	Summary  string
 }
+
+// Flags is the flags a command was given beside --help.
+type Flags struct{ DryRun bool }
 
 // Operands is the shape of a row's operands; Make's parameter is the shape,
 // so a row cannot make its command from the wrong one.
@@ -35,10 +39,12 @@ type Row struct {
 type Operands interface{ operands() }
 
 // TakesPaths is one or more paths: get, rm.
-type TakesPaths struct{ Make func([]PathText) Command }
+type TakesPaths struct {
+	Make func([]PathText, Flags) Command
+}
 
 // TakesPairs is one or more path-value pairs: set, add.
-type TakesPairs struct{ Make func([]Pair) Command }
+type TakesPairs struct{ Make func([]Pair, Flags) Command }
 
 // TakesNothing is no operands: the admin commands.
 type TakesNothing struct{ Make func() Command }
@@ -61,13 +67,43 @@ type Help struct{}
 type Get struct{ paths []PathText }
 
 // Rm deletes the nodes at its paths.
-type Rm struct{ paths []PathText }
+type Rm struct {
+	paths []PathText
+	flags Flags
+}
 
 // Set replaces the value at each path.
-type Set struct{ pairs []Pair }
+type Set struct {
+	pairs []Pair
+	flags Flags
+}
 
 // Add appends each value to the list at its path.
-type Add struct{ pairs []Pair }
+type Add struct {
+	pairs []Pair
+	flags Flags
+}
+
+// Paths is the paths get reads.
+func (g Get) Paths() []PathText { return g.paths }
+
+// Paths is the paths rm removes.
+func (r Rm) Paths() []PathText { return r.paths }
+
+// Pairs is each path set and its value.
+func (s Set) Pairs() []Pair { return s.pairs }
+
+// Pairs is each path added to and its value.
+func (a Add) Pairs() []Pair { return a.pairs }
+
+// Flags is the flags rm was given.
+func (r Rm) Flags() Flags { return r.flags }
+
+// Flags is the flags set was given.
+func (s Set) Flags() Flags { return s.flags }
+
+// Flags is the flags add was given.
+func (a Add) Flags() Flags { return a.flags }
 
 // AdminInit makes this checkout a writer.
 type AdminInit struct{}
@@ -102,7 +138,7 @@ const adminWord = "admin"
 
 // Parse reads argv against the two tables. Its error is a ParseFailure.
 func Parse(verbs, admin Table, args []string) (Command, error) {
-	words, help, err := scan(args)
+	words, help, flags, err := scan(args)
 	if err != nil {
 		return nil, err
 	}
@@ -111,19 +147,20 @@ func Parse(verbs, admin Table, args []string) (Command, error) {
 	}
 	all := known(verbs, admin)
 	if words[0] != adminWord {
-		return verbs.parse("", all, words)
+		return verbs.parse("", all, words, flags)
 	}
 	if len(words) == 1 {
 		return nil, ParseFailure{Code: Usage, Detail: "admin takes a command; the commands are " + all}
 	}
-	return admin.parse(adminWord+" ", all, words[1:])
+	return admin.parse(adminWord+" ", all, words[1:], flags)
 }
 
-// scan splits argv into operands and flags. --help is the one flag; -- ends
-// the flags; a word that does not start with -- is an operand, - included.
-// --help anywhere wins over an unknown flag, which is a usage failure only
-// when no --help is on the line, so the whole line is read before judging.
-func scan(args []string) (words []string, help bool, err error) {
+// scan splits argv into operands and flags. The flags are --help and
+// --dry-run; -- ends the flags; a word that does not start with -- is an
+// operand, - included. --help anywhere wins over an unknown flag, which is
+// a usage failure only when no --help is on the line, so the whole line is
+// read before judging.
+func scan(args []string) (words []string, help bool, flags Flags, err error) {
 	var unknown string
 	for i, a := range args {
 		if a == "--" {
@@ -138,28 +175,35 @@ func scan(args []string) (words []string, help bool, err error) {
 			help = true
 			continue
 		}
+		if a == "--dry-run" {
+			flags.DryRun = true
+			continue
+		}
 		if unknown == "" {
 			unknown = a
 		}
 	}
 	if !help && unknown != "" {
-		return nil, false, ParseFailure{Code: Usage, Detail: fmt.Sprintf("unknown flag %s; the one flag is --help", unknown)}
+		return nil, false, Flags{}, ParseFailure{Code: Usage, Detail: fmt.Sprintf("unknown flag %s; the flags are --help and --dry-run", unknown)}
 	}
-	return words, help, nil
+	return words, help, flags, nil
 }
 
 // parse finds the row named by words[0] and makes its command from the rest.
-func (t Table) parse(prefix, known string, words []string) (Command, error) {
+func (t Table) parse(prefix, known string, words []string, flags Flags) (Command, error) {
 	for _, r := range t.rows {
 		if r.Name == words[0] {
-			return r.parse(prefix+r.Name, words[1:])
+			if flags.DryRun && !r.DryRun {
+				return nil, ParseFailure{Code: Usage, Detail: prefix + r.Name + " takes no --dry-run: only a write does"}
+			}
+			return r.parse(prefix+r.Name, words[1:], flags)
 		}
 	}
 	return nil, ParseFailure{Code: UnknownVerb, Detail: fmt.Sprintf("%q is not a lit2 %scommand; the commands are %s", words[0], prefix, known)}
 }
 
 // parse checks the operands against the row's shape and makes its command.
-func (r Row) parse(name string, operands []string) (Command, error) {
+func (r Row) parse(name string, operands []string, flags Flags) (Command, error) {
 	switch o := r.Operands.(type) {
 	case TakesPaths:
 		if len(operands) == 0 {
@@ -169,7 +213,7 @@ func (r Row) parse(name string, operands []string) (Command, error) {
 		for i, w := range operands {
 			paths[i] = PathText(w)
 		}
-		return o.Make(paths), nil
+		return o.Make(paths, flags), nil
 	case TakesPairs:
 		if len(operands) == 0 || len(operands)%2 != 0 {
 			return nil, ParseFailure{Code: Usage, Detail: fmt.Sprintf("%s takes path value pairs; got %d operands", name, len(operands))}
@@ -178,7 +222,7 @@ func (r Row) parse(name string, operands []string) (Command, error) {
 		for i := range pairs {
 			pairs[i] = Pair{Path: PathText(operands[2*i]), Value: ValueText(operands[2*i+1])}
 		}
-		return o.Make(pairs), nil
+		return o.Make(pairs, flags), nil
 	case TakesNothing:
 		if len(operands) != 0 {
 			return nil, ParseFailure{Code: Usage, Detail: fmt.Sprintf("%s takes no operands; got %d", name, len(operands))}

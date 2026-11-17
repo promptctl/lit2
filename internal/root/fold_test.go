@@ -3,7 +3,6 @@ package root
 import (
 	"errors"
 	"math/rand/v2"
-	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/cli"
@@ -83,9 +82,9 @@ func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 	if f := folded(t, e); f.Records != 6 || f.Torn != 1 || f.Counts.Items != 6 {
 		t.Errorf("an open over a torn span folds %+v; want the 6 records and one torn span", f)
 	}
-	// the body ran: get is not built, which only its body says
-	if failed, ok := e.Outcome.(cli.Failed); !ok || failed.Failure.Reason() == "store" || !strings.Contains(failed.Failure.Error(), "not built") {
-		t.Errorf("a verb over a torn span ends %#v; want its body's outcome", e.Outcome)
+	// the body ran: only it records a verbs block
+	if failed, ok := e.Outcome.(cli.Failed); ok && failed.Failure.Reason() == "store" || e.Verbs == nil {
+		t.Errorf("a verb over a torn span ends %#v with verbs %v; want its body's outcome", e.Outcome, e.Verbs)
 	}
 }
 

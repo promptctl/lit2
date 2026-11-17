@@ -647,10 +647,10 @@ same test fails when the two disagree.
  cli        argv → typed command; rendering; exit codes; --json
  guidance   moments → resolved handlers → text after the data
  verbs      get/set/add/rm on typed addresses; requirements; verb → intents; echo
- address    path grammar; selectors; globs; the field table
+ address    path grammar; selectors; globs
  tick       clocked derivations: held, expiry, staleness, stage, rollup
- config     the active workspace version (§3.15) → one typed schema value
- field      field kinds and their value parsers; the built-in fields; the atom
+ config     the active workspace version (§3.15) → one typed schema value; the field table
+ field      field kinds and their value parsers; the built-in fields; the atom; the literal grammar
  fold       events → state; validation engine; rank; holders; conflicts
  events     record, codec, upcasters, ids, signature, envelope
  store      the append-only log; sealing into segments; one commit and one

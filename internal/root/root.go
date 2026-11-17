@@ -16,13 +16,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
+	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
+	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/verbs"
 )
 
 // Process is what every invocation reads from the world, read once by Main
@@ -36,8 +38,11 @@ type Process struct {
 	Fold     fold.Env
 	Reader   config.ReaderVersion
 	Commands command.Sink
-	In       io.Reader
-	Out, Err io.Writer
+	// IdentityFiles is a checkout's two identity directories, which admin
+	// init mints into.
+	IdentityFiles func(git.Checkout) (shared, private store.Files)
+	In            io.Reader
+	Out, Err      io.Writer
 }
 
 // Run runs one invocation: it mints the trace id, records the store's
@@ -51,16 +56,17 @@ func Run(p Process, args []string) int {
 		// crypto/rand itself does when the system's entropy fails.
 		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
 	}
-	verbs, admin := cli.Verbs(), cli.Admin()
-	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: p.Place, Agent: p.Agent, Config: configFacts(p)}
-	event := command.Record(p.Clock, inv, func(_ time.Time, asked func(cli.Summary), stored *command.StoreFacts) cli.Outcome {
+	table, admin := cli.Verbs(), cli.Admin()
+	loaded := load(p)
+	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: p.Place, Agent: p.Agent, Config: configFacts(p, loaded)}
+	event := command.Record(p.Clock, inv, func(now time.Time, asked func(cli.Summary), stored *command.StoreFacts, told func(command.VerbsFacts)) cli.Outcome {
 		stored.Opening = p.Store
-		cmd, err := cli.Parse(verbs, admin, args)
+		cmd, err := cli.Parse(table, admin, args)
 		if err != nil {
 			return failed(err)
 		}
 		asked(cli.Summarize(cmd))
-		return dispatch(p, verbs, admin, cmd, stored)
+		return dispatch(body{p: p, loaded: loaded, now: now, stored: stored, told: told}, table, admin, cmd)
 	})
 	// [LAW:no-silent-failure] exception: stderr is where failures are said;
 	// when writing to it fails there is no channel left but the exit status,
@@ -72,13 +78,11 @@ func Run(p Process, args []string) int {
 	return cli.ExitCode(event.Outcome)
 }
 
-// configFacts reads the workspace configuration in force for this run. Only a
+// load reads the workspace configuration in force for this run, once. Only a
 // committed version is in force (architecture.md §3.15), and none is committed
 // yet, so the shipped default is the model. Loading reads nothing from the
-// working tree, so a draft that does not parse never reaches a command. The
-// config-ref names the version in the code repository's object format, which
-// only an open store has, so a run with no store records no ref.
-func configFacts(p Process) *command.ConfigFacts {
+// working tree, so a draft that does not parse never reaches a command.
+func load(p Process) config.Loaded {
 	loaded, err := config.Load(config.NeverCommitted{}, p.Reader)
 	if err != nil {
 		// [LAW:no-silent-failure] the default profile is embedded in this
@@ -86,6 +90,13 @@ func configFacts(p Process) *command.ConfigFacts {
 		// to refuse.
 		panic(fmt.Sprintf("root: the shipped default profile does not parse: %v", err))
 	}
+	return loaded
+}
+
+// configFacts is the configuration the run read. The config-ref names the
+// version in the code repository's object format, which only an open store
+// has, so a run with no store records no ref.
+func configFacts(p Process, loaded config.Loaded) *command.ConfigFacts {
 	f := command.ConfigFacts{Facts: loaded.Facts()}
 	if o, ok := p.Store.(command.Opened); ok {
 		f.Ref = loaded.Ref(o.Format).String()
@@ -93,22 +104,33 @@ func configFacts(p Process) *command.ConfigFacts {
 	return &f
 }
 
+// body is one invocation as its body sees it: the process, the
+// configuration loaded once, the clock's one reading, and where its facts
+// go.
+type body struct {
+	p      Process
+	loaded config.Loaded
+	now    time.Time
+	stored *command.StoreFacts
+	told   func(command.VerbsFacts)
+}
+
 // dispatch binds each command to its body. Every verb runs the steps of §5
 // in order on every call: open and fold, then its own body.
-func dispatch(p Process, verbs, admin cli.Table, cmd cli.Command, stored *command.StoreFacts) cli.Outcome {
-	switch cmd.(type) {
+func dispatch(r body, table, admin cli.Table, cmd cli.Command) cli.Outcome {
+	switch c := cmd.(type) {
 	case cli.Help:
-		return written(io.WriteString(p.Out, cli.HelpText(verbs, admin, address.FieldTable{})))
+		return written(io.WriteString(r.p.Out, cli.HelpText(table, admin, r.loaded.Schema().Table())))
 	case cli.Get:
-		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("get") })
+		return verb(r.p, r.stored, func(f fold.Folded) cli.Outcome { return r.get(f, c.Paths()) })
 	case cli.Set:
-		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("set") })
+		return verb(r.p, r.stored, func(f fold.Folded) cli.Outcome { return r.write(f, verbs.Set, pairs(c.Pairs()), c.Flags()) })
 	case cli.Add:
-		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("add") })
+		return verb(r.p, r.stored, func(f fold.Folded) cli.Outcome { return r.write(f, verbs.Add, pairs(c.Pairs()), c.Flags()) })
 	case cli.Rm:
-		return verb(p, stored, func(fold.Folded) cli.Outcome { return notBuilt("rm") })
+		return verb(r.p, r.stored, func(f fold.Folded) cli.Outcome { return r.write(f, verbs.Rm, paths(c.Paths()), c.Flags()) })
 	case cli.AdminInit:
-		return notBuilt("admin init")
+		return r.init()
 	case cli.AdminSync:
 		return notBuilt("admin sync")
 	}

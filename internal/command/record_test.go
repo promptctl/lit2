@@ -40,7 +40,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 		{"help", cli.Done{}, 0},
 		{"get", cli.Failed{Failure: Internal{Err: errors.New("not built")}}, 70},
 	} {
-		e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, asked func(cli.Summary), _ *StoreFacts) cli.Outcome {
+		e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, asked func(cli.Summary), _ *StoreFacts, _ func(VerbsFacts)) cli.Outcome {
 			asked(cli.Summary{Name: tc.name})
 			return tc.outcome
 		})
@@ -51,7 +51,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 }
 
 func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
-	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, asked func(cli.Summary), _ *StoreFacts) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, asked func(cli.Summary), _ *StoreFacts, _ func(VerbsFacts)) cli.Outcome {
 		cmd, err := cli.Parse(cli.Verbs(), cli.Admin(), []string{"get", "x"})
 		if err != nil {
 			t.Fatal(err)
@@ -73,7 +73,9 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 }
 
 func TestWorkThatPanicsBeforeAskingIsUnparsed(t *testing.T) {
-	e := Record(&FixedClock{At: t0}, inv, func(time.Time, func(cli.Summary), *StoreFacts) cli.Outcome { panic("the parse broke") })
+	e := Record(&FixedClock{At: t0}, inv, func(time.Time, func(cli.Summary), *StoreFacts, func(VerbsFacts)) cli.Outcome {
+		panic("the parse broke")
+	})
 	if e.Command.Name != cli.Unparsed || cli.ExitCode(e.Outcome) != 70 {
 		t.Errorf("a panic before asked recorded %#v, exit %d; want unparsed, exit 70", e.Command, cli.ExitCode(e.Outcome))
 	}
@@ -82,7 +84,7 @@ func TestWorkThatPanicsBeforeAskingIsUnparsed(t *testing.T) {
 func TestRecordHandsNowToWorkAndTimesIt(t *testing.T) {
 	clock := &FixedClock{At: t0}
 	var handed time.Time
-	e := Record(clock, inv, func(now time.Time, _ func(cli.Summary), _ *StoreFacts) cli.Outcome {
+	e := Record(clock, inv, func(now time.Time, _ func(cli.Summary), _ *StoreFacts, _ func(VerbsFacts)) cli.Outcome {
 		handed = now
 		clock.At = clock.At.Add(1500 * time.Millisecond)
 		return cli.Done{}

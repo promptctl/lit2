@@ -64,6 +64,7 @@ type Event struct {
 	Started  time.Time
 	Duration time.Duration
 	Store    StoreFacts
+	Verbs    *VerbsFacts
 	Outcome  cli.Outcome
 }
 
@@ -114,13 +115,17 @@ func (Internal) Reason() string { return "internal" }
 // so the event keeps the last summary given even when the body panics
 // `[LAW:nothing-unseen]`; the panic becomes an Internal outcome carrying
 // its value and stack. Each store step's result goes on stored as the step
-// returns it, so the facts of the steps that ran survive a panic too.
-func Record(c Clock, inv Invocation, work func(now time.Time, asked func(cli.Summary), stored *StoreFacts) cli.Outcome) Event {
+// returns it, so the facts of the steps that ran survive a panic too. A
+// verb's body says what it did through told, the last facts given kept.
+func Record(c Clock, inv Invocation, work func(now time.Time, asked func(cli.Summary), stored *StoreFacts, told func(VerbsFacts)) cli.Outcome) Event {
 	started := c.Now()
 	summary := cli.Summary{Name: cli.Unparsed}
 	var facts StoreFacts
-	outcome := recovered(func() cli.Outcome { return work(started, func(s cli.Summary) { summary = s }, &facts) })
-	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Outcome: outcome}
+	var did *VerbsFacts
+	outcome := recovered(func() cli.Outcome {
+		return work(started, func(s cli.Summary) { summary = s }, &facts, func(v VerbsFacts) { did = &v })
+	})
+	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Verbs: did, Outcome: outcome}
 }
 
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {

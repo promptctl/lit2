@@ -13,17 +13,12 @@ import (
 
 // TestSmoke builds lit2 with the documented command and runs it as a person
 // would, outside any checkout and inside two whose workspace drafts are not in
-// force, one that does not parse and one that does: the one end-to-end test.
+// force, one that does not parse and one that does.
 func TestSmoke(t *testing.T) {
 	tmp := t.TempDir()
-	bin, state := filepath.Join(tmp, "lit2"), filepath.Join(tmp, "state")
+	bin, state := build(t, tmp), filepath.Join(tmp, "state")
 	broken := checkoutWithDraft(t, filepath.Join(tmp, "broken"), "prefix = [unclosed\n")
 	parses := checkoutWithDraft(t, filepath.Join(tmp, "parses"), oneLevel)
-	build := exec.Command("go", "build", "-o", bin, ".")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("CGO_ENABLED=0 go build ./cmd/lit2: %v\n%s", err, out)
-	}
 
 	var statuses []int
 	for _, tc := range []struct {
@@ -105,6 +100,55 @@ func TestSmoke(t *testing.T) {
 			t.Errorf("a run beside a draft records config %+v; want the default's three levels", inCheckout)
 		}
 	}
+}
+
+// TestSmokeWorksATicket makes a checkout a writer and works one ticket in
+// it by path, through the built binary and the store on disk.
+func TestSmokeWorksATicket(t *testing.T) {
+	tmp := t.TempDir()
+	bin, dir := build(t, tmp), checkoutWithDraft(t, filepath.Join(tmp, "work"), oneLevel)
+	lit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(bin, args...)
+		cmd.Dir, cmd.Env = dir, append(os.Environ(), "XDG_STATE_HOME="+filepath.Join(tmp, "state"))
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("lit2 %q: %v, stderr %q", args, err, stderr.String())
+		}
+		return stdout.String()
+	}
+	if out := lit("admin", "init"); !strings.HasPrefix(out, "principal did:key:") || !strings.Contains(out, "recovery phrase: ") {
+		t.Fatalf("admin init printed %q", out)
+	}
+	first, _, _ := strings.Cut(lit("add", "unfiled/children", "{title: a}"), "\n")
+	id := strings.TrimPrefix(first, "+ ")
+	if got := lit("get", id+"/title"); got != "a\n" {
+		t.Errorf("get title = %q", got)
+	}
+	lit("set", id+"/title", "b")
+	lit("add", id+"/comments", "a note")
+	lit("add", id+"/labels", "ready")
+	if got := lit("get", id+"/title", id+"/labels", id+"/ready"); got != id+"/title\tb\n"+id+"/labels\tready\n"+id+"/ready\tunmet description (ready)\n" {
+		t.Errorf("get title, labels and ready = %q", got)
+	}
+	lit("rm", id)
+	lit("set", id+"/deleted", "false")
+	if got := lit("get", id+"/deleted"); got != "false\n" {
+		t.Errorf("a restored item's deleted = %q", got)
+	}
+}
+
+// build builds lit2 into dir with the documented command.
+func build(t *testing.T, dir string) string {
+	t.Helper()
+	bin := filepath.Join(dir, "lit2")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("CGO_ENABLED=0 go build ./cmd/lit2: %v\n%s", err, out)
+	}
+	return bin
 }
 
 // configLine is the command log's config block, as a reader of the log sees it.

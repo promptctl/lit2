@@ -86,7 +86,7 @@ func TestASegmentTwoOfflineWritersFixedIsAmbiguousAndListsBoth(t *testing.T) {
 	}
 	_, err := address.Resolve(s, short(t, "lit-000"))
 	var amb address.Ambiguous
-	if !errors.As(err, &amb) || !slices.Contains(amb.Candidates, a.ID) || !slices.Contains(amb.Candidates, b.ID) || len(amb.Candidates) != 2 {
+	if !errors.As(err, &amb) || !slices.Contains(amb.Candidates, a.ID.String()) || !slices.Contains(amb.Candidates, b.ID.String()) || len(amb.Candidates) != 2 {
 		t.Fatalf("000 resolves with %v; want it ambiguous, listing both items", err)
 	}
 	if !strings.Contains(err.Error(), a.ID.String()) || !strings.Contains(err.Error(), b.ID.String()) {

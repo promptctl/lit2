@@ -1,0 +1,599 @@
+package verbs
+
+import (
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/promptctl/lit2/internal/address"
+	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/field"
+	"github.com/promptctl/lit2/internal/fold"
+	"github.com/promptctl/lit2/internal/tick"
+)
+
+// Verb is a write verb.
+type Verb uint8
+
+const (
+	Set Verb = iota + 1
+	Add
+	Rm
+)
+
+func (v Verb) String() string {
+	switch v {
+	case Set:
+		return "set"
+	case Add:
+		return "add"
+	case Rm:
+		return "rm"
+	}
+	panic(fmt.Sprintf("verbs: %d is not a Verb", uint8(v)))
+}
+
+// Operand is one operand of a write: a path, and the value given for it,
+// which rm has none of.
+type Operand struct {
+	Path  string
+	Value string
+}
+
+// Stdin is the operand value that reads standard input.
+const Stdin = "-"
+
+// Subject is what a write is about: an item that exists or one this
+// command creates, where it sits, the sections it is read through, and
+// what it holds. A created item holds the zero Facts: every register
+// unset, every set empty, so a compile function reads both alike.
+type Subject struct {
+	At    Who
+	Place field.Place
+	In    config.Ancestry
+	Facts fold.Facts
+}
+
+// Who is an item a write is about.
+//
+//sumtype:decl
+type Who interface{ who() }
+
+// Existing is an item the state holds, and its path as it renders.
+type Existing struct {
+	ID       events.ItemID
+	Rendered string
+}
+
+// Created is the Nth item this command creates, counting from 1 in
+// document order.
+type Created struct{ N int }
+
+func (Existing) who() {}
+func (Created) who()  {}
+
+// Source is where a write's value came from.
+//
+//sumtype:decl
+type Source interface{ source() }
+
+// FromOperand is a value an operand gave.
+type FromOperand struct{}
+
+// FromTemplate is a default a level's template gave a new item.
+type FromTemplate struct {
+	Level string
+	Field field.Path
+}
+
+func (FromOperand) source()  {}
+func (FromTemplate) source() {}
+
+// shape is what a write does, and which one function compiles it.
+type shape uint8
+
+const (
+	setOne shape = iota + 1
+	addMember
+	rmMember
+	addComment
+	// addChild expands to creates and their writes, never to one payload
+	addChild
+)
+
+// write is the unit of compilation: one value written to one field of one
+// subject. Every source of a write, an operand, a child object's key and
+// a template's default, makes one, and each shape has one compile
+// function, so no rule lives twice.
+type write struct {
+	subject Subject
+	path    field.Path
+	decl    field.FieldDecl
+	value   field.Literal
+	source  Source
+	shape   shape
+}
+
+// piece is what a compile function returns: a fact about its subject, or
+// a new element of it, which Mint names.
+//
+//sumtype:decl
+type piece interface{ piece() }
+
+type fact struct{ payload events.Payload }
+type newElement struct{ payload events.Payload }
+
+func (fact) piece()       {}
+func (newElement) piece() {}
+
+// claim is what a write overwrites, which one command writes once: a
+// register, a set's member, or standard input.
+type claim struct {
+	who    events.ItemID
+	path   field.Path
+	member string
+}
+
+var stdinClaim = claim{path: "-"}
+
+// refusal is why an operand compiles to nothing.
+type refusal struct {
+	reason string
+	err    error
+	detail string
+}
+
+func refuse(reason string, format string, args ...any) *refusal {
+	return &refusal{reason: reason, err: fmt.Errorf(format, args...)}
+}
+
+// creation is one item an operand creates: its number, where it is
+// placed, and the container it is placed in.
+type creation struct {
+	n         int
+	placement events.Placement
+	in        fold.Container
+}
+
+// expanded is one operand as writes: its address, the items it creates,
+// and the writes, in document order.
+type expanded struct {
+	addr    address.Address
+	creates []creation
+	writes  []write
+	values  int
+	stdin   bool
+}
+
+// Compile turns a write command into its drafts and changes, or refuses it
+// whole. Each operand runs the one pipeline: parse its path, read its value
+// by the literal grammar, expand it to writes, compile each write by its
+// shape's function, and then one pass in command order refuses a target
+// written twice. Nothing is shared between operands but that pass, so no
+// compile step mutates state another reads.
+func Compile(w World, verb Verb, operands []Operand, stdin func() (string, error)) Compiled {
+	var c Compiled
+	created := 0
+	claimed := map[claim]bool{}
+	for _, op := range operands {
+		r, ok := c.operand(w, verb, op, stdin, &created, claimed)
+		c.Operands = append(c.Operands, r)
+		if !ok {
+			c.refused = true
+		}
+	}
+	if c.refused {
+		c.Drafts, c.Changes = nil, nil
+	}
+	return c
+}
+
+// Compiled is a write command compiled: each operand's result, and when no
+// operand was refused, the drafts it mints and the changes the echo shows.
+type Compiled struct {
+	Operands []Result
+	Drafts   []events.Draft
+	Changes  []Change
+	refused  bool
+}
+
+// Refusal is the first operand's refusal, the command's, and false when
+// none was refused.
+func (c Compiled) Refusal() (Refused, bool) {
+	for _, r := range c.Operands {
+		if r, ok := r.(Refused); ok {
+			return r, true
+		}
+	}
+	return Refused{}, false
+}
+
+// Result is one operand's outcome.
+//
+//sumtype:decl
+type Result interface{ result() }
+
+// Accepted is an operand that compiled: its canonical address, how many
+// values it gave, and how many drafts it made.
+type Accepted struct {
+	Text   string
+	Canon  string
+	Values int
+	Drafts int
+}
+
+// Refused is an operand that did not: why, and for an address, the
+// detail that names its paths. A value's text is never in it.
+type Refused struct {
+	Text   string
+	Reason string
+	Err    error
+	Detail string
+}
+
+func (Accepted) result() {}
+func (Refused) result()  {}
+
+func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string, error), created *int, claimed map[claim]bool) (Result, bool) {
+	no := func(r *refusal) (Result, bool) {
+		return Refused{Text: op.Path, Reason: r.reason, Err: r.err, Detail: r.detail}, false
+	}
+	x, r := expand(w, verb, op, stdin, created)
+	if r != nil {
+		return no(r)
+	}
+	if x.stdin {
+		if claimed[stdinClaim] {
+			return no(refuse("twice", "standard input is read once in a command, and %s reads it again", op.Path))
+		}
+		claimed[stdinClaim] = true
+	}
+	var drafts []events.Draft
+	var changes []Change
+	then := map[int][]events.Payload{}
+	// a created item's changes echo under its create, so they are kept by
+	// the item they are about
+	about := map[int][]Change{}
+	for _, wr := range x.writes {
+		if err := field.Writable(wr.decl); err != nil {
+			return no(refuse("derived", "%s: %v", wr.path, err))
+		}
+		pieces, chs, claims, r := compile(w, wr)
+		if r != nil {
+			if t, ok := wr.source.(FromTemplate); ok && r.reason != "configuration" {
+				return no(refuse("template", "level %s's template sets %s: %v", t.Level, t.Field, r.err))
+			}
+			return no(r)
+		}
+		for _, k := range claims {
+			if claimed[k] {
+				return no(refuse("twice", "%s is written twice in this command", wr.path))
+			}
+			claimed[k] = true
+		}
+		switch who := wr.subject.At.(type) {
+		case Existing:
+			for _, p := range pieces {
+				switch p := p.(type) {
+				case fact:
+					drafts = append(drafts, events.Act{About: events.Item{ID: who.ID}, Payload: p.payload})
+				case newElement:
+					drafts = append(drafts, events.CreateElement{Of: who.ID, Payload: p.payload})
+				}
+			}
+		case Created:
+			for _, p := range pieces {
+				then[who.N] = append(then[who.N], p.(fact).payload)
+			}
+			about[who.N] = append(about[who.N], chs...)
+			continue
+		}
+		for i, ch := range chs {
+			if cm, ok := ch.(Commented); ok {
+				cm.Draft = len(drafts) - 1 // the element this write just drafted
+				chs[i] = cm
+			}
+		}
+		changes = append(changes, chs...)
+	}
+	// each create precedes every other draft the operand makes, its own
+	// facts in Then, so a new item is named before anything is about it
+	base := len(c.Drafts)
+	all := make([]events.Draft, 0, len(x.creates)+len(drafts))
+	for i, cr := range x.creates {
+		all = append(all, events.CreateItem{Payload: events.ItemCreate{Place: cr.placement}, Then: then[cr.n]})
+		c.Changes = append(c.Changes, Filed{N: cr.n, Draft: base + i, Parent: w.container(cr.in)})
+		c.Changes = append(c.Changes, about[cr.n]...)
+	}
+	all = append(all, drafts...)
+	for _, ch := range changes {
+		if cm, ok := ch.(Commented); ok {
+			cm.Draft += base + len(x.creates)
+			ch = cm
+		}
+		c.Changes = append(c.Changes, ch)
+	}
+	c.Drafts = append(c.Drafts, all...)
+	return Accepted{Text: op.Path, Canon: x.addr.String(), Values: x.values, Drafts: len(all)}, true
+}
+
+// expand reads an operand into writes: its path, its value by the literal
+// grammar alone, and then what its verb on that target writes.
+func expand(w World, verb Verb, op Operand, stdin func() (string, error), created *int) (expanded, *refusal) {
+	a, r := address.Parse(w.State, w.Schema, op.Path)
+	if r != nil {
+		return expanded{}, &refusal{reason: r.Reason(), err: r, detail: r.Error()}
+	}
+	x := expanded{addr: a}
+	if verb == Rm {
+		return x, x.rm(w)
+	}
+	var value field.Literal
+	if op.Value == Stdin {
+		text, err := stdin()
+		if err != nil {
+			return expanded{}, refuse("stdin", "reading standard input: %v", err)
+		}
+		value, x.stdin = field.Scalar{Text: strings.TrimSuffix(text, "\n")}, true
+	} else {
+		v, err := field.ParseLiteral(op.Value)
+		if err != nil {
+			return expanded{}, refuse("value", "%s: %v", op.Path, err)
+		}
+		value = v
+	}
+	x.values = count(value)
+	switch t := a.Target.(type) {
+	case address.Field:
+		row, isField := t.Row.(config.FieldRow)
+		if !isField {
+			return expanded{}, refuse("derived", "%s is a check: the engine computes it", t.Path)
+		}
+		sh, ok := shapeOf(verb, row.Decl)
+		if !ok {
+			return expanded{}, wrongVerb(verb, t.Path, t.Row)
+		}
+		if sh == addChild {
+			return x, x.children(w, value, created)
+		}
+		x.writes = []write{{subject: existing(w, a), path: t.Path, decl: row.Decl, value: value, source: FromOperand{}, shape: sh}}
+		return x, nil
+	}
+	return expanded{}, wrongVerb(verb, "", nil)
+}
+
+// count is how many values a literal gives.
+func count(v field.Literal) int {
+	if l, ok := v.(field.List); ok {
+		return len(l.Items)
+	}
+	return 1
+}
+
+// rm is the writes of removing the node at x's address: an item's is its
+// deleted flag set true, and a set's member its removal.
+func (x *expanded) rm(w World) *refusal {
+	switch t := x.addr.Target.(type) {
+	case address.Whole:
+		if _, ok := x.addr.Node.(address.Item); !ok {
+			return refuse("not_removable", "%s is not an item: the root and a home are the tree's, and rm removes an item or a member", x.addr)
+		}
+		r, _ := w.Schema.Table().Find(x.addr.Place, "deleted")
+		x.writes = []write{{subject: existing(w, x.addr), path: "deleted", decl: r.(config.FieldRow).Decl, value: field.Scalar{Text: "true"}, source: FromOperand{}, shape: setOne}}
+		return nil
+	case address.Element:
+		if m, ok := t.Key.(address.Member); ok {
+			x.writes = []write{{subject: existing(w, x.addr), path: t.Path, decl: t.Decl, value: field.Scalar{Text: m.Name.String()}, source: FromOperand{}, shape: rmMember}}
+			return nil
+		}
+	}
+	return refuse("not_removable", "rm removes an item or a member, and %s is neither", x.addr)
+}
+
+// Deletes is whether p deletes an item: its deleted flag set true, the
+// one way rm writes.
+func Deletes(p events.Payload) bool {
+	s, ok := p.(events.FieldSet)
+	if !ok || s.Field.String() != "deleted" {
+		return false
+	}
+	v, plain := s.Value.(events.Plain)
+	return plain && v.Canonical == "true"
+}
+
+// existing is the subject an address names: an item the state holds.
+func existing(w World, a address.Address) Subject {
+	n := a.Node.(address.Item)
+	return Subject{
+		At:    Existing{ID: n.ID, Rendered: n.Rendered},
+		Place: a.Place,
+		In:    tick.ItemAncestry(w.State, w.Schema, n.ID),
+		Facts: w.item(n.ID).Facts,
+	}
+}
+
+// shapeOf is what verb does to a field of d's shape, and false when it
+// does nothing: the one table the compile, a refusal and help all read
+// `[LAW:one-source-of-truth]`.
+func shapeOf(verb Verb, d field.FieldDecl) (shape, bool) {
+	switch {
+	case verb == Set && d.Multi == field.One:
+		return setOne, true
+	case verb == Add && d.Multi == field.Set:
+		return addMember, true
+	case verb == Add && d.Multi == field.Elements:
+		return addComment, true
+	case verb == Add && d.Multi == field.Children:
+		return addChild, true
+	}
+	return 0, false
+}
+
+// VerbsOf is the verbs that write a row, as help and a refusal list them.
+// A derived row and a check have none.
+func VerbsOf(r config.Row) []string {
+	f, ok := r.(config.FieldRow)
+	if !ok || field.Writable(f.Decl) != nil {
+		return nil
+	}
+	var out []string
+	for _, v := range []Verb{Set, Add} {
+		if _, ok := shapeOf(v, f.Decl); ok {
+			out = append(out, v.String())
+		}
+	}
+	if f.Decl.Multi == field.Set {
+		out = append(out, "rm "+string(f.At)+"/<member>")
+	}
+	return out
+}
+
+func wrongVerb(verb Verb, path field.Path, r config.Row) *refusal {
+	if r == nil {
+		return refuse("wrong_verb", "%s writes a field, not a whole node or an element; rm removes an item or a member", verb)
+	}
+	verbs := VerbsOf(r)
+	if len(verbs) == 0 {
+		return refuse("derived", "%s: the engine computes it", path)
+	}
+	return refuse("wrong_verb", "%s does not write %s; its verbs are %s", verb, path, strings.Join(verbs, ", "))
+}
+
+// children expands an add to children: each object a create, a write per
+// key it gives, and a write per template default it does not.
+func (x *expanded) children(w World, v field.Literal, created *int) *refusal {
+	var objects []field.Object
+	switch v := v.(type) {
+	case field.Object:
+		objects = []field.Object{v}
+	case field.List:
+		for _, it := range v.Items {
+			o, ok := it.(field.Object)
+			if !ok {
+				return refuse("value", "a child is an object, {title: …}")
+			}
+			objects = append(objects, o)
+		}
+	default:
+		return refuse("value", "a child is an object, {title: …}, or a list of them")
+	}
+	for _, o := range objects {
+		*created++
+		if r := x.child(w, o, *created); r != nil {
+			return r
+		}
+	}
+	return nil
+}
+
+// child is one object under x's node: placed by the node it is added to,
+// or under / by its level key, which placement reads before any key
+// becomes a write.
+func (x *expanded) child(w World, o field.Object, n int) *refusal {
+	var level events.Level
+	var placement events.Placement
+	var in fold.Container
+	pairs := o.Pairs
+	switch node := x.addr.Node.(type) {
+	case address.Root:
+		level, _ = events.ParseLevel(w.Schema.Levels())
+		if i := slices.IndexFunc(pairs, func(p field.Pair) bool { return p.Key == "level" }); i >= 0 {
+			s, ok := pairs[i].Value.(field.Scalar)
+			if !ok {
+				return refuse("value", "level is one value, 1 to %d", w.Schema.Levels())
+			}
+			text, err := (field.Level{}).Parse(s.Text)
+			if err != nil {
+				return refuse("value", "level: %v", err)
+			}
+			num, _ := strconv.Atoi(text)
+			l, _ := events.ParseLevel(num)
+			if l.Int() > w.Schema.Levels() {
+				return refuse("value", "level %d is not declared: this workspace has %d", l.Int(), w.Schema.Levels())
+			}
+			level = l
+			pairs = slices.Delete(slices.Clone(pairs), i, i+1)
+		}
+		placement, in = events.AtLevel{Level: level}, fold.Home{Holds: level}
+	case address.Home:
+		level, placement, in = node.Level, events.AtLevel{Level: node.Level}, fold.Home{Holds: node.Level}
+	case address.Item:
+		above := x.addr.Place.(field.Node).Level
+		level, _ = above.Below()
+		placement, in = events.BelowParent{Parent: node.ID}, fold.Under{Parent: node.ID}
+	}
+	sub := Subject{At: Created{N: n}, Place: field.ItemPlace(level), In: tick.AncestryOf(w.State, w.Schema, in)}
+	x.creates = append(x.creates, creation{n: n, placement: placement, in: in})
+	given := map[field.Path]bool{}
+	for _, p := range pairs {
+		path := field.Path(p.Key)
+		decl, r := keyed(w, sub.Place, path)
+		if r != nil {
+			return r
+		}
+		x.writes = append(x.writes, write{subject: sub, path: path, decl: decl, value: p.Value, source: FromOperand{}, shape: keyShape(decl)})
+		given[path] = true
+	}
+	lv, _ := w.Schema.Level(level.Int())
+	for _, path := range slices.Sorted(maps.Keys(lv.Template)) {
+		if given[path] {
+			continue
+		}
+		decl, r := keyed(w, sub.Place, path)
+		if r != nil {
+			return refuse("template", "level %s's template sets %s: %v", lv.Name, path, r.err)
+		}
+		values := lv.Template[path]
+		var v field.Literal = field.Scalar{Text: values[0]}
+		if decl.Multi == field.Set {
+			items := make([]field.Literal, len(values))
+			for i, s := range values {
+				items[i] = field.Scalar{Text: s}
+			}
+			v = field.List{Items: items}
+		}
+		x.writes = append(x.writes, write{subject: sub, path: path, decl: decl, value: v, source: FromTemplate{Level: lv.Name, Field: path}, shape: keyShape(decl)})
+		given[path] = true
+	}
+	if !given["title"] {
+		return refuse("value", "a new item carries a title, its own or its template's")
+	}
+	return nil
+}
+
+// keyShape is what a key of a child object or a template default writes:
+// a register's value or a set's members, the two Keyable admits.
+func keyShape(d field.FieldDecl) shape {
+	if d.Multi == field.Set {
+		return addMember
+	}
+	return setOne
+}
+
+// keyed is the field a child object's key or a template default names at
+// a new item's place: found by the table, and one value or a set.
+func keyed(w World, p field.Place, path field.Path) (field.FieldDecl, *refusal) {
+	r, err := w.Schema.Table().Find(p, path)
+	if err != nil {
+		var unknown config.UnknownField
+		if errors.As(err, &unknown) {
+			return field.FieldDecl{}, refuse("unknown_field", "%v", err)
+		}
+		return field.FieldDecl{}, refuse("not_on_level", "%v", err)
+	}
+	row, ok := r.(config.FieldRow)
+	if !ok {
+		return field.FieldDecl{}, refuse("derived", "%s is a check: the engine computes it", path)
+	}
+	if err := field.Writable(row.Decl); err != nil {
+		return field.FieldDecl{}, refuse("derived", "%s: %v", path, err)
+	}
+	if err := field.Keyable(row.Decl); err != nil {
+		return field.FieldDecl{}, refuse("value", "%s: %v", path, err)
+	}
+	return row.Decl, nil
+}

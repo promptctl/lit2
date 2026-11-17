@@ -6,9 +6,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/lit2/internal/address"
+	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/reason"
+	"github.com/promptctl/lit2/internal/verbs"
 )
+
+// fields is the default profile's field table.
+func fields(t *testing.T) config.Table {
+	t.Helper()
+	running, err := config.ReadReaderVersion("v0.4.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(config.NeverCommitted{}, running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loaded.Schema().Table()
+}
 
 func parse(args ...string) (Command, error) { return Parse(Verbs(), Admin(), args) }
 
@@ -21,6 +36,8 @@ func TestEachRowParsesToItsCommand(t *testing.T) {
 		{[]string{"rm", "x/labels/bug"}, Rm{paths: []PathText{"x/labels/bug"}}},
 		{[]string{"set", "x/status", "done", "y/title", "two words"}, Set{pairs: []Pair{{"x/status", "done"}, {"y/title", "two words"}}}},
 		{[]string{"add", "x/labels", "ready"}, Add{pairs: []Pair{{"x/labels", "ready"}}}},
+		{[]string{"rm", "x", "--dry-run"}, Rm{paths: []PathText{"x"}, flags: Flags{DryRun: true}}},
+		{[]string{"--dry-run", "add", "x/labels", "ready"}, Add{pairs: []Pair{{"x/labels", "ready"}}, flags: Flags{DryRun: true}}},
 		{[]string{"admin", "init"}, AdminInit{}},
 		{[]string{"admin", "sync"}, AdminSync{}},
 	} {
@@ -63,6 +80,8 @@ func TestNotALit2CommandLine(t *testing.T) {
 		{[]string{"admin"}, Usage},
 		{[]string{"admin", "init", "extra"}, Usage},
 		{[]string{"get", "x", "--frob"}, Usage},
+		{[]string{"get", "x", "--dry-run"}, Usage},
+		{[]string{"admin", "init", "--dry-run"}, Usage},
 	} {
 		_, err := parse(tc.args...)
 		var f ParseFailure
@@ -84,7 +103,7 @@ func TestEveryParseCodeHasItsOwnWireName(t *testing.T) {
 }
 
 func TestHelpNamesEveryRow(t *testing.T) {
-	help := HelpText(Verbs(), Admin(), address.FieldTable{})
+	help := HelpText(Verbs(), Admin(), fields(t))
 	for prefix, table := range map[string]Table{"": Verbs(), "admin ": Admin()} {
 		for _, r := range table.rows {
 			if !strings.Contains(help, prefix+r.Name) || !strings.Contains(help, r.Summary) {
@@ -94,27 +113,50 @@ func TestHelpNamesEveryRow(t *testing.T) {
 	}
 }
 
-func TestHelpNamesEveryField(t *testing.T) {
-	fields, err := address.NewFieldTable(address.FieldRow{Name: "title", Help: "one line naming the work"})
-	if err != nil {
-		t.Fatal(err)
+// TestHelpsFieldsAreTheTablesRows: the field section, read back as
+// (place, name, kind, verbs), is the table's rows at each place with the
+// verbs that write each, compared as sets.
+func TestHelpsFieldsAreTheTablesRows(t *testing.T) {
+	table := fields(t)
+	help := HelpText(Verbs(), Admin(), table)
+	got := map[string]bool{}
+	place := ""
+	for _, l := range strings.Split(help, "\n") {
+		if strings.HasPrefix(l, "fields of ") {
+			place = strings.TrimSuffix(strings.TrimPrefix(l, "fields of "), ":")
+			continue
+		}
+		if place == "" || !strings.HasPrefix(l, "  ") {
+			continue
+		}
+		cols := strings.Fields(l)
+		got[place+"|"+cols[0]+"|"+cols[1]+"|"+strings.Join(cols[2:], " ")] = true
 	}
-	help := HelpText(Verbs(), Admin(), fields)
-	if !strings.Contains(help, "title") || !strings.Contains(help, "one line naming the work") {
-		t.Errorf("--help does not name the field title:\n%s", help)
+	want := map[string]bool{}
+	for _, p := range table.Places() {
+		for _, r := range table.Rows(p) {
+			writers := strings.Join(verbs.VerbsOf(r), ", ")
+			if writers == "" {
+				writers = "derived"
+			}
+			want[config.PlaceName(p)+"|"+string(r.Path())+"|"+kindOf(r)+"|"+writers] = true
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("help's fields = %v\nwant the table's %v", got, want)
 	}
 }
 
 // The table is the parser: one more row parses and is helped with no other
 // edit `[LAW:composability]`.
 func TestOneMoreRowIsParsedAndHelped(t *testing.T) {
-	show := Row{Name: "show", Operands: TakesPaths{Make: func(p []PathText) Command { return Get{paths: p} }}, Summary: "read, by another name"}
-	verbs := Table{rows: append(Verbs().rows, show)}
-	got, err := Parse(verbs, Admin(), []string{"show", "x"})
+	show := Row{Name: "show", Operands: TakesPaths{Make: func(p []PathText, _ Flags) Command { return Get{paths: p} }}, Summary: "read, by another name"}
+	table := Table{rows: append(Verbs().rows, show)}
+	got, err := Parse(table, Admin(), []string{"show", "x"})
 	if err != nil || !reflect.DeepEqual(got, Get{paths: []PathText{"x"}}) {
 		t.Errorf("show x = %#v, %v; want the new row's command", got, err)
 	}
-	if help := HelpText(verbs, Admin(), address.FieldTable{}); !strings.Contains(help, "show") || !strings.Contains(help, show.Summary) {
+	if help := HelpText(table, Admin(), fields(t)); !strings.Contains(help, "show") || !strings.Contains(help, show.Summary) {
 		t.Errorf("--help does not name the new row:\n%s", help)
 	}
 }

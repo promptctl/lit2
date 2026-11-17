@@ -59,7 +59,7 @@ row; the architecture test fails on one without.
 
 | concern | unit | what of it lives there |
 |---|---|---|
-| §3.1 Node and path | `address`, `field` | the path grammar, selectors, globs and the field table in address; the atom selectors share in field |
+| §3.1 Node and path | `address`, `config`, `field` | the path grammar, selectors and globs in address; the field table in config, the one answer to what a path names at a place; the atom selectors share and the literal grammar in field |
 | §3.2 Event and intent | `events`, `verbs` | the event record and ids in events; the verb-to-intent table in verbs |
 | §3.3 Fold and tick | `fold`, `tick` | fold(events) → state; tick(state, config, now) → view |
 | §3.4 Work item, level, tree | `config`, `fold`, `tick` | levels and homes declared in config; the tree folded; stage and rollup in tick |

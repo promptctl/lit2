@@ -3,71 +3,97 @@ package address
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
 )
 
-// NotFound is a short id that names no item.
-type NotFound struct{ ID events.ShortID }
-
-// Ambiguous is a short id that names two or more items, each listed: two
-// writers offline can fix one segment for two items, and after sync the
-// segment names neither (§3.2).
-type Ambiguous struct {
-	ID         events.ShortID
-	Candidates []events.ItemID
+// candidate is one node a short id may name: its id, its full id's text,
+// and its rendered path, read only when segments are matched.
+type candidate[I comparable] struct {
+	id   I
+	full string
+	path func() []events.Segment
 }
 
-func (n NotFound) Error() string { return fmt.Sprintf("%s names no item", n.ID) }
-
-func (a Ambiguous) Error() string {
-	names := make([]string, len(a.Candidates))
-	for i, c := range a.Candidates {
-		names[i] = c.String()
-	}
-	return fmt.Sprintf("%s names %d items: %s", a.ID, len(a.Candidates), strings.Join(names, ", "))
-}
-
-// Resolve is the one created item id names in st. A full id names its
-// item wherever it sits; segments name the created items whose rendered path
-// ends with them, so the last is the item's own segment, unique among every
-// id its writer had folded, and any before it are its ancestors' nearest
-// last. Hierarchy narrows a match and never makes one (§3.2).
-func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
-	switch id := id.(type) {
+// resolve is the one rule a short id names a node by, an item or an
+// element alike `[LAW:single-enforcer]`. A full id names its node wherever
+// it sits; segments name the nodes whose rendered path ends with them, so
+// the last is the node's own segment, unique among every id its writer had
+// folded, and any before it its ancestors', nearest last. Hierarchy
+// narrows a match and never makes one (§3.2). Two writers offline can fix
+// one segment for two nodes, and then it names neither, listing both.
+func resolve[I comparable](key events.ShortID, cands []candidate[I]) (I, error) {
+	var none I
+	var matches []candidate[I]
+	switch k := key.(type) {
 	case events.FullID:
-		if f, ok := st.Item(id.ID).(fold.Found); ok && created(f.Item) {
-			return id.ID, nil
-		}
-		return events.ItemID{}, NotFound{ID: id}
-	case events.Segments:
-		want := id.List()
-		var matches []events.ItemID
-		for _, it := range st.Items() { // by id, so the candidates are listed in that order
-			path := st.Path(it.ID)
-			if len(path) >= len(want) && slices.Equal(path[len(path)-len(want):], want) {
-				matches = append(matches, it.ID)
+		for _, c := range cands {
+			if c.full == k.String() {
+				return c.id, nil
 			}
 		}
-		switch len(matches) {
-		case 0:
-			return events.ItemID{}, NotFound{ID: id}
-		case 1:
-			return matches[0], nil
+	case events.Segments:
+		want := k.List()
+		for _, c := range cands {
+			if p := c.path(); len(p) >= len(want) && slices.Equal(p[len(p)-len(want):], want) {
+				matches = append(matches, c)
+			}
 		}
-		return events.ItemID{}, Ambiguous{ID: id, Candidates: matches}
+	default:
+		panic(fmt.Sprintf("address: %T is not a ShortID", key))
 	}
-	panic(fmt.Sprintf("address: %T is not a ShortID", id))
+	switch len(matches) {
+	case 0:
+		return none, NotFound{ID: key.String()}
+	case 1:
+		return matches[0].id, nil
+	}
+	amb := Ambiguous{ID: key.String()}
+	for _, m := range matches {
+		amb.Candidates = append(amb.Candidates, m.full)
+	}
+	return none, amb
 }
 
-// created is whether it was created: an id that facts only name is no item.
-func created(it fold.Item) bool {
-	switch it.Origin.(type) {
-	case fold.Created, fold.Collided:
-		return true
-	case fold.Uncreated:
+// Resolve is the one created item id names in st. An id that facts only
+// name is no item, so it is no candidate.
+func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
+	var cands []candidate[events.ItemID]
+	for _, it := range st.Items() { // by id, so the candidates are listed in that order
+		if _, ok := createOf(it.Origin); !ok {
+			continue
+		}
+		cands = append(cands, candidate[events.ItemID]{id: it.ID, full: it.ID.String(), path: func() []events.Segment { return st.Path(it.ID) }})
 	}
-	return false
+	return resolve(id, cands)
+}
+
+// resolveElement is the one element of it, in the list n, that key names:
+// an element's path is its own segment.
+func resolveElement(it fold.Item, n events.Name, key events.ShortID) (ElementKey, error) {
+	var cands []candidate[ElementKey]
+	for _, e := range it.Elements {
+		c, ok := createOf(e.Origin)
+		if !ok || e.In != n {
+			continue
+		}
+		k := ElementKey{ID: e.ID, Rendered: c.Segment.String()}
+		cands = append(cands, candidate[ElementKey]{id: k, full: e.ID.String(), path: func() []events.Segment { return []events.Segment{c.Segment} }})
+	}
+	return resolve(key, cands)
+}
+
+// createOf is the create that placed a node: its first, when two name it.
+// A node facts only name has none.
+func createOf(o fold.Origin) (fold.Created, bool) {
+	switch o := o.(type) {
+	case fold.Created:
+		return o, true
+	case fold.Collided:
+		return o.First, true
+	case fold.Uncreated:
+		return fold.Created{}, false
+	}
+	panic(fmt.Sprintf("address: %T is not an Origin", o))
 }

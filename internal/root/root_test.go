@@ -63,12 +63,12 @@ func TestAnUnknownVerbIsUsage(t *testing.T) {
 
 func TestARowWithNoBodyIsInternal(t *testing.T) {
 	twin := NewTwin()
-	status, e := run(t, twin, "get", "x")
-	if status != 70 || reasonOf(e) != "internal" || !strings.Contains(twin.Err.String(), "lit2 get is not built in this binary") {
-		t.Errorf("lit2 get x: status %d, stderr %q", status, twin.Err)
+	status, e := run(t, twin, "admin", "sync")
+	if status != 70 || reasonOf(e) != "internal" || !strings.Contains(twin.Err.String(), "lit2 admin sync is not built in this binary") {
+		t.Errorf("lit2 admin sync: status %d, stderr %q", status, twin.Err)
 	}
-	if e.Command.Name != "get" || len(e.Command.Paths) != 1 {
-		t.Errorf("lit2 get x recorded %#v; want get with its one path", e.Command)
+	if e.Command.Name != "admin sync" {
+		t.Errorf("lit2 admin sync recorded %#v", e.Command)
 	}
 }
 

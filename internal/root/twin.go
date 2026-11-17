@@ -57,19 +57,29 @@ func NewTwin() Twin {
 	stored := rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 's', 't', 'o', 'r', 'e'})
 	repo := git.NewMemory()
 	ports := store.Ports{Files: store.NewMemoryFiles(), Objects: repo, Refs: repo, Entropy: stored}
+	// the twin is minted: its identity files hold its id and key, so init
+	// finds them there
+	shared, private := store.NewMemoryFiles(), store.NewMemoryFiles()
+	if _, err := private.CreateOnce(command.NameOf(command.IDFile{}), twinID.FileText()); err != nil {
+		panic(err)
+	}
+	if _, err := shared.CreateOnce(command.NameOf(command.PrincipalFile{}), twinKey().FileText()); err != nil {
+		panic(err)
+	}
 	return Twin{
 		Process: Process{
-			Clock:    &command.FixedClock{At: time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)},
-			Entropy:  entropy,
-			Agent:    events.Unlabeled{},
-			Place:    command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}},
-			Store:    command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
-			Fold:     foldEnv(2),
-			Reader:   twinReader(),
-			Commands: commands,
-			In:       strings.NewReader(""),
-			Out:      out,
-			Err:      errOut,
+			Clock:         &command.FixedClock{At: time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)},
+			Entropy:       entropy,
+			Agent:         events.Unlabeled{},
+			Place:         command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}},
+			Store:         command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
+			Fold:          foldEnv(2),
+			Reader:        twinReader(),
+			Commands:      commands,
+			IdentityFiles: func(git.Checkout) (store.Files, store.Files) { return shared, private },
+			In:            strings.NewReader(""),
+			Out:           out,
+			Err:           errOut,
 		},
 		Out:      out,
 		Err:      errOut,

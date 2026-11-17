@@ -41,17 +41,18 @@ func Main(args []string) int {
 	}
 	place := here()
 	return Run(Process{
-		Clock:    systemClock{},
-		Entropy:  rand.Reader,
-		Agent:    events.AgentFrom(os.Getenv("LIT_AGENT")),
-		Place:    place,
-		Store:    opening(place, rand.Reader),
-		Fold:     foldEnv(runtime.GOMAXPROCS(0)),
-		Reader:   reader,
-		Commands: commandLog(),
-		In:       os.Stdin,
-		Out:      os.Stdout,
-		Err:      os.Stderr,
+		Clock:         systemClock{},
+		Entropy:       rand.Reader,
+		Agent:         events.AgentFrom(os.Getenv("LIT_AGENT")),
+		Place:         place,
+		Store:         opening(place, rand.Reader),
+		Fold:          foldEnv(runtime.GOMAXPROCS(0)),
+		Reader:        reader,
+		Commands:      commandLog(),
+		IdentityFiles: identityFiles,
+		In:            os.Stdin,
+		Out:           os.Stdout,
+		Err:           os.Stderr,
 	}, args)
 }
 

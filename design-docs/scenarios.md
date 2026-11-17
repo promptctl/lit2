@@ -64,7 +64,7 @@ someone grooms it, and then is served in the order the groomer set.
 
 1. `add /children '{level: 2, title:"History reads come from one store"}'`
    creates a feature, a level-2 node, and homes it: the echo says
-   `⇒ parent = unassigned`. Call it `m2q`.
+   `⇒ <id>/parent = unfiled`, level 2's home. Call it `m2q`.
 2. `add m2q/children '[{title:…}, {title:…}, {title:…}]'` mints three tickets
    in `backlog`, each its own one-member lane, each without a body. The
    `capture/created` handler, `wrote */children`, prints once: the description
