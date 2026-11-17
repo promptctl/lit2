@@ -57,13 +57,10 @@ func resolve[I comparable](key events.ShortID, cands []candidate[I]) (I, error) 
 }
 
 // Resolve is the one created item id names in st. An id that facts only
-// name is no item, so it is no candidate.
+// name is no item, and Items lists none, so it is no candidate.
 func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
 	var cands []candidate[events.ItemID]
 	for _, it := range st.Items() { // by id, so the candidates are listed in that order
-		if _, ok := createOf(it.Origin); !ok {
-			continue
-		}
 		cands = append(cands, candidate[events.ItemID]{id: it.ID, full: it.ID.String(), path: func() []events.Segment { return st.Path(it.ID) }})
 	}
 	return resolve(id, cands)
@@ -74,7 +71,7 @@ func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
 func resolveElement(it fold.Item, n events.Name, key events.ShortID) (ElementKey, error) {
 	var cands []candidate[ElementKey]
 	for _, e := range it.Elements {
-		c, ok := createOf(e.Origin)
+		c, ok := fold.CreateOf(e.Origin)
 		if !ok || e.In != n {
 			continue
 		}
@@ -82,18 +79,4 @@ func resolveElement(it fold.Item, n events.Name, key events.ShortID) (ElementKey
 		cands = append(cands, candidate[ElementKey]{id: k, full: e.ID.String(), path: func() []events.Segment { return []events.Segment{c.Segment} }})
 	}
 	return resolve(key, cands)
-}
-
-// createOf is the create that placed a node: its first, when two name it.
-// A node facts only name has none.
-func createOf(o fold.Origin) (fold.Created, bool) {
-	switch o := o.(type) {
-	case fold.Created:
-		return o, true
-	case fold.Collided:
-		return o.First, true
-	case fold.Uncreated:
-		return fold.Created{}, false
-	}
-	panic(fmt.Sprintf("address: %T is not an Origin", o))
 }

@@ -493,7 +493,9 @@ func (s State) itemOf(r *item) Item {
 		}
 	}
 	slices.SortStableFunc(it.Elements, func(a, b Element) int {
-		return events.Compare(createdOf(a.Origin).Stamp.Order, createdOf(b.Origin).Stamp.Order)
+		ca, _ := CreateOf(a.Origin) // every element here is created
+		cb, _ := CreateOf(b.Origin)
+		return events.Compare(ca.Stamp.Order, cb.Stamp.Order)
 	})
 	return it
 }
@@ -580,14 +582,16 @@ func (s State) pathBelow(id events.ItemID, child *events.OrderKey) []events.Segm
 	panic(fmt.Sprintf("fold: %s is in no container", id))
 }
 
-// createdOf is the create that places a created node.
-func createdOf(o Origin) Created {
+// CreateOf is the create that placed a node: its first, when two name it,
+// and false for a node facts only name `[LAW:single-enforcer]`.
+func CreateOf(o Origin) (Created, bool) {
 	switch o := o.(type) {
 	case Created:
-		return o
+		return o, true
 	case Collided:
-		return o.First
+		return o.First, true
 	case Uncreated:
+		return Created{}, false
 	}
-	panic("fold: an uncreated node has no create")
+	panic(fmt.Sprintf("fold: %T is not an Origin", o))
 }

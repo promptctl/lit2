@@ -272,3 +272,65 @@ func TestAHeldUndeclaredMemberIsRemovable(t *testing.T) {
 		t.Error("rm of a declared label not held drafted")
 	}
 }
+
+// twoLabels is the profile with two labels declared.
+func twoLabels() string {
+	return strings.Replace(profile(""), `labels = ["ready"]`, `labels = ["ready", "external"]`, 1)
+}
+
+// TestSetMakesASetHoldExactlyItsValue: set on a set adds each member it
+// names and removes each it does not, and an empty list empties it.
+func TestSetMakesASetHoldExactlyItsValue(t *testing.T) {
+	b := newBook(t, twoLabels())
+	id := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
+	b.do(verbs.Add, op(id+"/labels", "ready"))
+	if echo := b.do(verbs.Set, op(id+"/labels", "external")); echo != "+ "+id+"/labels/external\n- "+id+"/labels/ready\n" {
+		t.Errorf("set labels echoes %q", echo)
+	}
+	if got := b.get(id + "/labels"); got != "external\n" {
+		t.Errorf("after set the labels read %q; want external alone", got)
+	}
+	if b.do(verbs.Set, op(id+"/labels", "[external]")) != "" {
+		t.Error("setting the members a set holds drafted")
+	}
+	b.do(verbs.Set, op(id+"/labels", "[]"))
+	if got := b.get(id + "/labels"); got != "" {
+		t.Errorf("after set to [] the labels read %q; want none", got)
+	}
+}
+
+// TestStandardInputIsOneMemberPerLineForASet: `-` on a set reads a member
+// from each line.
+func TestStandardInputIsOneMemberPerLineForASet(t *testing.T) {
+	b := newBook(t, twoLabels())
+	id := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
+	c := verbs.Compile(b.world(b.st), verbs.Add, []verbs.Operand{op(id+"/labels", verbs.Stdin)}, func() (string, error) { return "ready\nexternal\n", nil })
+	if no, refused := c.Refusal(); refused {
+		t.Fatalf("labels from standard input refused: %v", no.Err)
+	}
+	b.mint(one, b.st, c.Drafts)
+	if got := b.get(id + "/labels"); got != id+"/labels\tready\n"+id+"/labels\texternal\n" && got != id+"/labels\texternal\n"+id+"/labels\tready\n" {
+		t.Errorf("labels from standard input read %q; want both", got)
+	}
+}
+
+// TestTwiceIsTheRepeatersOwn: an operand refused for itself claims
+// nothing, so the next operand's result is its own; two that both read
+// standard input refuse the second as twice.
+func TestTwiceIsTheRepeatersOwn(t *testing.T) {
+	b := newBook(t, profile(""))
+	a := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: a}")))
+	c := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: c}")))
+	in := func() (string, error) { return "new", nil }
+	got := verbs.Compile(b.world(b.st), verbs.Set, []verbs.Operand{op(a+"/nope", verbs.Stdin), op(c+"/title", verbs.Stdin)}, in)
+	if _, ok := got.Operands[1].(verbs.Accepted); !ok {
+		t.Errorf("after a refused operand, the next is %+v; want accepted", got.Operands[1])
+	}
+	got = verbs.Compile(b.world(b.st), verbs.Set, []verbs.Operand{op(a+"/title", verbs.Stdin), op(c+"/title", verbs.Stdin)}, in)
+	if r, ok := got.Operands[1].(verbs.Refused); !ok || r.Reason != "twice" {
+		t.Errorf("a second read of standard input is %+v; want twice", got.Operands[1])
+	}
+	if len(got.Drafts) != 0 {
+		t.Errorf("a refused command drafted %d", len(got.Drafts))
+	}
+}

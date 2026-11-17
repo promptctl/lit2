@@ -181,6 +181,13 @@ var (
 	containers = PlaceSet{Root: true, Home: true, Node: true}
 )
 
+// The built-in fields the verbs name: the title every new item carries,
+// and the flag rm sets.
+const (
+	Title   Path = "title"
+	Deleted Path = "deleted"
+)
+
 // Builtins is the built-in field table. Its one input is the workspace's
 // declared labels as an enum, so `labels` reads the declared value set and
 // nothing else. A zero Enum is no labels declared.
@@ -194,11 +201,11 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 		return FieldDecl{Kind: k, Multi: m, Origin: Builtin, Writability: Derived, At: items}
 	}
 	return map[Path]FieldDecl{
-		"title":        stored(Text{}, One, items),
+		Title:          stored(Text{}, One, items),
 		"description":  stored(Text{}, One, items),
 		"reason":       stored(Text{}, One, items),
 		"labels":       stored(labels, Set, items),
-		"deleted":      stored(deleted, One, items),
+		Deleted:        stored(deleted, One, items),
 		"status":       stored(Column{}, One, leaves),
 		"comments":     stored(Text{}, Elements, items),
 		"children":     stored(ItemRef{}, Children, containers),

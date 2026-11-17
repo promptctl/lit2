@@ -84,14 +84,15 @@ func (p *parser) schema(raw map[string]any, gate ReaderGate) Schema {
 	for _, path := range sortedKeys(builtins) {
 		p.table.rows = append(p.table.rows, FieldRow{At: path, Decl: builtins[path]})
 	}
-	s.levels = p.readLevels(raw, builtins)
+	levels, nums := p.readLevels(raw, builtins)
+	s.levels = levels
 	p.table.levels = s.levels
-	p.templates(raw, s.levels)
 
 	s.checks = p.readChecks(raw)
 	for _, name := range sortedKeys(s.checks) {
 		p.table.rows = append(p.table.rows, CheckRow{Check: s.checks[name]})
 	}
+	p.templates(raw, s.levels, nums)
 	s.table = p.table
 	s.links = p.links(raw, len(s.levels))
 
@@ -197,12 +198,13 @@ func (p *parser) labels(raw map[string]any) field.Enum {
 }
 
 // readLevels reads the level tables, each with the fields it declares. It
-// returns the levels by number, leaf first.
-func (p *parser) readLevels(raw map[string]any, builtins map[field.Path]field.FieldDecl) []Level {
+// returns the levels by number, leaf first, and each one's number, which
+// is its index plus one only when no level is missing.
+func (p *parser) readLevels(raw map[string]any, builtins map[field.Path]field.FieldDecl) ([]Level, []int) {
 	tbl, ok := p.tableAt(raw, "", "levels")
 	if !ok || len(tbl) == 0 {
 		p.fail("levels", ReasonNoLevels, "the workspace declares no levels: level 1 is the leaf")
-		return nil
+		return nil, nil
 	}
 	var nums []int
 	for key := range tbl {
@@ -275,7 +277,7 @@ func (p *parser) readLevels(raw map[string]any, builtins map[field.Path]field.Fi
 		levels[i] = lv
 	}
 	p.checkHomes(levels, nums)
-	return levels
+	return levels, nums
 }
 
 // checkHomes refuses a home that repeats another home or a level's name, which
@@ -384,20 +386,21 @@ func (p *parser) fieldDecl(at KeyPath, name string, v any, on field.OnLevel) (fi
 	return field.FieldDecl{Kind: kind, Multi: multi, Origin: field.Declared, Writability: field.Settable, At: on}, true
 }
 
-// templates reads each level's template, once every field is a row: a key
-// is read by the table at the level's items, as a key of a child object
-// is, so the two take the same fields.
-func (p *parser) templates(raw map[string]any, levels []Level) {
+// templates reads each level's template, once every field and check is a
+// row: a key is read by the table at the level's items, as a key of a
+// child object is, so the two take the same fields. nums[i] is levels[i]'s
+// number.
+func (p *parser) templates(raw map[string]any, levels []Level, nums []int) {
 	tbl, _ := raw["levels"].(map[string]any)
 	for i, lv := range levels {
-		n := strconv.Itoa(i + 1)
+		n := strconv.Itoa(nums[i])
 		m, _ := tbl[n].(map[string]any)
 		at := keyed("levels", n)
 		tmpl, ok := p.tableAt(m, at, "template")
 		if !ok || lv.Template == nil {
 			continue
 		}
-		l, _ := events.ParseLevel(i + 1)
+		l, _ := events.ParseLevel(nums[i])
 		for _, key := range sortedKeys(tmpl) {
 			path := field.Path(key)
 			if v, ok := p.templateValue(keyed(keyed(at, "template"), key), field.ItemPlace(l), path, tmpl[key]); ok {

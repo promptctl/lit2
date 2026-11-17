@@ -67,7 +67,7 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 				e := about[ch.Draft].(events.NewElement)
 				key = e.Segment().String()
 			}
-			fmt.Fprintf(&b, "+ %s/comments/%s\n", who(ch.Who), key)
+			fmt.Fprintf(&b, "+ %s/%s/%s\n", who(ch.Who), ch.Path, key)
 		}
 	}
 	if minted == nil {

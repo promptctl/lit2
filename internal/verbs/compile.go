@@ -45,10 +45,11 @@ type Removed struct {
 	Member string
 }
 
-// Commented is a comment created, by the draft that creates it, whose
-// minted element names it.
+// Commented is a comment created in the list at Path, by the draft that
+// creates it, whose minted element names it.
 type Commented struct {
 	Who   Who
+	Path  field.Path
 	Draft int
 }
 
@@ -88,6 +89,12 @@ func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 	case rmMember:
 		pieces, changes, r = remove(wr)
 		keys = []claim{{path: wr.path, member: wr.value.(field.Scalar).Text}}
+	case setMembers:
+		var members []events.Name
+		pieces, changes, members, r = replace(wr)
+		for _, m := range members {
+			keys = append(keys, claim{path: wr.path, member: m.String()})
+		}
 	case addComment:
 		pieces, changes, r = comment(wr)
 		keys = nil
@@ -229,6 +236,29 @@ func remove(wr write) ([]piece, []Change, *refusal) {
 	return nil, nil, nil
 }
 
+// replace makes a set hold exactly the members a value names: each one it
+// does not hold added, as add adds it, and each it holds that the value
+// does not name removed, as remove removes it. What it overwrites is every
+// member it names or removes.
+func replace(wr write) ([]piece, []Change, []events.Name, *refusal) {
+	pieces, changes, members, r := add(wr)
+	if r != nil {
+		return nil, nil, nil, r
+	}
+	named := slices.Clone(members)
+	for _, h := range wr.subject.Facts.Members(events.MustName(string(wr.path))) {
+		if slices.Contains(named, h.Name) {
+			continue
+		}
+		rm := wr
+		rm.value = field.Scalar{Text: h.Name.String()}
+		ps, chs, _ := remove(rm)
+		pieces, changes = append(pieces, ps...), append(changes, chs...)
+		members = append(members, h.Name)
+	}
+	return pieces, changes, members, nil
+}
+
 // comment creates one comment: one non-empty text.
 func comment(wr write) ([]piece, []Change, *refusal) {
 	s, ok := wr.value.(field.Scalar)
@@ -239,5 +269,5 @@ func comment(wr write) ([]piece, []Change, *refusal) {
 	if err != nil {
 		return nil, nil, refuse("value", "a comment: %v", err)
 	}
-	return []piece{newElement{events.CommentAdd{Body: events.SealPlain(text)}}}, []Change{Commented{Who: wr.subject.At}}, nil
+	return []piece{newElement{events.CommentAdd{Body: events.SealPlain(text)}}}, []Change{Commented{Who: wr.subject.At, Path: wr.path}}, nil
 }

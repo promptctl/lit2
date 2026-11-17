@@ -80,6 +80,8 @@ func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
 	for text, reason := range map[string]string{
 		"":                    "syntax",
 		seg + "/":             "syntax",
+		seg + "/title/":       "syntax",
+		seg + "/labels/":      "syntax",
 		"Not An Id":           "syntax",
 		"zzz":                 "not_found",
 		seg + "/nope":         "unknown_field",

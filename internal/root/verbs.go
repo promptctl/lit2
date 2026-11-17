@@ -37,12 +37,13 @@ func (r body) write(f fold.Folded, verb verbs.Verb, ops []verbs.Operand, flags c
 		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
 		return cli.Failed{Failure: refusal{no}}
 	}
-	if len(c.Drafts) == 0 || flags.DryRun {
-		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
-		if len(c.Drafts) == 0 {
-			return cli.Done{}
-		}
+	if flags.DryRun {
+		r.told(r.facts(c.Operands, c.Drafts, true, nil))
 		return written(io.WriteString(r.p.Out, verbs.Echo(w, c, nil)))
+	}
+	if len(c.Drafts) == 0 {
+		r.told(r.facts(c.Operands, c.Drafts, false, nil))
+		return cli.Done{}
 	}
 	opened := r.p.Store.(command.Opened)
 	id := r.p.Place.(command.InCheckout).Identity.(command.Minted)

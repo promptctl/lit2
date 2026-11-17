@@ -19,13 +19,6 @@ type World struct {
 	Schema config.Schema
 }
 
-// comments and body are where a comment lives: the item's list of
-// elements, each holding its text.
-var (
-	comments = events.MustName("comments")
-	body     = fold.Body
-)
-
 // Read is the values the row at path holds on node n, at place p: the one
 // reader get and a check's tests call `[LAW:single-enforcer]`. A stored
 // field reads through stored; comments read the item's elements; children
@@ -133,12 +126,12 @@ type element struct {
 func elements(it fold.Item, n events.Name) []element {
 	var out []element
 	for _, e := range it.Elements {
-		c, ok := createOf(e.Origin)
+		c, ok := fold.CreateOf(e.Origin)
 		if !ok || e.In != n {
 			continue
 		}
 		text := ""
-		if t := texts(e.Facts.Text(body)); len(t) > 0 {
+		if t := texts(e.Facts.Text(fold.Body)); len(t) > 0 {
 			text = t[0]
 		}
 		out = append(out, element{key: c.Segment.String(), by: writer(c.Stamp.By), text: text})
@@ -153,19 +146,6 @@ func writer(a events.Attribution) string {
 		return a.Principal.String() + " via " + l.String()
 	}
 	return a.Principal.String()
-}
-
-// createOf is the create that placed a node: its first, when two name it.
-func createOf(o fold.Origin) (fold.Created, bool) {
-	switch o := o.(type) {
-	case fold.Created:
-		return o, true
-	case fold.Collided:
-		return o.First, true
-	case fold.Uncreated:
-		return fold.Created{}, false
-	}
-	panic(fmt.Sprintf("verbs: %T is not an Origin", o))
 }
 
 // children is what is placed at n, deleted items included: filtering is a
@@ -281,14 +261,13 @@ func holds(w World, atom field.Atom, scope []events.ItemID) bool {
 			continue
 		}
 		place := field.ItemPlace(l.Level)
-		node := address.Item{ID: id, Rendered: w.render(id)}
 		var kind field.Kind = field.Text{}
 		var found field.Found
 		if r, err := w.Schema.Table().Find(place, atom.Path()); err == nil {
 			if f, ok := r.(config.FieldRow); ok {
 				kind = f.Decl.Kind
 			}
-			found = Read(w, node, place, atom.Path(), r)
+			found = Read(w, address.Item{ID: id, Rendered: w.render(id)}, place, atom.Path(), r)
 		}
 		if bool(atom.Holds(kind, found)) != negative {
 			return !negative

@@ -45,12 +45,18 @@ func ParseLiteral(text string) (Literal, error) {
 	r := reader{s: text}
 	v, err := r.value()
 	if err != nil {
-		return nil, fmt.Errorf("%q is not a value: %w", text, err)
+		return nil, notValue(text, err)
 	}
 	if r.skip(); r.i < len(r.s) {
-		return nil, fmt.Errorf("%q is not a value: %s follows it", text, r.s[r.i:])
+		return nil, notValue(text, fmt.Errorf("%s follows it", r.s[r.i:]))
 	}
 	return v, nil
+}
+
+// notValue is a text the grammar could not read, and how to give it as
+// plain text instead.
+func notValue(text string, why error) error {
+	return fmt.Errorf(`%q is not a value: %w; a text that opens with %c is given quoted, "…", with "" for a quote`, text, why, text[0])
 }
 
 // reader is a cursor over a literal's text.

@@ -6,6 +6,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 )
 
@@ -17,14 +18,7 @@ type Got struct {
 }
 
 // Refusal is the first path's refusal, and false when none was refused.
-func (g Got) Refusal() (Refused, bool) {
-	for _, r := range g.Operands {
-		if r, ok := r.(Refused); ok {
-			return r, true
-		}
-	}
-	return Refused{}, false
-}
+func (g Got) Refusal() (Refused, bool) { return firstRefused(g.Operands) }
 
 // line is one value a read prints, under the path it is at.
 type line struct {
@@ -101,7 +95,7 @@ func read(w World, a address.Address) []line {
 			}
 			return nil
 		case address.ElementKey:
-			for _, e := range elements(w.item(a.Node.(address.Item).ID), comments) {
+			for _, e := range elements(w.item(a.Node.(address.Item).ID), events.MustName(string(t.Path))) {
 				if e.key == k.Rendered {
 					return []line{{at: base, value: fmt.Sprintf("[%s] %s", e.by, e.text)}}
 				}
@@ -117,7 +111,7 @@ func rowLines(w World, a address.Address, node string, path field.Path, r config
 	at := node + "/" + string(path)
 	if f, ok := r.(config.FieldRow); ok && f.Decl.Multi == field.Elements {
 		var out []line
-		for _, e := range elements(w.item(a.Node.(address.Item).ID), comments) {
+		for _, e := range elements(w.item(a.Node.(address.Item).ID), events.MustName(string(path))) {
 			out = append(out, line{at: at + "/" + e.key, value: fmt.Sprintf("[%s] %s", e.by, e.text)})
 		}
 		return out

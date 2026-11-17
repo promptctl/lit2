@@ -202,6 +202,9 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"duplicate-alias", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\naliases = [\"x\"]\n\n[columns.plan]\nnext = [\"done\"]\naliases = [\"x\"]"), ReasonDuplicateAlias},
 		{"template-field-undeclared", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nnope = \"x\""), ReasonTemplateFieldUndeclared},
 		{"template-field-derived", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\n\"plan/verdict\" = \"pass\""), ReasonTemplateFieldDerived},
+		{"template-names-a-check", func(s string) string {
+			return replace("[columns.done]", "[checks.ready]\ntests = [{ test = \"description\" }]\n\n[columns.done]")(replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nready = \"x\"")(s))
+		}, ReasonTemplateFieldDerived},
 		{"template-value", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"number\"\n[levels.1.template]\npts = \"abc\""), ReasonTemplateValue},
 		{"template-member-twice", func(s string) string {
 			return replace(`prefix = "lit"`, "prefix = \"lit\"\nlabels = [\"a\"]")(replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nlabels = [\"a\", \"a\"]")(s))
@@ -256,6 +259,21 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 			}
 			t.Errorf("want %s; got %v", tc.reason, refusals)
 		})
+	}
+}
+
+// TestATemplatePastAMissingLevelIsStillRead: with level 2 missing, level
+// 3's template is read as level 3's, so its fault is named beside the gap.
+func TestATemplatePastAMissingLevelIsStillRead(t *testing.T) {
+	text := replace("[levels.2]", "[levels.3]")(minimal)
+	text = replace(`home = "unfiled"`, "home = \"unfiled\"\n[levels.3.template]\nnope = \"x\"")(text)
+	var gap, template bool
+	for _, r := range refusalsOf(t, text) {
+		gap = gap || r.Reason == ReasonLevelsNotContiguous
+		template = template || (r.Reason == ReasonTemplateFieldUndeclared && r.Key == "levels.3.template.nope")
+	}
+	if !gap || !template {
+		t.Errorf("want the gap and levels.3.template.nope named; got %v", refusalsOf(t, text))
 	}
 }
 

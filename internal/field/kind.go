@@ -179,9 +179,10 @@ func NewPattern(src string) (Pattern, error) {
 // Source is the pattern as the workspace file wrote it.
 func (p Pattern) Source() string { return p.src }
 
-// KindNamed reads a kind's word. Only the five kinds exist; a kind that needs
-// parameters is built by the caller that has them, so a bare word here can
-// only name a parameterless kind.
+// KindNamed reads a kind's word. A workspace declares only the five kinds,
+// and the engine's own kinds have no word; a kind that needs parameters is
+// built by the caller that has them, so a bare word here can only name a
+// parameterless kind.
 func KindNamed(word string) (Kind, bool) {
 	switch word {
 	case "text":

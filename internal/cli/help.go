@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/field"
@@ -40,13 +41,15 @@ func HelpText(verbTable, admin Table, fields config.Table) string {
 	section(&b, "admin", adminWord+" ", admin)
 	for _, p := range fields.Places() {
 		fmt.Fprintf(&b, "\nfields of %s:\n", config.PlaceName(p))
+		tw := tabwriter.NewWriter(&b, 0, 0, 1, ' ', 0)
 		for _, r := range fields.Rows(p) {
 			writers := strings.Join(verbs.VerbsOf(r), ", ")
 			if writers == "" {
 				writers = "derived"
 			}
-			fmt.Fprintf(&b, "  %-14s %-10s %s\n", r.Path(), kindOf(r), writers)
+			fmt.Fprintf(tw, "  %s\t%s\t%s\n", r.Path(), kindOf(r), writers)
 		}
+		tw.Flush()
 	}
 	return b.String()
 }

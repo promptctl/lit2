@@ -139,6 +139,9 @@ func Parse(st fold.State, schema config.Schema, text string) (Address, Refusal) 
 	if text == "" {
 		return Address{}, Syntax{Text: text, Why: "a path is / or names a home or an item"}
 	}
+	if text != "/" && strings.HasSuffix(text, "/") {
+		return Address{}, Syntax{Text: text, Why: "a path does not end in /"}
+	}
 	head, steps, hasSteps := strings.Cut(text, "/")
 	var a Address
 	var it fold.Item
@@ -154,9 +157,6 @@ func Parse(st fold.State, schema config.Schema, text string) (Address, Refusal) 
 	if !hasSteps {
 		a.Target = Whole{}
 		return a, nil
-	}
-	if steps == "" {
-		return Address{}, Syntax{Text: text, Why: "a path does not end in /"}
 	}
 	t, r := target(schema.Table(), a.Place, it, steps)
 	if r != nil {

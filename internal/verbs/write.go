@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/config"
@@ -100,6 +101,7 @@ const (
 	setOne shape = iota + 1
 	addMember
 	rmMember
+	setMembers
 	addComment
 	// addChild expands to creates and their writes, never to one payload
 	addChild
@@ -140,6 +142,14 @@ type claim struct {
 
 var stdinClaim = claim{path: "-"}
 
+// twice is the refusal of the operand at path that repeats k.
+func (k claim) twice(path string) error {
+	if k == stdinClaim {
+		return fmt.Errorf("standard input is read once in a command, and %s reads it again", path)
+	}
+	return fmt.Errorf("%s is written twice in this command", path)
+}
+
 // refusal is why an operand compiles to nothing.
 type refusal struct {
 	reason string
@@ -170,23 +180,34 @@ type expanded struct {
 }
 
 // Compile turns a write command into its drafts and changes, or refuses it
-// whole. Each operand runs the one pipeline: parse its path, read its value
-// by the literal grammar, expand it to writes, compile each write by its
-// shape's function, and then one pass in command order refuses a target
-// written twice. Nothing is shared between operands but that pass, so no
-// compile step mutates state another reads.
+// whole. Each operand runs the one pipeline: parse its path, read its value,
+// expand it to writes, and compile each write by its shape's function.
+// Then one pass in command order refuses a target written twice. No compile
+// step mutates state another reads, so a refused operand leaves nothing for
+// a later one to trip on. Standard input is read once, by whichever operand
+// asks first.
 func Compile(w World, verb Verb, operands []Operand, stdin func() (string, error)) Compiled {
 	var c Compiled
 	created := 0
-	claimed := map[claim]bool{}
-	for _, op := range operands {
-		r, ok := c.operand(w, verb, op, stdin, &created, claimed)
+	read := sync.OnceValues(stdin)
+	claims := make([][]claim, len(operands))
+	for i, op := range operands {
+		var r Result
+		r, claims[i] = c.operand(w, verb, op, read, &created)
 		c.Operands = append(c.Operands, r)
-		if !ok {
-			c.refused = true
+	}
+	// [LAW:single-enforcer] the one pass that refuses a repeat
+	seen := map[claim]bool{}
+	for i, ks := range claims {
+		for _, k := range ks {
+			if seen[k] {
+				c.Operands[i] = Refused{Text: operands[i].Path, Reason: "twice", Err: k.twice(operands[i].Path)}
+				break
+			}
+			seen[k] = true
 		}
 	}
-	if c.refused {
+	if _, refused := c.Refusal(); refused {
 		c.Drafts, c.Changes = nil, nil
 	}
 	return c
@@ -198,13 +219,15 @@ type Compiled struct {
 	Operands []Result
 	Drafts   []events.Draft
 	Changes  []Change
-	refused  bool
 }
 
 // Refusal is the first operand's refusal, the command's, and false when
 // none was refused.
-func (c Compiled) Refusal() (Refused, bool) {
-	for _, r := range c.Operands {
+func (c Compiled) Refusal() (Refused, bool) { return firstRefused(c.Operands) }
+
+// firstRefused is the first refused result: a command's refusal.
+func firstRefused(rs []Result) (Refused, bool) {
+	for _, r := range rs {
 		if r, ok := r.(Refused); ok {
 			return r, true
 		}
@@ -238,19 +261,19 @@ type Refused struct {
 func (Accepted) result() {}
 func (Refused) result()  {}
 
-func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string, error), created *int, claimed map[claim]bool) (Result, bool) {
-	no := func(r *refusal) (Result, bool) {
-		return Refused{Text: op.Path, Reason: r.reason, Err: r.err, Detail: r.detail}, false
+// operand compiles one operand: its result, and what it overwrites, which
+// the twice pass reads. A refused operand overwrites nothing.
+func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string, error), created *int) (Result, []claim) {
+	no := func(r *refusal) (Result, []claim) {
+		return Refused{Text: op.Path, Reason: r.reason, Err: r.err, Detail: r.detail}, nil
 	}
 	x, r := expand(w, verb, op, stdin, created)
 	if r != nil {
 		return no(r)
 	}
+	var claims []claim
 	if x.stdin {
-		if claimed[stdinClaim] {
-			return no(refuse("twice", "standard input is read once in a command, and %s reads it again", op.Path))
-		}
-		claimed[stdinClaim] = true
+		claims = append(claims, stdinClaim)
 	}
 	var drafts []events.Draft
 	var changes []Change
@@ -262,19 +285,14 @@ func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string,
 		if err := field.Writable(wr.decl); err != nil {
 			return no(refuse("derived", "%s: %v", wr.path, err))
 		}
-		pieces, chs, claims, r := compile(w, wr)
+		pieces, chs, ks, r := compile(w, wr)
 		if r != nil {
 			if t, ok := wr.source.(FromTemplate); ok && r.reason != "configuration" {
 				return no(refuse("template", "level %s's template sets %s: %v", t.Level, t.Field, r.err))
 			}
 			return no(r)
 		}
-		for _, k := range claims {
-			if claimed[k] {
-				return no(refuse("twice", "%s is written twice in this command", wr.path))
-			}
-			claimed[k] = true
-		}
+		claims = append(claims, ks...)
 		switch who := wr.subject.At.(type) {
 		case Existing:
 			for _, p := range pieces {
@@ -318,11 +336,11 @@ func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string,
 		c.Changes = append(c.Changes, ch)
 	}
 	c.Drafts = append(c.Drafts, all...)
-	return Accepted{Text: op.Path, Canon: x.addr.String(), Values: x.values, Drafts: len(all)}, true
+	return Accepted{Text: op.Path, Canon: x.addr.String(), Values: x.values, Drafts: len(all)}, claims
 }
 
-// expand reads an operand into writes: its path, its value by the literal
-// grammar alone, and then what its verb on that target writes.
+// expand reads an operand into writes: its path, its value, and then what
+// its verb on that target writes.
 func expand(w World, verb Verb, op Operand, stdin func() (string, error), created *int) (expanded, *refusal) {
 	a, r := address.Parse(w.State, w.Schema, op.Path)
 	if r != nil {
@@ -332,38 +350,55 @@ func expand(w World, verb Verb, op Operand, stdin func() (string, error), create
 	if verb == Rm {
 		return x, x.rm(w)
 	}
-	var value field.Literal
-	if op.Value == Stdin {
-		text, err := stdin()
-		if err != nil {
-			return expanded{}, refuse("stdin", "reading standard input: %v", err)
-		}
-		value, x.stdin = field.Scalar{Text: strings.TrimSuffix(text, "\n")}, true
-	} else {
-		v, err := field.ParseLiteral(op.Value)
-		if err != nil {
-			return expanded{}, refuse("value", "%s: %v", op.Path, err)
-		}
-		value = v
+	t, isField := a.Target.(address.Field)
+	if !isField {
+		return expanded{}, wrongVerb(verb, "", nil)
+	}
+	row, isField := t.Row.(config.FieldRow)
+	if !isField {
+		return expanded{}, refuse("derived", "%s is a check: the engine computes it", t.Path)
+	}
+	sh, ok := shapeOf(verb, row.Decl)
+	if !ok {
+		return expanded{}, wrongVerb(verb, t.Path, t.Row)
+	}
+	value, no := x.value(op, stdin, row.Decl)
+	if no != nil {
+		return expanded{}, no
 	}
 	x.values = count(value)
-	switch t := a.Target.(type) {
-	case address.Field:
-		row, isField := t.Row.(config.FieldRow)
-		if !isField {
-			return expanded{}, refuse("derived", "%s is a check: the engine computes it", t.Path)
-		}
-		sh, ok := shapeOf(verb, row.Decl)
-		if !ok {
-			return expanded{}, wrongVerb(verb, t.Path, t.Row)
-		}
-		if sh == addChild {
-			return x, x.children(w, value, created)
-		}
-		x.writes = []write{{subject: existing(w, a), path: t.Path, decl: row.Decl, value: value, source: FromOperand{}, shape: sh}}
-		return x, nil
+	if sh == addChild {
+		return x, x.children(w, value, created)
 	}
-	return expanded{}, wrongVerb(verb, "", nil)
+	x.writes = []write{{subject: existing(w, a), path: t.Path, decl: row.Decl, value: value, source: FromOperand{}, shape: sh}}
+	return x, nil
+}
+
+// value reads an operand's value. `-` is standard input, which the literal
+// grammar never reads: verbatim less one final newline, and for a set one
+// member per line, so a list of names pipes in (path-addressed-cli.md
+// "Values"). Any other value is read by the literal grammar alone.
+func (x *expanded) value(op Operand, stdin func() (string, error), d field.FieldDecl) (field.Literal, *refusal) {
+	if op.Value != Stdin {
+		v, err := field.ParseLiteral(op.Value)
+		if err != nil {
+			return nil, refuse("value", "%s: %v", op.Path, err)
+		}
+		return v, nil
+	}
+	text, err := stdin()
+	if err != nil {
+		return nil, refuse("stdin", "reading standard input: %v", err)
+	}
+	x.stdin = true
+	if d.Multi != field.Set {
+		return field.Scalar{Text: strings.TrimSuffix(text, "\n")}, nil
+	}
+	var members []field.Literal
+	for line := range strings.Lines(text) {
+		members = append(members, field.Scalar{Text: strings.TrimSuffix(line, "\n")})
+	}
+	return field.List{Items: members}, nil
 }
 
 // count is how many values a literal gives.
@@ -382,8 +417,8 @@ func (x *expanded) rm(w World) *refusal {
 		if _, ok := x.addr.Node.(address.Item); !ok {
 			return refuse("not_removable", "%s is not an item: the root and a home are the tree's, and rm removes an item or a member", x.addr)
 		}
-		r, _ := w.Schema.Table().Find(x.addr.Place, "deleted")
-		x.writes = []write{{subject: existing(w, x.addr), path: "deleted", decl: r.(config.FieldRow).Decl, value: field.Scalar{Text: "true"}, source: FromOperand{}, shape: setOne}}
+		r, _ := w.Schema.Table().Find(x.addr.Place, field.Deleted)
+		x.writes = []write{{subject: existing(w, x.addr), path: field.Deleted, decl: r.(config.FieldRow).Decl, value: field.Scalar{Text: "true"}, source: FromOperand{}, shape: setOne}}
 		return nil
 	case address.Element:
 		if m, ok := t.Key.(address.Member); ok {
@@ -398,7 +433,7 @@ func (x *expanded) rm(w World) *refusal {
 // one way rm writes.
 func Deletes(p events.Payload) bool {
 	s, ok := p.(events.FieldSet)
-	if !ok || s.Field.String() != "deleted" {
+	if !ok || s.Field.String() != string(field.Deleted) {
 		return false
 	}
 	v, plain := s.Value.(events.Plain)
@@ -423,6 +458,8 @@ func shapeOf(verb Verb, d field.FieldDecl) (shape, bool) {
 	switch {
 	case verb == Set && d.Multi == field.One:
 		return setOne, true
+	case verb == Set && d.Multi == field.Set:
+		return setMembers, true
 	case verb == Add && d.Multi == field.Set:
 		return addMember, true
 	case verb == Add && d.Multi == field.Elements:
@@ -559,7 +596,7 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 		x.writes = append(x.writes, write{subject: sub, path: path, decl: decl, value: v, source: FromTemplate{Level: lv.Name, Field: path}, shape: keyShape(decl)})
 		given[path] = true
 	}
-	if !given["title"] {
+	if !given[field.Title] {
 		return refuse("value", "a new item carries a title, its own or its template's")
 	}
 	return nil

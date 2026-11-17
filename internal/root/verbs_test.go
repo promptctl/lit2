@@ -145,6 +145,9 @@ func TestADryRunWritesNothingAndEchoesWhatARunMints(t *testing.T) {
 	if dry.out != named+"(dry run: nothing written)\n" {
 		t.Errorf("the dry run echoed\n%s\nthe run\n%s", dry.out, real.out)
 	}
+	if noop := s.lit("set", "--dry-run", a+"/title", "a"); noop.out != "(dry run: nothing written)\n" {
+		t.Errorf("a dry run that changes nothing echoed %q", noop.out)
+	}
 }
 
 // TestAWriteThatChangesNothingMintsNothing: rm twice, a title set to
