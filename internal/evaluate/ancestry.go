@@ -1,4 +1,4 @@
-package tick
+package evaluate
 
 import (
 	"fmt"
@@ -27,7 +27,7 @@ func AncestryOf(s fold.State, schema config.Schema, c fold.Container) config.Anc
 			}
 			c = nil
 		default:
-			panic(fmt.Sprintf("tick: %T is not a Container", c))
+			panic(fmt.Sprintf("evaluate: %T is not a Container", c))
 		}
 	}
 	return a
@@ -54,5 +54,5 @@ func StatusIn(eff config.Effective, facts fold.Facts) string {
 		}
 		return f.Value
 	}
-	panic(fmt.Sprintf("tick: %T is not a PlainField", facts.Plain(fold.Status)))
+	panic(fmt.Sprintf("evaluate: %T is not a PlainField", facts.Plain(fold.Status)))
 }

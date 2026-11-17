@@ -137,7 +137,7 @@ type Container interface{ container() }
 type Under struct{ Parent events.ItemID }
 
 // Home is the synthetic home of the parentless items at level Holds, which
-// tick names unfiled, unassigned or the root by the reader's file: no item
+// evaluate names unfiled, unassigned or the root by the reader's file: no item
 // is parentless `[LAW:types-are-the-program]`.
 type Home struct{ Holds events.Level }
 
@@ -247,7 +247,7 @@ type Concern interface{ concern() }
 type Conflict struct{ Field events.Name }
 
 // MixedForms is a field holding live values in both forms; which form is
-// right is the reader's file's to say, in tick.
+// right is the reader's file's to say, in evaluate.
 type MixedForms struct{ Field events.Name }
 
 func (Conflict) concern()   {}

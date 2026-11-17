@@ -5,10 +5,10 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/tick"
 )
 
 // Change is what one write does, as the echo shows it. A compile function
@@ -143,7 +143,7 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 		if !ok {
 			return nil, nil, refuse("value", "%s is not a column this item can be in; the columns are %s", canon, strings.Join(eff.Columns.Names(), ", "))
 		}
-		from := tick.StatusIn(eff, facts)
+		from := evaluate.StatusIn(eff, facts)
 		if from == col.Name() && len(live) <= 1 {
 			return nil, nil, nil
 		}

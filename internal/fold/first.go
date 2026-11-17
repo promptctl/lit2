@@ -5,7 +5,7 @@ import (
 )
 
 // The names the first facts write under: an item's status, which only a
-// transition writes and tick reads; its comments' list; and a comment's
+// transition writes and evaluate reads; its comments' list; and a comment's
 // body, which verbs open.
 var (
 	Status   = events.MustName("status")

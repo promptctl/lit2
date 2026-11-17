@@ -38,12 +38,12 @@ its trail, and nothing else. Not configuration, not the clock, not another
 ticket. The fold answers it; two clones with the same events agree on it with
 no rule to evaluate.
 
-**What tick computes.** Everything but position:
+**What evaluate computes.** Everything but position:
 `held`, stage, claim expiry, staleness, the rollup of a node above level 1.
-`view = tick(fold(events), config, now)`, writing nothing, cached if wanted,
+`view = evaluate(fold(events), config, now)`, writing nothing, cached if wanted,
 never the source of truth. What the facts say about a ticket is a derived
 field such as `blockers` or `held`, or a label declared with a `where`
-selector (architecture.md §3.11), which tick computes as it computes any
+selector (architecture.md §3.11), which evaluate computes as it computes any
 derived field; a plain label is exactly what was written to the item.
 Conditional guidance is a handler with a selector
 ([workflows.md](workflows.md)), so one mechanism prints after a ticket.
@@ -57,7 +57,7 @@ Why the column is the one thing not computed:
 - `[LAW:parse-dont-validate]`. The requirements are checked once, on the transition, and
   the stored column is the stamp. Re-checking entry conditions on every read is
   validation that never ends, and the computed model pays for it by replaying
-  tick over history to learn whether a ticket is at a column's door or inside
+  evaluate over history to learn whether a ticket is at a column's door or inside
   it.
 - `[LAW:no-silent-failure]`, and the feedback stance in
   [project-intent.md](project-intent.md). A drag that is recorded and does not
@@ -77,7 +77,7 @@ is this ticket stuck" is answered on the line, and "why is this ticket in
 Two constraints the computed model needed become structural. Derivations never
 write facts: there is no action that could. Derivations never loop: a derived
 field reads stored facts, stored columns and the clock, never another rule's
-output, so which configuration tick applies and how competing placements
+output, so which configuration evaluate applies and how competing placements
 resolve have nothing left to decide. Derived fields under the active version,
 columns from the trail.
 
@@ -159,7 +159,7 @@ A resolved column graph is checked on every write that changes it: exactly one
 `initial` column, at least one `terminal`, every `next` target present, and no
 column removed while a ticket in the node's subtree holds it (`error (reason=in_use)`,
 naming the tickets). Two concurrent writers can still leave a ticket in a
-column its ancestors no longer declare: the fold keeps the transition, tick
+column its ancestors no longer declare: the fold keeps the transition, evaluate
 reports the column as undeclared with stage `active`, `/next` passes the lane
 over naming the reason, `/integrity` lists it, and the universal edges always
 offer a way out.
@@ -310,7 +310,7 @@ option kept open, so the model is stated here in enough detail to pick up.
 comes from rules of one kind: when a condition holds for a ticket entering,
 leaving or sitting in a column, produce an action, and the action places the
 ticket in a column, shows a label or prints guidance. A ticket's column is not
-stored. Every read computes the board, `board = tick(state, config, now)`, and
+stored. Every read computes the board, `board = evaluate(state, config, now)`, and
 writes nothing; a ticket sits in the first column in configuration order until
 a drag or a rule puts it elsewhere.
 
@@ -336,7 +336,7 @@ an override, so a column whose only rules are labels always accepts one.
 
 **What it costs.** Position stops being a command. Whether a ticket is at a
 column's door or inside it depends on whether its entry rules passed since the
-drag, so a read replays tick over past moments for every ticket shown and every
+drag, so a read replays evaluate over past moments for every ticket shown and every
 ticket their rules read; a cache makes that affordable and is never the source
 of truth. "Why is this ticket in backlog" becomes the common question and wants
 a command that prints each rule that placed it and the facts it read.
@@ -346,13 +346,13 @@ rule: the proposal recommended rules win, with the drag labeled with why,
 because an absence such as "no PR" has no event to be newer than. Competing and
 looping rules: first match in configuration order, placement repeated until
 nothing moves, a loop stopped at the first column reached and labeled. Which
-configuration tick applies: the current one, so editing a rule re-settles every
+configuration evaluate applies: the current one, so editing a rule re-settles every
 ticket, a different choice from validation's. Which past moments the replay
 visits and which `now` each uses, given that recorded times are not monotonic
 across writers. Two implementations that choose differently give two boards
 from the same facts, so all of it is fixed first.
 
-**Where today's design already meets it.** `view = tick(fold(events), config,
+**Where today's design already meets it.** `view = evaluate(fold(events), config,
 now)` is the evaluation it needs. A label with a `where` selector
 (architecture.md §3.11) is its label action; `held`, `blockers` and staleness
 are its conditions, as derived fields; a handler with a selector is its

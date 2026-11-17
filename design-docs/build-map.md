@@ -12,14 +12,14 @@ map is missing an activity.
   state.
 - **What it can do afterward:** everything in `architecture.md` §4, built
   as verbs on paths that compile to signed intents, a pure fold that
-  verifies, a read-time tick, a policy in the store and a committed
+  verifies, evaluate at read time, a policy in the store and a committed
   workspace file; no second mechanism beside the substrate.
 - **What it composes with:** git as it already is (the common dir, refs,
   the object database, remotes, worktrees); the shell and `--json` for
   agents; a TOML file a person edits and reviews in a pull request.
 - **Where the leverage is:** the event record and the fold, then the
   path grammar and the field table. Once those are the right shape, every
-  later capability is a fold rule, a tick rule, a capability in the
+  later capability is a fold rule, an evaluate rule, a capability in the
   policy, or a key in the workspace file, and no verb learns a new case.
 
 ## Backbone
@@ -55,7 +55,7 @@ ever, because each of those makes the things around it expensive to replace.
 - a `create` that stores a record as given
 
 **look**
-- ▶ every view is a path over `tick(fold(events), now)`: `/`, `x`,
+- ▶ every view is a path over `evaluate(fold(events), now)`: `/`, `x`,
   `x/field`, `x/history`, `/lanes`, `/next`, `/members`, `/me`; one
   renderer that redacts what the reader cannot open; `--json` keyed by
   path; selectors and globs expand once
@@ -74,8 +74,8 @@ ever, because each of those makes the things around it expensive to replace.
 **work**
 - ▶ columns in the workspace file; one enforcer on the write reading
   requirement lists and the writer's capabilities; `stage`, `rollup`,
-  `held` in tick; labels declared in the workspace file, applied by people or
-  computed by tick from a `where` selector; `plan` and `pr` as reviewables, their
+  `held` in evaluate; labels declared in the workspace file, applied by people or
+  computed by evaluate from a `where` selector; `plan` and `pr` as reviewables, their
   revisions and reviews as lists on paths; the checklist on the leaf, its
   final state kept
 - a status enum in code with a switch per transition; permission checks
@@ -128,7 +128,7 @@ it needs.
 | 8 epic with its own process | per-epic sections; nearest ancestor per column and handler field | 3, 5 |
 | 9 grooming at scale | selectors in full; `--dry-run` over an expansion | 8 |
 | 10 purge while others write | rewrites; the receiver's rule | 7 |
-| 11 dead worktree holding a lane | claim expiry in tick; `rm <lane>/claim` | 4 |
+| 11 dead worktree holding a lane | claim expiry in evaluate; `rm <lane>/claim` | 4 |
 | 12 old binary meets newer events | unknown events preserved; `min-reader-version` | 1 (codec), 7 |
 | 13 scale | snapshot; budgets harness; the depth corpus | 1, 7 |
 | 14 a human at the terminal | rendering; the field table as help | 1 |
@@ -158,7 +158,7 @@ applied as version one at init, `config-ref` as the blob id of that version), th
 verb-to-intent table. Built at working minimum: the default roles with the
 enforcer judging capabilities, under the default profile's requirement lists, the default
 tier in plaintext mode with the envelope type in place, `stage` and
-`rollup` in tick, `/next` as the head of the top-ranked lane,
+`rollup` in evaluate, `/next` as the head of the top-ranked lane,
 `lit2 admin sync` run by hand. The slice is done when the walk below
 narrates in two clones of one remote:
 

@@ -29,7 +29,7 @@ cli
 guidance
 verbs
 address
-tick
+evaluate
 config
 field
 fold
@@ -61,12 +61,12 @@ row; the architecture test fails on one without.
 |---|---|---|
 | §3.1 Node and path | `address`, `config`, `field` | the path grammar, selectors and globs in address; the field table in config, the one answer to what a path names at a place; the atom selectors share and the literal grammar in field |
 | §3.2 Event and intent | `events`, `verbs` | the event record and ids in events; the verb-to-intent table in verbs |
-| §3.3 Fold and tick | `fold`, `tick` | fold(events) → state; tick(state, config, now) → view |
-| §3.4 Work item, level, tree | `config`, `fold`, `tick` | levels and homes declared in config; the tree folded; stage and rollup in tick |
-| §3.5 Column and stage | `config`, `tick` | the column graph and its check in config's parse; stage and the undeclared column in tick |
-| §3.6 Requirement | `verbs`, `field`, `config`, `tick` | evaluated by the one enforcer in verbs; the test is field's atom; checks expanded in config; `held` in tick |
+| §3.3 Fold and evaluate | `fold`, `evaluate` | fold(events) → state; evaluate(state, config, now) → view |
+| §3.4 Work item, level, tree | `config`, `fold`, `evaluate` | levels and homes declared in config; the tree folded; stage and rollup in evaluate |
+| §3.5 Column and stage | `config`, `evaluate` | the column graph and its check in config's parse; stage and the undeclared column in evaluate |
+| §3.6 Requirement | `verbs`, `field`, `config`, `evaluate` | evaluated by the one enforcer in verbs; the test is field's atom; checks expanded in config; `held` in evaluate |
 | §3.7 Lane | `fold` | membership, order and the one rank order |
-| §3.8 Claim | `fold`, `tick` | the holder set folded; expiry in tick |
+| §3.8 Claim | `fold`, `evaluate` | the holder set folded; expiry in evaluate |
 | §3.9 Checklist | `fold`, `verbs` | items folded; the `set` list diff in verbs |
 | §3.10 Link | `fold`, `config` | links folded; link types declared in config |
 | §3.11 Label | `config`, `fold` | declared in config in the top-level `labels` list; applied as events and folded |
@@ -83,7 +83,7 @@ row; the architecture test fails on one without.
 | §5.2 Fold | `fold` | events newer than the snapshot, verified |
 | §5.3 Parse | `config` | the active workspace version the fold names, into the schema value |
 | §5.4 Address | `address` | paths into typed addresses; selectors and globs expanded once |
-| §5.5 Evaluate | `verbs`, `tick` | the description of a write; the answer of a get |
+| §5.5 Evaluate | `verbs`, `evaluate` | the description of a write; the answer of a get |
 | §5.6 Perform | `verbs`, `store` | the intents signed in verbs' perform step; appended to the log by store |
 | §5.7 Speak | `cli`, `guidance` | the echo and its rendering; the handlers' bodies after the data |
 | §5.8 Record | `command` | the command event and the command log |
@@ -93,9 +93,9 @@ row; the architecture test fails on one without.
 | checkout discovery | `git` | the work tree, private git dir and common dir |
 | the one enforcer and the in-use check | `verbs` | requirements and capabilities judged once, at the write |
 | the snapshot | `store`, `fold` | its bytes in store; its content and key in fold |
-| `/next`, `/lanes`, `/integrity`, `/me` | `fold`, `tick`, `address`, `cli` | computed by fold and tick, named by address, rendered by cli |
+| `/next`, `/lanes`, `/integrity`, `/me` | `fold`, `evaluate`, `address`, `cli` | computed by fold and evaluate, named by address, rendered by cli |
 | the managed block in AGENTS.md | `guidance`, `root` | its text in guidance; written by init in root |
-| liveness of a worktree | `git`, `tick` | read by git; decided by tick |
+| liveness of a worktree | `git`, `evaluate` | read by git; decided by evaluate |
 | budgets | `fold`, `store` | benchmarks beside the code they measure |
 | field kinds, value parsers, built-in fields, the atom | `field` | the field language config and address both read |
 | `@` references in prose | `verbs`, `cli` | normalized to `@<segments>` in verbs before the envelope seals; rendered as `@` plus the current name by cli at Speak |

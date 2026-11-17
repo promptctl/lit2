@@ -123,7 +123,7 @@ hold:
 3. **The claim is fresh.** Once established, *any* event by S on L's members
    refreshes it — ordinary working commentary keeps a claim alive through a
    long stretch on a single ticket. A claim whose newest event is older than
-   `claim_ttl` no longer holds. Expiry is tick's: computed on every read
+   `claim_ttl` no longer holds. Expiry is evaluate's: computed on every read
    against `now`, never stored.
 4. **S is live, as far as this machine can tell.** See the liveness prune
    below; machines that cannot check assume liveness and rely on freshness.

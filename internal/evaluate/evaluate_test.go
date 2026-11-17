@@ -1,4 +1,4 @@
-package tick
+package evaluate
 
 import (
 	"testing"

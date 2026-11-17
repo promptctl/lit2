@@ -11,10 +11,10 @@ import (
 
 	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/tick"
 )
 
 // Verb is a write verb.
@@ -577,7 +577,7 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 	case address.Element:
 		panic("verbs: a comment's table has no children row")
 	}
-	sub := Subject{At: Created{N: n}, Place: field.ItemPlace(level), In: tick.AncestryOf(w.State, w.Schema, in)}
+	sub := Subject{At: Created{N: n}, Place: field.ItemPlace(level), In: evaluate.AncestryOf(w.State, w.Schema, in)}
 	x.creates = append(x.creates, creation{n: n, placement: placement, in: in})
 	given := map[field.Path]bool{}
 	for _, p := range pairs {

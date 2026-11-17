@@ -1,4 +1,4 @@
-package tick
+package evaluate
 
 import (
 	"time"
@@ -16,7 +16,7 @@ type View struct {
 	now    time.Time
 }
 
-// Of is the view of s under schema at now, a pure function: tick reads the
+// Of is the view of s under schema at now, a pure function: evaluate reads the
 // clock's value, never the clock (§8).
 func Of(s fold.State, schema config.Schema, now time.Time) View {
 	return View{state: s, schema: schema, now: now}

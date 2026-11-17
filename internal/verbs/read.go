@@ -7,10 +7,10 @@ import (
 
 	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/tick"
 )
 
 // World is what a verb reads: the folded state, judged under the schema
@@ -62,9 +62,9 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 func (w World) held(n address.Node) (Existing, config.Ancestry, fold.Facts) {
 	switch n := n.(type) {
 	case address.Item:
-		return Existing{At: events.Item{ID: n.ID}, Rendered: n.Rendered}, tick.ItemAncestry(w.State, w.Schema, n.ID), w.item(n.ID).Facts
+		return Existing{At: events.Item{ID: n.ID}, Rendered: n.Rendered}, evaluate.ItemAncestry(w.State, w.Schema, n.ID), w.item(n.ID).Facts
 	case address.Element:
-		return Existing{At: events.Element{Of: n.Of, ID: n.ID}, Rendered: n.Rendered}, tick.ItemAncestry(w.State, w.Schema, n.Of), w.element(n).Facts
+		return Existing{At: events.Element{Of: n.Of, ID: n.ID}, Rendered: n.Rendered}, evaluate.ItemAncestry(w.State, w.Schema, n.Of), w.element(n).Facts
 	case address.Root, address.Home:
 	}
 	panic(fmt.Sprintf("verbs: %#v holds no stored field", n))
@@ -105,7 +105,7 @@ func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path fie
 		if err != nil {
 			return nil, err
 		}
-		return []string{tick.StatusIn(eff, facts)}, nil
+		return []string{evaluate.StatusIn(eff, facts)}, nil
 	}
 	if _, prose := d.Kind.(field.Text); prose {
 		return texts(facts.Text(n)), nil
@@ -306,7 +306,7 @@ func Judge(w World, id events.ItemID, tests []config.Test) ([]config.Test, error
 		scope := []events.ItemID{id}
 		if t.Scope == config.Ancestors {
 			scope = nil
-			for _, k := range tick.ItemAncestry(w.State, w.Schema, id) {
+			for _, k := range evaluate.ItemAncestry(w.State, w.Schema, id) {
 				if it, ok := k.Item(); ok {
 					scope = append(scope, it)
 				}

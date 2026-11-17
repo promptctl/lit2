@@ -48,7 +48,7 @@ are, rather than adding a mechanism beside the substrate.
 
 Two consequences shape everything above the substrate. Because the fold has
 no clock, every derivation is sorted into one of two homes: the **fold**
-(a pure function of events) or **tick** (a pure function of folded state,
+(a pure function of events) or **evaluate** (a pure function of folded state,
 config and `now`). And because no write is coordinated, every write is an
 **intent** that stays meaningful whatever happened concurrently: `place x
 above y`, not `x is at position 4`.
@@ -155,19 +155,19 @@ topic the item never had, naming its current rendering.
 The total order is `(causal-position, writer, event id)`: the event id, the
 record's content hash, settles two events of one writer at one position.
 
-### 3.3 Fold and tick
+### 3.3 Fold and evaluate
 
 `fold(events) → state`: items, fields, comments, labels, links,
 lanes, their order and their rank, checklists, lane holders, the revisions
 and reviews of each reviewable (§4), the applied workspace versions (§3.15),
 and every
 unresolved concurrent contradiction as a value on the thing it concerns.
-`tick(state, config, now) → view`: `held`, claim
-expiry, staleness, stage, rollup, the labels declared with `where` (§3.11). Every read is `tick(fold(events), now)`;
+`evaluate(state, config, now) → view`: `held`, claim
+expiry, staleness, stage, rollup, the labels declared with `where` (§3.11). Every read is `evaluate(fold(events), now)`;
 every write is evaluated against the same. Neither function performs I/O.
 The fold reads no configuration: an event's legality under the model was
 judged by the one enforcer at its write, under the active version its writer
-ran under, and tick applies the active version its reader ran under, which is
+ran under, and evaluate applies the active version its reader ran under, which is
 where a column or field that version no longer declares is reported (§3.5).
 
 Determinism is a behavior: two folds of one event set, in any arrival order,
@@ -233,7 +233,7 @@ A resolved column graph is checked when a version is applied (§3.15): one
 `initial`, at least one `terminal`, every `next` target present, no column
 removed while a ticket in its subtree holds it. Two concurrent writers can
 still produce a ticket in a column its ancestors no longer declare; the fold
-keeps the transition, tick reports the column as undeclared with stage
+keeps the transition, evaluate reports the column as undeclared with stage
 `active`, `/next` passes the lane over naming the reason, `/integrity` lists
 it, and the universal edges always offer a way out. Any node may carry `columns`;
 a ticket resolves its graph by nearest ancestor, per column name, so an epic
@@ -296,7 +296,7 @@ made its latest establishing transition, out of `initial` or into a
 establishing act; taking is one too, `add <lane>/claim`, which the fold reads
 as this checkout's establishing act, so work another checkout left in the
 middle of a column changes hands in one echoed write; parking a member into
-`initial` and finishing the lane's last member end a hold too. Expiry is tick's: `claim_ttl`, resolved by
+`initial` and finishing the lane's last member end a hold too. Expiry is evaluate's: `claim_ttl`, resolved by
 nearest ancestor, measured from the holder's newest event on any member; an
 expired claim is no claim and prints as none. A ticket's `claim` reads its
 lane's, so finishing one member hands the checkout the next with no second
@@ -589,7 +589,7 @@ row is that no primitive learned a new case.
 | edit many things at once, safely | selectors and globs expand once; `--dry-run` prints the expansion and the diff; a refusal on one path writes nothing |
 | work from several worktrees of one clone | one store under the common dir; each worktree its own checkout, ref and claims |
 | work from several machines, offline | per-writer refs; background push and fetch; the fold settles concurrent edits; conflicts are values; `/integrity` lists advisories |
-| know the view is stale or the push failed | tick compares local refs to remote-tracking refs and reads the last push outcome; one advisory line on read and write |
+| know the view is stale or the push failed | evaluate compares local refs to remote-tracking refs and reads the last push outcome; one advisory line on read and write |
 | file a bug with no clone | mint events, push to `refs/lit/inbox/<id>`; any clone's receive folds and anchors them |
 | erase content | `rm x --purge`, a rewrite; every replica converges; `gc` reclaims |
 | keep the store small and fast | the cache snapshot; compaction as a rewrite; budgets as gates |
@@ -621,7 +621,7 @@ of (events, clock, argv, writer); the rest is the hearth
    schema value.
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
-5. **Evaluate.** `get` computes its answer with tick and the clock. A write
+5. **Evaluate.** `get` computes its answer with evaluate and the clock. A write
    computes a description: the intents it would mint, the requirement and
    capability verdicts, the derivations, the echo. Refusal of any path
    refuses the whole.
@@ -649,7 +649,7 @@ same test fails when the two disagree.
  guidance   moments → resolved handlers → text after the data
  verbs      get/set/add/rm on typed addresses; requirements; verb → intents; echo
  address    path grammar; selectors; globs
- tick       clocked derivations: held, expiry, staleness, stage, rollup
+ evaluate   clocked derivations: held, expiry, staleness, stage, rollup
  config     the active workspace version (§3.15) → one typed schema value; the field table
  field      field kinds and their value parsers; the built-in fields; the atom; the literal grammar
  fold       events → state; validation engine; rank; holders; conflicts
@@ -718,7 +718,7 @@ decided in the body.
 ## 8. Constraints on later work
 
 - A new ticket fact is an event kind plus a fold rule and, if it has a clock,
-  a tick rule. A new piece of the model is a key in `.lit/workspace.toml`.
+  an evaluate rule. A new piece of the model is a key in `.lit/workspace.toml`.
   Never a table, never a second store.
 - Every mutating verb on a path has a capability `(verb, path glob,
   binding)`; what cannot be spelled as a path write cannot be authorized,
@@ -732,7 +732,7 @@ decided in the body.
   requirement that reads prose by content is evaluated by its writer, who
   holds the key; a reader without it sees that requirement's verdict as
   `unknown (tier)`, a third value of the verdict type, never a guess.
-- The fold reads no clock; tick reads one. A derivation that wants both is
+- The fold reads no clock; evaluate reads one. A derivation that wants both is
   two derivations.
 - No network on a foreground path; no lock on the cache.
 - A handler produces text and nothing else.

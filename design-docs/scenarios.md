@@ -17,7 +17,7 @@ the contract is the behavior stated under "relies on", never the text.
 | S-3 | 3, 11 | a held lane whose head is held traps the checkout | `/next` reports the held head and falls through, labeled (architecture §4) |
 | S-4 | 2 | guidance at "an epic finishes" has no moment | a selector may read through `parent`; `(stage=terminal parent/stage=terminal)` on `enter *` |
 | S-5 | 6 | two offline clones create a lane of the same name on one node | a lane is identified by its name on its node; `lane.create` is idempotent; members union in total order |
-| S-6 | 7 | a column removed from the workspace file while a ticket, somewhere, holds it | the transition stands; tick reports the column undeclared; `/next` skips; `/integrity` lists it |
+| S-6 | 7 | a column removed from the workspace file while a ticket, somewhere, holds it | the transition stands; evaluate reports the column undeclared; `/next` skips; `/integrity` lists it |
 | S-7 | 9 | `add` with different values on different paths is N calls | `add` takes `path value` pairs like `set` |
 | S-8 | 9 | N long bodies in one call need shell substitution | open; low frequency; a file form is a later addition if it bites |
 | S-9 | 10 | a comment written concurrently with a purge vanishes | the fold drops it and counts it on `/integrity` as "events after purge" |
@@ -278,7 +278,7 @@ process is versioned, diffed and reviewed by git; and nothing is hidden:
 not define is unrepresentable. With the model in a file that merges
 independently of the events, it is representable, and the engine needs one
 rule for it. The rule follows the existing stance for an undeclared field
-value: the transition stands, tick reports `status: audit (undeclared)`,
+value: the transition stands, evaluate reports `status: audit (undeclared)`,
 `stage` reads `active` (an undeclared column has neither flag), `/next`
 passes the lane over and says so, `/integrity` lists it, and the way out is a
 transition to a column that exists, which the universal edges always offer.
@@ -387,7 +387,7 @@ cleaning up, and a live holder is never robbed by a clock.
 **Walk.**
 
 1. Worktree W starts `k7q`, then is deleted. Its ref remains.
-2. On the same machine, tick's liveness prune finds W absent in `git worktree
+2. On the same machine, evaluate's liveness prune finds W absent in `git worktree
    list` and treats the hold as void now; `/next` on a sibling worktree serves
    the lane.
 3. On another machine, the hold persists until `claim_ttl` has passed since
@@ -434,7 +434,7 @@ inside the budgets.
 
 **Walk.** 10,000 items, 200,000 events, 400 lanes. `get '*/title'` is one
 walk of folded state. `/next` is a walk of the lane order, linear in lanes.
-Tick evaluates each rule's selector over every ticket on every read, linear in
+Evaluate runs each rule's selector over every ticket on every read, linear in
 tickets times rules. A warm read is a snapshot load plus a delta fold. A cold
 refold applies 200,000 events in under a second, which sets the bar for the
 codec and for the fold's data structures, and is measured in the harness
