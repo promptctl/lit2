@@ -1,6 +1,8 @@
 package fold_test
 
 import (
+	"math/rand/v2"
+	"slices"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events"
@@ -57,7 +59,7 @@ func TestAChildOfALeafIsUnderLeaf(t *testing.T) {
 
 func TestAChildOfANeverCreatedIDIsOrphaned(t *testing.T) {
 	w := newWorld(t)
-	ghost := must(events.ParseItemID("lit-zzz"))
+	ghost := ghost("z")
 	child := idOf(w.mint(a, fold.State{}, createUnder(ghost))[0])
 	s := w.state()
 	if got := found(t, s, child).Level; got != (fold.Orphaned{Missing: ghost}) {
@@ -69,29 +71,85 @@ func TestAChildOfANeverCreatedIDIsOrphaned(t *testing.T) {
 	if _, ok := s.Item(ghost).(fold.NotFound); !ok {
 		t.Errorf("the missing parent is %#v; want NotFound", s.Item(ghost))
 	}
-	if !s.Names().Taken(top, ghost.Segments()[0]) {
-		t.Errorf("the orphan's missing parent %s is free in Names", ghost)
+	if !s.Known().Holds(ghost) {
+		t.Errorf("the orphan's missing parent %s is not Known", ghost)
 	}
 }
 
-func TestALevelStatedOnAChildIsMisaddressed(t *testing.T) {
+func TestACreateIsAboutWhatItCreatesAndNothingElse(t *testing.T) {
 	w := newWorld(t)
-	epic := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(3)}))[0])
-	stated := w.mint(a, w.state(), events.Create{In: events.Children{Parent: events.Under{ID: epic}}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})[0]
-	unstated := w.mint(a, w.state(), events.Create{In: top, Payload: events.ItemCreate{Place: events.BelowParent{}}})[0]
+	epic := w.mint(a, fold.State{}, create(events.AtLevel{Level: level(3)}))[0]
+	recreated := w.mint(a, w.state(), events.Act{About: events.Item{ID: idOf(epic)}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})[0]
+	written := w.mint(a, w.state(), events.Act{About: events.NewItem{ID: ghost("w"), Width: 3}, Payload: events.FieldSet{Field: title, Value: prose("t")}})[0]
 	s := w.state()
-	for _, e := range []events.Event{stated, unstated} {
-		if _, ok := s.Item(idOf(e)).(fold.NotFound); !ok {
-			t.Errorf("a misplaced create made %#v", s.Item(idOf(e)))
-		}
-	}
 	un := s.Integrity().Unapplied
 	if len(un) != 2 {
-		t.Fatalf("unapplied %#v; want the two misplaced creates", un)
+		t.Fatalf("unapplied %#v; want the create about an item and the write about a create", un)
 	}
-	for i, e := range []events.Event{stated, unstated} {
+	for i, e := range []events.Event{recreated, written} {
 		if _, ok := un[i].Why.(fold.Misaddressed); !ok || un[i].Stamp.Event != e.ID() || un[i].About != e.Header().About() {
-			t.Errorf("unapplied %d is %#v; want %s Misaddressed", i, un[i], idOf(e))
+			t.Errorf("unapplied %d is %#v; want %s Misaddressed", i, un[i], e.ID())
+		}
+	}
+	if _, ok := found(t, s, idOf(epic)).Origin.(fold.Created); !ok {
+		t.Errorf("a create about an existing item collided with it")
+	}
+}
+
+func TestACreateReplayedIntoAnotherLogKeepsItsIDAndSegment(t *testing.T) {
+	src := newWorld(t)
+	original := src.mint(a, fold.State{}, create(events.AtLevel{Level: level(2)}))[0]
+	made := original.Header().About().(events.NewItem)
+	// another store, another writer, a later position: the create replayed
+	dst := newWorld(t)
+	dst.entropy = rand.NewChaCha8([32]byte{'d', 's', 't'})
+	dst.mint(b, fold.State{}, create(events.AtLevel{Level: level(1)}), create(events.AtLevel{Level: level(1)}))
+	replayed := dst.mint(b, dst.state(), events.Act{About: made, Payload: original.Body().(events.Readable).Payload})[0]
+	if replayed.ID() == original.ID() || replayed.Header().Position() == original.Header().Position() {
+		t.Fatal("the replay is the original event; the test replays nothing")
+	}
+	created, ok := found(t, dst.state(), made.ID).Origin.(fold.Created)
+	if !ok || created.Segment != made.Segment() || created.In != (fold.Home{Holds: level(2)}) {
+		t.Errorf("the replayed create folds to %#v; want id %s, segment %s, at level 2", created, made.ID, made.Segment())
+	}
+}
+
+func TestAnItemRendersUnderItsParentsSegments(t *testing.T) {
+	w := newWorld(t)
+	epic := w.mint(a, fold.State{}, create(events.AtLevel{Level: level(3)}))[0]
+	child := w.mint(a, w.state(), createUnder(idOf(epic)))[0]
+	orphan := w.mint(a, w.state(), createUnder(ghost("z")))[0]
+	s := w.state()
+	seg := func(e events.Event) events.Segment { return e.Header().About().(events.NewItem).Segment() }
+	for _, c := range []struct {
+		name string
+		id   events.ItemID
+		want []events.Segment
+	}{
+		{"a top-level item", idOf(epic), []events.Segment{seg(epic)}},
+		{"a child", idOf(child), []events.Segment{seg(epic), seg(child)}},
+		{"an orphan", idOf(orphan), []events.Segment{seg(orphan)}},
+		{"an id nothing created", ghost("z"), nil},
+	} {
+		if got := s.Path(c.id); !slices.Equal(got, c.want) {
+			t.Errorf("%s renders by %v; want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAParentCreatedAfterItsChildIsNoLinkAndTheWalkEnds(t *testing.T) {
+	w := newWorld(t)
+	p := ghost("p")
+	child := w.mint(a, fold.State{}, createUnder(p))[0]
+	// a forged create of p, under its own child, sorting after the child's
+	w.mint(a, w.state(), events.Act{About: events.NewItem{ID: p, Width: 3}, Payload: events.ItemCreate{Place: events.BelowParent{Parent: idOf(child)}}})
+	s := w.state()
+	for _, id := range []events.ItemID{idOf(child), p} {
+		if got := found(t, s, id).Level; got != (fold.Orphaned{Missing: p}) {
+			t.Errorf("%s in a forged cycle is %#v; want Orphaned{%s}", id, got, p)
+		}
+		if got := s.Path(id); len(got) == 0 {
+			t.Errorf("%s in a forged cycle renders by no segments", id)
 		}
 	}
 }
@@ -101,7 +159,7 @@ func TestTwoCreatesOfOneIDCollideAndTheFirstPlacesIt(t *testing.T) {
 	first := w.mint(a, fold.State{}, create(events.AtLevel{Level: level(2)}))[0]
 	id := idOf(first)
 	// B never folded A's create, and names the same id at its own level
-	again := w.mint(b, fold.State{}, events.Act{About: events.Item{ID: id}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})[0]
+	again := w.mint(b, fold.State{}, events.Act{About: events.NewItem{ID: id, Width: 3}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})[0]
 	s := w.state()
 	it := found(t, s, id)
 	c, ok := it.Origin.(fold.Collided)

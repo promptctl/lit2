@@ -107,10 +107,12 @@ type Item struct {
 //sumtype:decl
 type Origin interface{ origin() }
 
-// Created is a node's one create.
+// Created is a node's one create: where it put the node, and the segment
+// it fixed at mint, which the node renders by (§3.2).
 type Created struct {
-	Stamp Stamp
-	In    Container
+	Stamp   Stamp
+	In      Container
+	Segment events.Segment
 }
 
 // Collided is a node two or more creates name: First is the first in
@@ -152,10 +154,12 @@ type LevelOf interface{ levelOf() }
 // Leveled is an item at Level.
 type Leveled struct{ Level events.Level }
 
-// Orphaned is an item whose chain reaches Missing, an id nobody created.
-// Missing may be the item itself: a Found item whose Origin is Uncreated,
-// which facts name but nothing created, reads Level Orphaned{Missing: its
-// own id}.
+// Orphaned is an item whose chain reaches Missing, an id with no create
+// before its child's in total order: nobody created it, or a create sorting
+// after the child's, which no honest mint makes, since a writer names a
+// parent it has folded and Lamport's rule mints past it. Missing may be
+// the item itself: a Found item whose Origin is Uncreated, which facts name
+// but nothing created, reads Level Orphaned{Missing: its own id}.
 type Orphaned struct{ Missing events.ItemID }
 
 // UnderLeaf is an item whose chain reaches a child of Leaf, a level-1 item,
@@ -183,7 +187,7 @@ func (Tombstoned) life() {}
 
 // Element is one created element of an item, such as a comment.
 type Element struct {
-	Name events.Segment
+	ID events.ElementID
 	// In is the list it shows in, the first create's.
 	In     events.Name
 	Origin Origin
@@ -245,7 +249,7 @@ type Member struct {
 // Advisory is a contradiction or a gap the fold names on the node it
 // concerns, the list /integrity shows.
 type Advisory struct {
-	At Target
+	At Node
 	Is Concern
 }
 
@@ -377,41 +381,59 @@ func (s State) Children(c Container) []events.ItemID {
 	return ids
 }
 
-// Names is every name a folded event made or named, created or not, so
-// Mint draws none of them again; carried events name none.
-func (s State) Names() events.Names {
-	var b events.NamesBuilder
-	// an id names every ancestor on its path, created here or not, so a
-	// clone that folded a child but not its parent never mints the parent's
-	// id afresh
-	var path func(id events.ItemID)
-	path = func(id events.ItemID) {
-		segs := id.Segments()
-		b.Add(events.Children{Parent: id.Parent()}, segs[len(segs)-1])
-		switch p := id.Parent().(type) {
-		case events.Under:
-			path(p.ID)
-		case events.Top:
-		}
-	}
-	add := func(a events.About) {
+// Known is every id a folded event made or named, created or not, with
+// each namespace's created count, so Mint widens past all of them;
+// carried events name none.
+func (s State) Known() events.Known {
+	var b events.KnownBuilder
+	saw := func(a events.About) {
 		switch a := a.(type) {
 		case events.Item:
-			path(a.ID)
+			b.Saw(a.ID)
+		case events.NewItem:
+			b.Saw(a.ID)
 		case events.Element:
-			path(a.Of)
-			b.Add(events.Elements{Of: a.Of}, a.Name)
+			b.Saw(a.Of)
+			b.Saw(a.ID)
+		case events.NewElement:
+			b.Saw(a.Of)
+			b.Saw(a.ID)
 		case events.Root:
 		}
 	}
 	s.items.each(func(r *item) {
-		add(events.Item{ID: r.id})
+		b.Saw(r.id)
+		for _, c := range r.sortedCreates() {
+			switch in := c.in.(type) {
+			case Under:
+				b.Saw(in.Parent)
+			case Home:
+			}
+		}
+		if !r.creates.empty() {
+			b.Created(namespaceOf(r.firstCreate().in))
+		}
 		for _, el := range r.sortedElements() {
-			add(events.Element{Of: r.id, Name: el.name})
+			b.Saw(el.id)
+			if !el.creates.empty() {
+				b.Created(events.ElementOf{Item: r.id})
+			}
 		}
 	})
-	s.integrity.unapplied.each(func(u Unapplied) { add(u.About) })
-	return b.Names()
+	s.integrity.unapplied.each(func(u Unapplied) { saw(u.About) })
+	return b.Known()
+}
+
+// namespaceOf is the namespace the items in c are named in: every home is
+// the top-level one.
+func namespaceOf(c Container) events.Namespace {
+	switch c := c.(type) {
+	case Home:
+		return events.Top{}
+	case Under:
+		return events.ChildOf{Parent: c.Parent}
+	}
+	panic(fmt.Sprintf("fold: %T is not a Container", c))
 }
 
 // Frontier is the highest position among the verified events folded.
@@ -451,7 +473,7 @@ func (s State) Advisories() []Advisory {
 		}
 		out = append(out, r.facts.advisories(at)...)
 		for _, el := range r.sortedElements() {
-			eat := OnElement{Of: r.id, Name: el.name}
+			eat := OnElement{Of: r.id, ID: el.id}
 			switch o := el.origin(r.id).(type) {
 			case Created:
 			case Collided:
@@ -479,7 +501,7 @@ func (s State) itemOf(r *item) Item {
 	it := Item{ID: r.id, Origin: r.origin(), Level: s.levelOf(r.id), Life: r.life, Facts: r.facts}
 	for _, el := range r.sortedElements() {
 		if !el.creates.empty() {
-			it.Elements = append(it.Elements, Element{Name: el.name, In: el.firstCreate().in, Origin: el.origin(r.id), Facts: el.facts})
+			it.Elements = append(it.Elements, Element{ID: el.id, In: el.firstCreate().in, Origin: el.origin(r.id), Facts: el.facts})
 		}
 	}
 	slices.SortStableFunc(it.Elements, func(a, b Element) int {
@@ -488,28 +510,68 @@ func (s State) itemOf(r *item) Item {
 	return it
 }
 
-// levelOf is id's level, from its parent chain: an id with no create is
-// the chain's missing link.
-func (s State) levelOf(id events.ItemID) LevelOf {
-	r, ok := s.items.get(id)
-	if !ok || r.creates.empty() {
+// levelOf is id's level, from its parent chain: an id with no create
+// placing it is the chain's missing link.
+func (s State) levelOf(id events.ItemID) LevelOf { return s.levelBelow(id, nil) }
+
+// levelBelow is levelOf, reading only a create of id that sorts before
+// child, the create of the item below it.
+func (s State) levelBelow(id events.ItemID, child *events.OrderKey) LevelOf {
+	c, ok := s.placing(id, child)
+	if !ok {
 		return Orphaned{Missing: id}
 	}
-	switch c := r.firstCreate().in.(type) {
+	switch in := c.in.(type) {
 	case Home:
-		return Leveled{Level: c.Holds}
+		return Leveled{Level: in.Holds}
 	case Under:
-		switch up := s.levelOf(c.Parent).(type) {
+		switch up := s.levelBelow(in.Parent, &c.stamp.Order).(type) {
 		case Leveled:
 			if below, ok := up.Level.Below(); ok {
 				return Leveled{Level: below}
 			}
-			return UnderLeaf{Leaf: c.Parent}
+			return UnderLeaf{Leaf: in.Parent}
 		case Orphaned:
 			return up
 		case UnderLeaf:
 			return up
 		}
+	}
+	panic(fmt.Sprintf("fold: %s is in no container", id))
+}
+
+// placing is the create that places id, read from below: its first create,
+// when it sorts before child. Following a link only toward earlier creates
+// ends every walk up a chain, and a forged back-link, which could make a
+// cycle, reads as a missing parent `[LAW:types-are-the-program]`.
+func (s State) placing(id events.ItemID, child *events.OrderKey) (creation, bool) {
+	r, ok := s.items.get(id)
+	if !ok || r.creates.empty() {
+		return creation{}, false
+	}
+	c := r.firstCreate()
+	if child != nil && events.Compare(c.stamp.Order, *child) >= 0 {
+		return creation{}, false
+	}
+	return c, true
+}
+
+// Path is the segments id renders by, the top-most first (§3.2): each
+// item's own, fixed by its first create, up the chain levelOf walks. A
+// chain broken above an item renders from the first item below the break,
+// and an item with no create has no segments and renders by its full id.
+func (s State) Path(id events.ItemID) []events.Segment { return s.pathBelow(id, nil) }
+
+func (s State) pathBelow(id events.ItemID, child *events.OrderKey) []events.Segment {
+	c, ok := s.placing(id, child)
+	if !ok {
+		return nil
+	}
+	switch in := c.in.(type) {
+	case Home:
+		return []events.Segment{c.segment}
+	case Under:
+		return append(s.pathBelow(in.Parent, &c.stamp.Order), c.segment)
 	}
 	panic(fmt.Sprintf("fold: %s is in no container", id))
 }

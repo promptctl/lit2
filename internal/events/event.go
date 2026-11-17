@@ -373,16 +373,40 @@ func aboutWire(a About) []byte {
 	switch a := a.(type) {
 	case Root:
 	case Item:
-		w.Bytes(1, []byte(a.ID.s))
+		w.Bytes(subjectItem, a.ID.b[:])
+	case NewItem:
+		w.Bytes(subjectItem, a.ID.b[:])
+		w.Uvarint(subjectWidth, widthWire(a.Width))
 	case Element:
-		w.Bytes(1, []byte(a.Of.s))
-		w.Bytes(2, []byte(a.Name.s))
+		w.Bytes(subjectItem, a.Of.b[:])
+		w.Bytes(subjectElement, a.ID.b[:])
+	case NewElement:
+		w.Bytes(subjectItem, a.Of.b[:])
+		w.Bytes(subjectElement, a.ID.b[:])
+		w.Uvarint(subjectWidth, widthWire(a.Width))
 	default:
 		// [LAW:no-silent-failure] an empty subject reads as the root, so a
 		// draft naming nothing would mint a signed event about the root
 		panic(fmt.Sprintf("events: %T is not an About", a))
 	}
 	return w.Encoded()
+}
+
+// The subject's wire fields: 1:item id 2:element id 3:segment width.
+const (
+	subjectItem    = 1
+	subjectElement = 2
+	subjectWidth   = 3
+)
+
+// widthWire is a segment width as it is stored. Go lets a caller write any
+// int, and a width outside 3..26 is no segment of an id, so writing one is
+// a caller's bug.
+func widthWire(w int) uint64 {
+	if w < minWidth || w > fullWidth {
+		panic(fmt.Sprintf("events: a segment width of %d; a segment is %d to %d digits", w, minWidth, fullWidth))
+	}
+	return uint64(w)
 }
 
 // Wire is the attribution as it is stored. readAttribution reads it.
@@ -508,41 +532,65 @@ func readHeader(b []byte) (Header, error) {
 	return h, nil
 }
 
-// readAbout reads a subject's stored form.
+// readAbout reads a subject's stored form: nothing, an item, an item and
+// an element, either with a segment width.
 func readAbout(b []byte) (About, error) {
-	var node, name []byte
-	var hasNode, hasName bool
+	var item, element []byte
+	var width uint64
+	var hasItem, hasElement, hasWidth bool
 	r := wire.NewReader(b)
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		switch tag {
-		case 1:
-			node, hasNode = r.Bytes(), true
-		case 2:
-			name, hasName = r.Bytes(), true
+		case subjectItem:
+			item, hasItem = r.Bytes(), true
+		case subjectElement:
+			element, hasElement = r.Bytes(), true
+		case subjectWidth:
+			width, hasWidth = r.Uvarint(), true
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("the subject: %w", err)
 	}
-	switch {
-	case !hasNode && hasName:
-		return nil, errors.New("the subject is the root, which has no elements, and names one")
-	case !hasNode:
+	if !hasItem {
+		if hasElement || hasWidth {
+			return nil, errors.New("the subject is the root, which has no elements and no segment, and names one")
+		}
 		return Root{}, nil
 	}
-	id, err := ParseItemID(string(node))
+	of, err := idBits(item)
 	if err != nil {
-		return nil, fmt.Errorf("the subject: %w", err)
+		return nil, fmt.Errorf("the subject's item: %w", err)
 	}
-	if !hasName {
-		return Item{ID: id}, nil
+	if hasWidth && (width < minWidth || width > fullWidth) {
+		return nil, fmt.Errorf("the subject's segment width is %d; a segment is %d to %d digits", width, minWidth, fullWidth)
 	}
-	s, err := ParseSegment(string(name))
+	w := int(width)
+	if !hasElement {
+		if hasWidth {
+			return NewItem{ID: ItemID{b: of}, Width: w}, nil
+		}
+		return Item{ID: ItemID{b: of}}, nil
+	}
+	el, err := idBits(element)
 	if err != nil {
 		return nil, fmt.Errorf("the subject's element: %w", err)
 	}
-	return Element{Of: id, Name: s}, nil
+	if hasWidth {
+		return NewElement{Of: ItemID{b: of}, ID: ElementID{b: el}, Width: w}, nil
+	}
+	return Element{Of: ItemID{b: of}, ID: ElementID{b: el}}, nil
+}
+
+// idBits reads an id's stored 16 bytes.
+func idBits(b []byte) ([16]byte, error) {
+	var id [16]byte
+	if len(b) != len(id) {
+		return id, fmt.Errorf("an id is %d bytes; this one is %d", len(id), len(b))
+	}
+	copy(id[:], b)
+	return id, nil
 }
 
 // readAttribution reads an attribution's stored form.

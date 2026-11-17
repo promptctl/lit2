@@ -54,6 +54,8 @@ const (
 type (
 	// byItem is FNV-1a over the id's text.
 	byItem struct{}
+	// byElement is FNV-1a over the element id's text.
+	byElement struct{}
 	// byName is FNV-1a over a name's text.
 	byName struct{}
 	// byEvent is the event id's first eight bytes: the id is a hash.
@@ -63,6 +65,8 @@ type (
 )
 
 func (byItem) hash(id events.ItemID) uint64 { return fnv64a(id.String()) }
+
+func (byElement) hash(id events.ElementID) uint64 { return fnv64a(id.String()) }
 
 func (byName) hash(name string) uint64 { return fnv64a(name) }
 

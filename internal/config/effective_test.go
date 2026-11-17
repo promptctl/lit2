@@ -20,7 +20,7 @@ func layered(t *testing.T) Schema {
 
 func itemNode(t *testing.T, id string) NodeKey {
 	t.Helper()
-	parsed, err := events.ParseItemID(id)
+	parsed, err := events.ParseShortID(id, layered(t).Prefix())
 	if err != nil {
 		t.Fatal(err)
 	}

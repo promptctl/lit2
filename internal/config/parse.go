@@ -120,7 +120,7 @@ func (p *parser) schema(raw map[string]any, gate ReaderGate) Schema {
 	// an ancestor's section declares, and which sections stack is known only
 	// from the items, so here a section's next targets are checked only against
 	// every column declared anywhere; each stacked graph is checked at apply.
-	s.sections = p.sections(raw, s.levels)
+	s.sections = p.sections(raw, s.levels, s.prefix)
 	declared := map[string]bool{}
 	for name := range rootCols {
 		declared[name] = true
@@ -793,8 +793,8 @@ func (p *parser) severity(m map[string]any, at KeyPath) (Severity, bool) {
 }
 
 // sections reads the node sections: per-node columns and claim lifetimes,
-// keyed by a full item id or a declared home.
-func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Section {
+// keyed by an item id under the file's prefix or bare, or a declared home.
+func (p *parser) sections(raw map[string]any, levels []Level, prefix events.Prefix) map[NodeKey]Section {
 	tbl, _ := p.table(raw, "", "nodes")
 	homes := map[string]bool{}
 	for _, lv := range levels {
@@ -804,9 +804,9 @@ func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Sectio
 	}
 	sections := map[NodeKey]Section{}
 	for _, key := range sortedKeys(tbl) {
-		node, ok := nodeKey(key, homes)
-		if !ok {
-			p.fail(keyed("nodes", `"`+key+`"`), ReasonBadNodeKey, "%q is neither a full item id nor a declared home", key)
+		node, err := nodeKey(key, homes, prefix)
+		if err != nil {
+			p.fail(keyed("nodes", `"`+key+`"`), ReasonBadNodeKey, "%q is not a declared home, and %v", key, err)
 			continue
 		}
 		at := keyed("nodes", nodeSegment(node))
@@ -826,15 +826,17 @@ func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Sectio
 	return sections
 }
 
-// nodeKey reads a section key: a declared home, or else a full id.
-func nodeKey(key string, homes map[string]bool) (NodeKey, bool) {
+// nodeKey reads a section key: a declared home, or else an item id, as
+// events reads one under the active prefix `[LAW:single-enforcer]`.
+func nodeKey(key string, homes map[string]bool, prefix events.Prefix) (NodeKey, error) {
 	if homes[key] {
-		return HomeNode(key), true
+		return HomeNode(key), nil
 	}
-	if id, err := events.ParseItemID(key); err == nil {
-		return ItemNode(id), true
+	id, err := events.ParseShortID(key, prefix)
+	if err != nil {
+		return NodeKey{}, err
 	}
-	return NodeKey{}, false
+	return ItemNode(id), nil
 }
 
 // duration reads a claim lifetime: a positive Go duration.

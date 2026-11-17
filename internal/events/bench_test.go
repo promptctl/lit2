@@ -10,18 +10,19 @@ import (
 
 // corpus is scenario 13's store: 10,000 items and 200,000 events from ten
 // writers, the items' creates among acts on items and their elements, each
-// with prose, as one log's records.
+// act with prose, as one log's records; benchKinds reads it.
+var benchKinds = NewKinds(Row[note](readNote), Row[ItemCreate](ReadItemCreate))
+
 var corpus = sync.OnceValue(func() []store.Record {
 	const items, events, writers = 10_000, 200_000, 10
-	r, salt := rand.New(rand.NewPCG(13, 13)), salts(13)
+	r, salt := rand.New(rand.NewPCG(13, 13)), entropy(13)
 	keys := make([]Key, writers)
 	for w := range keys {
 		keys[w] = keyOf(byte(w))
 	}
 	var f Frontier
 	var ids []ItemID
-	var b NamesBuilder
-	top := Children{Parent: Top{Prefix: prefix}}
+	var b KnownBuilder
 	rs := make([]store.Record, 0, events)
 	for len(rs) < events {
 		w := r.IntN(writers)
@@ -29,12 +30,12 @@ var corpus = sync.OnceValue(func() []store.Record {
 		create := len(ids) == 0 || r.IntN(events-len(rs)) < items-len(ids)
 		switch {
 		case create:
-			d = Create{In: top, Payload: made{Title: text(words(r, 3+r.IntN(8)))}}
+			d = CreateItem{Payload: ItemCreate{Place: AtLevel{Level: mustLevel(1 + r.IntN(3))}}}
 		default:
 			item := ids[r.IntN(len(ids))]
 			about := About(Item{ID: item})
 			if r.IntN(4) == 0 {
-				about = Element{Of: item, Name: Segment{s: "abc"}}
+				about = Element{Of: item, ID: anElement}
 			}
 			var tags []string
 			for range r.IntN(3) {
@@ -42,7 +43,7 @@ var corpus = sync.OnceValue(func() []store.Record {
 			}
 			d = Act{About: about, Payload: note{Text: text(words(r, r.IntN(60))), Tags: tags}}
 		}
-		m, err := Mint(Context{Writer: writer(byte(w)), Agent: Unlabeled{}, ConfigRef: config, Policy: 1, Frontier: f, Names: b.Names(), Now: t0},
+		m, err := Mint(Context{Writer: writer(byte(w)), Agent: Unlabeled{}, ConfigRef: config, Policy: 1, Frontier: f, Known: b.Known(), Now: t0},
 			NewDrafts(d), keys[w].Signer(), salt)
 		if err != nil {
 			panic(err)
@@ -50,9 +51,10 @@ var corpus = sync.OnceValue(func() []store.Record {
 		e := m.Events[0]
 		f = f.Observe(e.Header())
 		if create {
-			it := e.Header().About().(Item)
+			it := e.Header().About().(NewItem)
 			ids = append(ids, it.ID)
-			b.Add(top, it.ID.Segments()[0])
+			b.Saw(it.ID)
+			b.Created(Top{})
 		}
 		rs = append(rs, m.Batch.Records()...)
 	}
@@ -74,7 +76,7 @@ func BenchmarkCorpus(b *testing.B) {
 	es := make([]Event, len(rs))
 	parts := make([]record, len(rs))
 	for i, r := range rs {
-		es[i] = decoded(b, here, r)
+		es[i] = decoded(b, benchKinds, r)
 		rec, err := readRecord(r)
 		if err != nil {
 			b.Fatal(err)
@@ -88,7 +90,7 @@ func BenchmarkCorpus(b *testing.B) {
 	b.Run("Decode", func(b *testing.B) {
 		for b.Loop() {
 			for _, r := range rs {
-				if _, ok := Decode(here, r).(Event); !ok {
+				if _, ok := Decode(benchKinds, r).(Event); !ok {
 					b.Fatal("a corpus record is malformed")
 				}
 			}

@@ -3,6 +3,7 @@ package fold_test
 import (
 	"bytes"
 	"math/rand/v2"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,8 +23,6 @@ var (
 	checkoutB  = store.CheckoutID{0xb}
 	configRef  = must(git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e"))
 	t0         = time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
-	prefix     = must(events.ParsePrefix("lit"))
-	top        = events.Children{Parent: events.Top{Prefix: prefix}}
 	env        = must(fold.NewEnv(fold.NewRegistry(fold.FirstFacts()...), events.NewSuites(events.Ed25519()), 2))
 
 	title    = name("title")
@@ -69,7 +68,7 @@ func (w writer) ref() store.Ref { return store.WriterRef{Checkout: w.checkout} }
 // batches, in append order, under one log.
 type world struct {
 	t       testing.TB
-	salts   *rand.ChaCha8
+	entropy *rand.ChaCha8
 	order   []store.Ref
 	streams map[store.Ref]*stream
 }
@@ -80,7 +79,7 @@ type stream struct {
 }
 
 func newWorld(t testing.TB) *world {
-	return &world{t: t, salts: rand.NewChaCha8([32]byte{'f', 'o', 'l', 'd'}), streams: map[store.Ref]*stream{}}
+	return &world{t: t, entropy: rand.NewChaCha8([32]byte{'f', 'o', 'l', 'd'}), streams: map[store.Ref]*stream{}}
 }
 
 // mint mints ds as w, at the frontier and with the names of seen, the
@@ -88,7 +87,7 @@ func newWorld(t testing.TB) *world {
 func (wd *world) mint(w writer, seen fold.State, d events.Draft, more ...events.Draft) []events.Event {
 	wd.t.Helper()
 	m, err := events.Mint(events.Context{Writer: w.checkout, Agent: events.Unlabeled{}, ConfigRef: configRef, Policy: 1,
-		Frontier: seen.Frontier(), Names: seen.Names(), Now: t0}, events.NewDrafts(d, more...), w.signer, wd.salts)
+		Frontier: seen.Frontier(), Known: seen.Known(), Now: t0}, events.NewDrafts(d, more...), w.signer, wd.entropy)
 	if err != nil {
 		wd.t.Fatal(err)
 	}
@@ -163,14 +162,17 @@ func (wd *world) view(upto map[store.Ref]int) fold.State {
 func (wd *world) state() fold.State { return wd.replay().State }
 
 func create(at events.Placement) events.Draft {
-	return events.Create{In: top, Payload: events.ItemCreate{Place: at}}
+	return events.CreateItem{Payload: events.ItemCreate{Place: at}}
 }
 
 func createUnder(parent events.ItemID) events.Draft {
-	return events.Create{In: events.Children{Parent: events.Under{ID: parent}}, Payload: events.ItemCreate{Place: events.BelowParent{}}}
+	return events.CreateItem{Payload: events.ItemCreate{Place: events.BelowParent{Parent: parent}}}
 }
 
-func idOf(e events.Event) events.ItemID { return e.Header().About().(events.Item).ID }
+func idOf(e events.Event) events.ItemID { return e.Header().About().(events.NewItem).ID }
+
+// ghost is an item id no test mints: c, 25 times, then 0.
+func ghost(c string) events.ItemID { return must(events.ParseItemID(strings.Repeat(c, 25) + "0")) }
 
 func set(id events.ItemID, field events.Name, v events.Value, over ...events.Event) events.Draft {
 	return events.Act{About: events.Item{ID: id}, Payload: events.FieldSet{Field: field, Value: v, Over: idsOf(over)}}

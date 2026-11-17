@@ -4,59 +4,48 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/lit2/internal/events/wire"
 )
 
-func TestAnItemIDRoundTripsAndNothingElseParses(t *testing.T) {
-	for _, s := range []string{"lit-abc", "lit-0zz.792a.dee", "rin-2ae", "p2p-9xyzwv0", "lit-abc.def.ghj.kmn"} {
-		id, err := ParseItemID(s)
-		if err != nil || id.String() != s {
-			t.Errorf("ParseItemID(%q) = %v, %v; want it back", s, id, err)
-			continue
+func TestAFullIDRoundTripsAndItsSegmentsAreItsPrefixes(t *testing.T) {
+	for _, b := range [][16]byte{{}, {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, anItem.b} {
+		id := ItemID{b: b}
+		s := id.String()
+		back, err := ParseItemID(s)
+		if err != nil || back != id || len(s) != fullWidth {
+			t.Errorf("%x renders %q, which reads back as %v, %v", b, s, back, err)
 		}
-		segs := id.Segments()
-		if child := id.Parent().Child(segs[len(segs)-1]); child != id {
-			t.Errorf("%s's parent's child of its last segment is %s", id, child)
+		for w := minWidth; w <= fullWidth; w++ {
+			if seg := id.Segment(w).String(); seg != s[:w] {
+				t.Errorf("%s's %d-digit segment is %q; want its first %d digits", s, w, seg, w)
+			}
 		}
 	}
-	for _, s := range []string{"", "lit", "lit-", "li-abc", "Lit-abc", "1it-abc", "lit_abc", "lit-ab", "lit-abc.", "lit-abc..def",
-		"lit-abi", "lit-abl", "lit-abo", "lit-abu", "lit-ABC", "lit-abc.de", "lit-abc/def", " lit-abc", "lit-abc-def"} {
+	full := anItem.String()
+	for _, s := range []string{"", full[:25], full + "0", strings.ToUpper(full), full[:25] + "1", full[:25] + "i", "lit-" + full} {
 		if id, err := ParseItemID(s); err == nil {
 			t.Errorf("ParseItemID(%q) = %v; want it refused", s, id)
 		}
 	}
-	if top, ok := mustID(t, "lit-abc").Parent().(Top); !ok || top.Prefix != prefix {
-		t.Errorf("a top-level id's parent is %#v; want its prefix", mustID(t, "lit-abc").Parent())
-	}
-	if under, ok := mustID(t, "lit-abc.def").Parent().(Under); !ok || under.ID != mustID(t, "lit-abc") {
-		t.Errorf("a child's parent is %#v; want lit-abc", mustID(t, "lit-abc.def").Parent())
-	}
-}
-
-func mustID(t *testing.T, s string) ItemID {
-	t.Helper()
-	id, err := ParseItemID(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
 }
 
 func TestWidthGrowsWithTheNamespaceAndKeepsAMatchUnlikely(t *testing.T) {
 	prev := Width(0)
-	for _, taken := range append(rangeTo(1<<16), 1<<20, 1<<24, 1<<30, 1<<40) {
-		w := Width(taken)
+	for _, fill := range append(rangeTo(1<<16), 1<<20, 1<<24, 1<<30, 1<<40) {
+		w := Width(fill)
 		room := uint64(1) << (5 * w)
-		if w < prev || w < 3 || 1024*(uint64(taken)+1) > room {
-			t.Fatalf("Width(%d) = %d after %d; want it monotone, at least 3, and (taken+1)/32^w ≤ 1/1024", taken, w, prev)
+		if w < prev || w < 3 || 1024*(uint64(fill)+1) > room {
+			t.Fatalf("Width(%d) = %d after %d; want it monotone, at least 3, and (fill+1)/32^w ≤ 1/1024", fill, w, prev)
 		}
-		if w > 3 && 1024*(uint64(taken)+1) <= room>>5 {
-			t.Fatalf("Width(%d) = %d, though %d digits would do", taken, w, w-1)
+		if w > 3 && 1024*(uint64(fill)+1) <= room>>5 {
+			t.Fatalf("Width(%d) = %d, though %d digits would do", fill, w, w-1)
 		}
 		prev = w
 	}
-	for taken, want := range map[int]int{0: 3, 31: 3, 32: 4, 1023: 4, 1024: 5, 32767: 5} {
-		if got := Width(taken); got != want {
-			t.Errorf("Width(%d) = %d; want %d", taken, got, want)
+	for fill, want := range map[int]int{0: 3, 31: 3, 32: 4, 1023: 4, 1024: 5, 32767: 5} {
+		if got := Width(fill); got != want {
+			t.Errorf("Width(%d) = %d; want %d", fill, got, want)
 		}
 	}
 }
@@ -69,125 +58,178 @@ func rangeTo(n int) []int {
 	return ns
 }
 
-func TestTwoWritersAndTwoCommandsOfOneMintFromDistinctInputs(t *testing.T) {
-	top := Children{Parent: Top{Prefix: prefix}}
-	create := Create{In: top, Payload: made{Title: text("one title")}}
+var topCreate = CreateItem{Payload: ItemCreate{Place: AtLevel{Level: mustLevel(1)}}}
+
+func newItemOf(e Event) NewItem { return e.Header().About().(NewItem) }
+
+func TestAnIDIsTheEntropysAndNothingElses(t *testing.T) {
 	at := Frontier{highest: 7}
-	// two offline writers at one frontier, even drawing one salt stream
-	a := mint(t, context(1, at, Names{}), keyOf(1), 1, create).Events[0]
-	b := mint(t, context(2, at, Names{}), keyOf(2), 1, create).Events[0]
-	// two commands of one checkout racing one frontier, with no lock
-	c := mint(t, context(1, at, Names{}), keyOf(1), 2, create).Events[0]
-	for _, pair := range [][2]Event{{a, b}, {a, c}, {b, c}} {
-		x, y := pair[0], pair[1]
-		if x.Header().Attribution().Checkout == y.Header().Attribution().Checkout && x.Header().PayloadHash() == y.Header().PayloadHash() {
-			t.Errorf("two mints hashed one writer, position and payload hash")
-		}
-		if x.Header().About() == y.Header().About() {
-			t.Errorf("two mints named one item, %v", x.Header().About())
-		}
-		if Compare(x.Order(), y.Order()) == 0 || Compare(x.Order(), y.Order()) != -Compare(y.Order(), x.Order()) {
-			t.Errorf("the order does not tell %s from %s", x.ID(), y.ID())
-		}
+	// one entropy, two writers, two frontiers: one id, so where the create
+	// lands is no part of it
+	a := newItemOf(mint(t, context(1, at, Known{}), keyOf(1), 1, topCreate).Events[0])
+	b := newItemOf(mint(t, context(2, Frontier{highest: 90}, Known{}), keyOf(2), 1, topCreate).Events[0])
+	if a != b {
+		t.Errorf("one entropy minted %v and %v; want one id", a, b)
 	}
-	if a.Header().Position() != c.Header().Position() {
-		t.Error("two commands at one frontier took different positions; the test does not race them")
+	// two offline writers at one frontier, each with its own entropy
+	c := newItemOf(mint(t, context(1, at, Known{}), keyOf(1), 2, topCreate).Events[0])
+	if a.ID == c.ID {
+		t.Errorf("two entropies minted one id, %s", a.ID)
 	}
 }
 
-func TestMintNeverNamesWhatIsTakenAndLeavesNamesAsTheyWere(t *testing.T) {
-	ns := Children{Parent: Top{Prefix: prefix}}
-	create := Create{In: ns, Payload: made{Title: text("x")}}
-	first := mint(t, context(1, Frontier{}, Names{}), keyOf(1), 5, create)
-	name := first.Events[0].Header().About().(Item).ID.Segments()[0]
+// fixed is an entropy source that gives its bytes in order, then zeros.
+type fixed struct{ b []byte }
 
-	var b NamesBuilder
-	b.Add(ns, name)
-	names := b.Names()
-	again := mint(t, context(1, Frontier{}, names), keyOf(1), 5, create)
-	if got := again.Events[0].Header().About().(Item).ID.Segments()[0]; got == name || again.Redraws != 1 {
-		t.Errorf("with %s taken, the same draw named %s after %d redraws; want another name, one redraw", name, got, again.Redraws)
-	}
-	if names.Count(ns) != 1 || !names.Taken(ns, name) {
-		t.Errorf("Mint changed its Names: %d taken", names.Count(ns))
-	}
-	b.Add(ns, Segment{s: "zzz"})
-	if names.Count(ns) != 1 || names.Taken(ns, Segment{s: "zzz"}) || !b.Names().Taken(ns, Segment{s: "zzz"}) {
-		t.Error("a later Add changed a Names already taken from the builder")
-	}
-
-	// two drafts of one command whose first draws name alike: the second
-	// draws again
-	s1, s2 := clashingSalts(t, ns)
-	m, err := Mint(context(1, Frontier{}, Names{}), NewDrafts(create, create), keyOf(1).Signer(), saltStream(s1, s2, Salt{9}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	x, y := m.Events[0].Header().About(), m.Events[1].Header().About()
-	if x == y || m.Redraws != 1 {
-		t.Errorf("one command named %v and %v after %d redraws; want two names, one redraw", x, y, m.Redraws)
-	}
-}
-
-// clashingSalts finds two salts whose names at positions 1 and 2 match at
-// three digits, by search: one in 32,768 pairs does.
-func clashingSalts(t *testing.T, ns Namespace) (Salt, Salt) {
-	t.Helper()
-	payload := payloadWire(made{Title: text("x")})
-	seen := map[Segment]Salt{}
-	for i := range uint64(1 << 20) {
-		var s Salt
-		s[0], s[1], s[2] = byte(i), byte(i>>8), byte(i>>16)
-		seen[segmentOf(nameDigest(writer(1), CausalPosition{n: 1}, payloadHash(s, payload)), 3)] = s
-		var s2 Salt
-		s2[31], s2[30], s2[29] = byte(i), byte(i>>8), byte(i>>16)
-		if s1, ok := seen[segmentOf(nameDigest(writer(1), CausalPosition{n: 2}, payloadHash(s2, payload)), 3)]; ok {
-			return s1, s2
-		}
-	}
-	t.Fatalf("no clash in 2^20 salts in %v", ns)
-	return Salt{}, Salt{}
-}
-
-// repeating is a broken salt source: every byte it gives is 7.
-type repeating struct{}
-
-func (repeating) Read(p []byte) (int, error) {
-	for i := range p {
-		p[i] = 7
-	}
+func (f *fixed) Read(p []byte) (int, error) {
+	n := copy(p, f.b)
+	f.b = f.b[n:]
+	clear(p[n:])
 	return len(p), nil
 }
 
-func TestABrokenSaltSourceFailsMintInsteadOfHangingIt(t *testing.T) {
-	ns := Children{Parent: Top{Prefix: prefix}}
-	create := Create{In: ns, Payload: made{Title: text("x")}}
-	c := context(1, Frontier{}, Names{})
-	first, err := Mint(c, NewDrafts(create), keyOf(1).Signer(), repeating{})
+// drawing is entropy whose first id is id: the id, then a zero salt.
+func drawing(ids ...ItemID) *fixed {
+	var b []byte
+	for _, id := range ids {
+		b = append(b, id.b[:]...)
+		b = append(b, make([]byte, len(Salt{}))...)
+	}
+	return &fixed{b: b}
+}
+
+// sharing is an id that shares exactly k leading digits with id.
+func sharing(id ItemID, k int) ItemID {
+	out := id.b
+	bit := 5 * k // the first bit of digit k
+	out[bit/8] ^= 0x80 >> (bit % 8)
+	return ItemID{b: out}
+}
+
+func TestASegmentIsWiderThanAnyKnownIDsSharedDigits(t *testing.T) {
+	drawn := ItemID{b: [16]byte{0x5a, 0x17, 0xc3, 0x9e, 0x42, 0x0d, 0x88, 0x61}}
+	for _, k := range []int{0, 2, 3, 5, 25} {
+		var b KnownBuilder
+		b.Saw(sharing(drawn, k))
+		m, err := Mint(context(1, Frontier{}, b.Known()), NewDrafts(topCreate), keyOf(1).Signer(), drawing(drawn))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := newItemOf(m.Events[0])
+		if got.ID != drawn || got.Width != max(3, k+1) {
+			t.Errorf("a known id sharing %d digits gave %v; want %s at width %d", k, got, drawn, max(3, k+1))
+		}
+		if seg := got.Segment(); sharing(drawn, k).Segment(got.Width) == seg {
+			t.Errorf("the segment %s is a known id's own prefix", seg)
+		}
+	}
+	// a full namespace widens every segment, whatever the ids share
+	var b KnownBuilder
+	for range 32 {
+		b.Created(Top{})
+	}
+	m, err := Mint(context(1, Frontier{}, b.Known()), NewDrafts(topCreate), keyOf(1).Signer(), drawing(drawn))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var b NamesBuilder
-	b.Add(ns, first.Events[0].Header().About().(Item).ID.Segments()[0])
-	c.Names = b.Names()
-	if m, err := Mint(c, NewDrafts(create), keyOf(1).Signer(), repeating{}); err == nil || !strings.Contains(err.Error(), "salt") {
-		t.Errorf("a salt source that repeats a taken name mints %v, %v; want an error naming the salt source", m.Events, err)
+	if w := newItemOf(m.Events[0]).Width; w != 4 {
+		t.Errorf("a namespace of 32 gave width %d; want 4", w)
 	}
 }
 
-type stream struct{ salts []Salt }
+func TestTwoCreatesOfOneCommandWidenEachOthersSegments(t *testing.T) {
+	first := ItemID{b: [16]byte{0x5a, 0x17, 0xc3}}
+	m, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate, topCreate), keyOf(1).Signer(), drawing(first, sharing(first, 4)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, y := newItemOf(m.Events[0]), newItemOf(m.Events[1])
+	if x.Width != 3 || y.Width != 5 {
+		t.Errorf("two creates sharing 4 digits got widths %d and %d; want 3, then 5", x.Width, y.Width)
+	}
+}
 
-func saltStream(ss ...Salt) *stream { return &stream{salts: ss} }
+func TestAnEntropySourceThatRepeatsFailsMint(t *testing.T) {
+	var b KnownBuilder
+	b.Saw(anItem)
+	if m, err := Mint(context(1, Frontier{}, b.Known()), NewDrafts(topCreate), keyOf(1).Signer(), drawing(anItem)); err == nil || !strings.Contains(err.Error(), "repeats") {
+		t.Errorf("drawing a known id mints %v, %v; want an error naming the entropy source", m.Events, err)
+	}
+	if _, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate, topCreate), keyOf(1).Signer(), drawing(anItem, anItem)); err == nil {
+		t.Error("one command drawing one id twice mints")
+	}
+}
 
-func (s *stream) Read(p []byte) (int, error) {
-	n := copy(p, s.salts[0][:])
-	s.salts = s.salts[1:]
-	return n, nil
+func TestKnownIsAValueTheBuilderNoLongerChanges(t *testing.T) {
+	var b KnownBuilder
+	b.Saw(anItem)
+	b.Created(Top{})
+	k := b.Known()
+	b.Saw(anElement)
+	b.Created(Top{})
+	if !k.Holds(anItem) || k.Holds(anElement) || k.Fill(Top{}) != 1 {
+		t.Errorf("a later record changed a Known already taken: holds the element %v, fill %d", k.Holds(anElement), k.Fill(Top{}))
+	}
+}
+
+func TestEverySubjectRoundTripsAndNoOtherShapeReads(t *testing.T) {
+	for _, a := range []About{Root{}, Item{ID: anItem}, NewItem{ID: anItem, Width: 4}, Element{Of: anItem, ID: anElement},
+		NewElement{Of: anItem, ID: anElement, Width: 26}} {
+		if got, err := readAbout(aboutWire(a)); err != nil || got != a {
+			t.Errorf("%#v reads back as %#v, %v", a, got, err)
+		}
+	}
+	subject := func(fields func(*wire.Writer)) []byte {
+		var w wire.Writer
+		fields(&w)
+		return w.Encoded()
+	}
+	for name, b := range map[string][]byte{
+		"an element of the root": subject(func(w *wire.Writer) { w.Bytes(subjectElement, anElement.b[:]) }),
+		"a segment of the root":  subject(func(w *wire.Writer) { w.Uvarint(subjectWidth, 3) }),
+		"a short item id":        subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:15]) }),
+		"a long element id":      subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Bytes(subjectElement, make([]byte, 17)) }),
+		"a two-digit segment":    subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 2) }),
+		"a segment past the id":  subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 27) }),
+	} {
+		if got, err := readAbout(b); err == nil {
+			t.Errorf("%s reads as %#v", name, got)
+		}
+	}
+}
+
+func TestAShortIDParsesBareOrUnderTheActivePrefixOnly(t *testing.T) {
+	for s, want := range map[string]ShortID{
+		"1f9":                    Segments{s: "1f9"},
+		"1f9.zc7":                Segments{s: "1f9.zc7"},
+		"lit-1f9.zc7":            Segments{s: "1f9.zc7"},
+		anItem.String():          FullID{ID: anItem},
+		"lit-" + anItem.String(): FullID{ID: anItem},
+	} {
+		if got, err := ParseShortID(s, prefix); err != nil || got != want {
+			t.Errorf("ParseShortID(%q) = %#v, %v; want %#v", s, got, err, want)
+		}
+	}
+	if _, err := ParseShortID("rin-1f9", prefix); err == nil || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "another project") {
+		t.Errorf("an id under another prefix reads, or its refusal does not name it: %v", err)
+	}
+	for _, s := range []string{"", "1f", "1f9.", "1f9..zc7", "1fi", "Lit-1f9", "lit-", "lit_1f9", "1f9/zc7", "unfiled"} {
+		if got, err := ParseShortID(s, prefix); err == nil {
+			t.Errorf("ParseShortID(%q) = %#v; want it refused", s, got)
+		}
+	}
+	segs := Segments{s: "1f9.zc7"}.List()
+	if got := Render(mustPrefix("abc"), anItem, segs); got != "abc-1f9.zc7" {
+		t.Errorf("1f9.zc7 under abc renders %q", got)
+	}
+	if got := Render(prefix, anItem, nil); got != "lit-"+anItem.String() {
+		t.Errorf("an item with no segments renders %q; want its full id", got)
+	}
 }
 
 func TestKDraftsTakeTheKPositionsPastTheFrontierAndAnObserverSortsAfter(t *testing.T) {
 	act := Act{About: Root{}, Payload: note{Text: text("x")}}
-	m := mint(t, context(1, Frontier{highest: 99}, Names{}), keyOf(1), 1, act, act, act, act)
+	m := mint(t, context(1, Frontier{highest: 99}, Known{}), keyOf(1), 1, act, act, act, act)
 	var got []uint64
 	for _, e := range m.Events {
 		got = append(got, e.Header().Position().n)
@@ -197,17 +239,23 @@ func TestKDraftsTakeTheKPositionsPastTheFrontierAndAnObserverSortsAfter(t *testi
 	}
 	// a writer far behind, whose id sorts first, observes the last of them
 	seen := m.Events[3]
-	after := mint(t, context(0, Frontier{highest: 3}.Observe(seen.Header()), Names{}), keyOf(2), 2, act).Events[0]
+	after := mint(t, context(0, Frontier{highest: 3}.Observe(seen.Header()), Known{}), keyOf(2), 2, act).Events[0]
 	if Compare(seen.Order(), after.Order()) >= 0 {
 		t.Errorf("an event minted after observing %s sorts before it", seen.ID())
 	}
 	if f := (Frontier{highest: 500}).Observe(seen.Header()); f.highest != 500 {
 		t.Errorf("observing an older event moved the frontier back to %d", f.highest)
 	}
+	// two commands of one checkout racing one frontier, with no lock
+	x := mint(t, context(1, Frontier{highest: 7}, Known{}), keyOf(1), 1, act).Events[0]
+	y := mint(t, context(1, Frontier{highest: 7}, Known{}), keyOf(1), 2, act).Events[0]
+	if x.Header().Position() != y.Header().Position() || Compare(x.Order(), y.Order()) == 0 || x.ID() == y.ID() {
+		t.Errorf("two commands at one position are not told apart by the order")
+	}
 }
 
 func TestAnEventIDReadsBackAndAShortOneIsRefused(t *testing.T) {
-	id := mint(t, context(3, Frontier{highest: 1 << 40}, Names{}), keyOf(1), 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0].ID()
+	id := mint(t, context(3, Frontier{highest: 1 << 40}, Known{}), keyOf(1), 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0].ID()
 	if got, err := ReadEventID(id[:]); err != nil || got != id {
 		t.Errorf("an event id reads back as %v, %v", got, err)
 	}

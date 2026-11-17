@@ -45,19 +45,19 @@ func payloadBytes(p Payload) []byte {
 
 func TestTheFirstFactsReadBackAsMinted(t *testing.T) {
 	k := keyOf(1)
-	id := Top{Prefix: prefix}.Child(Segment{s: "abc"})
+	id := anItem
 	over := []EventID{{1}, {2}}
 	for _, c := range []struct {
 		draft Draft
 		same  func(Payload) bool
 	}{
-		{Create{In: Children{Parent: Top{Prefix: prefix}}, Payload: ItemCreate{Place: AtLevel{Level: mustLevel(3)}}},
+		{CreateItem{Payload: ItemCreate{Place: AtLevel{Level: mustLevel(3)}}},
 			func(p Payload) bool {
 				at, ok := p.(ItemCreate).Place.(AtLevel)
 				return ok && at.Level == mustLevel(3)
 			}},
-		{Create{In: Children{Parent: Under{ID: id}}, Payload: ItemCreate{Place: BelowParent{}}},
-			func(p Payload) bool { _, ok := p.(ItemCreate).Place.(BelowParent); return ok }},
+		{CreateItem{Payload: ItemCreate{Place: BelowParent{Parent: id}}},
+			func(p Payload) bool { below, ok := p.(ItemCreate).Place.(BelowParent); return ok && below.Parent == id }},
 		{Act{About: Item{ID: id}, Payload: ItemDelete{}},
 			func(p Payload) bool { _, ok := p.(ItemDelete); return ok }},
 		{Act{About: Item{ID: id}, Payload: FieldSet{Field: mustName("title"), Value: Prose{Body: text("a title")}, Over: over}},
@@ -79,10 +79,10 @@ func TestTheFirstFactsReadBackAsMinted(t *testing.T) {
 				r := p.(LabelRm)
 				return r.Label == mustLabel("urgent") && slices.Equal(r.Observed, over)
 			}},
-		{Create{In: Elements{Of: id}, Payload: CommentAdd{Body: text("a comment")}},
+		{CreateElement{Of: id, Payload: CommentAdd{Body: text("a comment")}},
 			func(p Payload) bool { return p.(CommentAdd).Body.Commitment() == text("a comment").Commitment() }},
 	} {
-		m := mint(t, context(1, Frontier{}, Names{}), k, 1, c.draft)
+		m := mint(t, context(1, Frontier{}, Known{}), k, 1, c.draft)
 		e := decoded(t, first, records(m)[0])
 		read, ok := e.Body().(Readable)
 		if !ok {
@@ -181,9 +181,9 @@ func TestAZeroLevelOrNameIsRefusedByItsWriter(t *testing.T) {
 // A zero Labeled agent reads back as Unlabeled, so the writer refuses it. A
 // labeled agent is the control that must be written.
 func TestAZeroAgentLabelIsRefusedByItsWriter(t *testing.T) {
-	act := Act{About: Item{ID: Top{Prefix: prefix}.Child(Segment{s: "abc"})}, Payload: LabelAdd{Label: mustLabel("a")}}
+	act := Act{About: Item{ID: anItem}, Payload: LabelAdd{Label: mustLabel("a")}}
 	signedWith := func(a Agent) string {
-		c := context(1, Frontier{}, Names{})
+		c := context(1, Frontier{}, Known{})
 		c.Agent = a
 		return panicked(func() { mint(t, c, keyOf(1), 1, act) })
 	}
@@ -210,10 +210,11 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	var badField wire.Writer
 	badField.Bytes(1, []byte("Title"))
 	badField.Bytes(2, Plain{Canonical: "x"}.wire())
-	var levelSix, bothPlaces wire.Writer
+	var levelSix, bothPlaces, shortParent wire.Writer
 	levelSix.Uvarint(placeAtLevel, 6)
 	bothPlaces.Uvarint(placeAtLevel, 1)
-	bothPlaces.Bytes(placeBelowParent, nil)
+	bothPlaces.Bytes(placeBelowParent, anItem.b[:])
+	shortParent.Bytes(placeBelowParent, anItem.b[:8])
 	place := func(b []byte) []byte {
 		var w wire.Writer
 		w.Bytes(1, b)
@@ -229,6 +230,7 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		{"an item.create placed nowhere", ReadItemCreate, nil},
 		{"an item.create at level 6", ReadItemCreate, place(levelSix.Encoded())},
 		{"an item.create at a level and below its parent", ReadItemCreate, place(bothPlaces.Encoded())},
+		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded())},
 		{"a label.add of no label", ReadLabelAdd, nil},
 		{"a comment.add with no body", ReadCommentAdd, nil},
 	} {

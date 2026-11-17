@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/assets"
+	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/git"
 )
@@ -230,7 +231,7 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"bad-pair", replace("[columns.backlog]", "[links.x]\nkind = \"relates\"\nbetween = [[1]]\n\n[columns.backlog]"), ReasonBadPair},
 		{"pair-level-undeclared", replace("[columns.backlog]", "[links.x]\nkind = \"relates\"\nbetween = [[1, 9]]\n\n[columns.backlog]"), ReasonPairLevelUndeclared},
 		{"bad-duration", replace(`claim_ttl = "6h"`, `claim_ttl = "soon"`), ReasonBadDuration},
-		{"bad-node-key", replace("[columns.backlog]", "[nodes.zzz]\nclaim_ttl = \"1h\"\n\n[columns.backlog]"), ReasonBadNodeKey},
+		{"bad-node-key", replace("[columns.backlog]", "[nodes.\"zzz-7k2\"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]"), ReasonBadNodeKey},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -605,6 +606,29 @@ func TestAHomeIsAHomeWhateverItsName(t *testing.T) {
 	}
 	if _, ok := s.Sections()[HomeNode("lit-7k2")]; !ok {
 		t.Errorf("sections = %v, want the home lit-7k2's", s.Sections())
+	}
+}
+
+// TestAnItemKeyIsBareOrUnderTheFilesOwnPrefix: "lit-7k2" and "7k2" key
+// one node, as an id typed either way names one item; a key under another
+// prefix is another project's, and its refusal names that prefix.
+func TestAnItemKeyIsBareOrUnderTheFilesOwnPrefix(t *testing.T) {
+	for _, key := range []string{`"lit-7k2"`, "7k2"} {
+		s, err := parseText(t, replace("[columns.backlog]", "[nodes."+key+"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(minimal))
+		if err != nil {
+			t.Fatal(err)
+		}
+		bare, err := events.ParseShortID("7k2", s.Prefix())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.Sections()[ItemNode(bare)]; !ok {
+			t.Errorf("[nodes.%s]: sections = %v, want 7k2's", key, s.Sections())
+		}
+	}
+	refusals := refusalsOf(t, replace("[columns.backlog]", "[nodes.\"zzz-7k2\"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(minimal))
+	if len(refusals) != 1 || refusals[0].Reason != ReasonBadNodeKey || !strings.Contains(refusals[0].Message, "zzz") {
+		t.Errorf("a key under another prefix: refusals = %v, want one bad-node-key naming zzz", refusals)
 	}
 }
 

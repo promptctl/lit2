@@ -32,7 +32,7 @@ func readFlag(r *wire.Reader) (events.Versioned, error) {
 func TestANewKindTouchesNothing(t *testing.T) {
 	flags := name("flags")
 	withFlags := must(fold.NewEnv(fold.NewRegistry(append(fold.FirstFacts(), fold.On(fold.Items, func(f fold.Fact[flag]) fold.Applies {
-		return fold.Changes{List: []fold.Change{fold.Add{At: f.At, Set: flags, Member: f.Payload.Flag}}}
+		return fold.Changes{List: []fold.Change{fold.Add{At: f.At.(fold.Node), Set: flags, Member: f.Payload.Flag}}}
 	}, readFlag))...), env.Suites(), 1))
 	w, id := item(t)
 	w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: flag{Flag: name("blocked")}})

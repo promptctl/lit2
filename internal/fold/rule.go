@@ -36,22 +36,42 @@ type Misaddressed struct{ Want string }
 func (Changes) applies()      {}
 func (Misaddressed) applies() {}
 
-// Target is the node a change writes.
+// Target is what an event is about, narrowed to what its kind accepts: a
+// node that exists, or a node its create makes.
 //
 //sumtype:decl
 type Target interface{ target() }
 
+// Node is a node a change writes: an item or an element of one. A create
+// subject is no Node, so no write can target one `[LAW:types-are-the-program]`.
+//
+//sumtype:decl
+type Node interface {
+	Target
+	node()
+}
+
 // OnItem is an item.
 type OnItem struct{ ID events.ItemID }
 
-// OnElement is the element named Name of item Of.
+// OnElement is element ID of item Of.
 type OnElement struct {
-	Of   events.ItemID
-	Name events.Segment
+	Of events.ItemID
+	ID events.ElementID
 }
 
-func (OnItem) target()    {}
-func (OnElement) target() {}
+// OnNewItem is the item a create makes.
+type OnNewItem struct{ New events.NewItem }
+
+// OnNewElement is the element a create makes.
+type OnNewElement struct{ New events.NewElement }
+
+func (OnItem) target()       {}
+func (OnElement) target()    {}
+func (OnNewItem) target()    {}
+func (OnNewElement) target() {}
+func (OnItem) node()         {}
+func (OnElement) node()      {}
 
 // Aim is the About shapes a kind accepts.
 type Aim uint8
@@ -64,6 +84,10 @@ const (
 	Elements
 	// Nodes is an item or an element.
 	Nodes
+	// NewItems is the item a create makes.
+	NewItems
+	// NewElements is the element a create makes.
+	NewElements
 )
 
 // target narrows about to the node a kind of this aim writes; false is an
@@ -73,7 +97,11 @@ func (a Aim) target(about events.About) (Target, bool) {
 	case events.Item:
 		return OnItem{ID: at.ID}, a == Items || a == Nodes
 	case events.Element:
-		return OnElement{Of: at.Of, Name: at.Name}, a == Elements || a == Nodes
+		return OnElement{Of: at.Of, ID: at.ID}, a == Elements || a == Nodes
+	case events.NewItem:
+		return OnNewItem{New: at}, a == NewItems
+	case events.NewElement:
+		return OnNewElement{New: at}, a == NewElements
 	case events.Root:
 		return nil, false
 	}
@@ -89,6 +117,10 @@ func (a Aim) misaddressed() Misaddressed {
 		return Misaddressed{Want: "an element of an item"}
 	case Nodes:
 		return Misaddressed{Want: "an item or an element of one"}
+	case NewItems:
+		return Misaddressed{Want: "the item it creates"}
+	case NewElements:
+		return Misaddressed{Want: "the element it creates"}
 	}
 	panic(fmt.Sprintf("fold: %d is not an Aim", uint8(a)))
 }
@@ -146,22 +178,21 @@ func (r Registry) Kinds() events.Kinds { return r.decode }
 //sumtype:decl
 type Change interface{ change() }
 
-// CreateItem creates item ID, placed as its create says.
+// CreateItem creates New, placed as its create says.
 type CreateItem struct {
-	ID    events.ItemID
+	New   events.NewItem
 	Place events.Placement
 }
 
-// CreateElement creates element Name of item Of, shown in the list In.
+// CreateElement creates New, shown in its item's list In.
 type CreateElement struct {
-	Of   events.ItemID
-	Name events.Segment
-	In   events.Name
+	New events.NewElement
+	In  events.Name
 }
 
 // Write writes Value to field Field of At, replacing the writes Over.
 type Write struct {
-	At    Target
+	At    Node
 	Field events.Name
 	Value events.Value
 	Over  []events.EventID
@@ -169,14 +200,14 @@ type Write struct {
 
 // Add adds Member to set Set of At.
 type Add struct {
-	At     Target
+	At     Node
 	Set    events.Name
 	Member events.Name
 }
 
 // Remove removes the adds Observed of Member from set Set of At.
 type Remove struct {
-	At       Target
+	At       Node
 	Set      events.Name
 	Member   events.Name
 	Observed []events.EventID

@@ -16,7 +16,7 @@ func rmLabel(id events.ItemID, l events.Label, observed ...events.Event) events.
 }
 
 func comment(id events.ItemID, text string) events.Draft {
-	return events.Create{In: events.Elements{Of: id}, Payload: events.CommentAdd{Body: events.SealPlain(text)}}
+	return events.CreateElement{Of: id, Payload: events.CommentAdd{Body: events.SealPlain(text)}}
 }
 
 func TestAConcurrentRemoveLeavesAFreshAdd(t *testing.T) {
@@ -55,8 +55,8 @@ func TestCommentsListInCreationOrder(t *testing.T) {
 		want := e.Body().(events.Readable).Payload.(events.CommentAdd).Body.Commitment()
 		text, ok := el.Facts.Text(bodyName).(fold.Agreed)
 		created, isCreated := el.Origin.(fold.Created)
-		if el.In != comments || el.Name != e.Header().About().(events.Element).Name || !ok || text.Body.Commitment() != want || !isCreated || created.Stamp.Event != e.ID() {
-			t.Errorf("comment %d is %#v; want %s's comment, in comments, its body agreed", i, el, e.ID())
+		if el.In != comments || el.ID != e.Header().About().(events.NewElement).ID || created.Segment != e.Header().About().(events.NewElement).Segment() || !ok || text.Body.Commitment() != want || !isCreated || created.Stamp.Event != e.ID() {
+			t.Errorf("comment %d is %#v; want %s's comment, its id and segment, in comments, its body agreed", i, el, e.ID())
 		}
 	}
 }

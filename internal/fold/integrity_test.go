@@ -65,7 +65,7 @@ func TestAForgedSignatureIsCarriedUnappliedAndUnobserved(t *testing.T) {
 
 func TestAnUnknownKindIsUnreadWithItsNameKept(t *testing.T) {
 	w := newWorld(t)
-	e := w.mint(a, fold.State{}, events.Create{In: top, Payload: unknown{}})[0]
+	e := w.mint(a, fold.State{}, events.Act{About: events.NewItem{ID: ghost("v"), Width: 3}, Payload: unknown{}})[0]
 	s := w.state()
 	un := s.Integrity().Unapplied
 	if len(un) != 1 || un[0].Stamp.Event != e.ID() || un[0].Kind != "test.unknown" || un[0].Why != (fold.Unread{Why: events.UnknownKind{}}) {
@@ -77,15 +77,14 @@ func TestAnUnknownKindIsUnreadWithItsNameKept(t *testing.T) {
 	if s.Frontier() == (fold.State{}).Frontier() {
 		t.Errorf("an unread event's header did not feed the frontier")
 	}
-	segs := idOf(e).Segments()
-	if !s.Names().Taken(top, segs[len(segs)-1]) {
-		t.Errorf("an unread create's name %s is free in Names", idOf(e))
+	if !s.Known().Holds(idOf(e)) {
+		t.Errorf("an unread create's id %s is not Known", idOf(e))
 	}
-	// an unread event about an id no create named names its whole path
-	deep := must(events.ParseItemID("lit-yyy.xxx"))
-	w.mint(a, w.state(), events.Act{About: events.Item{ID: deep}, Payload: unknown{}})
-	if n := w.state().Names(); !n.Taken(top, deep.Segments()[0]) || !n.Taken(events.Children{Parent: deep.Parent()}, deep.Segments()[1]) {
-		t.Errorf("an unread act about %s leaves its path free in Names", deep)
+	// an unread event about an id no create named makes it known
+	named := ghost("y")
+	w.mint(a, w.state(), events.Act{About: events.Item{ID: named}, Payload: unknown{}})
+	if !w.state().Known().Holds(named) {
+		t.Errorf("an unread act about %s leaves it unknown", named)
 	}
 }
 

@@ -170,14 +170,17 @@ func (garbled) Schema() SchemaVersion   { return 1 }
 func (garbled) AppendTo(w *wire.Writer) { w.Uvarint(1, 7) }
 
 var (
-	here  = NewKinds(Row[note](readNote), Row[made](readMade))
+	here  = NewKinds(Row[note](readNote), Row[made](readMade), Row[ItemCreate](ReadItemCreate))
 	ahead = NewKinds(Row[newerNote](readNewerNote), Row[made](readMade), Row[newer](readNewer))
 	later = NewKinds(Row[laterNote](readPastNote, readLaterNote), Row[made](readMade))
 
 	suites = NewSuites(Ed25519())
 	prefix = mustPrefix("lit")
-	config = mustConfigRef("2e65efe2a145dda7ee51d1741299f848e5bf752e")
-	t0     = time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
+	// anItem and anElement are ids a test names without minting them
+	anItem    = ItemID{b: [16]byte{0xab, 0xc0}}
+	anElement = ElementID{b: [16]byte{0xe1}}
+	config    = mustConfigRef("2e65efe2a145dda7ee51d1741299f848e5bf752e")
+	t0        = time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
 )
 
 func mustPrefix(s string) Prefix {
@@ -208,13 +211,13 @@ func keyOf(seed byte) Key {
 // writer is a checkout id named by one byte.
 func writer(b byte) store.CheckoutID { return store.CheckoutID{b} }
 
-// context is a context for writer w at frontier f with the names n.
-func context(w byte, f Frontier, n Names) Context {
-	return Context{Writer: writer(w), Agent: Unlabeled{}, ConfigRef: config, Policy: 1, Frontier: f, Names: n, Now: t0}
+// context is a context for writer w at frontier f knowing k.
+func context(w byte, f Frontier, k Known) Context {
+	return Context{Writer: writer(w), Agent: Unlabeled{}, ConfigRef: config, Policy: 1, Frontier: f, Known: k, Now: t0}
 }
 
-// salts is a seeded source of salts.
-func salts(seed uint64) *rand.ChaCha8 {
+// entropy is a seeded source of ids and salts.
+func entropy(seed uint64) *rand.ChaCha8 {
 	var s [32]byte
 	s[0] = byte(seed)
 	s[1] = byte(seed >> 8)
@@ -223,7 +226,7 @@ func salts(seed uint64) *rand.ChaCha8 {
 
 func mint(t testing.TB, c Context, k Key, seed uint64, first Draft, rest ...Draft) Minted {
 	t.Helper()
-	m, err := Mint(c, NewDrafts(first, rest...), k.Signer(), salts(seed))
+	m, err := Mint(c, NewDrafts(first, rest...), k.Signer(), entropy(seed))
 	if err != nil {
 		t.Fatal(err)
 	}

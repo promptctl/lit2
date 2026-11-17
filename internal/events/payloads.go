@@ -88,9 +88,9 @@ func (l Level) Below() (Level, bool) {
 	return Level{n: l.n - 1}, true
 }
 
-// Placement is where a created item sits in the tree: a top-level id
-// states its level, and a child's level is its parent's one down, so a
-// child never states one (§3.4) `[LAW:one-source-of-truth]`.
+// Placement is where a created item sits in the tree: a top-level item
+// states its level, and a child its parent, whose level one down is its
+// own, so a child never states one (§3.4) `[LAW:one-source-of-truth]`.
 //
 //sumtype:decl
 type Placement interface{ placement() }
@@ -102,8 +102,12 @@ type AtLevel struct {
 	unknown wire.Unknown
 }
 
-// BelowParent is a child, under the item its id names.
-type BelowParent struct{ unknown wire.Unknown }
+// BelowParent is a child, under Parent: the link the child renders
+// under, never part of its id (§3.2).
+type BelowParent struct {
+	Parent  ItemID
+	unknown wire.Unknown
+}
 
 func (AtLevel) placement()     {}
 func (BelowParent) placement() {}
@@ -184,7 +188,8 @@ func readValue(b []byte) (Value, error) {
 	return made[0](r.Rest()), nil
 }
 
-// ItemCreate is item.create: About is the item it creates.
+// ItemCreate is item.create: About is the NewItem it creates, and Place
+// is the one record of where the item sits.
 type ItemCreate struct {
 	Place   Placement
 	unknown wire.Unknown
@@ -218,8 +223,7 @@ type LabelRm struct {
 	unknown  wire.Unknown
 }
 
-// CommentAdd is comment.add: About is the element it creates, its name
-// minted in the item's elements.
+// CommentAdd is comment.add: About is the NewElement it creates.
 type CommentAdd struct {
 	Body    Envelope
 	unknown wire.Unknown
@@ -239,7 +243,8 @@ func (LabelAdd) Schema() SchemaVersion   { return 1 }
 func (LabelRm) Schema() SchemaVersion    { return 1 }
 func (CommentAdd) Schema() SchemaVersion { return 1 }
 
-// The placement's wire fields: 1:at-level (the level) | 2:below-parent.
+// The placement's wire fields: 1:at-level (the level) | 2:below-parent
+// (the parent's id).
 const (
 	placeAtLevel     = 1
 	placeBelowParent = 2
@@ -259,7 +264,7 @@ func PlacementWire(p Placement) []byte {
 		pl.Uvarint(placeAtLevel, levelWire(at.Level))
 		pl.Keep(at.unknown)
 	case BelowParent:
-		pl.Bytes(placeBelowParent, nil)
+		pl.Bytes(placeBelowParent, at.Parent.b[:])
 		pl.Keep(at.unknown)
 	default:
 		// [LAW:no-silent-failure] a create placed nowhere would be signed
@@ -303,8 +308,9 @@ func ReadPlacement(b []byte) (Placement, error) {
 			made = append(made, func(u wire.Unknown) Placement { return AtLevel{Level: l, unknown: u} })
 			return err
 		case placeBelowParent:
-			r.Bytes()
-			made = append(made, func(u wire.Unknown) Placement { return BelowParent{unknown: u} })
+			parent, err := idBits(r.Bytes())
+			made = append(made, func(u wire.Unknown) Placement { return BelowParent{Parent: ItemID{b: parent}, unknown: u} })
+			return err
 		}
 		return nil
 	})

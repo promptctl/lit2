@@ -48,7 +48,7 @@ func minted(t *testing.T, d events.Draft) store.Record {
 }
 
 func TestTheCopiesOfOneEventFoldAlikeInEitherArrivalOrder(t *testing.T) {
-	id := must(events.ParseItemID("lit-abc"))
+	id := ghost("a")
 	unread := minted(t, events.Act{About: events.Item{ID: id}, Payload: garbled{}})
 	readable := minted(t, set(id, title, prose("t")))
 	copies := map[string]store.Record{

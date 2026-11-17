@@ -34,7 +34,7 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 			w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.ItemDelete{}})
 		}},
 		{"a second create", func(w *world, id events.ItemID, _, _ events.Event) {
-			w.mint(b, fold.State{}, events.Act{About: events.Item{ID: id}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})
+			w.mint(b, fold.State{}, events.Act{About: events.NewItem{ID: id, Width: 3}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})
 		}},
 		{"a text over the title", func(w *world, id events.ItemID, named, _ events.Event) {
 			w.mint(a, w.state(), set(id, title, prose("u"), named))

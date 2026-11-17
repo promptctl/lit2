@@ -109,13 +109,6 @@ func (r Registry) changes(st Stamp, h events.Header, b events.Body) ([]Change, U
 	}
 	switch a := k.apply(st, at, p).(type) {
 	case Changes:
-		for _, ch := range a.List {
-			if c, ok := ch.(CreateItem); ok {
-				if _, placed := containerOf(c.ID, c.Place); !placed {
-					return nil, misplaced(c.ID)
-				}
-			}
-		}
 		return a.List, nil
 	case Misaddressed:
 		return nil, a
@@ -123,43 +116,30 @@ func (r Registry) changes(st Stamp, h events.Header, b events.Body) ([]Change, U
 	panic(fmt.Sprintf("fold: %s's rule applies nothing", h.Kind()))
 }
 
-// containerOf is where a create of id placed by p puts it: a top-level id
-// states its level and a child states none, since its parent fixes it, so
-// the two agree or the create is misaddressed.
-func containerOf(id events.ItemID, p events.Placement) (Container, bool) {
-	switch parent := id.Parent().(type) {
-	case events.Top:
-		at, ok := p.(events.AtLevel)
-		return Home{Holds: at.Level}, ok
-	case events.Under:
-		_, ok := p.(events.BelowParent)
-		return Under{Parent: parent.ID}, ok
+// containerOf is where a create placed at p puts its item: the home of
+// its level, or under its parent.
+func containerOf(p events.Placement) Container {
+	switch p := p.(type) {
+	case events.AtLevel:
+		return Home{Holds: p.Level}
+	case events.BelowParent:
+		return Under{Parent: p.Parent}
 	}
-	panic(fmt.Sprintf("fold: %T is not a Parent", id.Parent()))
-}
-
-func misplaced(id events.ItemID) Misaddressed {
-	switch id.Parent().(type) {
-	case events.Top:
-		return Misaddressed{Want: "a top-level id's create states its level"}
-	case events.Under:
-		return Misaddressed{Want: "a child's create states no level: its parent's fixes it"}
-	}
-	panic(fmt.Sprintf("fold: %T is not a Parent", id.Parent()))
+	panic(fmt.Sprintf("fold: %T is not a Placement", p))
 }
 
 // apply merges one change, made by st, into s.
 func (s State) apply(st Stamp, c Change) State {
 	switch c := c.(type) {
 	case CreateItem:
-		in, placed := containerOf(c.ID, c.Place)
-		if !placed {
-			panic(fmt.Sprintf("fold: a create of %s the step did not place", c.ID))
-		}
-		return s.update(c.ID, func(r *item) *item { return r.withCreate(creation{stamp: st, in: in}) })
+		return s.update(c.New.ID, func(r *item) *item {
+			return r.withCreate(creation{stamp: st, in: containerOf(c.Place), segment: c.New.Segment()})
+		})
 	case CreateElement:
-		return s.update(c.Of, func(r *item) *item {
-			return r.withElement(c.Name, func(el *element) *element { return el.withListing(listing{stamp: st, in: c.In}) })
+		return s.update(c.New.Of, func(r *item) *item {
+			return r.withElement(c.New.ID, func(el *element) *element {
+				return el.withListing(listing{stamp: st, in: c.In, segment: c.New.Segment()})
+			})
 		})
 	case Write:
 		return s.facts(c.At, func(f Facts) Facts { return f.write(st, c.Field, c.Value, c.Over) })
@@ -174,13 +154,13 @@ func (s State) apply(st Stamp, c Change) State {
 }
 
 // facts is s with at's facts changed by f.
-func (s State) facts(at Target, f func(Facts) Facts) State {
+func (s State) facts(at Node, f func(Facts) Facts) State {
 	switch at := at.(type) {
 	case OnItem:
 		return s.update(at.ID, func(r *item) *item { return r.withFacts(f) })
 	case OnElement:
 		return s.update(at.Of, func(r *item) *item {
-			return r.withElement(at.Name, func(el *element) *element { return el.withFacts(f) })
+			return r.withElement(at.ID, func(el *element) *element { return el.withFacts(f) })
 		})
 	}
 	panic(fmt.Sprintf("fold: %T is not a Target", at))

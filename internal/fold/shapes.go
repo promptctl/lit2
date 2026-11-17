@@ -25,7 +25,7 @@ type item struct {
 	creates  createSet
 	life     Life
 	facts    Facts
-	elements table[string, *element, byName] // by name
+	elements table[events.ElementID, *element, byElement]
 }
 
 // createSet, listSet and writeSet hold a node's creates and a register's
@@ -36,23 +36,27 @@ type (
 	writeSet  = table[events.EventID, candidate, byEvent]
 )
 
-// creation is one create of an item and where it places the item.
+// creation is one create of an item: where it places the item, and the
+// segment it fixed.
 type creation struct {
-	stamp Stamp
-	in    Container
+	stamp   Stamp
+	in      Container
+	segment events.Segment
 }
 
 // element is one element's record.
 type element struct {
-	name    events.Segment
+	id      events.ElementID
 	creates listSet
 	facts   Facts
 }
 
-// listing is one create of an element and the list it shows in.
+// listing is one create of an element: the list it shows in, and the
+// segment it fixed.
 type listing struct {
-	stamp Stamp
-	in    events.Name
+	stamp   Stamp
+	in      events.Name
+	segment events.Segment
 }
 
 func newItem(id events.ItemID) *item { return &item{id: id, life: Live{}} }
@@ -60,11 +64,11 @@ func newItem(id events.ItemID) *item { return &item{id: id, life: Live{}} }
 func (r *item) key() events.ItemID { return r.id }
 
 func (r *item) origin() Origin {
-	return origin(r.sortedCreates(), func(c creation) Container { return c.in })
+	return origin(r.sortedCreates(), func(c creation) (Container, events.Segment) { return c.in, c.segment })
 }
 
 func (el *element) origin(of events.ItemID) Origin {
-	return origin(el.sortedCreates(), func(listing) Container { return Under{Parent: of} })
+	return origin(el.sortedCreates(), func(l listing) (Container, events.Segment) { return Under{Parent: of}, l.segment })
 }
 
 // made is a create of a node, or a write: its stamp.
@@ -108,12 +112,13 @@ func (el *element) firstCreate() listing {
 }
 
 // origin is the origin of a node made by creates, in total order: the
-// first places it, in the container in names.
-func origin[C made](creates []C, in func(C) Container) Origin {
+// first places it, in the container and with the segment placed names.
+func origin[C made](creates []C, placed func(C) (Container, events.Segment)) Origin {
 	if len(creates) == 0 {
 		return Uncreated{}
 	}
-	first := Created{Stamp: creates[0].made(), In: in(creates[0])}
+	in, seg := placed(creates[0])
+	first := Created{Stamp: creates[0].made(), In: in, Segment: seg}
 	if len(creates) == 1 {
 		return first
 	}
@@ -149,22 +154,22 @@ func (r *item) withFacts(f func(Facts) Facts) *item {
 	return &next
 }
 
-// withElement is r with its element name changed by f, made first if r
-// has none of that name.
-func (r *item) withElement(name events.Segment, f func(*element) *element) *item {
+// withElement is r with its element id changed by f, made first if r has
+// none of that id.
+func (r *item) withElement(id events.ElementID, f func(*element) *element) *item {
 	next := *r
-	el, found := r.elements.get(name.String())
+	el, found := r.elements.get(id)
 	if !found {
-		el = &element{name: name}
+		el = &element{id: id}
 	}
 	next.elements = r.elements.set(f(el))
 	return &next
 }
 
-// sortedElements is r's elements in name order: a table holds no order, so
+// sortedElements is r's elements in id order: a table holds no order, so
 // a reader that needs one sorts what it reads.
 func (r *item) sortedElements() []*element {
-	return r.elements.sorted(byKey[string, *element])
+	return r.elements.sorted(func(a, b *element) int { return cmp.Compare(a.id.String(), b.id.String()) })
 }
 
 func (el *element) withListing(l listing) *element {
@@ -413,7 +418,7 @@ func (r register) plain(settled string) []Candidate {
 }
 
 // advisories is every field of f holding a contradiction, at at.
-func (f Facts) advisories(at Target) []Advisory {
+func (f Facts) advisories(at Node) []Advisory {
 	var out []Advisory
 	for _, r := range f.registers() {
 		prose := r.prose()
@@ -432,10 +437,10 @@ func (f Facts) advisories(at Target) []Advisory {
 	return out
 }
 
-func (r register) key() string  { return r.name.String() }
-func (s set) key() string       { return s.name.String() }
-func (t tally) key() string     { return t.name.String() }
-func (el *element) key() string { return el.name.String() }
+func (r register) key() string            { return r.name.String() }
+func (s set) key() string                 { return s.name.String() }
+func (t tally) key() string               { return t.name.String() }
+func (el *element) key() events.ElementID { return el.id }
 
 // byKey orders records by their keys: the order a reader sorts a table into.
 func byKey[K cmp.Ordered, R record[K]](a, b R) int { return cmp.Compare(a.key(), b.key()) }

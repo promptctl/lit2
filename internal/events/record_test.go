@@ -64,8 +64,7 @@ func none(*wire.Writer) {}
 // drafts is n generated drafts: creates of items and their elements, and
 // acts on the root, on items and on elements, with prose and tags.
 func drafts(r *rand.Rand, n int) []Draft {
-	parent := Top{Prefix: prefix}
-	item := parent.Child(Segment{s: "0zz"})
+	item := anItem
 	var ds []Draft
 	for range n {
 		var tags []string
@@ -75,15 +74,15 @@ func drafts(r *rand.Rand, n int) []Draft {
 		payload := note{Text: text(words(r, r.IntN(40))), Tags: tags}
 		switch r.IntN(5) {
 		case 0:
-			ds = append(ds, Create{In: Children{Parent: parent}, Payload: made{Title: text(words(r, 6))}})
+			ds = append(ds, CreateItem{Payload: ItemCreate{Place: BelowParent{Parent: item}}})
 		case 1:
-			ds = append(ds, Create{In: Elements{Of: item}, Payload: payload})
+			ds = append(ds, CreateElement{Of: item, Payload: payload})
 		case 2:
 			ds = append(ds, Act{About: Root{}, Payload: payload})
 		case 3:
 			ds = append(ds, Act{About: Item{ID: item}, Payload: payload})
 		default:
-			ds = append(ds, Act{About: Element{Of: item, Name: Segment{s: "abc"}}, Payload: payload})
+			ds = append(ds, Act{About: Element{Of: item, ID: anElement}, Payload: payload})
 		}
 	}
 	return ds
@@ -94,7 +93,7 @@ func TestGeneratedEventsDecodeAsMintedAndVerify(t *testing.T) {
 	k := keyOf(1)
 	for i := range 100 {
 		ds := drafts(r, 1+r.IntN(5))
-		m := mint(t, context(byte(i), Frontier{highest: uint64(r.IntN(1000))}, Names{}), k, uint64(i), ds[0], ds[1:]...)
+		m := mint(t, context(byte(i), Frontier{highest: uint64(r.IntN(1000))}, Known{}), k, uint64(i), ds[0], ds[1:]...)
 		for j, rec := range records(m) {
 			got := decoded(t, here, rec)
 			if !reflect.DeepEqual(got, m.Events[j]) {
@@ -109,7 +108,7 @@ func TestGeneratedEventsDecodeAsMintedAndVerify(t *testing.T) {
 
 func TestAChangedHeaderPrincipalOrSuiteFailsTheSignature(t *testing.T) {
 	k := keyOf(1)
-	e := mint(t, context(1, Frontier{}, Names{}), k, 1, Act{About: Root{}, Payload: note{Text: text("the header is signed")}}).Events[0]
+	e := mint(t, context(1, Frontier{}, Known{}), k, 1, Act{About: Root{}, Payload: note{Text: text("the header is signed")}}).Events[0]
 	for i := range len(e.raw) {
 		header := slices.Clone(e.raw)
 		header[i] ^= 0x01
@@ -141,7 +140,7 @@ func TestANewerRecordKeepsTheFieldsThisBinaryDoesNotKnow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	theirs := mint(t, context(1, Frontier{}, Names{}), k, 1, Act{About: Item{ID: Top{Prefix: prefix}.Child(Segment{s: "abc"})},
+	theirs := mint(t, context(1, Frontier{}, Known{}), k, 1, Act{About: Item{ID: anItem},
 		Payload: newerNote{Text: future, Tags: []string{"b", "a", "c"}, Mood: "keen"}}).Events[0]
 	header := edited(theirs.raw, 0, func(w *wire.Writer) { w.Bytes(20, []byte("header's")) })
 	rec := recordOf(header, k.Signer().Sign(signed(header)), bodyWire(t, theirs))
@@ -160,7 +159,7 @@ func TestANewerRecordKeepsTheFieldsThisBinaryDoesNotKnow(t *testing.T) {
 	}
 	// this binary changes the payload and writes it back
 	n.Tags = append(n.Tags, "d")
-	back := mint(t, context(1, Frontier{}.Observe(mine.Header()), Names{}), k, 2, Act{About: mine.Header().About(), Payload: n})
+	back := mint(t, context(1, Frontier{}.Observe(mine.Header()), Known{}), k, 2, Act{About: mine.Header().About(), Payload: n})
 	theirsAgain, ok := decoded(t, ahead, records(back)[0]).Body().(Readable)
 	if !ok {
 		t.Fatal("the payload written back does not read in the newer binary")
@@ -180,7 +179,7 @@ func futureField(tag uint32, s string) []byte {
 
 func TestAPayloadThisBinaryCannotReadIsUnreadWithItsHeaderWhole(t *testing.T) {
 	k := keyOf(1)
-	at := Item{ID: Top{Prefix: prefix}.Child(Segment{s: "abc"})}
+	at := Item{ID: anItem}
 	// each payload is one a newer or a broken binary wrote
 	for _, tc := range []struct {
 		name string
@@ -191,7 +190,7 @@ func TestAPayloadThisBinaryCannotReadIsUnreadWithItsHeaderWhole(t *testing.T) {
 		{"a newer schema", laterNote{Text: text("v2")}, NewerSchema{Have: 2, Max: 1}},
 		{"an undecodable committed payload", garbled{}, Undecodable{}},
 	} {
-		m := mint(t, context(1, Frontier{highest: 41}, Names{}), k, 1, Act{About: at, Payload: tc.p})
+		m := mint(t, context(1, Frontier{highest: 41}, Known{}), k, 1, Act{About: at, Payload: tc.p})
 		e, got := m.Events[0], decoded(t, here, records(m)[0])
 		unread, ok := got.Body().(Unread)
 		if !ok || reflect.TypeOf(unread.Why) != reflect.TypeOf(tc.want) {
@@ -209,7 +208,7 @@ func TestAPayloadThisBinaryCannotReadIsUnreadWithItsHeaderWhole(t *testing.T) {
 }
 
 func TestALaterBinaryReadsAnEarlierVersionThroughItsUpcaster(t *testing.T) {
-	e := mint(t, context(1, Frontier{}, Names{}), keyOf(1), 1, Act{About: Root{}, Payload: note{Text: text("written at v1")}}).Events[0]
+	e := mint(t, context(1, Frontier{}, Known{}), keyOf(1), 1, Act{About: Root{}, Payload: note{Text: text("written at v1")}}).Events[0]
 	read, ok := decoded(t, later, recordOf(e.raw, e.Signature(), bodyWire(t, e))).Body().(Readable)
 	if !ok || !reflect.DeepEqual(read.Payload, laterNote{Text: text("written at v1"), Pinned: false}) {
 		t.Errorf("the later binary reads a v1 note as %#v; want it upcast to v2", read)
@@ -218,9 +217,9 @@ func TestALaterBinaryReadsAnEarlierVersionThroughItsUpcaster(t *testing.T) {
 
 func TestARewrittenPayloadKeepsTheSignatureTheIDAndTheName(t *testing.T) {
 	k := keyOf(1)
-	m := mint(t, context(1, Frontier{}, Names{}), k, 1, Create{In: Children{Parent: Top{Prefix: prefix}}, Payload: made{Title: text("a secret title")}})
+	m := mint(t, context(1, Frontier{}, Known{}), k, 1, CreateElement{Of: anItem, Payload: made{Title: text("a secret title")}})
 	e := m.Events[0]
-	other := mint(t, context(1, Frontier{}, Names{}), k, 9, Act{About: Root{}, Payload: made{Title: text("something else")}}).Events[0]
+	other := mint(t, context(1, Frontier{}, Known{}), k, 9, Act{About: Root{}, Payload: made{Title: text("something else")}}).Events[0]
 	for _, tc := range []struct {
 		name string
 		body []byte
@@ -242,7 +241,7 @@ func TestARewrittenPayloadKeepsTheSignatureTheIDAndTheName(t *testing.T) {
 	if forged.ID() == e.ID() {
 		t.Error("another signature over one header is the same event id")
 	}
-	twice := mint(t, context(1, Frontier{}, Names{}), k, 3, Act{About: Root{}, Payload: note{Text: text("same")}}, Act{About: Root{}, Payload: note{Text: text("same")}})
+	twice := mint(t, context(1, Frontier{}, Known{}), k, 3, Act{About: Root{}, Payload: note{Text: text("same")}}, Act{About: Root{}, Payload: note{Text: text("same")}})
 	if twice.Events[0].Header().PayloadHash() == twice.Events[1].Header().PayloadHash() {
 		t.Error("two equal payloads hash alike; want the salt to set them apart")
 	}
@@ -250,7 +249,7 @@ func TestARewrittenPayloadKeepsTheSignatureTheIDAndTheName(t *testing.T) {
 
 func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 	k := keyOf(1)
-	e := mint(t, context(1, Frontier{}, Names{}), k, 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0]
+	e := mint(t, context(1, Frontier{}, Known{}), k, 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0]
 	for name, header := range map[string][]byte{
 		"no config-ref":                edited(e.raw, headerConfigRef, none),
 		"no policy version":            edited(e.raw, headerPolicy, none),
@@ -276,8 +275,8 @@ func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 
 func TestARecordWithNewerRecordAndSignatureFieldsDecodesAsItsEvent(t *testing.T) {
 	k := keyOf(1)
-	at := Item{ID: Top{Prefix: prefix}.Child(Segment{s: "abc"})}
-	e := mint(t, context(1, Frontier{highest: 8}, Names{}), k, 1, Act{About: at, Payload: note{Text: text("x")}}).Events[0]
+	at := Item{ID: anItem}
+	e := mint(t, context(1, Frontier{highest: 8}, Known{}), k, 1, Act{About: at, Payload: note{Text: text("x")}}).Events[0]
 	var w wire.Writer
 	w.Bytes(recordHeader, e.raw)
 	w.Bytes(recordSignature, append(signatureWire(e.Signature()), futureField(3, "a newer signature field")...))
@@ -296,7 +295,7 @@ func TestARecordWithNewerRecordAndSignatureFieldsDecodesAsItsEvent(t *testing.T)
 }
 
 func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
-	at := context(1, Frontier{}, Names{})
+	at := context(1, Frontier{}, Known{})
 	noClock := at
 	noClock.Now = time.Time{}
 	noAgent := at
@@ -309,6 +308,7 @@ func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
 		"a payload's unset envelope": {at, Act{About: Root{}, Payload: note{}}},
 		"no clock reading":           {noClock, Act{About: Root{}, Payload: note{Text: text("x")}}},
 		"no agent":                   {noAgent, Act{About: Root{}, Payload: note{Text: text("x")}}},
+		"a two-digit segment":        {at, Act{About: NewItem{ID: anItem, Width: 2}, Payload: note{Text: text("x")}}},
 	} {
 		func() {
 			defer func() {
@@ -316,7 +316,7 @@ func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
 					t.Errorf("Mint with %s did not panic", name)
 				}
 			}()
-			_, _ = Mint(tc.c, NewDrafts(tc.d), keyOf(1).Signer(), salts(1))
+			_, _ = Mint(tc.c, NewDrafts(tc.d), keyOf(1).Signer(), entropy(1))
 		}()
 	}
 }

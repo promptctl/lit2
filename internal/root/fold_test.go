@@ -19,10 +19,6 @@ import (
 // its own writer.
 func three(t *testing.T, twin Twin, seed byte) {
 	t.Helper()
-	prefix, err := events.ParsePrefix("lit")
-	if err != nil {
-		t.Fatal(err)
-	}
 	config, err := git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e")
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +27,7 @@ func three(t *testing.T, twin Twin, seed byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	create := events.Create{In: events.Children{Parent: events.Top{Prefix: prefix}}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level}}}
+	create := events.CreateItem{Payload: events.ItemCreate{Place: events.AtLevel{Level: level}}}
 	m, err := events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: config, Policy: 1, Now: twin.Process.Clock.Now()},
 		events.NewDrafts(create, create, create), twinKey().Signer(), rand.NewChaCha8([32]byte{seed}))
 	if err != nil {
@@ -100,5 +96,38 @@ func TestAVerbWithNoStoreFailsAsTheEnvironments(t *testing.T) {
 	failed, ok := e.Outcome.(cli.Failed)
 	if !ok || failed.Failure.Reason() != "store" || failed.Failure.Class() != reason.ClassEnvironment || len(e.Store.Folds) != 0 {
 		t.Errorf("a verb with no store ends %#v with folds %v; want it failed as the store's, no fold", e.Outcome, e.Store.Folds)
+	}
+}
+
+// The twin's entropy is seeded, so a twin mints the same ids on every run
+// and a scenario that names an id it minted reads the same id each time
+// (D6). Nothing in the binary mints yet; this is the reader the minting
+// verbs will draw from.
+func TestEveryTwinMintsTheSameIDs(t *testing.T) {
+	config, err := git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	level, err := events.ParseLevel(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := events.CreateItem{Payload: events.ItemCreate{Place: events.AtLevel{Level: level}}}
+	minted := func() []events.ItemID {
+		twin := NewTwin()
+		m, err := events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: config, Policy: 1, Now: twin.Process.Clock.Now()},
+			events.NewDrafts(create, create), twinKey().Signer(), twin.Process.Entropy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []events.ItemID
+		for _, e := range m.Events {
+			ids = append(ids, e.Header().About().(events.NewItem).ID)
+		}
+		return ids
+	}
+	first, again := minted(), minted()
+	if first[0] != again[0] || first[1] != again[1] || first[0] == first[1] {
+		t.Errorf("two twins minted %v and %v; want the same two distinct ids", first, again)
 	}
 }
