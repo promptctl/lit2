@@ -14,7 +14,7 @@ func TestParseAtomForms(t *testing.T) {
 	}{
 		{"description", "description", "present"},
 		{"!blockers", "blockers", "absent"},
-		{"verdict=pass", "verdict", "equals"},
+		{"pr/verdict=pass", "pr/verdict", "equals"},
 		{"labels!=external", "labels", "not-equals"},
 		{"title~^T-[0-9]+$", "title", "matches"},
 	}
@@ -44,9 +44,46 @@ func TestParseAtomRefusals(t *testing.T) {
 		"p=has space",
 		"p~[unclosed",
 		"p!=",
+		"p=a,",
+		"p=\"open",
+		"p=\"a\"b",
+		"p<3",
 	} {
 		if _, err := ParseAtom(in); err == nil {
 			t.Errorf("ParseAtom(%q) parsed; the grammar refuses it", in)
+		}
+	}
+}
+
+// TestAtomValues: a quoted value takes "" for a quote and every other
+// character as itself, backslashes included, and = and != take several values
+// separated by commas, where ~ takes one regular expression, commas and all.
+func TestAtomValues(t *testing.T) {
+	cases := []struct {
+		atom  string
+		found Found
+		want  Truth
+	}{
+		{`status=backlog,impl`, Found{"impl"}, true},
+		{`status=backlog,impl`, Found{"review"}, false},
+		{`status!=backlog,impl`, Found{"review"}, true},
+		{`status!=backlog,impl`, Found{"backlog"}, false},
+		{`reason="a,b"`, Found{"a,b"}, true},
+		{`reason="a,b"`, Found{"a"}, false},
+		{`reason="say ""hi"""`, Found{`say "hi"`}, true},
+		{`path="C:\dir\file"`, Found{`C:\dir\file`}, true},
+		{`reason="a b",c`, Found{"c"}, true},
+		{`title~"^\d+$"`, Found{"42"}, true},
+		{`title~^a{1,3}$`, Found{"aa"}, true},
+	}
+	for _, tc := range cases {
+		a, err := ParseAtom(tc.atom)
+		if err != nil {
+			t.Errorf("ParseAtom(%q): %v", tc.atom, err)
+			continue
+		}
+		if got := a.Holds(tc.found); got != tc.want {
+			t.Errorf("%s holds %v against %v, want %v", tc.atom, got, tc.found, tc.want)
 		}
 	}
 }

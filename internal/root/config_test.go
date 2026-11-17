@@ -17,8 +17,8 @@ func TestTheConfigBlockNamesTheDefaultAndItsRef(t *testing.T) {
 	if e.Config == nil {
 		t.Fatal("the event has no config block")
 	}
-	if e.Config.Facts.Source != "default" || e.Config.Facts.Outcome != "parsed" {
-		t.Errorf("config = %s/%s, want default/parsed", e.Config.Facts.Source, e.Config.Facts.Outcome)
+	if e.Config.Facts.Source != "default" {
+		t.Errorf("config source = %s, want default", e.Config.Facts.Source)
 	}
 	want := git.HashBlob(git.SHA1, assets.DefaultWorkspace.Bytes()).String()
 	if e.Config.Ref != want {

@@ -52,7 +52,7 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 		"of":                 {Kind: Text{}, Multi: Many, Origin: Builtin, Writability: Derived},
 		"blockers":           {Kind: Text{}, Multi: Many, Origin: Builtin, Writability: Derived},
 		"unmet_requirements": {Kind: Text{}, Multi: Many, Origin: Builtin, Writability: Derived},
-		"verdict":            {Kind: verdict, Multi: One, Origin: Builtin, Writability: Derived},
+		"pr/verdict":         {Kind: verdict, Multi: One, Origin: Builtin, Writability: Derived},
 		"plan/verdict":       {Kind: verdict, Multi: One, Origin: Builtin, Writability: Derived},
 	}
 }

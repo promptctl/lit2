@@ -12,12 +12,13 @@ import (
 )
 
 // TestSmoke builds lit2 with the documented command and runs it as a person
-// would, outside any checkout and inside one whose workspace draft does not
-// parse: the one end-to-end test.
+// would, outside any checkout and inside two whose workspace drafts are not in
+// force, one that does not parse and one that does: the one end-to-end test.
 func TestSmoke(t *testing.T) {
 	tmp := t.TempDir()
 	bin, state := filepath.Join(tmp, "lit2"), filepath.Join(tmp, "state")
-	checkout := draftThatDoesNotParse(t, filepath.Join(tmp, "checkout"))
+	broken := checkoutWithDraft(t, filepath.Join(tmp, "broken"), "prefix = [unclosed\n")
+	parses := checkoutWithDraft(t, filepath.Join(tmp, "parses"), oneLevel)
 	build := exec.Command("go", "build", "-o", bin, ".")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -36,7 +37,8 @@ func TestSmoke(t *testing.T) {
 		{[]string{"--help"}, 0, "admin init", "", false, tmp},
 		{[]string{"frobnicate"}, 64, "", "error (reason=unknown_verb): ", false, tmp},
 		{nil, 0, "", "", true, tmp},
-		{nil, 0, "admin sync", "", false, checkout},
+		{nil, 0, "admin sync", "", false, broken},
+		{nil, 0, "admin sync", "", false, parses},
 	} {
 		cmd := exec.Command(bin, tc.args...)
 		cmd.Dir, cmd.Env = tc.dir, append(os.Environ(), "XDG_STATE_HOME="+state)
@@ -95,21 +97,43 @@ func TestSmoke(t *testing.T) {
 			t.Errorf("run %d exited %d and its line records %d", i, statuses[i], recorded[i])
 		}
 	}
-	// The run in the checkout read the shipped default and never the draft
-	// beside it (architecture.md §3.15).
-	if inCheckout := configs[len(configs)-1]; inCheckout.Source != "default" {
-		t.Errorf("the run beside a broken draft records config source %q; want default", inCheckout.Source)
+	// The runs in the checkouts read the shipped default, its three levels, and
+	// never the draft beside them (architecture.md §3.15): not the one that
+	// parses, and not the default in place of the one that does not.
+	for _, inCheckout := range configs[len(configs)-2:] {
+		if inCheckout.Source != "default" || inCheckout.Counts.Levels != 3 {
+			t.Errorf("a run beside a draft records config %+v; want the default's three levels", inCheckout)
+		}
 	}
 }
 
 // configLine is the command log's config block, as a reader of the log sees it.
 type configLine struct {
 	Source string `json:"source"`
+	Counts struct {
+		Levels int `json:"levels"`
+	} `json:"counts"`
 }
 
-// draftThatDoesNotParse makes a git checkout at dir whose .lit/workspace.toml
-// is not TOML, and returns dir.
-func draftThatDoesNotParse(t *testing.T, dir string) string {
+// oneLevel is a draft that parses and is not the default: one level where the
+// default has three.
+const oneLevel = `prefix = "lit"
+claim_ttl = "6h"
+
+[levels.1]
+name = "story"
+
+[columns.backlog]
+initial = true
+next = ["done"]
+
+[columns.done]
+terminal = true
+`
+
+// checkoutWithDraft makes a git checkout at dir whose .lit/workspace.toml is
+// draft, and returns dir.
+func checkoutWithDraft(t *testing.T, dir, draft string) string {
 	t.Helper()
 	if out, err := exec.Command("git", "init", "--quiet", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
@@ -117,7 +141,7 @@ func draftThatDoesNotParse(t *testing.T, dir string) string {
 	if err := os.MkdirAll(filepath.Join(dir, ".lit"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".lit", "workspace.toml"), []byte("prefix = [unclosed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".lit", "workspace.toml"), []byte(draft), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir

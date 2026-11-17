@@ -52,7 +52,7 @@ entry = [{ test = "plan/verdict=pass", severity = "warning" }]
 
 [columns.merge]
 next = ["done"]
-entry = [{ test = "verdict=pass", severity = "error" }]
+entry = [{ test = "pr/verdict=pass", severity = "error" }]
 
 [columns.done]
 terminal = true

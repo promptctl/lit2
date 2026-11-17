@@ -39,6 +39,15 @@ func twinKey() events.Key {
 	return key
 }
 
+// twinReader is the release the twin runs as.
+func twinReader() config.ReaderVersion {
+	r, err := config.ReadReaderVersion("v0.4.0")
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
 // NewTwin is a twin whose checkout is minted, so its writer is known.
 func NewTwin() Twin {
 	out, errOut, commands := &bytes.Buffer{}, &bytes.Buffer{}, &command.Memory{}
@@ -56,8 +65,7 @@ func NewTwin() Twin {
 			Place:    command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}},
 			Store:    command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
 			Fold:     foldEnv(2),
-			Reader:   config.Released{V: "v0.4.0"},
-			Version:  "twin",
+			Reader:   twinReader(),
 			Commands: commands,
 			In:       strings.NewReader(""),
 			Out:      out,

@@ -5,27 +5,28 @@ import (
 	"testing"
 )
 
-// TestReadReaderVersion: a release stamp is the release; a pseudo-version is a
-// development build whose base is the version before it and whose revision is
-// the commit's; a dirty tree is marked modified.
+// reader reads a stamp a test needs as a version, failing the test if Go
+// could not have stamped it.
+func reader(t *testing.T, stamp string) ReaderVersion {
+	t.Helper()
+	r, err := ReadReaderVersion(stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// TestReadReaderVersion: a stamp reads as itself, and a dirty tree is marked
+// modified.
 func TestReadReaderVersion(t *testing.T) {
-	got, err := ReadReaderVersion("v0.4.0")
-	if err != nil || got != (Released{V: "v0.4.0"}) {
-		t.Errorf("v0.4.0 = %#v, %v; want Released v0.4.0", got, err)
-	}
-	got, err = ReadReaderVersion("v1.2.3+dirty")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got.(Released); !ok {
-		t.Errorf("a dirty release is a Released version, got %#v", got)
-	}
-	got, err = ReadReaderVersion("v0.4.1-0.20261101120000-abcdef123456")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != (Development{Base: "v0.4.0", Revision: "abcdef123456"}) {
-		t.Errorf("pseudo-version = %#v, want Development based on v0.4.0 at abcdef123456", got)
+	for stamp, want := range map[string]string{
+		"v0.4.0": "v0.4.0",
+		"v1.2.3-0.20261101120000-abcdef123456+dirty": "v1.2.3-0.20261101120000-abcdef123456 (modified)",
+		"v0.0.0-20261111233357-fde3028a2d02":         "v0.0.0-20261111233357-fde3028a2d02",
+	} {
+		if got := reader(t, stamp).String(); got != want {
+			t.Errorf("%s reads as %q, want %q", stamp, got, want)
+		}
 	}
 }
 
@@ -45,18 +46,26 @@ func TestReadReaderVersionRefusesWhatHasNoVersion(t *testing.T) {
 }
 
 // TestGateAdmitsByVersion: a gate of none admits any reader; a minimum admits
-// a reader at or above it and refuses one below.
+// a reader at or above it and refuses one below. A build between tags is past
+// the tag below it and short of the next, and a build before the first tag is
+// short of every release.
 func TestGateAdmitsByVersion(t *testing.T) {
-	if !admits(NoGate{}, Released{V: "v0.1.0"}) {
-		t.Error("no gate admits every reader")
+	cases := []struct {
+		gate   ReaderGate
+		stamp  string
+		admits bool
+	}{
+		{NoGate{}, "v0.1.0", true},
+		{NoGate{}, "v0.0.0-20261111233357-fde3028a2d02+dirty", true},
+		{AtLeast{V: "v0.4.0"}, "v0.4.0", true},
+		{AtLeast{V: "v0.4.0"}, "v0.3.9", false},
+		{AtLeast{V: "v0.4.0"}, "v0.4.1-0.20261101120000-abcdef123456", true},
+		{AtLeast{V: "v0.4.1"}, "v0.4.1-0.20261101120000-abcdef123456", false},
+		{AtLeast{V: "v0.0.1"}, "v0.0.0-20261111233357-fde3028a2d02", false},
 	}
-	if !admits(AtLeast{V: "v0.4.0"}, Released{V: "v0.4.0"}) {
-		t.Error("a reader at the minimum is admitted")
-	}
-	if admits(AtLeast{V: "v0.4.0"}, Released{V: "v0.3.9"}) {
-		t.Error("a reader below the minimum is refused")
-	}
-	if !admits(AtLeast{V: "v0.4.0"}, Development{Base: "v0.4.1-0.20261101120000-abcdef123456", Revision: "abcdef123456"}) {
-		t.Error("a development build reads its base's version")
+	for _, c := range cases {
+		if got := admits(c.gate, reader(t, c.stamp)); got != c.admits {
+			t.Errorf("%#v admits %s = %v, want %v", c.gate, c.stamp, got, c.admits)
+		}
 	}
 }

@@ -17,7 +17,6 @@ type Schema struct {
 	prefix   events.Prefix
 	gate     ReaderGate
 	labels   field.Enum
-	fields   map[field.Path]field.FieldDecl
 	levels   []Level
 	links    map[string]LinkType
 	checks   map[string]Check
@@ -26,7 +25,9 @@ type Schema struct {
 }
 
 // Level is one declared level. Index 0 is level 1, the leaf, which has no
-// home; every level above it names one.
+// home; every level above it names one. Fields are the fields this level
+// declares, beside the built-ins every level has; the same name on another
+// level is another field.
 type Level struct {
 	Name     string
 	Home     string
@@ -192,10 +193,6 @@ func (s Schema) Root() RootFrame { return s.root }
 
 // Sections reads the node sections by key.
 func (s Schema) Sections() map[NodeKey]Section { return s.sections }
-
-// Fields reads every field a test or a template may name: the built-ins and
-// the fields levels declare.
-func (s Schema) Fields() map[field.Path]field.FieldDecl { return s.fields }
 
 // Effective resolves the configuration an ancestry judges an item under. The
 // root is the base; each section on the ancestry layers over it, the nearest

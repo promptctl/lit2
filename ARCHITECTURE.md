@@ -69,7 +69,7 @@ row; the architecture test fails on one without.
 | §3.8 Claim | `fold`, `tick` | the holder set folded; expiry in tick |
 | §3.9 Checklist | `fold`, `verbs` | items folded; the `set` list diff in verbs |
 | §3.10 Link | `fold`, `config` | links folded; link types declared in config |
-| §3.11 Label | `config`, `fold`, `tick` | declared in config under `[labels.<name>]`; a plain one applied as events and folded; one with `where` computed in tick |
+| §3.11 Label | `config`, `fold` | declared in config in the top-level `labels` list; applied as events and folded |
 | §3.12 Moment and handler | `guidance` | moments, handlers, workflows, their three layers |
 | §3.13 Rewrite | `fold`, `store` | applied by the fold; segments re-sealed by store |
 | §3.14 Identity | `root`, `events` | the checkout id, principal and agent label read in root; attribution carried in events |

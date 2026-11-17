@@ -6,12 +6,13 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/assets"
+	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/git"
 )
 
 // running is the reader every parse test reads under: a release new enough for
 // every gate the fixtures write.
-var running = Released{V: "v0.4.0"}
+var running = ReaderVersion{v: "v0.4.0"}
 
 // minimal is the smallest file that parses: a prefix, a claim lifetime, two
 // levels, and a graph of one initial and one terminal column. Each refusal
@@ -117,7 +118,7 @@ func TestDefaultProfileParsesToTheDocumentedModel(t *testing.T) {
 	if review, _ := g.Resolve("review"); review.Entry()[0].Severity != Warning {
 		t.Errorf("review's entry severity = %v, want warning", review.Entry()[0].Severity)
 	}
-	if merge, _ := g.Resolve("merge"); merge.Entry()[0].Test.Atom.String() != "verdict=pass" {
+	if merge, _ := g.Resolve("merge"); merge.Entry()[0].Test.Atom.String() != "pr/verdict=pass" {
 		t.Errorf("merge's entry = %s", merge.Entry()[0].Test.Atom)
 	}
 	if dup, _ := g.Resolve("dup"); dup.Entry()[0].Test.Atom.String() != "of" {
@@ -194,16 +195,12 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"unknown-kind", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"color\""), ReasonUnknownKind},
 		{"kind-parameter", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"text\"\nvalues = [\"a\"]"), ReasonKindParameter},
 		{"builtin-redeclared", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.description]\nkind = \"text\""), ReasonBuiltinRedeclared},
-		{"field-redeclared", func(s string) string {
-			s = replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"number\"")(s)
-			return replace(`home = "unfiled"`, "home = \"unfiled\"\n[levels.2.fields.pts]\nkind = \"text\"")(s)
-		}, ReasonFieldRedeclared},
 		{"bad-label", replace(`prefix = "lit"`, "prefix = \"lit\"\nlabels = [\"Bad Label\"]"), ReasonBadLabel},
 		{"duplicate-label", replace(`prefix = "lit"`, "prefix = \"lit\"\nlabels = [\"a\", \"a\"]"), ReasonDuplicateLabel},
 		{"alias-collides", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\naliases = [\"backlog\"]"), ReasonAliasCollides},
 		{"duplicate-alias", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\naliases = [\"x\"]\n\n[columns.plan]\nnext = [\"done\"]\naliases = [\"x\"]"), ReasonDuplicateAlias},
 		{"template-field-undeclared", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nnope = \"x\""), ReasonTemplateFieldUndeclared},
-		{"template-field-derived", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nverdict = \"pass\""), ReasonTemplateFieldDerived},
+		{"template-field-derived", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\n\"plan/verdict\" = \"pass\""), ReasonTemplateFieldDerived},
 		{"template-value", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"number\"\n[levels.1.template]\npts = \"abc\""), ReasonTemplateValue},
 		{"bad-column-name", replace("[columns.done]", "[columns.Done]"), ReasonBadColumnName},
 		{"initial-and-terminal", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\ninitial = true"), ReasonInitialAndTerm},
@@ -294,7 +291,7 @@ many = true
 
 [levels.1.fields.ticket]
 kind = "pattern"
-re = "^T-[0-9]+$"
+pattern = "^T-[0-9]+$"
 
 [levels.1.fields.opened]
 kind = "date"
@@ -363,8 +360,8 @@ func TestEverySectionParses(t *testing.T) {
 	if s.Checks()["sized"].Tests[0].DeclaredIn != "ready" {
 		t.Errorf("a test from an included check keeps its declaring name: got %q", s.Checks()["sized"].Tests[0].DeclaredIn)
 	}
-	if _, ok := s.Fields()["size"]; !ok {
-		t.Error("a declared field is in the field table")
+	if lv, _ := s.Level(1); lv.Fields["size"].Kind == nil {
+		t.Error("a declared field is in its level's field table")
 	}
 	// unfiled is one section though two tables name it; lit-7k2 is the other.
 	if len(s.Sections()) != 2 {
@@ -431,6 +428,121 @@ func TestAliasesResolveToTheirColumn(t *testing.T) {
 	}
 	if _, ok := s.Root().Columns.Resolve("nowhere"); ok {
 		t.Error("a name neither declared nor aliased resolves to nothing")
+	}
+}
+
+// TestAReaderTooOldSeesOnlyTheGate: a version gated above the reader is
+// refused for the gate alone, not for the keys this reader does not know.
+func TestAReaderTooOldSeesOnlyTheGate(t *testing.T) {
+	text := replace(`prefix = "lit"`, "prefix = \"lit\"\nmin-reader-version = \"9.0.0\"\nworkflows = \"a key from 9.0.0\"")(minimal)
+	refusals := refusalsOf(t, text)
+	if len(refusals) != 1 || refusals[0].Reason != ReasonReaderTooOld {
+		t.Errorf("refusals = %v, want reader-too-old alone", refusals)
+	}
+}
+
+// TestTheSameNameOnTwoLevelsIsTwoFields: each level may declare a field of
+// one name with its own kind, and a test's value is held to every one.
+func TestTheSameNameOnTwoLevelsIsTwoFields(t *testing.T) {
+	text := replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.points]\nkind = \"number\"")(minimal)
+	text = replace(`home = "unfiled"`, "home = \"unfiled\"\n[levels.2.fields.points]\nkind = \"enum\"\nvalues = [\"1\", \"3\"]")(text)
+	held := replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nentry = [{ test = \"points=3\", severity = \"error\" }]")(text)
+	s, err := parseText(t, held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, _ := s.Level(1)
+	feature, _ := s.Level(2)
+	if _, ok := leaf.Fields["points"].Kind.(field.Number); !ok {
+		t.Errorf("level 1's points = %#v, want a number", leaf.Fields["points"])
+	}
+	if _, ok := feature.Fields["points"].Kind.(field.Enum); !ok {
+		t.Errorf("level 2's points = %#v, want an enum", feature.Fields["points"])
+	}
+	refusals := refusalsOf(t, replace("points=3", "points=2")(held))
+	if len(refusals) != 1 || refusals[0].Reason != ReasonAtomValue {
+		t.Errorf("points=2 fits level 1's number and not level 2's enum: refusals = %v, want atom-value", refusals)
+	}
+}
+
+// TestAColumnCheckReferenceTakesNoScope: a check's tests carry their own
+// scope, so a scope on the reference is refused on a column as in a check.
+func TestAColumnCheckReferenceTakesNoScope(t *testing.T) {
+	text := replace("[columns.done]\nterminal = true", "[checks.ready]\ntests = [{ test = \"description\" }]\n\n[columns.done]\nterminal = true\nentry = [{ check = \"ready\", scope = \"ancestors\", severity = \"error\" }]")(minimal)
+	refusals := refusalsOf(t, text)
+	if len(refusals) != 1 || refusals[0].Key != "columns.done.entry[0].scope" {
+		t.Errorf("refusals = %v, want one at columns.done.entry[0].scope", refusals)
+	}
+}
+
+// TestAFaultInACheckIsNamedOnce: a check with a bad test is refused once, at
+// the test, however many checks and columns name it, and nothing that names
+// it is told it names no check.
+func TestAFaultInACheckIsNamedOnce(t *testing.T) {
+	text := replace("[columns.done]\nterminal = true", "[checks.a]\ntests = [{ check = \"b\" }]\n\n[checks.b]\ntests = [{ test = \"nope\" }]\n\n[columns.done]\nterminal = true\nentry = [{ check = \"b\", severity = \"error\" }]")(minimal)
+	refusals := refusalsOf(t, text)
+	if len(refusals) != 1 || refusals[0].Reason != ReasonPathUndeclared || refusals[0].Key != "checks.b.tests[0].test" {
+		t.Errorf("refusals = %v, want path-undeclared once, at checks.b.tests[0].test", refusals)
+	}
+	cycle := replace("[columns.done]", "[checks.a]\ntests = [{ check = \"b\" }]\n\n[checks.b]\ntests = [{ check = \"a\" }]\n\n[columns.done]")(minimal)
+	if refusals := refusalsOf(t, cycle); len(refusals) != 1 || refusals[0].Reason != ReasonCheckCycle {
+		t.Errorf("refusals = %v, want the cycle once", refusals)
+	}
+}
+
+// TestATestIsAString: a test that is not a string is the wrong type, not an
+// atom that failed to parse.
+func TestATestIsAString(t *testing.T) {
+	text := replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nentry = [{ test = 5, severity = \"error\" }]")(minimal)
+	refusals := refusalsOf(t, text)
+	if len(refusals) != 1 || refusals[0].Reason != ReasonWrongType {
+		t.Errorf("refusals = %v, want wrong-type", refusals)
+	}
+}
+
+// TestASectionHasOneKeyPath: every refusal in a home's section names the
+// section the way the file writes it.
+func TestASectionHasOneKeyPath(t *testing.T) {
+	text := replace("[columns.backlog]", "[nodes.unfiled.columns.Bad]\nterminal = true\n\n[nodes.unfiled.columns.audit]\nnext = [\"nowhere\"]\n\n[columns.backlog]")(minimal)
+	refusals := refusalsOf(t, text)
+	if len(refusals) != 2 {
+		t.Fatalf("refusals = %v, want the bad name and the bad next", refusals)
+	}
+	for _, r := range refusals {
+		if !strings.HasPrefix(string(r.Key), "nodes.unfiled.columns.") {
+			t.Errorf("%s refused at %s, want under nodes.unfiled.columns", r.Reason, r.Key)
+		}
+	}
+}
+
+// TestARefusedHomeNamesItsLevel: a level's refusal names it by its number,
+// whatever levels around it are missing.
+func TestARefusedHomeNamesItsLevel(t *testing.T) {
+	text := replace("[levels.2]\nname = \"feature\"", "[levels.3]\nname = \"epic\"\nhome = \"unfiled\"\n\n[levels.2]\nname = \"feature\"")(minimal)
+	text = replace("[levels.2]\nname = \"feature\"\nhome = \"unfiled\"\n", "")(text)
+	text = replace("[levels.3]\nname = \"epic\"\nhome = \"unfiled\"\n", "[levels.3]\nname = \"epic\"\nhome = \"story\"\n")(text)
+	refusals := refusalsOf(t, text)
+	for _, r := range refusals {
+		if r.Reason == ReasonHomeCollides {
+			if r.Key != "levels.3.home" {
+				t.Errorf("home-collides at %s, want levels.3.home", r.Key)
+			}
+			return
+		}
+	}
+	t.Errorf("refusals = %v, want home-collides", refusals)
+}
+
+// TestFactsCountEveryRequirement: the count of requirements covers the
+// sections' columns as well as the root's.
+func TestFactsCountEveryRequirement(t *testing.T) {
+	text := replace("[columns.backlog]", "[nodes.unfiled.columns.audit]\nnext = [\"done\"]\nentry = [{ test = \"description\", severity = \"error\" }]\n\n[columns.backlog]")(minimal)
+	l, err := Load(Committed{Bytes: []byte(text)}, running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.Facts().Counts.Requirements; got != 1 {
+		t.Errorf("requirements = %d, want the section's one", got)
 	}
 }
 

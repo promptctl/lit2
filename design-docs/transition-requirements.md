@@ -118,10 +118,7 @@ shipped default, in full (the file is `internal/assets/workspace/default.toml`):
 ```toml
 prefix = "lit"
 claim_ttl = "6h"
-
-[labels.ready]
-[labels.needs-design]
-[labels.external]
+labels = ["ready", "needs-design", "external"]
 
 [levels.1]
 name = "story"

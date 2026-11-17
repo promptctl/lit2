@@ -42,7 +42,6 @@ const (
 	ReasonUnknownKind       Reason = "unknown-kind"
 	ReasonKindParameter     Reason = "kind-parameter"
 	ReasonBuiltinRedeclared Reason = "builtin-redeclared"
-	ReasonFieldRedeclared   Reason = "field-redeclared"
 
 	// Labels.
 	ReasonBadLabel       Reason = "bad-label"

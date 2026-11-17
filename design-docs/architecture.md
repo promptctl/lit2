@@ -333,19 +333,15 @@ stage is derived, so a dependency on a node is a dependency on its leaves.
 
 ### 3.11 Label
 
-A **label** is a name declared in the workspace file under `[labels.<name>]`
-before anything uses it. A label declared plain is applied by a person,
-`add x/labels ready`, and an item carries exactly the plain labels written to
-it. A label declared with `where`, a selector, is computed: tick evaluates the
-selector on every read and the item carries the label while it matches, so
-`[labels.orphaned] where = "(stage=active updated<-6h)"` gives what the facts
-say a name, and `add x/labels orphaned` is refused at parse as a write to any
-derived value is. Either kind reads as `labels=<name>` in a selector or a
-requirement, the requirement judged at the write with the command's `now`. A
-`where` reads stored fields, the engine's derived fields other than `held`,
-and `parent/`, never another computed label, so derivations never loop, and
-apply refuses a version in which one does. The shipped default declares
-`ready`, `needs-design` and `external`, all plain.
+A **label** is a name a person applies, `add x/labels ready`, declared in the
+workspace file's top-level `labels` list before anything uses it: the list is
+the value set of the built-in `labels` field, an enum that holds many values.
+An item carries exactly the labels written to it. A label reads as
+`labels=<name>` in a selector or a requirement, and a test naming an undeclared
+label is refused at parse. A stored label that a later version stops declaring
+stays stored, and `/integrity` reports it. What the facts already say is a
+selector, not a label: `get '(stage=active updated<-6h)'` is the orphaned
+tickets. The shipped default declares `ready`, `needs-design` and `external`.
 
 ### 3.12 Moment and handler
 

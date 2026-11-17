@@ -35,7 +35,6 @@ type Process struct {
 	Store    command.Opening
 	Fold     fold.Env
 	Reader   config.ReaderVersion
-	Version  string
 	Commands command.Sink
 	In       io.Reader
 	Out, Err io.Writer
@@ -53,7 +52,7 @@ func Run(p Process, args []string) int {
 		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
 	}
 	verbs, admin := cli.Verbs(), cli.Admin()
-	inv := command.Invocation{Trace: trace, Version: p.Version, Place: p.Place, Agent: p.Agent, Config: configFacts(p)}
+	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: p.Place, Agent: p.Agent, Config: configFacts(p)}
 	event := command.Record(p.Clock, inv, func(_ time.Time, asked func(cli.Summary), stored *command.StoreFacts) cli.Outcome {
 		stored.Opening = p.Store
 		cmd, err := cli.Parse(verbs, admin, args)

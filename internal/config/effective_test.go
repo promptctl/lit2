@@ -125,7 +125,7 @@ func TestEffectiveSecondInitialIsRefused(t *testing.T) {
 	if refused.Refusals[0].Reason != ReasonManyInitial {
 		t.Errorf("reason = %s, want many-initial", refused.Refusals[0].Reason)
 	}
-	if refused.Refusals[0].Key != "nodes.\"unfiled\".columns.intake" && refused.Refusals[0].Key != "nodes.unfiled.columns.intake" {
+	if refused.Refusals[0].Key != "nodes.unfiled.columns.intake" {
 		t.Errorf("key = %s, want the section that declared intake", refused.Refusals[0].Key)
 	}
 }

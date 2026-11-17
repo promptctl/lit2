@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/promptctl/lit2/internal/assets"
@@ -78,11 +77,9 @@ func (l Loaded) Ref(f git.ObjectFormat) git.ObjectID { return git.HashBlob(f, l.
 // Facts is what the command event records of the configuration a run read,
 // `[LAW:nothing-unseen]`. Zero counts are facts, so every count is present.
 type Facts struct {
-	Source   string
-	Gate     string
-	Outcome  string
-	Refusals []Refusal
-	Counts   Counts
+	Source string
+	Gate   string
+	Counts Counts
 }
 
 // Counts is how many of each declaration the version holds.
@@ -94,9 +91,14 @@ type Counts struct {
 func (l Loaded) Facts() Facts {
 	s := l.schema
 	reqs := 0
-	for _, name := range s.root.Columns.Names() {
-		c, _ := s.root.Columns.Resolve(name)
-		reqs += len(c.Entry()) + len(c.Exit())
+	count := func(cols map[string]Column) {
+		for _, c := range cols {
+			reqs += len(c.Entry()) + len(c.Exit())
+		}
+	}
+	count(s.root.Declared)
+	for _, sec := range s.sections {
+		count(sec.Columns)
 	}
 	src := "default"
 	if _, ok := l.source.(FromLog); ok {
@@ -107,9 +109,8 @@ func (l Loaded) Facts() Facts {
 		gate = g.V
 	}
 	return Facts{
-		Source:  src,
-		Gate:    gate,
-		Outcome: "parsed",
+		Source: src,
+		Gate:   gate,
 		Counts: Counts{
 			Levels:       len(s.levels),
 			Columns:      len(s.root.Declared),
@@ -120,19 +121,4 @@ func (l Loaded) Facts() Facts {
 			Sections:     len(s.sections),
 		},
 	}
-}
-
-// RefusedFacts reads the facts of a version that was refused: its source and
-// every fault in it. The counts are zero, because nothing parsed.
-func RefusedFacts(err error, a ActiveConfig) Facts {
-	src := "default"
-	if _, ok := a.(Committed); ok {
-		src = "log"
-	}
-	f := Facts{Source: src, Gate: "none", Outcome: "refused"}
-	var r *Refused
-	if errors.As(err, &r) {
-		f.Refusals = r.Refusals
-	}
-	return f
 }

@@ -3,12 +3,12 @@ package field
 import (
 	"fmt"
 	"regexp"
-	"strconv"
+	"slices"
 	"strings"
 )
 
 // Atom is one test over one path of an item: `p`, `!p`, `p=v`, `p!=v` or
-// `p~re`. Requirements read it, and so will a CLI selector: the one grammar
+// `p~re`, where `v` may be several values, `p=a,b`. Requirements read it, and so will a CLI selector: the one grammar
 // `[LAW:one-source-of-truth]`.
 type Atom struct {
 	path Path
@@ -25,11 +25,11 @@ type Present struct{}
 // Absent holds when the path has none.
 type Absent struct{}
 
-// Equals holds when some value is V.
-type Equals struct{ V string }
+// Equals holds when some value the item holds is one of Values.
+type Equals struct{ Values []string }
 
-// NotEquals holds when no value is V.
-type NotEquals struct{ V string }
+// NotEquals holds when no value the item holds is one of Values.
+type NotEquals struct{ Values []string }
 
 // Matches holds when some value matches Re.
 type Matches struct{ Re *regexp.Regexp }
@@ -67,9 +67,9 @@ func (a Atom) Holds(f Found) Truth {
 	case Absent:
 		return Truth(len(f) == 0)
 	case Equals:
-		return Truth(contains(f, func(v string) bool { return v == op.V }))
+		return Truth(contains(f, func(v string) bool { return slices.Contains(op.Values, v) }))
 	case NotEquals:
-		return !Truth(contains(f, func(v string) bool { return v == op.V }))
+		return !Truth(contains(f, func(v string) bool { return slices.Contains(op.Values, v) }))
 	case Matches:
 		return Truth(contains(f, op.Re.MatchString))
 	}
@@ -89,7 +89,7 @@ func contains(f Found, hit func(string) bool) bool {
 const segment = `[a-z][a-z0-9_-]*`
 
 // atomGrammar is the whole grammar: an optional !, a path, and at most one
-// operator with its value. A value is the rest of the text, bare or quoted.
+// operator with its values, which are the rest of the text.
 var atomGrammar = regexp.MustCompile(`^(!?)(` + segment + `(?:/` + segment + `)*)(?:(!=|=|~)(.*))?$`)
 
 // ParseAtom reads an atom from its source. It refuses what the grammar does
@@ -110,35 +110,90 @@ func ParseAtom(s string) (Atom, error) {
 	if neg != "" {
 		return Atom{}, fmt.Errorf("%q is not an atom: ! negates a path alone, write !%s%s%s", s, path, opWord, rest)
 	}
-	value, err := atomValue(rest)
+	if opWord == "~" {
+		pattern, err := only(rest)
+		if err != nil {
+			return Atom{}, fmt.Errorf("%q is not an atom: %w", s, err)
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return Atom{}, fmt.Errorf("%q is not an atom: %q is not a regular expression: %w", s, pattern, err)
+		}
+		return Atom{path: path, op: Matches{Re: re}, src: s}, nil
+	}
+	values, err := list(rest)
 	if err != nil {
 		return Atom{}, fmt.Errorf("%q is not an atom: %w", s, err)
 	}
-	switch opWord {
-	case "=":
-		return Atom{path: path, op: Equals{V: value}, src: s}, nil
-	case "!=":
-		return Atom{path: path, op: NotEquals{V: value}, src: s}, nil
+	if opWord == "=" {
+		return Atom{path: path, op: Equals{Values: values}, src: s}, nil
 	}
-	re, err := regexp.Compile(value)
-	if err != nil {
-		return Atom{}, fmt.Errorf("%q is not an atom: %q is not a regular expression: %w", s, value, err)
-	}
-	return Atom{path: path, op: Matches{Re: re}, src: s}, nil
+	return Atom{path: path, op: NotEquals{Values: values}, src: s}, nil
 }
 
-// atomValue is the value an atom names: a quoted string unquoted, or a bare
-// word, which is non-empty and has no space or quote in it.
-func atomValue(rest string) (string, error) {
-	if strings.HasPrefix(rest, `"`) {
-		v, err := strconv.Unquote(rest)
+// list reads the values of = and !=: one or more, separated by commas.
+func list(rest string) ([]string, error) {
+	var out []string
+	for {
+		v, tail, err := value(rest, ",")
 		if err != nil {
-			return "", fmt.Errorf("the quoted value %s is not a string", rest)
+			return nil, err
 		}
-		return v, nil
+		out = append(out, v)
+		if tail == "" {
+			return out, nil
+		}
+		rest = tail[1:]
 	}
-	if rest == "" || strings.ContainsAny(rest, " \t\"") {
-		return "", fmt.Errorf("a value is a bare word or a quoted string")
+}
+
+// only reads the one value of ~, a regular expression, which may hold commas.
+func only(rest string) (string, error) {
+	v, tail, err := value(rest, "")
+	if err != nil {
+		return "", err
 	}
-	return rest, nil
+	if tail != "" {
+		return "", fmt.Errorf("%s follows the quoted value", tail)
+	}
+	return v, nil
+}
+
+// value reads one value from the front of s, and returns what follows it,
+// which is empty or starts at one of stops. A value is a quoted string, in
+// which "" is a literal quote and every other character is itself, a backslash
+// included, so a regex or a path needs no escaping; or a bare word, non-empty,
+// with no space or quote, running to the first of stops.
+func value(s, stops string) (string, string, error) {
+	if strings.HasPrefix(s, `"`) {
+		var b strings.Builder
+		for i := 1; i < len(s); i++ {
+			if s[i] != '"' {
+				b.WriteByte(s[i])
+				continue
+			}
+			if i+1 < len(s) && s[i+1] == '"' {
+				b.WriteByte('"')
+				i++
+				continue
+			}
+			tail := s[i+1:]
+			if tail != "" && !strings.ContainsRune(stops, rune(tail[0])) {
+				return "", "", fmt.Errorf("%s follows the quoted value", tail)
+			}
+			return b.String(), tail, nil
+		}
+		return "", "", fmt.Errorf("the quoted value %s has no closing quote", s)
+	}
+	end := len(s)
+	if stops != "" {
+		if i := strings.IndexAny(s, stops); i >= 0 {
+			end = i
+		}
+	}
+	word := s[:end]
+	if word == "" || strings.ContainsAny(word, " \t\"") {
+		return "", "", fmt.Errorf("a value is a bare word or a quoted string")
+	}
+	return word, s[end:], nil
 }
