@@ -155,7 +155,7 @@ func (o opened) apply(version []byte, blob, ref git.ObjectID, said string) cli.O
 func (o opened) status() cli.Outcome {
 	_, file := o.workspaceFile()
 	st := o.folded.State
-	if out, failed := written(io.WriteString(o.p.Out, verbs.Workspace(st, file)+"\n")).(cli.Failed); failed {
+	if out, isFailed := written(io.WriteString(o.p.Out, verbs.Workspace(st, file)+"\n")).(cli.Failed); isFailed {
 		return out
 	}
 	in, ok := st.Workspace().(fold.InForce)
@@ -194,7 +194,7 @@ func (r body) init() cli.Outcome {
 		said += fmt.Sprintf("recovery phrase: %s\nwrite it down: it is the one way to restore this key\n", minted.Key.Phrase())
 	}
 	// the phrase is said before anything else can fail: it is shown once
-	if out, failed := written(io.WriteString(r.p.Out, said)).(cli.Failed); failed {
+	if out, isFailed := written(io.WriteString(r.p.Out, said)).(cli.Failed); isFailed {
 		return out
 	}
 	opening := r.p.Open(in.Checkout, minted)

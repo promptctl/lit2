@@ -415,9 +415,10 @@ so a draft that does not parse stops no command. `Parse` reads one version's
 bytes into one typed schema. `lit2 admin init` writes the default profile,
 `internal/assets/workspace/default.toml`, to `.lit/workspace.toml` when no
 file exists, and applies the same bytes as version one at init in a store
-no version is in force in, right after the enrollment (§3.17), so the file and the active version share one blob id
-from the start; an existing file is applied instead, and must parse. Every
-later event can rely on an active version existing.
+no version is in force in, right after the enrollment (§3.17), so the file
+and the active version share one blob id from the start; an existing file is
+applied instead, and must parse. Every verb refuses a store with no version
+in force, so every event a verb writes is written under one.
 
 Every event carries `config-ref`, the git blob id of the active version its writer
 ran under, in the code repository's object format. It is provenance: it names the
@@ -448,9 +449,9 @@ version one's is its own blob. The board compares git's id for the working
 file's bytes with the active blob, and never parses the file. lit2 reads the
 code repository's HEAD and history in process, through go-git, which reads
 only SHA-1 repositories; in a SHA-256 repository `config commit` and the
-history half of `config status` are refused, naming the format. A shallow
-clone holds no history past its boundary, so a version not found before it is
-refused as unknown, never answered no.
+history half of `config status` are refused, naming the format. A history
+walk that reaches a commit the clone does not hold, past a shallow clone's
+boundary, is refused as unknown, never answered no.
 
 What belongs in the file is decided by one test: a value is the workspace's
 when two machines that disagree about it cannot both be right about the

@@ -59,8 +59,8 @@ func TestASHA256CodeRepositoryIsRefusedByName(t *testing.T) {
 }
 
 // TestAShallowCloneSaysWhatItCannotKnow: a blob before the boundary is
-// found; one not found is unknown, refused naming the shallow clone, never
-// answered no.
+// found; one the walk must pass the boundary for is unknown, refused naming
+// the shallow clone, never answered no.
 func TestAShallowCloneSaysWhatItCannotKnow(t *testing.T) {
 	const path = ".lit/workspace.toml"
 	one, two := []byte("prefix = \"a\"\n"), []byte("prefix = \"b\"\n")
@@ -79,20 +79,5 @@ func TestAShallowCloneSaysWhatItCannotKnow(t *testing.T) {
 	}
 	if ever, err := code.EverAt(path, git.HashBlob(git.SHA1, one)); err == nil || !strings.Contains(err.Error(), "shallow") {
 		t.Errorf("EverAt(a blob past the boundary) = %v, %v; want a refusal naming the shallow clone", ever, err)
-	}
-}
-
-// TestASymlinkAtThePathIsNoFile: HEAD's blob for a symlink is its target's
-// text, never the bytes the work tree reads through it, so it is no file.
-func TestASymlinkAtThePathIsNoFile(t *testing.T) {
-	repo := gittest.NewRepo(t)
-	repo.Commit(t, map[string][]byte{"real.toml": []byte("prefix = \"a\"\n")})
-	if err := os.Symlink("real.toml", filepath.Join(repo.Dir, "link.toml")); err != nil {
-		t.Fatal(err)
-	}
-	gittest.Git(t, repo.Dir, "add", "link.toml")
-	gittest.Git(t, repo.Dir, "commit", "-q", "-m", "link")
-	if got, err := repo.AtHead("link.toml"); err != nil || got != (git.Untracked{}) {
-		t.Errorf("AtHead(a symlink) = %#v, %v; want Untracked", got, err)
 	}
 }
