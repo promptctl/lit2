@@ -241,7 +241,7 @@ node, so two creations collide on the address. A rule the fold can apply
 identically everywhere: `lane.create` is idempotent on `(node, name)`, and
 members from both creations are placed in total order, so the lane folds to
 `[dee, b64, fw9]` on both machines with an advisory naming both creators.
-This is the same rule as two `label.add` of one label. Adopted.
+This is the same rule as two `member.add` of one member. Adopted.
 
 ## 7. The process changes under running work
 

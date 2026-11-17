@@ -39,15 +39,13 @@ func must[T any](v T, err error) T {
 	return v
 }
 
-func name(s string) events.Name { return must(events.ParseName(s)) }
+func name(s string) events.Name { return events.MustName(s) }
 
 func keyOf(seed byte) events.Key {
 	return must(events.NewKey(bytes.NewReader(bytes.Repeat([]byte{seed}, 32))))
 }
 
 func level(n int) events.Level { return must(events.ParseLevel(n)) }
-
-func label(s string) events.Label { return must(events.ParseLabel(s)) }
 
 // writer is one writing checkout and its principal's signer.
 type writer struct {

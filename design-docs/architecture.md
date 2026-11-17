@@ -117,9 +117,9 @@ same shape:
 | on the command line | events minted |
 |---|---|
 | `set x/title "…"` | `field.set {item, field, value, over}`, `over` the candidates the writer saw and replaces |
-| `set x/status review` | `transition {item, from, to}` |
-| `add x/labels ready` / `rm x/labels/ready` | `label.add {item, label}` / `label.rm {item, label, observed}`, `observed` the adds the writer saw |
-| `set x/labels '[a, b]'` | one `label.rm` per element removed, one `label.add` per element added |
+| `set x/status review` | `transition {item, from, to, over}`, `over` the status writes the writer saw; only a transition writes `status` |
+| `add x/labels ready` / `rm x/labels/ready` | `member.add {item, field, member}` / `member.rm {item, field, member, observed}`, `observed` the adds the writer saw; every many-valued field, `labels` first, is a set of names |
+| `set x/labels '[a, b]'` | one `member.rm` per element removed, one `member.add` per element added |
 | `add x/comments "…"` | `comment.add {item, id, body}` |
 | `add <node>/lanes/datetime '[dee, b64]'` | `lane.create`, then `lane.place {lane, item, after}` per member |
 | `set <node>/lanes/datetime '[b64, dee, fw9]'` | one `lane.place` per member whose predecessor changed |

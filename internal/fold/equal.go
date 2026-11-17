@@ -22,7 +22,7 @@ func (s State) Equal(o State) bool {
 func (r *item) equal(o *item) bool {
 	return r.id == o.id &&
 		slices.EqualFunc(r.sortedCreates(), o.sortedCreates(), func(a, b creation) bool { return a.stamp.equal(b.stamp) && a.in == b.in && a.segment == b.segment }) &&
-		lifeEqual(r.life, o.life) && r.facts.equal(o.facts) &&
+		r.facts.equal(o.facts) &&
 		slices.EqualFunc(r.sortedElements(), o.sortedElements(), (*element).equal)
 }
 
@@ -34,18 +34,6 @@ func (el *element) equal(o *element) bool {
 
 func (s Stamp) equal(o Stamp) bool {
 	return s.Event == o.Event && s.Order == o.Order && s.By == o.By && s.RecordedAt.Equal(o.RecordedAt)
-}
-
-func lifeEqual(a, b Life) bool {
-	switch a := a.(type) {
-	case Live:
-		_, ok := b.(Live)
-		return ok
-	case Tombstoned:
-		t, ok := b.(Tombstoned)
-		return ok && a.By.equal(t.By)
-	}
-	return false
 }
 
 func (f Facts) equal(o Facts) bool {

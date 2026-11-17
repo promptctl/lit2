@@ -182,7 +182,7 @@ func (p *parser) labels(raw map[string]any) field.Enum {
 			p.fail(at, ReasonWrongType, "a label is a string")
 			continue
 		}
-		if _, err := events.ParseLabel(s); err != nil {
+		if _, err := events.ParseName(s); err != nil {
 			p.fail(at, ReasonBadLabel, "%v", err)
 			continue
 		}

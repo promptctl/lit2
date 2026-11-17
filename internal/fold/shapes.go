@@ -12,7 +12,6 @@ import (
 // shape merges in any order and is idempotent on the event id, so a fold
 // is a function of the event set, not of its arrival `[LAW:one-source-of-truth]`:
 //   - origin: the creates of a node, the first in total order its creator;
-//   - life: the first delete in total order;
 //   - the register: a multi-value register, whose live writes are those no
 //     write names in Over;
 //   - the set: an observed-remove set, whose live adds are those no remove
@@ -23,7 +22,6 @@ import (
 type item struct {
 	id       events.ItemID
 	creates  createSet
-	life     Life
 	facts    Facts
 	elements table[events.ElementID, *element, byElement]
 }
@@ -60,7 +58,7 @@ type listing struct {
 	segment events.Segment
 }
 
-func newItem(id events.ItemID) *item { return &item{id: id, life: Live{}} }
+func newItem(id events.ItemID) *item { return &item{id: id} }
 
 func (r *item) key() events.ItemID { return r.id }
 
@@ -133,19 +131,6 @@ func origin[C made](creates []C, placed func(C) (Container, events.Segment)) Ori
 func (r *item) withCreate(c creation) *item {
 	next := *r
 	next.creates = r.creates.set(c)
-	return &next
-}
-
-func (r *item) withDelete(st Stamp) *item {
-	next := *r
-	switch l := r.life.(type) {
-	case Live:
-		next.life = Tombstoned{By: st}
-	case Tombstoned:
-		if events.Compare(st.Order, l.By.Order) < 0 {
-			next.life = Tombstoned{By: st}
-		}
-	}
 	return &next
 }
 
@@ -344,6 +329,31 @@ func (f Facts) Members(s events.Name) []Member {
 		if adds := t.liveAdds(); len(adds) > 0 {
 			out = append(out, Member{Name: t.name, Added: adds})
 		}
+	}
+	return out
+}
+
+// memberCount is how many members f's sets hold, every set together.
+func (f Facts) memberCount() int {
+	n := 0
+	f.sets.each(func(s set) {
+		s.members.each(func(t tally) {
+			if len(t.liveAdds()) > 0 {
+				n++
+			}
+		})
+	})
+	return n
+}
+
+// Live is every live write of field n, in either form, by total order:
+// what a write that replaces the field names in Over, so a write it did
+// not read stays live beside it. It holds writes of equal value too, which
+// a read of the settled value cannot list `[LAW:one-source-of-truth]`.
+func (f Facts) Live(n events.Name) []events.EventID {
+	var out []events.EventID
+	for _, c := range f.register(n).liveWrites() {
+		out = append(out, c.stamp.Event)
 	}
 	return out
 }

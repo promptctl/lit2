@@ -95,7 +95,6 @@ type Item struct {
 	ID     events.ItemID
 	Origin Origin
 	Level  LevelOf
-	Life   Life
 	Facts  Facts
 	// Elements are the item's created elements, in the total order of the
 	// creates that placed each.
@@ -169,21 +168,6 @@ type UnderLeaf struct{ Leaf events.ItemID }
 func (Leveled) levelOf()   {}
 func (Orphaned) levelOf()  {}
 func (UnderLeaf) levelOf() {}
-
-// Life is whether an item is deleted.
-//
-//sumtype:decl
-type Life interface{ life() }
-
-// Live is an item no delete names.
-type Live struct{}
-
-// Tombstoned is a deleted item, By its first delete in total order; every
-// fact stays.
-type Tombstoned struct{ By Stamp }
-
-func (Live) life()       {}
-func (Tombstoned) life() {}
 
 // Element is one created element of an item, such as a comment.
 type Element struct {
@@ -383,6 +367,20 @@ func (s State) Children(c Container) []events.ItemID {
 	return ids
 }
 
+// Container is the container id is placed in, as Children lists it: its
+// home, or its parent when the parent's create sorts first, as levelOf
+// and Path read the chain. An id with no create, or whose parent link is
+// no link, is in none. Every step up a chain of Containers goes to an
+// earlier create, so a walk up ends, a forged cycle included; it is the
+// one reading of a parent link `[LAW:single-enforcer]`.
+func (s State) Container(id events.ItemID) Container {
+	c, ok := s.placing(id, nil)
+	if !ok || !s.placedIn(c, c.in) {
+		return nil
+	}
+	return c.in
+}
+
 // Known is every id a folded event made or named, created or not, with
 // each namespace's created count, so Mint widens past all of them;
 // carried events name none.
@@ -488,7 +486,7 @@ func (s State) records() []*item {
 
 // itemOf is the record r as an Item, its level derived.
 func (s State) itemOf(r *item) Item {
-	it := Item{ID: r.id, Origin: r.origin(), Level: s.levelOf(r.id), Life: r.life, Facts: r.facts}
+	it := Item{ID: r.id, Origin: r.origin(), Level: s.levelOf(r.id), Facts: r.facts}
 	for _, el := range r.sortedElements() {
 		if !el.creates.empty() {
 			it.Elements = append(it.Elements, Element{ID: el.id, In: el.firstCreate().in, Origin: el.origin(r.id), Facts: el.facts})

@@ -36,7 +36,7 @@ func TestAFoldOfNothingIsEveryCountZeroAndPresent(t *testing.T) {
 	zeros := map[string][]string{
 		"decoded":   {"readable", "erased", "uncommitted", "malformed"},
 		"verdicts":  {"valid", "invalid", "unknown_suite"},
-		"counts":    {"items", "tombstoned", "comments", "labels", "prose_conflicts", "overruled", "mixed_forms", "collisions", "uncreated"},
+		"counts":    {"items", "comments", "members", "prose_conflicts", "overruled", "mixed_forms", "collisions", "uncreated"},
 		"carried":   {"bad_signature", "unknown_suite"},
 		"unapplied": {"unread", "erased", "uncommitted", "misaddressed"},
 	}

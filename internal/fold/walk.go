@@ -146,7 +146,7 @@ type VerdictCounts struct{ Valid, Invalid, UnknownSuite int }
 
 // StateCounts is the folded state's size and its contradictions.
 type StateCounts struct {
-	Items, Tombstoned, Comments, Labels                          int
+	Items, Comments, Members                                     int
 	ProseConflicts, Overruled, MixedForms, Collisions, Uncreated int
 }
 
@@ -243,10 +243,7 @@ func countsOf(s State) StateCounts {
 			c.Items++
 		}
 		c.origin(r.origin())
-		if _, ok := r.life.(Tombstoned); ok {
-			c.Tombstoned++
-		}
-		c.Labels += len(r.facts.Members(labels))
+		c.Members += r.facts.memberCount()
 		c.facts(r.facts)
 		r.elements.each(func(el *element) {
 			o := el.origin(r.id)

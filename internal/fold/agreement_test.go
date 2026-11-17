@@ -63,20 +63,20 @@ func (h *history) op(wr writer) {
 	case 3:
 		h.w.mint(wr, seen, events.Act{About: events.Item{ID: it.ID}, Payload: events.FieldSet{Field: priority, Value: plain(h.pick("high", "low", "medium")), Over: h.over(plainStamps(it.Facts.Plain(priority)))}})
 	case 4:
-		h.w.mint(wr, seen, addLabel(it.ID, label(h.pick("red", "blue"))))
+		h.w.mint(wr, seen, addLabel(it.ID, name(h.pick("red", "blue"))))
 	case 5:
-		l := label(h.pick("red", "blue"))
+		l := name(h.pick("red", "blue"))
 		var observed []events.EventID
 		for _, m := range it.Facts.Members(labels) {
-			if m.Name == l.Name() {
+			if m.Name == l {
 				observed = stampIDs(m.Added)
 			}
 		}
-		h.w.mint(wr, seen, events.Act{About: events.Item{ID: it.ID}, Payload: events.LabelRm{Label: l, Observed: observed}})
+		h.w.mint(wr, seen, events.Act{About: events.Item{ID: it.ID}, Payload: events.MemberRm{Field: labels, Member: l, Observed: observed}})
 	case 6:
 		h.w.mint(wr, seen, comment(it.ID, h.pick("yes", "no")))
 	case 7:
-		h.w.mint(wr, seen, events.Act{About: events.Item{ID: it.ID}, Payload: events.ItemDelete{}})
+		h.w.mint(wr, seen, events.Act{About: events.Item{ID: it.ID}, Payload: events.Transition{From: name("backlog"), To: name(h.pick("plan", "done")), Over: it.Facts.Live(fold.Status)}})
 	case 8:
 		h.w.mint(writer{checkout: wr.checkout, signer: forger{wr.signer}}, seen, set(it.ID, title, prose("forged")))
 	case 9:

@@ -7,12 +7,12 @@ import (
 	"github.com/promptctl/lit2/internal/fold"
 )
 
-func addLabel(id events.ItemID, l events.Label) events.Draft {
-	return events.Act{About: events.Item{ID: id}, Payload: events.LabelAdd{Label: l}}
+func addLabel(id events.ItemID, l events.Name) events.Draft {
+	return events.Act{About: events.Item{ID: id}, Payload: events.MemberAdd{Field: labels, Member: l}}
 }
 
-func rmLabel(id events.ItemID, l events.Label, observed ...events.Event) events.Draft {
-	return events.Act{About: events.Item{ID: id}, Payload: events.LabelRm{Label: l, Observed: idsOf(observed)}}
+func rmLabel(id events.ItemID, l events.Name, observed ...events.Event) events.Draft {
+	return events.Act{About: events.Item{ID: id}, Payload: events.MemberRm{Field: labels, Member: l, Observed: idsOf(observed)}}
 }
 
 func comment(id events.ItemID, text string) events.Draft {
@@ -21,13 +21,13 @@ func comment(id events.ItemID, text string) events.Draft {
 
 func TestAConcurrentRemoveLeavesAFreshAdd(t *testing.T) {
 	w, id := item(t)
-	urgent := label("urgent")
+	urgent := name("urgent")
 	first := w.mint(a, w.state(), addLabel(id, urgent))[0]
 	seen := w.state()
 	w.mint(b, seen, rmLabel(id, urgent, first))
 	fresh := w.mint(a, seen, addLabel(id, urgent))[0]
 	got := found(t, w.state(), id).Facts.Members(labels)
-	if len(got) != 1 || got[0].Name != urgent.Name() || !stamped(got[0].Added, fresh) {
+	if len(got) != 1 || got[0].Name != urgent || !stamped(got[0].Added, fresh) {
 		t.Errorf("a remove concurrent with a fresh add leaves %#v; want urgent, added by the fresh add alone", got)
 	}
 	w.mint(b, w.state(), rmLabel(id, urgent, fresh))

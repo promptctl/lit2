@@ -15,7 +15,7 @@ func TestAParentlessLeafIsInTheHomeOfLevelOne(t *testing.T) {
 	s := w.state()
 	it := found(t, s, leaf)
 	created, ok := it.Origin.(fold.Created)
-	if !ok || created.In != (fold.Home{Holds: level(1)}) || it.Level != (fold.Leveled{Level: level(1)}) || it.Life != (fold.Live{}) {
+	if !ok || created.In != (fold.Home{Holds: level(1)}) || it.Level != (fold.Leveled{Level: level(1)}) {
 		t.Errorf("a parentless leaf is %#v; want created in Home{1}, Leveled{1}, live", it)
 	}
 	if kids := s.Children(fold.Home{Holds: level(1)}); len(kids) != 1 || kids[0] != leaf {
@@ -160,6 +160,17 @@ func TestAParentCreatedAfterItsChildIsNoLinkAndTheWalkEnds(t *testing.T) {
 	if got := s.Children(fold.Under{Parent: p}); len(got) != 0 {
 		t.Errorf("p's children are %v; want none, the forged back-link unfollowed", got)
 	}
+	// Container reads a link as Children does, so a walk up from either
+	// ends: child's link to p is no link, and p is under child
+	if got := s.Container(idOf(child)); got != nil {
+		t.Errorf("child's container is %#v; want none, its link to p forged", got)
+	}
+	if got := s.Container(p); got != (fold.Under{Parent: idOf(child)}) {
+		t.Errorf("p's container is %#v; want under child", got)
+	}
+	if got := s.Container(ghost("z")); got != nil {
+		t.Errorf("an id nothing created is in %#v; want none", got)
+	}
 }
 
 func TestTwoCreatesOfOneIDCollideAndTheFirstPlacesIt(t *testing.T) {
@@ -190,17 +201,41 @@ func TestTwoCreatesOfOneIDCollideAndTheFirstPlacesIt(t *testing.T) {
 	}
 }
 
-func TestADeletedItemIsTombstonedAndKeepsEveryFact(t *testing.T) {
+// Only a transition writes status: it settles the register to its column,
+// and a field.set of status is left unapplied, so the register never holds
+// a value that is no column's name.
+func TestOnlyATransitionWritesStatus(t *testing.T) {
 	w := newWorld(t)
 	id := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0])
-	named := w.mint(a, w.state(), set(id, title, prose("kept")))[0]
-	del := w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.ItemDelete{}})[0]
-	w.mint(b, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.ItemDelete{}})
-	it := found(t, w.state(), id)
-	if tomb, ok := it.Life.(fold.Tombstoned); !ok || tomb.By.Event != del.ID() {
-		t.Errorf("a deleted item's life is %#v; want Tombstoned by the first delete", it.Life)
+	w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.Transition{From: name("backlog"), To: name("plan")}})
+	forged := w.mint(b, w.state(), set(id, fold.Status, plain("Not A Name")))[0]
+	s := w.state()
+	if got, ok := found(t, s, id).Facts.Plain(fold.Status).(fold.Settled); !ok || got.Value != "plan" || len(got.Overruled) != 0 {
+		t.Errorf("status after a move and a field.set of it is %#v; want plan alone", found(t, s, id).Facts.Plain(fold.Status))
 	}
-	if got, ok := it.Facts.Text(title).(fold.Agreed); !ok || got.Body.Commitment() != commitment("kept") || !stamped(got.By, named) {
-		t.Errorf("a deleted item's title is %#v; want it kept", it.Facts.Text(title))
+	un := s.Integrity().Unapplied
+	if len(un) != 1 || un[0].Stamp.Event != forged.ID() {
+		t.Fatalf("unapplied %#v; want the field.set of status", un)
+	}
+	if _, ok := un[0].Why.(fold.Misaddressed); !ok {
+		t.Errorf("a field.set of status is unapplied as %#v; want Misaddressed", un[0].Why)
+	}
+}
+
+// Live lists every live write, two of one value included, which the
+// settled value shows as one: a write over Live retires both.
+func TestLiveHoldsEveryLiveWriteAndAWriteOverItRetiresThem(t *testing.T) {
+	w := newWorld(t)
+	id := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0])
+	seen := w.state()
+	w.mint(a, seen, set(id, priority, plain("high")))
+	w.mint(b, seen, set(id, priority, plain("high")))
+	live := found(t, w.state(), id).Facts.Live(priority)
+	if len(live) != 2 {
+		t.Fatalf("two offline writes of one value leave %d live; want 2", len(live))
+	}
+	over := w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.FieldSet{Field: priority, Value: plain("low"), Over: live}})[0]
+	if got := found(t, w.state(), id).Facts.Live(priority); len(got) != 1 || got[0] != over.ID() {
+		t.Errorf("after a write over both, live is %v; want that write alone", got)
 	}
 }

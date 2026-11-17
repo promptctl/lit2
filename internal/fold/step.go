@@ -147,8 +147,6 @@ func (s State) apply(st Stamp, c Change) State {
 		return s.facts(c.At, func(f Facts) Facts { return f.add(st, c.Set, c.Member) })
 	case Remove:
 		return s.facts(c.At, func(f Facts) Facts { return f.remove(c.Set, c.Member, c.Observed) })
-	case Tombstone:
-		return s.update(c.Item, func(r *item) *item { return r.withDelete(st) })
 	}
 	panic(fmt.Sprintf("fold: %T is not a Change", c))
 }

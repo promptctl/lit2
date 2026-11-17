@@ -14,7 +14,7 @@ import (
 func base(t *testing.T) (*world, events.ItemID, events.Event, events.Event) {
 	w, id := item(t)
 	named := w.mint(a, w.state(), set(id, title, prose("t")))[0]
-	red := w.mint(a, w.state(), addLabel(id, label("red")))[0]
+	red := w.mint(a, w.state(), addLabel(id, name("red")))[0]
 	w.mint(b, w.state(), comment(id, "c"))
 	w.mint(writer{checkout: checkoutB, signer: forger{keyB.Signer()}}, w.state(), set(id, priority, plain("x")))
 	w.mint(b, w.state(), events.Act{About: events.Item{ID: id}, Payload: unknown{}})
@@ -30,8 +30,8 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 		{"another item", func(w *world, _ events.ItemID, _, _ events.Event) {
 			w.mint(a, w.state(), create(events.AtLevel{Level: level(2)}))
 		}},
-		{"a delete", func(w *world, id events.ItemID, _, _ events.Event) {
-			w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.ItemDelete{}})
+		{"a transition", func(w *world, id events.ItemID, _, _ events.Event) {
+			w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: events.Transition{From: name("backlog"), To: name("plan")}})
 		}},
 		{"a second create", func(w *world, id events.ItemID, _, _ events.Event) {
 			w.mint(b, fold.State{}, events.Act{About: events.NewItem{ID: id, Width: 3}, Payload: events.ItemCreate{Place: events.AtLevel{Level: level(1)}}})
@@ -49,16 +49,16 @@ func TestEqualitySeesEveryFact(t *testing.T) {
 			w.mint(a, w.state(), set(id, priority, plain("high")))
 		}},
 		{"a label", func(w *world, id events.ItemID, _, _ events.Event) {
-			w.mint(a, w.state(), addLabel(id, label("blue")))
+			w.mint(a, w.state(), addLabel(id, name("blue")))
 		}},
 		{"the label again", func(w *world, id events.ItemID, _, _ events.Event) {
-			w.mint(b, w.state(), addLabel(id, label("red")))
+			w.mint(b, w.state(), addLabel(id, name("red")))
 		}},
 		{"a label removed", func(w *world, id events.ItemID, _, red events.Event) {
-			w.mint(a, w.state(), rmLabel(id, label("red"), red))
+			w.mint(a, w.state(), rmLabel(id, name("red"), red))
 		}},
 		{"a remove that saw nothing", func(w *world, id events.ItemID, _, _ events.Event) {
-			w.mint(a, w.state(), rmLabel(id, label("red")))
+			w.mint(a, w.state(), rmLabel(id, name("red")))
 		}},
 		{"a comment", func(w *world, id events.ItemID, _, _ events.Event) {
 			w.mint(a, w.state(), comment(id, "d"))

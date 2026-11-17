@@ -34,9 +34,8 @@ type (
 	}
 	stateLine struct {
 		Items          int `json:"items"`
-		Tombstoned     int `json:"tombstoned"`
 		Comments       int `json:"comments"`
-		Labels         int `json:"labels"`
+		Members        int `json:"members"`
 		ProseConflicts int `json:"prose_conflicts"`
 		Overruled      int `json:"overruled"`
 		MixedForms     int `json:"mixed_forms"`
@@ -55,7 +54,7 @@ func foldBlock(fs []fold.FoldFacts) []foldLine {
 			Verdicts: verdictsLine{Valid: f.Verdicts.Valid, Invalid: f.Verdicts.Invalid, UnknownSuite: f.Verdicts.UnknownSuite},
 			Applied:  f.Applied, Carried: f.Carried, Unapplied: f.Unapplied,
 			Counts: stateLine{
-				Items: f.Counts.Items, Tombstoned: f.Counts.Tombstoned, Comments: f.Counts.Comments, Labels: f.Counts.Labels,
+				Items: f.Counts.Items, Comments: f.Counts.Comments, Members: f.Counts.Members,
 				ProseConflicts: f.Counts.ProseConflicts, Overruled: f.Counts.Overruled, MixedForms: f.Counts.MixedForms,
 				Collisions: f.Counts.Collisions, Uncreated: f.Counts.Uncreated,
 			},

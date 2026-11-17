@@ -10,24 +10,10 @@ import (
 )
 
 // first is the first facts' decode table.
-var first = NewKinds(Row[ItemCreate](ReadItemCreate), Row[ItemDelete](ReadItemDelete), Row[FieldSet](ReadFieldSet),
-	Row[LabelAdd](ReadLabelAdd), Row[LabelRm](ReadLabelRm), Row[CommentAdd](ReadCommentAdd))
+var first = NewKinds(Row[ItemCreate](ReadItemCreate), Row[FieldSet](ReadFieldSet), Row[MemberAdd](ReadMemberAdd),
+	Row[MemberRm](ReadMemberRm), Row[Transition](ReadTransition), Row[CommentAdd](ReadCommentAdd))
 
-func mustName(s string) Name {
-	n, err := ParseName(s)
-	if err != nil {
-		panic(err)
-	}
-	return n
-}
-
-func mustLabel(s string) Label {
-	l, err := ParseLabel(s)
-	if err != nil {
-		panic(err)
-	}
-	return l
-}
+var labels = MustName("labels")
 
 func mustLevel(n int) Level {
 	l, err := ParseLevel(n)
@@ -58,26 +44,29 @@ func TestTheFirstFactsReadBackAsMinted(t *testing.T) {
 			}},
 		{CreateItem{Payload: ItemCreate{Place: BelowParent{Parent: id}}},
 			func(p Payload) bool { below, ok := p.(ItemCreate).Place.(BelowParent); return ok && below.Parent == id }},
-		{Act{About: Item{ID: id}, Payload: ItemDelete{}},
-			func(p Payload) bool { _, ok := p.(ItemDelete); return ok }},
-		{Act{About: Item{ID: id}, Payload: FieldSet{Field: mustName("title"), Value: Prose{Body: text("a title")}, Over: over}},
+		{Act{About: Item{ID: id}, Payload: Transition{From: MustName("backlog"), To: MustName("plan"), Over: over}},
+			func(p Payload) bool {
+				m := p.(Transition)
+				return m.From == MustName("backlog") && m.To == MustName("plan") && slices.Equal(m.Over, over)
+			}},
+		{Act{About: Item{ID: id}, Payload: FieldSet{Field: MustName("title"), Value: Prose{Body: text("a title")}, Over: over}},
 			func(p Payload) bool {
 				f := p.(FieldSet)
 				pr, ok := f.Value.(Prose)
-				return f.Field == mustName("title") && ok && pr.Body.Commitment() == text("a title").Commitment() && slices.Equal(f.Over, over)
+				return f.Field == MustName("title") && ok && pr.Body.Commitment() == text("a title").Commitment() && slices.Equal(f.Over, over)
 			}},
-		{Act{About: Item{ID: id}, Payload: FieldSet{Field: mustName("priority"), Value: Plain{Canonical: "high"}}},
+		{Act{About: Item{ID: id}, Payload: FieldSet{Field: MustName("priority"), Value: Plain{Canonical: "high"}}},
 			func(p Payload) bool {
 				f := p.(FieldSet)
 				pl, ok := f.Value.(Plain)
-				return f.Field == mustName("priority") && ok && pl.Canonical == "high" && len(f.Over) == 0
+				return f.Field == MustName("priority") && ok && pl.Canonical == "high" && len(f.Over) == 0
 			}},
-		{Act{About: Item{ID: id}, Payload: LabelAdd{Label: mustLabel("urgent")}},
-			func(p Payload) bool { return p.(LabelAdd).Label == mustLabel("urgent") }},
-		{Act{About: Item{ID: id}, Payload: LabelRm{Label: mustLabel("urgent"), Observed: over}},
+		{Act{About: Item{ID: id}, Payload: MemberAdd{Field: labels, Member: MustName("urgent")}},
+			func(p Payload) bool { a := p.(MemberAdd); return a.Field == labels && a.Member == MustName("urgent") }},
+		{Act{About: Item{ID: id}, Payload: MemberRm{Field: labels, Member: MustName("urgent"), Observed: over}},
 			func(p Payload) bool {
-				r := p.(LabelRm)
-				return r.Label == mustLabel("urgent") && slices.Equal(r.Observed, over)
+				r := p.(MemberRm)
+				return r.Field == labels && r.Member == MustName("urgent") && slices.Equal(r.Observed, over)
 			}},
 		{CreateElement{Of: id, Payload: CommentAdd{Body: text("a comment")}},
 			func(p Payload) bool { return p.(CommentAdd).Body.Commitment() == text("a comment").Commitment() }},
@@ -95,6 +84,32 @@ func TestTheFirstFactsReadBackAsMinted(t *testing.T) {
 	}
 }
 
+// A create's first facts are events about the item it names, at the
+// positions after it, before the command's next draft.
+func TestACreatesFactsFollowItAboutTheItemItNames(t *testing.T) {
+	title := FieldSet{Field: MustName("title"), Value: Plain{Canonical: "t"}}
+	m := mint(t, context(1, Frontier{}, Known{}), keyOf(1), 1,
+		CreateItem{Payload: ItemCreate{Place: AtLevel{Level: mustLevel(1)}}, Then: []Payload{title, title}},
+		Act{About: Item{ID: anItem}, Payload: title})
+	if len(m.Events) != 4 {
+		t.Fatalf("a create with two facts and an act minted %d events; want 4", len(m.Events))
+	}
+	made := m.Events[0].Header().About().(NewItem)
+	for i, e := range m.Events {
+		if e.Header().Position().n != m.Events[0].Header().Position().n+uint64(i) {
+			t.Errorf("event %d is at %v; want %d after the create", i, e.Header().Position(), i)
+		}
+	}
+	for _, e := range m.Events[1:3] {
+		if e.Header().About() != (Item{ID: made.ID}) {
+			t.Errorf("a create's fact is about %#v; want the item it created, %s", e.Header().About(), made.ID)
+		}
+	}
+	if m.Events[3].Header().About() != (Item{ID: anItem}) {
+		t.Errorf("the act after a create is about %#v; want its own item", m.Events[3].Header().About())
+	}
+}
+
 func TestTheFirstFactsKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 	future := futureField(15, "newer")
 	for _, c := range []struct {
@@ -102,10 +117,10 @@ func TestTheFirstFactsKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 		read func(*wire.Reader) (Versioned, error)
 	}{
 		{ItemCreate{Place: AtLevel{Level: mustLevel(1)}}, ReadItemCreate},
-		{ItemDelete{}, ReadItemDelete},
-		{FieldSet{Field: mustName("title"), Value: Plain{Canonical: "x"}}, ReadFieldSet},
-		{LabelAdd{Label: mustLabel("a")}, ReadLabelAdd},
-		{LabelRm{Label: mustLabel("a")}, ReadLabelRm},
+		{FieldSet{Field: MustName("title"), Value: Plain{Canonical: "x"}}, ReadFieldSet},
+		{MemberAdd{Field: labels, Member: MustName("a")}, ReadMemberAdd},
+		{MemberRm{Field: labels, Member: MustName("a")}, ReadMemberRm},
+		{Transition{From: MustName("a"), To: MustName("b")}, ReadTransition},
 		{CommentAdd{Body: text("c")}, ReadCommentAdd},
 	} {
 		v, err := c.read(wire.NewReader(append(payloadBytes(c.p), future...)))
@@ -167,7 +182,7 @@ func TestAZeroLevelOrNameIsRefusedByItsWriter(t *testing.T) {
 	}{
 		{"a level", "is not a level", ItemCreate{Place: AtLevel{}}},
 		{"a field name", "a zero Name is not a name", FieldSet{Value: Plain{Canonical: "x"}}},
-		{"a label", "a zero Name is not a name", LabelAdd{}},
+		{"a member", "a zero Name is not a name", MemberAdd{Field: labels}},
 	} {
 		if got := panicked(func() { payloadBytes(c.p) }); !strings.Contains(got, c.want) {
 			t.Errorf("%s: the writer panicked %q; want a refusal containing %q", c.what, got, c.want)
@@ -181,7 +196,7 @@ func TestAZeroLevelOrNameIsRefusedByItsWriter(t *testing.T) {
 // A zero Labeled agent reads back as Unlabeled, so the writer refuses it. A
 // labeled agent is the control that must be written.
 func TestAZeroAgentLabelIsRefusedByItsWriter(t *testing.T) {
-	act := Act{About: Item{ID: anItem}, Payload: LabelAdd{Label: mustLabel("a")}}
+	act := Act{About: Item{ID: anItem}, Payload: MemberAdd{Field: labels, Member: MustName("a")}}
 	signedWith := func(a Agent) string {
 		c := context(1, Frontier{}, Known{})
 		c.Agent = a
@@ -215,6 +230,14 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	bothPlaces.Uvarint(placeAtLevel, 1)
 	bothPlaces.Bytes(placeBelowParent, anItem.b[:])
 	shortParent.Bytes(placeBelowParent, anItem.b[:8])
+	// a name field is one name: a second is refused, not read as either
+	var twoTos, twoFields wire.Writer
+	twoTos.Bytes(1, []byte("backlog"))
+	twoTos.Bytes(2, []byte("plan"))
+	twoTos.Bytes(2, []byte("done"))
+	twoFields.Bytes(1, []byte("title"))
+	twoFields.Bytes(1, []byte("reason"))
+	twoFields.Bytes(2, Plain{Canonical: "x"}.wire())
 	place := func(b []byte) []byte {
 		var w wire.Writer
 		w.Bytes(1, b)
@@ -231,7 +254,9 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		{"an item.create at level 6", ReadItemCreate, place(levelSix.Encoded())},
 		{"an item.create at a level and below its parent", ReadItemCreate, place(bothPlaces.Encoded())},
 		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded())},
-		{"a label.add of no label", ReadLabelAdd, nil},
+		{"a member.add of no member", ReadMemberAdd, place([]byte("labels"))},
+		{"a transition with two tos", ReadTransition, twoTos.Encoded()},
+		{"a field.set with two fields", ReadFieldSet, twoFields.Encoded()},
 		{"a comment.add with no body", ReadCommentAdd, nil},
 	} {
 		if _, err := c.read(wire.NewReader(c.b)); err == nil {
@@ -240,7 +265,7 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	}
 }
 
-func TestNamesLabelsAndLevelsParseOnlyTheirOwnShape(t *testing.T) {
+func TestNamesAndLevelsParseOnlyTheirOwnShape(t *testing.T) {
 	for _, s := range []string{"title", "a", "due-date", "x_1"} {
 		if n, err := ParseName(s); err != nil || n.String() != s {
 			t.Errorf("ParseName(%q) = %v, %v", s, n, err)
@@ -250,12 +275,6 @@ func TestNamesLabelsAndLevelsParseOnlyTheirOwnShape(t *testing.T) {
 		if _, err := ParseName(s); err == nil {
 			t.Errorf("ParseName(%q) reads", s)
 		}
-		if _, err := ParseLabel(s); err == nil {
-			t.Errorf("ParseLabel(%q) reads", s)
-		}
-	}
-	if l := mustLabel("urgent"); l.Name() != mustName("urgent") || l.String() != "urgent" {
-		t.Errorf("a label's name is %v", l.Name())
 	}
 	for _, n := range []int{0, 6, -1} {
 		if _, err := ParseLevel(n); err == nil {

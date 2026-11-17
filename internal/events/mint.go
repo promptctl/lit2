@@ -33,8 +33,13 @@ type Act struct {
 }
 
 // CreateItem is an item.create: Mint names the item, in the namespace its
-// placement puts it in.
-type CreateItem struct{ Payload ItemCreate }
+// placement puts it in. Then is the item's first facts, such as its title:
+// each is signed as an event about the item, after its create, so a fact
+// of an item not yet named is unrepresentable rather than refused.
+type CreateItem struct {
+	Payload ItemCreate
+	Then    []Payload
+}
 
 // CreateElement is a create of an element of item Of, such as a
 // comment.add: Mint names the element among Of's elements.
@@ -114,30 +119,14 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 		mine, fill[in] = append(mine, id), fill[in]+1
 		return id, w, nil
 	}
-	for i, d := range ds.all() {
-		position := CausalPosition{n: c.Frontier.highest + 1 + uint64(i)}
-		var p Payload
-		var at About
-		switch d := d.(type) {
-		case Act:
-			p, at = d.Payload, d.About
-		case CreateItem:
-			id, w, err := name(NamespaceOf(d.Payload.Place))
-			if err != nil {
-				return Minted{}, err
-			}
-			p, at = d.Payload, NewItem{ID: ItemID{b: id}, Width: w}
-		case CreateElement:
-			id, w, err := name(ElementOf{Item: d.Of})
-			if err != nil {
-				return Minted{}, err
-			}
-			p, at = d.Payload, NewElement{Of: d.Of, ID: ElementID{b: id}, Width: w}
-		}
+	// sign is p about at as the next event: each event takes the next
+	// position, so a create's facts follow it in order
+	sign := func(p Payload, at About) error {
+		position := CausalPosition{n: c.Frontier.highest + 1 + uint64(len(m.Events))}
 		body := payloadWire(p)
 		var salt Salt
 		if _, err := io.ReadFull(entropy, salt[:]); err != nil {
-			return Minted{}, fmt.Errorf("drawing a payload's salt: %w", err)
+			return fmt.Errorf("drawing a payload's salt: %w", err)
 		}
 		h := Header{
 			kind: p.Kind(), schema: p.Schema(), about: at,
@@ -156,6 +145,37 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 		sigRaw := signatureWire(sig)
 		m.Events = append(m.Events, Event{id: eventID(raw, sigRaw), header: read, body: Readable{Payload: p, Salt: salt}, sig: sig, raw: raw, sigRaw: sigRaw})
 		records = append(records, store.Record(recordWire(raw, sigRaw, salt, body)))
+		return nil
+	}
+	for _, d := range ds.all() {
+		var err error
+		switch d := d.(type) {
+		case Act:
+			err = sign(d.Payload, d.About)
+		case CreateItem:
+			var id [16]byte
+			var w int
+			if id, w, err = name(NamespaceOf(d.Payload.Place)); err != nil {
+				return Minted{}, err
+			}
+			err = sign(d.Payload, NewItem{ID: ItemID{b: id}, Width: w})
+			for _, p := range d.Then {
+				if err != nil {
+					break
+				}
+				err = sign(p, Item{ID: ItemID{b: id}})
+			}
+		case CreateElement:
+			var id [16]byte
+			var w int
+			if id, w, err = name(ElementOf{Item: d.Of}); err != nil {
+				return Minted{}, err
+			}
+			err = sign(d.Payload, NewElement{Of: d.Of, ID: ElementID{b: id}, Width: w})
+		}
+		if err != nil {
+			return Minted{}, err
+		}
 	}
 	b, err := store.NewBatch(records...)
 	if err != nil {

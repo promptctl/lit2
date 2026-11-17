@@ -1,62 +1,49 @@
 package fold
 
 import (
-	"fmt"
-
 	"github.com/promptctl/lit2/internal/events"
 )
 
-// The names the first facts write under: an item's labels, its comments'
-// list, and a comment's body.
+// The names the first facts write under: an item's status, which only a
+// transition writes and tick reads; its comments' list; and a comment's
+// body, which verbs open.
 var (
-	labels   = mustName("labels")
-	comments = mustName("comments")
-	body     = mustName("body")
+	Status   = events.MustName("status")
+	comments = events.MustName("comments")
+	Body     = events.MustName("body")
 )
 
-func mustName(s string) events.Name {
-	n, err := events.ParseName(s)
-	if err != nil {
-		panic(err)
-	}
-	return n
-}
-
-// FirstFacts is the kinds of the first slice: items, fields, labels and
-// comments, each a payload and one rule over the shapes.
+// FirstFacts is the kinds of the first slice: items, fields, members of a
+// set, moves between columns and comments, each a payload and one rule
+// over the shapes.
 func FirstFacts() []Kind {
 	return []Kind{
 		On(NewItems, func(f Fact[events.ItemCreate]) Applies {
 			return Changes{List: []Change{CreateItem{New: f.At.(OnNewItem).New, Place: f.Payload.Place}}}
 		}, events.ReadItemCreate),
-		On(Items, func(f Fact[events.ItemDelete]) Applies {
-			return Changes{List: []Change{Tombstone{Item: itemAt(f.At)}}}
-		}, events.ReadItemDelete),
 		On(Nodes, func(f Fact[events.FieldSet]) Applies {
+			if f.Payload.Field == Status {
+				// [LAW:one-source-of-truth] the status register is a
+				// transition's alone, so it only ever holds a column's name
+				return Misaddressed{Want: "a field other than status, which a transition writes"}
+			}
 			return Changes{List: []Change{Write{At: f.At.(Node), Field: f.Payload.Field, Value: f.Payload.Value, Over: f.Payload.Over}}}
 		}, events.ReadFieldSet),
-		On(Items, func(f Fact[events.LabelAdd]) Applies {
-			return Changes{List: []Change{Add{At: f.At.(Node), Set: labels, Member: f.Payload.Label.Name()}}}
-		}, events.ReadLabelAdd),
-		On(Items, func(f Fact[events.LabelRm]) Applies {
-			return Changes{List: []Change{Remove{At: f.At.(Node), Set: labels, Member: f.Payload.Label.Name(), Observed: f.Payload.Observed}}}
-		}, events.ReadLabelRm),
+		On(Items, func(f Fact[events.MemberAdd]) Applies {
+			return Changes{List: []Change{Add{At: f.At.(Node), Set: f.Payload.Field, Member: f.Payload.Member}}}
+		}, events.ReadMemberAdd),
+		On(Items, func(f Fact[events.MemberRm]) Applies {
+			return Changes{List: []Change{Remove{At: f.At.(Node), Set: f.Payload.Field, Member: f.Payload.Member, Observed: f.Payload.Observed}}}
+		}, events.ReadMemberRm),
+		On(Items, func(f Fact[events.Transition]) Applies {
+			return Changes{List: []Change{Write{At: f.At.(Node), Field: Status, Value: events.Plain{Canonical: f.Payload.To.String()}, Over: f.Payload.Over}}}
+		}, events.ReadTransition),
 		On(NewElements, func(f Fact[events.CommentAdd]) Applies {
 			el := f.At.(OnNewElement).New
 			return Changes{List: []Change{
 				CreateElement{New: el, In: comments},
-				Write{At: OnElement{Of: el.Of, ID: el.ID}, Field: body, Value: events.Prose{Body: f.Payload.Body}},
+				Write{At: OnElement{Of: el.Of, ID: el.ID}, Field: Body, Value: events.Prose{Body: f.Payload.Body}},
 			}}
 		}, events.ReadCommentAdd),
 	}
-}
-
-// itemAt is the item an Items kind's fact is about.
-func itemAt(at Target) events.ItemID {
-	switch at := at.(type) {
-	case OnItem:
-		return at.ID
-	case OnElement, OnNewItem, OnNewElement:
-	}
-	panic(fmt.Sprintf("fold: an item kind's fact is about %#v", at))
 }

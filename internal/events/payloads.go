@@ -3,6 +3,8 @@ package events
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -33,24 +35,16 @@ func nameWire(n Name) []byte {
 	return []byte(n.s)
 }
 
-// Label is one label of an item: a name, an open set the workspace
-// chooses. The labels a workspace file declares and the field table's
-// label kind are this type.
-type Label struct{ name Name }
-
-// ParseLabel reads a label.
-func ParseLabel(s string) (Label, error) {
+// MustName is s, which the caller's own parse has already read as a name:
+// a literal, or a field's or a column's name a schema holds. A name that
+// is not one is the caller's bug, so it panics.
+func MustName(s string) Name {
 	n, err := ParseName(s)
 	if err != nil {
-		return Label{}, fmt.Errorf("a label: %w", err)
+		panic(fmt.Sprintf("events: %q was read as a name: %v", s, err))
 	}
-	return Label{name: n}, nil
+	return n
 }
-
-func (l Label) String() string { return l.name.s }
-
-// Name is the label as a member of an item's labels.
-func (l Label) Name() Name { return l.name }
 
 // Level is a work item's level, 1 at the bottom (a leaf) to 5 (§3.4).
 type Level struct{ n uint8 }
@@ -195,10 +189,6 @@ type ItemCreate struct {
 	unknown wire.Unknown
 }
 
-// ItemDelete is item.delete: About is the item, tombstoned, reversibly
-// (§3.2).
-type ItemDelete struct{ unknown wire.Unknown }
-
 // FieldSet is field.set: About is the item or element whose field is
 // written. Over is the writes the writer read for this field, which this
 // one replaces: a write that names none is concurrent with every other.
@@ -209,18 +199,34 @@ type FieldSet struct {
 	unknown wire.Unknown
 }
 
-// LabelAdd is label.add: About is the item.
-type LabelAdd struct {
-	Label   Label
+// MemberAdd is member.add: About is the item, and Member joins its set
+// Field, such as labels. Every many-valued field is a set of names, so one
+// kind serves them all.
+type MemberAdd struct {
+	Field   Name
+	Member  Name
 	unknown wire.Unknown
 }
 
-// LabelRm is label.rm: About is the item; Observed is the label.add events
-// the writer saw, which it removes, so an add it did not see survives.
-type LabelRm struct {
-	Label    Label
+// MemberRm is member.rm: About is the item; Observed is the member.add
+// events the writer saw, which it removes, so an add it did not see
+// survives.
+type MemberRm struct {
+	Field    Name
+	Member   Name
 	Observed []EventID
 	unknown  wire.Unknown
+}
+
+// Transition is transition: About is the item, which moves from column
+// From to column To. Over is the writes of its status the writer read, as
+// a field.set's Over is; From is the column the writer saw it in, kept as
+// history (§3.2).
+type Transition struct {
+	From    Name
+	To      Name
+	Over    []EventID
+	unknown wire.Unknown
 }
 
 // CommentAdd is comment.add: About is the NewElement it creates.
@@ -230,17 +236,17 @@ type CommentAdd struct {
 }
 
 func (ItemCreate) Kind() Kind { return "item.create" }
-func (ItemDelete) Kind() Kind { return "item.delete" }
 func (FieldSet) Kind() Kind   { return "field.set" }
-func (LabelAdd) Kind() Kind   { return "label.add" }
-func (LabelRm) Kind() Kind    { return "label.rm" }
+func (MemberAdd) Kind() Kind  { return "member.add" }
+func (MemberRm) Kind() Kind   { return "member.rm" }
+func (Transition) Kind() Kind { return "transition" }
 func (CommentAdd) Kind() Kind { return "comment.add" }
 
 func (ItemCreate) Schema() SchemaVersion { return 1 }
-func (ItemDelete) Schema() SchemaVersion { return 1 }
 func (FieldSet) Schema() SchemaVersion   { return 1 }
-func (LabelAdd) Schema() SchemaVersion   { return 1 }
-func (LabelRm) Schema() SchemaVersion    { return 1 }
+func (MemberAdd) Schema() SchemaVersion  { return 1 }
+func (MemberRm) Schema() SchemaVersion   { return 1 }
+func (Transition) Schema() SchemaVersion { return 1 }
 func (CommentAdd) Schema() SchemaVersion { return 1 }
 
 // The placement's wire fields: 1:at-level (the level) | 2:below-parent
@@ -323,15 +329,6 @@ func ReadPlacement(b []byte) (Placement, error) {
 	return made[0](r.Rest()), nil
 }
 
-// item.delete = unknown….
-func (p ItemDelete) AppendTo(w *wire.Writer) { w.Keep(p.unknown) }
-
-// ReadItemDelete reads item.delete at version 1.
-func ReadItemDelete(r *wire.Reader) (Versioned, error) {
-	err := r.Each(func(uint32, *wire.Reader) error { return nil })
-	return ItemDelete{unknown: r.Rest()}, err
-}
-
 // field.set = 1:field 2:value 3:over (an event id, repeated) · unknown….
 func (p FieldSet) AppendTo(w *wire.Writer) {
 	w.Bytes(1, nameWire(p.Field))
@@ -343,98 +340,129 @@ func (p FieldSet) AppendTo(w *wire.Writer) {
 // ReadFieldSet reads field.set at version 1.
 func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 	var p FieldSet
-	var field []byte
-	var hasField bool
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
-		var err error
-		switch tag {
-		case 1:
-			field, hasField = r.Bytes(), true
-		case 2:
+	err := readNamed(r, map[uint32]named{1: {&p.Field, "field"}}, map[uint32]*[]EventID{3: &p.Over},
+		func(tag uint32, r *wire.Reader) error {
+			if tag != 2 {
+				return nil
+			}
+			if p.Value != nil {
+				return errors.New("it gives its value twice")
+			}
+			var err error
 			p.Value, err = readValue(r.Bytes())
-		case 3:
-			var id EventID
-			id, err = ReadEventID(r.Bytes())
-			p.Over = append(p.Over, id)
-		}
-		return err
-	})
+			return err
+		})
 	p.unknown = r.Rest()
-	switch {
-	case err != nil:
-		return nil, err
-	case !hasField:
-		return nil, errors.New("a field.set names no field")
-	case p.Value == nil:
-		return nil, errors.New("a field.set has no value")
+	if err == nil && p.Value == nil {
+		err = errors.New("it has no value")
 	}
-	if p.Field, err = ParseName(string(field)); err != nil {
-		return nil, fmt.Errorf("a field.set's field: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("a field.set: %w", err)
 	}
 	return p, nil
 }
 
-// label.add = 1:label · unknown….
-func (p LabelAdd) AppendTo(w *wire.Writer) {
-	w.Bytes(1, nameWire(p.Label.name))
+// member.add = 1:field 2:member · unknown….
+func (p MemberAdd) AppendTo(w *wire.Writer) {
+	w.Bytes(1, nameWire(p.Field))
+	w.Bytes(2, nameWire(p.Member))
 	w.Keep(p.unknown)
 }
 
-// ReadLabelAdd reads label.add at version 1.
-func ReadLabelAdd(r *wire.Reader) (Versioned, error) {
-	var p LabelAdd
-	label, err := readLabel(r, func(*wire.Reader, uint32) error { return nil })
-	p.Label, p.unknown = label, r.Rest()
+// ReadMemberAdd reads member.add at version 1.
+func ReadMemberAdd(r *wire.Reader) (Versioned, error) {
+	var p MemberAdd
+	err := readNamed(r, map[uint32]named{1: {&p.Field, "field"}, 2: {&p.Member, "member"}}, nil, nil)
+	p.unknown = r.Rest()
 	if err != nil {
-		return nil, fmt.Errorf("a label.add: %w", err)
+		return nil, fmt.Errorf("a member.add: %w", err)
 	}
 	return p, nil
 }
 
-// label.rm = 1:label 2:observed (an event id, repeated) · unknown….
-func (p LabelRm) AppendTo(w *wire.Writer) {
-	w.Bytes(1, nameWire(p.Label.name))
-	WriteIDs(w, 2, p.Observed)
+// member.rm = 1:field 2:member 3:observed (an event id, repeated) · unknown….
+func (p MemberRm) AppendTo(w *wire.Writer) {
+	w.Bytes(1, nameWire(p.Field))
+	w.Bytes(2, nameWire(p.Member))
+	WriteIDs(w, 3, p.Observed)
 	w.Keep(p.unknown)
 }
 
-// ReadLabelRm reads label.rm at version 1.
-func ReadLabelRm(r *wire.Reader) (Versioned, error) {
-	var p LabelRm
-	label, err := readLabel(r, func(r *wire.Reader, tag uint32) error {
-		if tag != 2 {
-			return nil
-		}
-		id, err := ReadEventID(r.Bytes())
-		p.Observed = append(p.Observed, id)
-		return err
-	})
-	p.Label, p.unknown = label, r.Rest()
+// ReadMemberRm reads member.rm at version 1.
+func ReadMemberRm(r *wire.Reader) (Versioned, error) {
+	var p MemberRm
+	err := readNamed(r, map[uint32]named{1: {&p.Field, "field"}, 2: {&p.Member, "member"}}, map[uint32]*[]EventID{3: &p.Observed}, nil)
+	p.unknown = r.Rest()
 	if err != nil {
-		return nil, fmt.Errorf("a label.rm: %w", err)
+		return nil, fmt.Errorf("a member.rm: %w", err)
 	}
 	return p, nil
 }
 
-// readLabel reads a message whose field 1 is a label, handing every other
-// field to more.
-func readLabel(r *wire.Reader, more func(*wire.Reader, uint32) error) (Label, error) {
-	var label []byte
-	var hasLabel bool
+// transition = 1:from 2:to 3:over (an event id, repeated) · unknown….
+func (p Transition) AppendTo(w *wire.Writer) {
+	w.Bytes(1, nameWire(p.From))
+	w.Bytes(2, nameWire(p.To))
+	WriteIDs(w, 3, p.Over)
+	w.Keep(p.unknown)
+}
+
+// ReadTransition reads transition at version 1.
+func ReadTransition(r *wire.Reader) (Versioned, error) {
+	var p Transition
+	err := readNamed(r, map[uint32]named{1: {&p.From, "from"}, 2: {&p.To, "to"}}, map[uint32]*[]EventID{3: &p.Over}, nil)
+	p.unknown = r.Rest()
+	if err != nil {
+		return nil, fmt.Errorf("a transition: %w", err)
+	}
+	return p, nil
+}
+
+// named is one name field of a payload: where it is read into, and what
+// a refusal calls it.
+type named struct {
+	into *Name
+	what string
+}
+
+// readNamed reads a payload's name fields, each exactly once, and its
+// lists of event ids, handing every other field to more: the one reader
+// of a payload's names, so a name given twice is refused by every kind
+// alike, as readValue refuses a value of two forms `[LAW:single-enforcer]`.
+func readNamed(r *wire.Reader, names map[uint32]named, ids map[uint32]*[]EventID, more func(uint32, *wire.Reader) error) error {
+	seen := map[uint32]bool{}
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
-		if tag == 1 {
-			label, hasLabel = r.Bytes(), true
+		if n, ok := names[tag]; ok {
+			if seen[tag] {
+				return fmt.Errorf("it gives its %s twice", n.what)
+			}
+			seen[tag] = true
+			v, err := ParseName(string(r.Bytes()))
+			if err != nil {
+				return fmt.Errorf("its %s: %w", n.what, err)
+			}
+			*n.into = v
 			return nil
 		}
-		return more(r, tag)
+		if list, ok := ids[tag]; ok {
+			id, err := ReadEventID(r.Bytes())
+			*list = append(*list, id)
+			return err
+		}
+		if more == nil {
+			return nil
+		}
+		return more(tag, r)
 	})
-	switch {
-	case err != nil:
-		return Label{}, err
-	case !hasLabel:
-		return Label{}, errors.New("it names no label")
+	if err != nil {
+		return err
 	}
-	return ParseLabel(string(label))
+	for _, tag := range slices.Sorted(maps.Keys(names)) {
+		if !seen[tag] {
+			return fmt.Errorf("it names no %s", names[tag].what)
+		}
+	}
+	return nil
 }
 
 // comment.add = 1:body (an envelope) · unknown….

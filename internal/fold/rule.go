@@ -213,15 +213,11 @@ type Remove struct {
 	Observed []events.EventID
 }
 
-// Tombstone deletes Item, reversibly: its facts stay.
-type Tombstone struct{ Item events.ItemID }
-
 func (CreateItem) change()    {}
 func (CreateElement) change() {}
 func (Write) change()         {}
 func (Add) change()           {}
 func (Remove) change()        {}
-func (Tombstone) change()     {}
 
 // Stamp is which event made a fact, where it sorts, who wrote it and the
 // writer's clock when it did: data, never order (INV:wall-time-is-data).
