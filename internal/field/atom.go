@@ -121,8 +121,11 @@ func ParseAtom(s string) (Atom, error) {
 		}
 		return Atom{path: path, op: Absent{}, src: s}, nil
 	}
+	if neg != "" && opWord == "=" {
+		return Atom{}, fmt.Errorf("%q is not an atom: ! negates a path alone, so write %s!=%s", s, path, rest)
+	}
 	if neg != "" {
-		return Atom{}, fmt.Errorf("%q is not an atom: ! negates a path alone, write !%s%s%s", s, path, opWord, rest)
+		return Atom{}, fmt.Errorf("%q is not an atom: ! negates a path alone", s)
 	}
 	if opWord == "~" {
 		pattern, err := only(rest)
