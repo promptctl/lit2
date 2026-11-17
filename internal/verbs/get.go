@@ -37,7 +37,7 @@ func Get(w World, paths []string) Got {
 	var reads [][]line
 	var whole []bool
 	for _, p := range paths {
-		a, r := address.Parse(w.State(), w.Schema(), p)
+		a, r := address.Parse(w.View, p)
 		if r != nil {
 			g.Operands = append(g.Operands, Refused{Text: p, Reason: r.Reason(), Err: r, Detail: r.Error()})
 			continue

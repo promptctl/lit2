@@ -7,12 +7,12 @@ import (
 )
 
 // Equal is the state's own equality, shape by shape: two folds agree when
-// every item, every fact with its stamps, the frontier and the integrity
-// record agree. Prose compares by commitment and never by bytes, so
+// every item, every fact with its stamps, every applied version, the
+// frontier and the integrity record agree. Prose compares by commitment and never by bytes, so
 // determinism is tested through this and never through a serialization
 // `[LAW:behavior-not-structure]`.
 func (s State) Equal(o State) bool {
-	if s.frontier != o.frontier || !s.integrity.equal(o.integrity) {
+	if s.frontier != o.frontier || !s.integrity.equal(o.integrity) || !s.workspace.equal(o.workspace) {
 		return false
 	}
 	a, b := s.records(), o.records()

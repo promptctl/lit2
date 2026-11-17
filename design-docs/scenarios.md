@@ -42,7 +42,8 @@ work and knows what to do.
 2. A fresh agent reads the managed block: work is tracked by lit2, run
    `lit2`, follow what it prints.
 3. `lit2` is `get /`. The root prints its children (none), `lanes` (none),
-   `columns` (10), `integrity ok`, `next (none)`. The `orientation/arrive`
+   `columns` (10), `integrity ok`, `next (none)`, and `workspace`: the
+   version in force and that the file matches it. The `orientation/arrive`
    handler, bound `read /`, prints after it: what lit2 is, the four verbs,
    `get /next` to pick work, and that every node prints its guidance after
    itself.
@@ -266,6 +267,10 @@ how the team works.
    on the file, which is where concurrent edits to a file are already
    resolved, with the full diff in front of them. Two applies naming one
    parent are a conflict value in the fold, resolved by an apply naming both.
+   Before sync each writer sees only their own apply. After it, every
+   command runs on the later of the two in total order, the board's
+   `workspace` line names the other and its writer, and the next
+   `config commit` names both, which resolves them.
 5. A applies a merged version that removes `rin`'s `audit` column while
    `rin.4ou`, started on another machine, sits in `audit`. The check at apply
    saw no such ticket.

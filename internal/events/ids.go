@@ -278,19 +278,40 @@ func (s Segments) List() []Segment {
 
 func (s Segments) String() string { return s.s }
 
-// ParseShortID reads an item reference a person typed: bare, or under the
-// active prefix as `<prefix>-…`; a full id or segments, their digits read
+// Prefixes is every prefix an id of this project may be typed under: the
+// active version's, which ids render under, and each one a version in the
+// log has ever declared, so an id copied before a rename still reads
+// (§3.2). The zero Prefixes admits none, only a bare id.
+type Prefixes struct {
+	active Prefix
+	former []Prefix
+}
+
+// KnownPrefixes is active and the prefixes every applied version declared.
+func KnownPrefixes(active Prefix, declared ...Prefix) Prefixes {
+	return Prefixes{active: active, former: declared}
+}
+
+// Active is the prefix ids render under.
+func (k Prefixes) Active() Prefix { return k.active }
+
+func (k Prefixes) admits(pre string) bool {
+	return pre == k.active.s || slices.ContainsFunc(k.former, func(p Prefix) bool { return p.s == pre })
+}
+
+// ParseShortID reads an item reference a person typed: bare, or under a
+// known prefix as `<prefix>-…`; a full id or segments, their digits read
 // as Crockford decodes them. Any other prefix is refused as another
-// project's (§3.2).
-func ParseShortID(s string, active Prefix) (ShortID, error) {
+// project's, naming the active one (§3.2).
+func ParseShortID(s string, known Prefixes) (ShortID, error) {
 	body := s
 	if pre, rest, ok := strings.Cut(s, "-"); ok {
 		pre = strings.ToLower(pre)
 		if _, err := ParsePrefix(pre); err != nil {
 			return nil, fmt.Errorf("%q is not an item id: %w", s, err)
 		}
-		if pre != active.s {
-			return nil, fmt.Errorf("%q is under the prefix %s, another project's; this one's is %s", s, pre, active)
+		if !known.admits(pre) {
+			return nil, fmt.Errorf("%q is under the prefix %s, another project's; this one's is %s", s, pre, known.active)
 		}
 		body = rest
 	}

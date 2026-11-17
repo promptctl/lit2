@@ -42,30 +42,41 @@ type Invocation struct {
 	Version string
 	Place   Place
 	Agent   events.Agent
-	// Config is the workspace configuration the run read; nil when none was
-	// read, which the event records as an absent config block.
-	Config *ConfigFacts
 }
 
-// ConfigFacts is the workspace configuration a run read, and the config-ref it
-// names when the run had a store to hash it in.
+// ConfigFacts is the version in force a run read from its store's fold:
+// its config-ref and what it held. How many versions the log holds, and
+// how many contend, are the fold's counts.
 type ConfigFacts struct {
 	Facts config.Facts
-	// Ref is the config-ref in hex; empty when the run had no store, so no
-	// object format to hash the version in.
+	// Ref is the config-ref in hex.
 	Ref string
 }
 
 // Event is the command event: the invocation, what was asked, when it
-// started, how long it took, what its store steps did, and how it ended.
+// started, how long it took, what its store steps did, the version it ran
+// under, and how it ended. Config is nil when the run read no version,
+// which the event records as an absent config block.
 type Event struct {
 	Invocation
 	Command  cli.Summary
 	Started  time.Time
 	Duration time.Duration
 	Store    StoreFacts
+	Config   *ConfigFacts
 	Verbs    *VerbsFacts
 	Outcome  cli.Outcome
+}
+
+// Recorder is where a body says what it did, each fact as soon as it is
+// known, so a panic keeps the facts given before it: what was asked, each
+// store step, the version in force, and what the verb did, the last of
+// each kept.
+type Recorder struct {
+	Asked      func(cli.Summary)
+	Stored     *StoreFacts
+	Configured func(ConfigFacts)
+	Told       func(VerbsFacts)
 }
 
 // Place is where an invocation ran.
@@ -114,18 +125,25 @@ func (Internal) Reason() string { return "internal" }
 // says otherwise through asked, as soon as it knows, before its body runs,
 // so the event keeps the last summary given even when the body panics
 // `[LAW:nothing-unseen]`; the panic becomes an Internal outcome carrying
-// its value and stack. Each store step's result goes on stored as the step
-// returns it, so the facts of the steps that ran survive a panic too. A
-// verb's body says what it did through told, the last facts given kept.
-func Record(c Clock, inv Invocation, work func(now time.Time, asked func(cli.Summary), stored *StoreFacts, told func(VerbsFacts)) cli.Outcome) Event {
+// its value and stack. Each store step's result goes on Stored as the step
+// returns it, so the facts of the steps that ran survive a panic too. The
+// version in force arrives through Configured once the fold has read it,
+// and a verb's body says what it did through Told.
+func Record(c Clock, inv Invocation, work func(now time.Time, r Recorder) cli.Outcome) Event {
 	started := c.Now()
 	summary := cli.Summary{Name: cli.Unparsed}
 	var facts StoreFacts
+	var config *ConfigFacts
 	var did *VerbsFacts
 	outcome := recovered(func() cli.Outcome {
-		return work(started, func(s cli.Summary) { summary = s }, &facts, func(v VerbsFacts) { did = &v })
+		return work(started, Recorder{
+			Asked:      func(s cli.Summary) { summary = s },
+			Stored:     &facts,
+			Configured: func(c ConfigFacts) { config = &c },
+			Told:       func(v VerbsFacts) { did = &v },
+		})
 	})
-	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Verbs: did, Outcome: outcome}
+	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Config: config, Verbs: did, Outcome: outcome}
 }
 
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {

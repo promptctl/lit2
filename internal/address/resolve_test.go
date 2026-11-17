@@ -70,7 +70,7 @@ func made(e events.Event) events.NewItem { return e.Header().About().(events.New
 
 func short(t *testing.T, s string) events.ShortID {
 	t.Helper()
-	return must(events.ParseShortID(s, must(events.ParsePrefix("lit"))))
+	return must(events.ParseShortID(s, events.KnownPrefixes(must(events.ParsePrefix("lit")))))
 }
 
 func TestASegmentTwoOfflineWritersFixedIsAmbiguousAndListsBoth(t *testing.T) {

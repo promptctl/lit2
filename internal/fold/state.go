@@ -10,11 +10,12 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// State is the folded backlog: the item table, the frontier and the
-// integrity record. It is immutable; Step returns the next one, and the
-// zero State is the fold of nothing.
+// State is the folded backlog: the item table, the workspace's applied
+// versions, the frontier and the integrity record. It is immutable; Step
+// returns the next one, and the zero State is the fold of nothing.
 type State struct {
 	items     table[events.ItemID, *item, byItem]
+	workspace versions
 	frontier  events.Frontier
 	integrity integrity
 }

@@ -359,7 +359,7 @@ func (h Header) wire() []byte {
 	w.Uvarint(headerSchema, uint64(h.schema))
 	w.Bytes(headerSubject, aboutWire(h.about))
 	w.Bytes(headerAttribution, h.by.wire())
-	w.Bytes(headerConfigRef, configRefWire(h.configRef))
+	w.Bytes(headerConfigRef, objectIDWire(h.configRef, "config-ref"))
 	w.Uvarint(headerPolicy, uint64(h.policy))
 	w.Uvarint(headerPosition, h.position.n)
 	w.Uvarint(headerRecordedAt, uint64(h.recordedAt.UnixNano()))
@@ -431,13 +431,15 @@ func (a Attribution) wire() []byte {
 	return w.Encoded()
 }
 
-// configRefWire is the id's format and bytes.
-func configRefWire(id git.ObjectID) []byte {
+// objectIDWire is a git object id as an event stores it, its format and
+// bytes: the header's config-ref and an applied version's blob. what names
+// the field for the panic.
+func objectIDWire(id git.ObjectID, what string) []byte {
 	if id.Format() == 0 {
 		// [LAW:types-are-the-program] exception: git.ObjectID's zero value
-		// names no object, yet every event names its config-ref; a Context
-		// holds a parsed id, so this is a caller's bug.
-		panic("events: a config-ref that names no object")
+		// names no object, yet every field written here names one; the
+		// writer holds a parsed or hashed id, so this is a caller's bug.
+		panic("events: a " + what + " that names no object")
 	}
 	var w wire.Writer
 	w.Uvarint(1, uint64(id.Format()))
@@ -491,7 +493,7 @@ func readHeader(b []byte) (Header, error) {
 		case headerAttribution:
 			h.by, err = readAttribution(r.Bytes())
 		case headerConfigRef:
-			h.configRef, err = readConfigRef(r.Bytes())
+			h.configRef, err = readObjectID(r.Bytes(), "the config-ref")
 		case headerPolicy:
 			h.policy = PolicyVersion(r.Uvarint())
 		case headerPosition:
@@ -660,7 +662,9 @@ func readPrincipal(b []byte) (PrincipalID, error) {
 	return p, nil
 }
 
-func readConfigRef(b []byte) (git.ObjectID, error) {
+// readObjectID reads what objectIDWire writes; what names the field in a
+// refusal.
+func readObjectID(b []byte, what string) (git.ObjectID, error) {
 	var format git.ObjectFormat
 	var sum []byte
 	r := wire.NewReader(b)
@@ -678,11 +682,11 @@ func readConfigRef(b []byte) (git.ObjectID, error) {
 		return nil
 	})
 	if err != nil {
-		return git.ObjectID{}, fmt.Errorf("the config-ref: %w", err)
+		return git.ObjectID{}, fmt.Errorf("%s: %w", what, err)
 	}
 	id, err := git.ObjectIDFrom(format, sum)
 	if err != nil {
-		return git.ObjectID{}, fmt.Errorf("the config-ref: %w", err)
+		return git.ObjectID{}, fmt.Errorf("%s: %w", what, err)
 	}
 	return id, nil
 }

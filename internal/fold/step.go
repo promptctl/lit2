@@ -147,6 +147,9 @@ func (s State) apply(st Stamp, c Change) State {
 		return s.facts(c.At, func(f Facts) Facts { return f.add(st, c.Set, c.Member) })
 	case Remove:
 		return s.facts(c.At, func(f Facts) Facts { return f.remove(c.Set, c.Member, c.Observed) })
+	case Apply:
+		s.workspace = s.workspace.with(st, c)
+		return s
 	}
 	panic(fmt.Sprintf("fold: %T is not a Change", c))
 }

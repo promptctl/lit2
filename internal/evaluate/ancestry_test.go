@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
@@ -25,7 +26,7 @@ var (
 	env      = must(fold.NewEnv(registry, events.NewSuites(events.Ed25519()), 1))
 	key      = must(events.NewKey(bytes.NewReader(bytes.Repeat([]byte{1}, 32))))
 	running  = must(config.ReadReaderVersion("v0.4.0"))
-	schema   = must(config.Load(config.NeverCommitted{}, running)).Schema()
+	schema   = must(config.Load(assets.DefaultWorkspace.Bytes(), running))
 )
 
 // mint folds d onto s as a writer that has folded s but knows only known,

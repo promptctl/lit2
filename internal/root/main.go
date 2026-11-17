@@ -39,13 +39,16 @@ func Main(args []string) int {
 		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
 		return 2
 	}
-	place := here()
+	place, open := here(), diskStore(rand.Reader)
 	return Run(Process{
 		Clock:         systemClock{},
 		Entropy:       rand.Reader,
 		Agent:         events.AgentFrom(os.Getenv("LIT_AGENT")),
 		Place:         place,
-		Store:         opening(place, rand.Reader),
+		Store:         opening(place, open),
+		Open:          open,
+		WorkTree:      func(c git.Checkout) store.Files { return store.FilesAt(c.WorkTree) },
+		Code:          git.CodeAt,
 		Fold:          foldEnv(runtime.GOMAXPROCS(0)),
 		Reader:        reader,
 		Commands:      commandLog(),
@@ -88,14 +91,20 @@ func place(dir string) command.Place {
 	return command.InCheckout{Checkout: c, Identity: readIdentity(identityFiles(c))}
 }
 
-// opening opens the store of a minted checkout, the one place a store is
-// opened: over its clone's common dir on disk, beside the code
-// repository's object format, read once. Any other place has no store and
-// says why.
-func opening(p command.Place, entropy io.Reader) command.Opening {
+// opening opens the store of a minted checkout through open, the one place
+// a run's store is opened. Any other place has no store and says why.
+func opening(p command.Place, open func(git.Checkout, command.Minted) command.Opening) command.Opening {
 	switch p := p.(type) {
 	case command.InCheckout:
-		return openingIn(p, entropy)
+		switch id := p.Identity.(type) {
+		case command.Minted:
+			return open(p.Checkout, id)
+		case command.Unminted:
+			return command.Unopened{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(p.Checkout), " and "))}
+		case command.Unreadable:
+			return command.Unopened{Why: fmt.Errorf("reading %s: %w", command.PathOf(id.File, p.Checkout), id.Err)}
+		}
+		panic(fmt.Sprintf("root: %T is not an Identity", p.Identity))
 	case command.NoCheckout:
 		return command.Unopened{Why: fmt.Errorf("no git checkout at or above %s", p.Dir)}
 	case command.Unlocatable:
@@ -104,20 +113,16 @@ func opening(p command.Place, entropy io.Reader) command.Opening {
 	panic(fmt.Sprintf("root: %T is not a Place", p))
 }
 
-func openingIn(in command.InCheckout, entropy io.Reader) command.Opening {
-	switch id := in.Identity.(type) {
-	case command.Minted:
-		format, err := git.ReadObjectFormat(in.Checkout.CommonDir)
+// diskStore opens a minted checkout's store over its clone's common dir on
+// disk, beside the code repository's object format, read once.
+func diskStore(entropy io.Reader) func(git.Checkout, command.Minted) command.Opening {
+	return func(c git.Checkout, id command.Minted) command.Opening {
+		format, err := git.ReadObjectFormat(c.CommonDir)
 		if err != nil {
 			return command.Unopened{Why: fmt.Errorf("reading the object format: %w", err)}
 		}
-		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(in.Checkout, entropy), store.DefaultSegmentBound), Format: format}
-	case command.Unminted:
-		return command.Unopened{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(in.Checkout), " and "))}
-	case command.Unreadable:
-		return command.Unopened{Why: fmt.Errorf("reading %s: %w", command.PathOf(id.File, in.Checkout), id.Err)}
+		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(c, entropy), store.DefaultSegmentBound), Format: format}
 	}
-	panic(fmt.Sprintf("root: %T is not an Identity", in.Identity))
 }
 
 // commandLog is this machine's command log, $XDG_STATE_HOME/lit/commands,

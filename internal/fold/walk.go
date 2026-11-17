@@ -144,10 +144,12 @@ type DecodeCounts struct {
 // VerdictCounts is the signature verdicts of the events folded.
 type VerdictCounts struct{ Valid, Invalid, UnknownSuite int }
 
-// StateCounts is the folded state's size and its contradictions.
+// StateCounts is the folded state's size and its contradictions; Versions
+// is every apply folded, and Contending the live ones holding a blob
+// other than the active version's.
 type StateCounts struct {
-	Items, Comments, Members                                     int
-	ProseConflicts, Overruled, MixedForms, Collisions, Uncreated int
+	Items, Comments, Members, Versions                                       int
+	ProseConflicts, Overruled, MixedForms, Collisions, Uncreated, Contending int
 }
 
 func newFacts() FoldFacts {
@@ -254,6 +256,11 @@ func countsOf(s State) StateCounts {
 			c.facts(el.facts)
 		})
 	})
+	switch w := s.Workspace().(type) {
+	case NoVersion:
+	case InForce:
+		c.Versions, c.Contending = len(w.Applied), len(w.Contending)
+	}
 	return c
 }
 

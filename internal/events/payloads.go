@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/lit2/internal/events/wire"
+	"github.com/promptctl/lit2/internal/git"
 )
 
 // Name is a field's, a set's or a list's name: one path segment,
@@ -238,19 +239,49 @@ type CommentAdd struct {
 	unknown wire.Unknown
 }
 
-func (ItemCreate) Kind() Kind { return "item.create" }
-func (FieldSet) Kind() Kind   { return "field.set" }
-func (MemberAdd) Kind() Kind  { return "member.add" }
-func (MemberRm) Kind() Kind   { return "member.rm" }
-func (Transition) Kind() Kind { return "transition" }
-func (CommentAdd) Kind() Kind { return "comment.add" }
+// WorkspaceApply is workspace.apply: About is the root, and the version
+// it applies, the whole bytes of a `.lit/workspace.toml`, becomes the
+// model in force (§3.15). Over is the applies the writer saw in force,
+// which it replaces, as a field.set's Over is; an apply naming every live
+// one resolves a conflict. The blob is git's id for the bytes, so the log
+// alone says what is in force; only NewWorkspaceApply and the reader make
+// one, and both hash the bytes, so a blob that names other bytes is
+// unrepresentable `[LAW:one-source-of-truth]`.
+type WorkspaceApply struct {
+	version []byte
+	blob    git.ObjectID
+	Over    []EventID
+	unknown wire.Unknown
+}
 
-func (ItemCreate) Schema() SchemaVersion { return 1 }
-func (FieldSet) Schema() SchemaVersion   { return 1 }
-func (MemberAdd) Schema() SchemaVersion  { return 1 }
-func (MemberRm) Schema() SchemaVersion   { return 1 }
-func (Transition) Schema() SchemaVersion { return 1 }
-func (CommentAdd) Schema() SchemaVersion { return 1 }
+// NewWorkspaceApply is an apply of version, its blob in the code
+// repository's object format f, replacing over.
+func NewWorkspaceApply(version []byte, f git.ObjectFormat, over []EventID) WorkspaceApply {
+	return WorkspaceApply{version: version, blob: git.HashBlob(f, version), Over: over}
+}
+
+// Version is the applied version's bytes.
+func (p WorkspaceApply) Version() []byte { return p.version }
+
+// Blob is git's id for the version's bytes: the config-ref an event written
+// under it names.
+func (p WorkspaceApply) Blob() git.ObjectID { return p.blob }
+
+func (ItemCreate) Kind() Kind     { return "item.create" }
+func (FieldSet) Kind() Kind       { return "field.set" }
+func (MemberAdd) Kind() Kind      { return "member.add" }
+func (MemberRm) Kind() Kind       { return "member.rm" }
+func (Transition) Kind() Kind     { return "transition" }
+func (CommentAdd) Kind() Kind     { return "comment.add" }
+func (WorkspaceApply) Kind() Kind { return "workspace.apply" }
+
+func (ItemCreate) Schema() SchemaVersion     { return 1 }
+func (FieldSet) Schema() SchemaVersion       { return 1 }
+func (MemberAdd) Schema() SchemaVersion      { return 1 }
+func (MemberRm) Schema() SchemaVersion       { return 1 }
+func (Transition) Schema() SchemaVersion     { return 1 }
+func (CommentAdd) Schema() SchemaVersion     { return 1 }
+func (WorkspaceApply) Schema() SchemaVersion { return 1 }
 
 // The placement's wire fields: 1:at-level (the level) | 2:below-parent
 // (the parent's id).
@@ -492,6 +523,47 @@ func ReadCommentAdd(r *wire.Reader) (Versioned, error) {
 		return nil, fmt.Errorf("a comment.add: %w", err)
 	case !hasBody:
 		return nil, errors.New("a comment.add has no body")
+	}
+	return p, nil
+}
+
+// workspace.apply = 1:version (the bytes) 2:blob 3:over (an event id,
+// repeated) · unknown….
+func (p WorkspaceApply) AppendTo(w *wire.Writer) {
+	w.Bytes(1, p.version)
+	w.Bytes(2, objectIDWire(p.blob, "version's blob"))
+	WriteIDs(w, 3, p.Over)
+	w.Keep(p.unknown)
+}
+
+// ReadWorkspaceApply reads workspace.apply at version 1: the bytes and a
+// blob that is git's id for them.
+func ReadWorkspaceApply(r *wire.Reader) (Versioned, error) {
+	var p WorkspaceApply
+	var hasVersion, hasBlob bool
+	err := readNamed(r, nil, map[uint32]*[]EventID{3: &p.Over}, func(tag uint32, r *wire.Reader) error {
+		var err error
+		switch tag {
+		case 1:
+			p.version, hasVersion = r.Bytes(), true
+		case 2:
+			p.blob, err = readObjectID(r.Bytes(), "the version's blob")
+			hasBlob = true
+		}
+		return err
+	})
+	p.unknown = r.Rest()
+	switch {
+	case err != nil:
+	case !hasVersion:
+		err = errors.New("it carries no version")
+	case !hasBlob:
+		err = errors.New("it names no blob")
+	case git.HashBlob(p.blob.Format(), p.version) != p.blob:
+		err = fmt.Errorf("its blob %s is not git's id for the version it carries", p.blob)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("a workspace.apply: %w", err)
 	}
 	return p, nil
 }

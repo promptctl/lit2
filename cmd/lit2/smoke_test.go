@@ -12,13 +12,13 @@ import (
 )
 
 // TestSmoke builds lit2 with the documented command and runs it as a person
-// would, outside any checkout and inside two whose workspace drafts are not in
-// force, one that does not parse and one that does.
+// would, outside any checkout and inside two not yet minted, whose workspace
+// drafts are not in force, one that does not parse and one that does.
 func TestSmoke(t *testing.T) {
 	tmp := t.TempDir()
 	bin, state := build(t, tmp), filepath.Join(tmp, "state")
-	broken := checkoutWithDraft(t, filepath.Join(tmp, "broken"), "prefix = [unclosed\n")
-	parses := checkoutWithDraft(t, filepath.Join(tmp, "parses"), oneLevel)
+	broken := checkout(t, filepath.Join(tmp, "broken"), "prefix = [unclosed\n")
+	parses := checkout(t, filepath.Join(tmp, "parses"), oneLevel)
 
 	var statuses []int
 	for _, tc := range []struct {
@@ -62,7 +62,7 @@ func TestSmoke(t *testing.T) {
 	}
 
 	var recorded []int
-	var configs []configLine
+	var configs []*configLine
 	days, err := filepath.Glob(filepath.Join(state, "lit", "commands", "*.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +74,9 @@ func TestSmoke(t *testing.T) {
 		}
 		for l := range bytes.Lines(b) {
 			var line struct {
-				ExitCode int        `json:"exit_code"`
-				Outcome  string     `json:"outcome"`
-				Config   configLine `json:"config"`
+				ExitCode int         `json:"exit_code"`
+				Outcome  string      `json:"outcome"`
+				Config   *configLine `json:"config"`
 			}
 			if err := json.Unmarshal(l, &line); err != nil || (line.ExitCode == 0) != (line.Outcome == "ok") {
 				t.Errorf("log line %q does not decode to an exit code and its outcome: %v", l, err)
@@ -93,33 +93,23 @@ func TestSmoke(t *testing.T) {
 			t.Errorf("run %d exited %d and its line records %d", i, statuses[i], recorded[i])
 		}
 	}
-	// The runs in the checkouts read the shipped default, its three levels, and
-	// never the draft beside them (architecture.md §3.15): not the one that
-	// parses, and not the default in place of the one that does not.
-	for _, inCheckout := range configs[len(configs)-2:] {
-		if inCheckout.Source != "default" || inCheckout.Counts.Levels != 3 {
-			t.Errorf("a run beside a draft records config %+v; want the default's three levels", inCheckout)
+	// No run read a version: only an applied one is in force, never the
+	// draft beside it, and nothing stands in for none (architecture.md §3.15).
+	for i, c := range configs {
+		if c != nil {
+			t.Errorf("run %d records config %+v; want none, no version being applied", i, *c)
 		}
 	}
 }
 
-// TestSmokeWorksATicket makes a checkout a writer and works one ticket in
-// it by path, through the built binary and the store on disk.
+// TestSmokeWorksATicket makes a checkout a writer, the default profile its
+// version one, and works one ticket in it by path, through the built
+// binary and the store on disk.
 func TestSmokeWorksATicket(t *testing.T) {
 	tmp := t.TempDir()
-	bin, dir := build(t, tmp), checkoutWithDraft(t, filepath.Join(tmp, "work"), oneLevel)
-	lit := func(args ...string) string {
-		t.Helper()
-		cmd := exec.Command(bin, args...)
-		cmd.Dir, cmd.Env = dir, append(os.Environ(), "XDG_STATE_HOME="+filepath.Join(tmp, "state"))
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("lit2 %q: %v, stderr %q", args, err, stderr.String())
-		}
-		return stdout.String()
-	}
-	if out := lit("admin", "init"); !strings.HasPrefix(out, "principal did:key:") || !strings.Contains(out, "recovery phrase: ") {
+	bin, dir := build(t, tmp), checkout(t, filepath.Join(tmp, "work"), "")
+	lit := func(args ...string) string { t.Helper(); return run(t, bin, dir, tmp, 0, args...) }
+	if out := lit("admin", "init"); !strings.HasPrefix(out, "principal did:key:") || !strings.Contains(out, "recovery phrase: ") || !strings.Contains(out, "applied as version one") {
 		t.Fatalf("admin init printed %q", out)
 	}
 	first, _, _ := strings.Cut(lit("add", "unfiled/children", "{title: a}"), "\n")
@@ -143,6 +133,118 @@ func TestSmokeWorksATicket(t *testing.T) {
 	}
 }
 
+// TestSmokeAppliesTheWorkspace walks the ticket's done-when through real
+// git: init leaves a file whose blob is the version in force; an edit
+// leaves the old model in force with one line on the board, and is refused
+// until committed; once committed and applied the next command runs the
+// new model; a file that does not parse stops no command.
+func TestSmokeAppliesTheWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	bin, dir := build(t, tmp), checkout(t, filepath.Join(tmp, "work"), "")
+	lit := func(status int, args ...string) string { t.Helper(); return run(t, bin, dir, tmp, status, args...) }
+	write := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, ".lit", "workspace.toml"), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lit(0, "admin", "init")
+	first := git(t, dir, "hash-object", ".lit/workspace.toml")
+	if got := lit(0, "get", "/workspace"); !strings.Contains(got, first[:7]+" in force · .lit/workspace.toml matches") {
+		t.Errorf("the board after init: %q; want %s in force", got, first[:7])
+	}
+	if got := lit(0, "config", "status"); !strings.Contains(got, "in HEAD's history: no") {
+		t.Errorf("status before the file is committed:\n%s", got)
+	}
+	git(t, dir, "add", ".lit/workspace.toml")
+	git(t, dir, "commit", "-q", "-m", "workspace")
+	if got := lit(0, "config", "status"); !strings.Contains(got, "in HEAD's history: yes") {
+		t.Errorf("status once the file is committed:\n%s", got)
+	}
+	if got := lit(0, "config", "commit"); !strings.Contains(got, "is already in force") {
+		t.Errorf("committing the version in force: %q", got)
+	}
+	write(withIcebox)
+	if got := lit(0); !strings.Contains(got, first[:7]+" in force · .lit/workspace.toml differs (") || !strings.Contains(got, "unassigned · home") {
+		t.Errorf("the board beside an edit, the default still in force:\n%s", got)
+	}
+	lit(1, "config", "commit")
+	git(t, dir, "commit", "-q", "-am", "icebox")
+	blob := git(t, dir, "rev-parse", "HEAD:.lit/workspace.toml")
+	if got := lit(0, "config", "commit"); got != "applied "+blob+"\n" {
+		t.Errorf("config commit printed %q; want applied %s", got, blob)
+	}
+	feature, _, _ := strings.Cut(lit(0, "add", "unfiled/children", "{title: f}"), "\n")
+	story, _, _ := strings.Cut(lit(0, "add", strings.TrimPrefix(feature, "+ ")+"/children", "{title: s}"), "\n")
+	story = strings.TrimPrefix(story, "+ ")
+	lit(0, "set", story+"/status", "icebox")
+	if got := lit(0, "get", story+"/status"); got != "icebox\n" {
+		t.Errorf("a story moved into the new column reads %q", got)
+	}
+	write("prefix = [unclosed\n")
+	if got := lit(0); !strings.Contains(got, blob[:7]+" in force · .lit/workspace.toml differs (") {
+		t.Errorf("the board beside a file that does not parse:\n%s", got)
+	}
+}
+
+// withIcebox is a model that is not the default: two levels, and an icebox
+// column a story moves into from the backlog.
+const withIcebox = `prefix = "lit"
+claim_ttl = "6h"
+
+[levels.1]
+name = "story"
+
+[levels.2]
+name = "feature"
+home = "unfiled"
+
+[columns.backlog]
+initial = true
+next = ["done", "icebox"]
+
+[columns.icebox]
+terminal = true
+
+[columns.done]
+terminal = true
+`
+
+// run runs lit2 in dir, its command log under tmp, and is its stdout,
+// failing t unless it exits status.
+func run(t *testing.T, bin, dir, tmp string, status int, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	cmd.Dir, cmd.Env = dir, append(os.Environ(), "XDG_STATE_HOME="+filepath.Join(tmp, "state"))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	got := 0
+	var exit *exec.ExitError
+	if err := cmd.Run(); errors.As(err, &exit) {
+		got = exit.ExitCode()
+	} else if err != nil {
+		t.Fatalf("lit2 %q did not run: %v", args, err)
+	}
+	if got != status {
+		t.Fatalf("lit2 %q exited %d, stderr %q; want %d", args, got, stderr.String(), status)
+	}
+	return stdout.String()
+}
+
+// git runs git in dir with no config of the caller's, and is its output.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %q: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // build builds lit2 into dir with the documented command.
 func build(t *testing.T, dir string) string {
 	t.Helper()
@@ -157,10 +259,7 @@ func build(t *testing.T, dir string) string {
 
 // configLine is the command log's config block, as a reader of the log sees it.
 type configLine struct {
-	Source string `json:"source"`
-	Counts struct {
-		Levels int `json:"levels"`
-	} `json:"counts"`
+	Ref string `json:"ref"`
 }
 
 // oneLevel is a draft that parses and is not the default: one level where the
@@ -179,12 +278,15 @@ next = ["done"]
 terminal = true
 `
 
-// checkoutWithDraft makes a git checkout at dir whose .lit/workspace.toml is
-// draft, and returns dir.
-func checkoutWithDraft(t *testing.T, dir, draft string) string {
+// checkout makes a git checkout at dir whose .lit/workspace.toml is draft,
+// or with none when draft is empty, and returns dir.
+func checkout(t *testing.T, dir, draft string) string {
 	t.Helper()
 	if out, err := exec.Command("git", "init", "--quiet", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	if draft == "" {
+		return dir
 	}
 	if err := os.MkdirAll(filepath.Join(dir, ".lit"), 0o755); err != nil {
 		t.Fatal(err)

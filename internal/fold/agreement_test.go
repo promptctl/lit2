@@ -53,7 +53,7 @@ func (h *history) op(wr writer) {
 		return
 	}
 	it := items[h.r.IntN(len(items))]
-	switch h.r.IntN(12) {
+	switch h.r.IntN(13) {
 	case 0:
 		h.w.mint(wr, seen, create(events.AtLevel{Level: level(1 + h.r.IntN(3))}))
 	case 1:
@@ -89,6 +89,13 @@ func (h *history) op(wr writer) {
 	case 11:
 		// two facts in one command, one a plain value on the prose field
 		h.w.mint(wr, seen, set(it.ID, priority, plain("high")), set(it.ID, title, plain("short")))
+	case 12:
+		// an apply over what wr saw in force, half the time, or over nothing
+		var live []events.EventID
+		if in, ok := seen.Workspace().(fold.InForce); ok {
+			live = in.Live
+		}
+		h.w.mint(wr, seen, apply(h.pick("prefix = \"one\"", "prefix = \"two\""), h.over(live)...))
 	}
 }
 

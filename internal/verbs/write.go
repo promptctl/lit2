@@ -361,7 +361,7 @@ func (c *Compiled) operand(w World, verb Verb, n int, op Operand, stdin func() (
 // expand reads an operand into writes: its path, its value, and then what
 // its verb on that target writes.
 func expand(w World, verb Verb, op Operand, stdin func() (string, error), created *int) (expanded, *refusal) {
-	a, r := address.Parse(w.State(), w.Schema(), op.Path)
+	a, r := address.Parse(w.View, op.Path)
 	if r != nil {
 		return expanded{}, &refusal{reason: r.Reason(), err: r, detail: r.Error()}
 	}

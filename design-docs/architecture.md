@@ -432,6 +432,24 @@ drift apart whenever one is edited or the other applied; `config status`
 reports the drift, and whether the active blob is in HEAD's history, and the
 board carries one line for it. No other command mentions it.
 
+An apply names the applies it replaces by event id, as any register write
+names its parents. The live applies are those no later apply names; the
+active version is the last live one in total order. Live applies holding two
+or more blobs are contending, and one blob applied twice, as two inits of the
+default are, is agreement. While they contend every command runs on the
+active version, the board line and `config status` name each contending blob
+and its writer, and the next `config commit` names every live apply, which
+resolves them; before sync each writer sees only its own. The §3.5 check runs
+against every live version, so a ticket moved into a column only the losing
+version declares is protected too: a version that leaves a held column
+unresolved is refused with the `aliases` line that says where its tickets go.
+An apply's own `config-ref` is the version in force when it was written;
+version one's is its own blob. The board compares git's id for the working
+file's bytes with the active blob, and never parses the file. lit2 reads the
+code repository's HEAD and history in process, through go-git, which reads
+only SHA-1 repositories; in a SHA-256 repository `config commit` and the
+history half of `config status` are refused, naming the format.
+
 What belongs in the file is decided by one test: a value is the workspace's
 when two machines that disagree about it cannot both be right about the
 backlog, and a person's own when they can. A level's name, which fields exist,
@@ -618,7 +636,8 @@ of (events, clock, entropy, argv, writer); the rest is the hearth
 2. **Fold** the events newer than the snapshot, from the sealed segments
    and the open log, verifying each (§3.20).
 3. **Parse** the active workspace version the fold names (§3.15) into the
-   schema value.
+   schema value. A store with no applied version refuses every verb,
+   naming `lit2 config commit`; nothing stands in for it.
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
 5. **Evaluate.** `get` computes its answer with evaluate, handed `now`. A write
@@ -685,8 +704,10 @@ decided in the body.
   v1 hierarchy epic's three-level cap dropped: that cap existed to keep
   scheduling frames from nesting, and nothing in the tree schedules.
 - **B. Language and git library.** Go, with go-git (Apache-2.0) in process
-  for objects and refs (§6). The first budget run measures go-git's object
-  walk on the depth corpus.
+  for objects and refs (§6), and for reading the code repository's HEAD and
+  history, never writing it; go-git v5 reads no SHA-256 repository, so that
+  read is refused there until it does. The first budget run measures
+  go-git's object walk on the depth corpus.
 - **C. `topic`.** A built-in settable field, one short word that groups
   items across the tree and renders in the id, kept from v1 because a
   reader cannot tell `1f9.zc7` from `2ae.k3f` without it: the create

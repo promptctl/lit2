@@ -73,7 +73,7 @@ row; the architecture test fails on one without.
 | §3.12 Moment and handler | `guidance` | moments, handlers, workflows, their three layers |
 | §3.13 Rewrite | `fold`, `store` | applied by the fold; segments re-sealed by store |
 | §3.14 Identity | `root`, `events` | the checkout id, principal and agent label read in root; attribution carried in events |
-| §3.15 The workspace file | `config`, `assets` | the one schema parse of an applied version, and the default profile init applies as version one; the shipped files and their `Asset` handles in assets |
+| §3.15 The workspace file | `config`, `fold`, `evaluate`, `verbs`, `root`, `assets` | the one schema parse of an applied version in config; the applies and which version is in force folded; the §3.5 check against every live version in evaluate; the one judge of an apply, `Admit`, and the board's `workspace` line in verbs; `config commit`, `config status` and init's version one in root; the default profile in assets |
 | §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs through git |
 | §3.17 Principal and policy | `events`, `fold` | the key, signature and suite in events; the policy as events folded |
 | §3.18 Capability | `verbs`, `fold` | the capability verdict at the one enforcer; roles from the folded policy |
@@ -91,6 +91,7 @@ row; the architecture test fails on one without.
 | the order of the §5 steps | `root` | the dispatcher every invocation passes through |
 | exit classes and statuses | `reason`, `cli` | the four classes in reason; each layer's failure names its own reasons; statuses in cli |
 | checkout discovery | `git` | the work tree, private git dir and common dir |
+| the code repository's HEAD and history | `git` | the blob HEAD holds at a path and whether one was ever there, read, never written |
 | the one enforcer and the in-use check | `verbs` | requirements and capabilities judged once, at the write |
 | the snapshot | `store`, `fold` | its bytes in store; its content and key in fold |
 | `/next`, `/lanes`, `/integrity`, `/me` | `fold`, `evaluate`, `address`, `cli` | computed by fold and evaluate, named by address, rendered by cli |
@@ -108,8 +109,10 @@ The decisions the layout needed and the design documents did not make.
 - **D1 Module path** `github.com/promptctl/lit2`: v1's org, the binary's name.
 - **D2 Go and tooling.** `go 1.26`; the third-party modules are the ones
   the `dependencies` block names, each in one unit: go-git with its go-billy
-  filesystem in `git` alone, for lit's objects and refs (architecture.md
-  decision B), none of its transport packages imported; edwards25519 in
+  filesystem in `git` alone, for lit's objects and refs and to read the
+  code repository's HEAD and history (architecture.md decision B), through
+  its storage and object packages, so none of its transport packages is
+  linked; edwards25519 in
   `events` for the signature check; the TOML parser and `x/mod` in
   `config`. Tests are
   the standard `testing` package. Lint is golangci-lint v2 as a `tool`
@@ -118,8 +121,9 @@ The decisions the layout needed and the design documents did not make.
   make a missing case a lint failure.
 - **D3 Build** `CGO_ENABLED=0 go build ./cmd/lit2`, one command, a static
   binary; no Makefile.
-- **D4 Argv** is the standard library and a scan over the two tables: a flag
-  is `--name` anywhere, `--` ends the flags, `-` is a value.
+- **D4 Argv** is the standard library and a scan over the tables, the verbs
+  and each group's (`admin`, `config`): a flag is `--name` anywhere, `--`
+  ends the flags, `-` is a value.
 - **D5 The one-way-deps check** is `internal/architecture`, over the
   `layers` block above: Go refuses cycles, not an upward edge that closes
   none.
@@ -141,7 +145,8 @@ The decisions the layout needed and the design documents did not make.
 - **D11 On disk.** Per clone, `<git-common-dir>/lit/`: `store/`, the store's
   root, and `principal`, beside the store and outside it. Per checkout,
   `<git-dir>/lit/checkout/`: `id`, 32 lowercase hex digits and a newline,
-  which git deletes with the worktree.
+  which git deletes with the worktree. Per work tree, `.lit/workspace.toml`,
+  committed with the code, which only init writes, and only when absent.
 - **D12 Command log** `$XDG_STATE_HOME/lit/commands/<UTC date>.jsonl`
   (`~/.local/state` when unset): one line per invocation in one `O_APPEND`
   write, per machine; every write removes day files older than 30 days.

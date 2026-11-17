@@ -132,12 +132,11 @@ type counts struct {
 	Values int `json:"values"`
 }
 
-// configLine is the config block: the version a run read, where it came from,
-// and what it held. Every count is written, zeros included, so an absent block and an empty version
-// are different facts.
+// configLine is the config block: the version in force a run read and what
+// it held. Every count is written, zeros included, so an absent block and an
+// empty version are different facts.
 type configLine struct {
-	Source string       `json:"source"`
-	Ref    string       `json:"ref,omitempty"`
+	Ref    string       `json:"ref"`
 	Gate   string       `json:"gate"`
 	Counts configCounts `json:"counts"`
 }
@@ -158,9 +157,8 @@ func configBlock(c *ConfigFacts) *configLine {
 	}
 	n := c.Facts.Counts
 	return &configLine{
-		Source: c.Facts.Source,
-		Ref:    c.Ref,
-		Gate:   c.Facts.Gate,
+		Ref:  c.Ref,
+		Gate: c.Facts.Gate,
 		Counts: configCounts{
 			Levels: n.Levels, Columns: n.Columns, Labels: n.Labels, Requirements: n.Requirements,
 			Checks: n.Checks, Links: n.Links, Sections: n.Sections,

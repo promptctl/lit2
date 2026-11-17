@@ -255,6 +255,7 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 		"rollup":       derived(Text{}, One, nodes),
 		"lanes":        derived(Text{}, One, root),
 		"next":         derived(Text{}, One, root),
+		"workspace":    derived(Text{}, One, root),
 		"pr/verdict":   derived(verdict, One, items),
 		"plan/verdict": derived(verdict, One, items),
 	}

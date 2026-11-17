@@ -41,6 +41,8 @@ type (
 		MixedForms     int `json:"mixed_forms"`
 		Collisions     int `json:"collisions"`
 		Uncreated      int `json:"uncreated"`
+		Versions       int `json:"versions"`
+		Contending     int `json:"contending"`
 	}
 )
 
@@ -57,6 +59,7 @@ func foldBlock(fs []fold.FoldFacts) []foldLine {
 				Items: f.Counts.Items, Comments: f.Counts.Comments, Members: f.Counts.Members,
 				ProseConflicts: f.Counts.ProseConflicts, Overruled: f.Counts.Overruled, MixedForms: f.Counts.MixedForms,
 				Collisions: f.Counts.Collisions, Uncreated: f.Counts.Uncreated,
+				Versions: f.Counts.Versions, Contending: f.Counts.Contending,
 			},
 		}
 		out = append(out, l)

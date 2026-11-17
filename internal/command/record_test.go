@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/promptctl/lit2/internal/cli"
+	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
@@ -40,8 +41,8 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 		{"help", cli.Done{}, 0},
 		{"get", cli.Failed{Failure: Internal{Err: errors.New("not built")}}, 70},
 	} {
-		e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, asked func(cli.Summary), _ *StoreFacts, _ func(VerbsFacts)) cli.Outcome {
-			asked(cli.Summary{Name: tc.name})
+		e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, r Recorder) cli.Outcome {
+			r.Asked(cli.Summary{Name: tc.name})
 			return tc.outcome
 		})
 		if e.Invocation != inv || e.Command.Name != tc.name || cli.ExitCode(e.Outcome) != tc.exit {
@@ -51,12 +52,12 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 }
 
 func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
-	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, asked func(cli.Summary), _ *StoreFacts, _ func(VerbsFacts)) cli.Outcome {
-		cmd, err := cli.Parse(cli.Verbs(), cli.Admin(), []string{"get", "x"})
+	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, r Recorder) cli.Outcome {
+		cmd, err := cli.Parse(cli.Verbs(), cli.Groups(), []string{"get", "x"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		asked(cli.Summarize(cmd))
+		r.Asked(cli.Summarize(cmd))
 		panic("the body broke")
 	})
 	if e.Command.Name != "get" || len(e.Command.Paths) != 1 || e.Command.Paths[0] != "x" {
@@ -73,7 +74,7 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 }
 
 func TestWorkThatPanicsBeforeAskingIsUnparsed(t *testing.T) {
-	e := Record(&FixedClock{At: t0}, inv, func(time.Time, func(cli.Summary), *StoreFacts, func(VerbsFacts)) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, inv, func(time.Time, Recorder) cli.Outcome {
 		panic("the parse broke")
 	})
 	if e.Command.Name != cli.Unparsed || cli.ExitCode(e.Outcome) != 70 {
@@ -84,13 +85,35 @@ func TestWorkThatPanicsBeforeAskingIsUnparsed(t *testing.T) {
 func TestRecordHandsNowToWorkAndTimesIt(t *testing.T) {
 	clock := &FixedClock{At: t0}
 	var handed time.Time
-	e := Record(clock, inv, func(now time.Time, _ func(cli.Summary), _ *StoreFacts, _ func(VerbsFacts)) cli.Outcome {
+	e := Record(clock, inv, func(now time.Time, _ Recorder) cli.Outcome {
 		handed = now
 		clock.At = clock.At.Add(1500 * time.Millisecond)
 		return cli.Done{}
 	})
 	if !handed.Equal(t0) || !e.Started.Equal(t0) || e.Duration != 1500*time.Millisecond {
 		t.Errorf("work saw %v, Started %v, Duration %v; want %v, %v, 1.5s", handed, e.Started, e.Duration, t0, t0)
+	}
+}
+
+// The version in force is known only once the fold has read it, so the
+// body gives it, and a run that read none has no config block at all.
+func TestTheVersionInForceIsRecordedOnceTheBodyGivesIt(t *testing.T) {
+	given := ConfigFacts{Ref: "ab12", Facts: config.Facts{Gate: "none"}}
+	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, r Recorder) cli.Outcome {
+		r.Configured(given)
+		panic("after the fold")
+	})
+	if e.Config == nil || *e.Config != given {
+		t.Fatalf("the event's config is %+v; want %+v kept through the panic", e.Config, given)
+	}
+	block, _ := decode(t, e)["config"].(map[string]any)
+	counts, _ := block["counts"].(map[string]any)
+	if block["ref"] != "ab12" || counts["levels"] != 0.0 {
+		t.Errorf("the config block is %v; want the ref and every zero count written", block)
+	}
+	none := Record(&FixedClock{At: t0}, inv, func(time.Time, Recorder) cli.Outcome { return cli.Done{} })
+	if _, ok := decode(t, none)["config"]; ok || none.Config != nil {
+		t.Error("a run that read no version has a config block")
 	}
 }
 

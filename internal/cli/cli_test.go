@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/reason"
 	"github.com/promptctl/lit2/internal/verbs"
@@ -18,14 +19,14 @@ func fields(t *testing.T) config.Table {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := config.Load(config.NeverCommitted{}, running)
+	schema, err := config.Load(assets.DefaultWorkspace.Bytes(), running)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return loaded.Schema().Table()
+	return schema.Table()
 }
 
-func parse(args ...string) (Command, error) { return Parse(Verbs(), Admin(), args) }
+func parse(args ...string) (Command, error) { return Parse(Verbs(), Groups(), args) }
 
 func TestEachRowParsesToItsCommand(t *testing.T) {
 	for _, tc := range []struct {
@@ -40,6 +41,8 @@ func TestEachRowParsesToItsCommand(t *testing.T) {
 		{[]string{"--dry-run", "add", "x/labels", "ready"}, Add{pairs: []Pair{{"x/labels", "ready"}}, flags: Flags{DryRun: true}}},
 		{[]string{"admin", "init"}, AdminInit{}},
 		{[]string{"admin", "sync"}, AdminSync{}},
+		{[]string{"config", "commit"}, ConfigCommit{}},
+		{[]string{"config", "status"}, ConfigStatus{}},
 	} {
 		got, err := parse(tc.args...)
 		if err != nil || !reflect.DeepEqual(got, tc.want) {
@@ -89,6 +92,9 @@ func TestNotALit2CommandLine(t *testing.T) {
 		{[]string{"set", "x/status"}, Usage},
 		{[]string{"add", "x/labels", "a", "x/labels"}, Usage},
 		{[]string{"admin"}, Usage},
+		{[]string{"config"}, Usage},
+		{[]string{"config", "frobnicate"}, UnknownVerb},
+		{[]string{"config", "commit", "--dry-run"}, Usage},
 		{[]string{"admin", "init", "extra"}, Usage},
 		{[]string{"get", "x", "--frob"}, Usage},
 		{[]string{"get", "x", "--dry-run"}, Usage},
@@ -114,8 +120,12 @@ func TestEveryParseCodeHasItsOwnWireName(t *testing.T) {
 }
 
 func TestHelpNamesEveryRow(t *testing.T) {
-	help := HelpText(Verbs(), Admin(), fields(t))
-	for prefix, table := range map[string]Table{"": Verbs(), "admin ": Admin()} {
+	help := HelpText(Verbs(), Groups(), ActiveFields{Table: fields(t)})
+	tables := map[string]Table{"": Verbs()}
+	for _, g := range Groups() {
+		tables[g.Word+" "] = g.Table
+	}
+	for prefix, table := range tables {
 		for _, r := range table.rows {
 			if !strings.Contains(help, prefix+r.Name) || !strings.Contains(help, r.Summary) {
 				t.Errorf("--help does not name %q with its summary %q", prefix+r.Name, r.Summary)
@@ -129,7 +139,7 @@ func TestHelpNamesEveryRow(t *testing.T) {
 // verbs that write each, compared as sets.
 func TestHelpsFieldsAreTheTablesRows(t *testing.T) {
 	table := fields(t)
-	help := HelpText(Verbs(), Admin(), table)
+	help := HelpText(Verbs(), Groups(), ActiveFields{Table: table})
 	got := map[string]bool{}
 	place := ""
 	for _, l := range strings.Split(help, "\n") {
@@ -163,12 +173,21 @@ func TestHelpsFieldsAreTheTablesRows(t *testing.T) {
 func TestOneMoreRowIsParsedAndHelped(t *testing.T) {
 	show := Row{Name: "show", Operands: TakesPaths{Make: func(p []PathText, _ Flags) Command { return Get{paths: p} }}, Summary: "read, by another name"}
 	table := Table{rows: append(Verbs().rows, show)}
-	got, err := Parse(table, Admin(), []string{"show", "x"})
+	got, err := Parse(table, Groups(), []string{"show", "x"})
 	if err != nil || !reflect.DeepEqual(got, Get{paths: []PathText{"x"}}) {
 		t.Errorf("show x = %#v, %v; want the new row's command", got, err)
 	}
-	if help := HelpText(table, Admin(), fields(t)); !strings.Contains(help, "show") || !strings.Contains(help, show.Summary) {
+	if help := HelpText(table, Groups(), ActiveFields{Table: fields(t)}); !strings.Contains(help, "show") || !strings.Contains(help, show.Summary) {
 		t.Errorf("--help does not name the new row:\n%s", help)
+	}
+}
+
+// TestHelpWithNoVersionSaysWhy: with no version in force there is no field
+// table to print, and help says why in its place.
+func TestHelpWithNoVersionSaysWhy(t *testing.T) {
+	help := HelpText(Verbs(), Groups(), NoFields{Why: "no version in force"})
+	if strings.Contains(help, "fields of ") || !strings.Contains(help, "fields: no version in force") {
+		t.Errorf("help with no version:\n%s", help)
 	}
 }
 

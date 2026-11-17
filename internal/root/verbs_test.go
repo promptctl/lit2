@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
 
@@ -80,6 +82,10 @@ func filed(t *testing.T, echo string) string {
 }
 
 func appends(e command.Event) int { return len(e.Store.Appends) }
+
+// workspaceRow is the board's workspace row in the twin: the default profile in
+// force, the file matching it.
+var workspaceRow = "$/workspace\t" + git.HashBlob(git.SHA1, assets.DefaultWorkspace.Bytes()).String()[:7] + " in force · .lit/workspace.toml matches\n"
 
 // TestAPersonFilesAndWorksATicketByPath is the ticket's done-when: file a
 // ticket, read it, retitle it, comment on it and edit the comment, label
@@ -372,7 +378,7 @@ func TestAnItemReadsItsFieldsThenItsComments(t *testing.T) {
 // is that read (scenarios.md 1).
 func TestABareLit2IsTheBoardOfAnEmptyWorkspace(t *testing.T) {
 	s := newSession(t)
-	want := "$ = /\n$/children\tunassigned · home\n$/children\tunfiled · home\n$/next\tlanes considered: 0\n"
+	want := "$ = /\n$/children\tunassigned · home\n$/children\tunfiled · home\n$/next\tlanes considered: 0\n" + workspaceRow
 	if got := s.ok(); got != want {
 		t.Errorf("a bare lit2 prints\n%s\nwant\n%s", got, want)
 	}
@@ -399,7 +405,7 @@ func TestTheBoardIsTheTreeTheLanesAndNext(t *testing.T) {
 		"$/lanes\t" + first + " · backlog · tree\n" +
 		"$/lanes\t" + second + " · backlog · lanes\n" +
 		"$/next\t" + first + " · backlog · tree\n" +
-		"$/next\tlanes considered: 1\n"
+		"$/next\tlanes considered: 1\n" + workspaceRow
 	if got := s.ok("get", "/"); got != want {
 		t.Errorf("get / prints\n%s\nwant\n%s", got, want)
 	}
@@ -424,7 +430,7 @@ func TestARemovedFeaturesLeavesReadAsRemoved(t *testing.T) {
 		"unfiled/children\t" + feature + " · (deleted) · initial · backlog 1 · board\n" +
 		feature + "/children\t" + leaf + " · (deleted) · backlog · tree\n" +
 		"$/lanes\t" + leaf + " · (deleted) · backlog · tree\n" +
-		"$/next\tlanes considered: 1\n"
+		"$/next\tlanes considered: 1\n" + workspaceRow
 	if got := s.ok("get", "/"); got != want {
 		t.Errorf("get / prints\n%s\nwant\n%s", got, want)
 	}

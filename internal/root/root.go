@@ -30,11 +30,20 @@ import (
 // Process is what every invocation reads from the world, read once by Main
 // or set by NewTwin, every field set, so nothing downstream checks for nil.
 type Process struct {
-	Clock    command.Clock
-	Entropy  io.Reader
-	Agent    events.Agent
-	Place    command.Place
-	Store    command.Opening
+	Clock   command.Clock
+	Entropy io.Reader
+	Agent   events.Agent
+	Place   command.Place
+	Store   command.Opening
+	// Open opens a minted checkout's store: how Store was opened, and how
+	// admin init opens the store of the checkout it has just minted.
+	Open func(git.Checkout, command.Minted) command.Opening
+	// WorkTree is a checkout's work tree, read for .lit/workspace.toml and
+	// written only by init, creating it.
+	WorkTree func(git.Checkout) store.Files
+	// Code is a checkout's code repository in its object format, read
+	// for the blob HEAD holds at a path and its history.
+	Code     func(git.Checkout, git.ObjectFormat) git.Code
 	Fold     fold.Env
 	Reader   config.ReaderVersion
 	Commands command.Sink
@@ -56,17 +65,16 @@ func Run(p Process, args []string) int {
 		// crypto/rand itself does when the system's entropy fails.
 		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
 	}
-	table, admin := cli.Verbs(), cli.Admin()
-	loaded := load(p)
-	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: p.Place, Agent: p.Agent, Config: configFacts(p, loaded)}
-	event := command.Record(p.Clock, inv, func(now time.Time, asked func(cli.Summary), stored *command.StoreFacts, told func(command.VerbsFacts)) cli.Outcome {
-		stored.Opening = p.Store
-		cmd, err := cli.Parse(table, admin, args)
+	table, groups := cli.Verbs(), cli.Groups()
+	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: p.Place, Agent: p.Agent}
+	event := command.Record(p.Clock, inv, func(now time.Time, rec command.Recorder) cli.Outcome {
+		rec.Stored.Opening = p.Store
+		cmd, err := cli.Parse(table, groups, args)
 		if err != nil {
 			return failed(err)
 		}
-		asked(cli.Summarize(cmd))
-		return dispatch(body{p: p, loaded: loaded, now: now, stored: stored, told: told}, table, admin, cmd)
+		rec.Asked(cli.Summarize(cmd))
+		return dispatch(body{p: p, now: now, rec: rec}, table, groups, cmd)
 	})
 	// [LAW:no-silent-failure] exception: stderr is where failures are said;
 	// when writing to it fails there is no channel left but the exit status,
@@ -78,61 +86,37 @@ func Run(p Process, args []string) int {
 	return cli.ExitCode(event.Outcome)
 }
 
-// load reads the workspace configuration in force for this run, once. Only a
-// committed version is in force (architecture.md §3.15), and none is committed
-// yet, so the shipped default is the model. Loading reads nothing from the
-// working tree, so a draft that does not parse never reaches a command.
-func load(p Process) config.Loaded {
-	loaded, err := config.Load(config.NeverCommitted{}, p.Reader)
-	if err != nil {
-		// [LAW:no-silent-failure] the default profile is embedded in this
-		// binary; one that does not parse is a defect of the build, not a run
-		// to refuse.
-		panic(fmt.Sprintf("root: the shipped default profile does not parse: %v", err))
-	}
-	return loaded
-}
-
-// configFacts is the configuration the run read. The config-ref names the
-// version in the code repository's object format, which only an open store
-// has, so a run with no store records no ref.
-func configFacts(p Process, loaded config.Loaded) *command.ConfigFacts {
-	f := command.ConfigFacts{Facts: loaded.Facts()}
-	if o, ok := p.Store.(command.Opened); ok {
-		f.Ref = loaded.Ref(o.Format).String()
-	}
-	return &f
-}
-
-// body is one invocation as its body sees it: the process, the
-// configuration loaded once, the clock's one reading, and where its facts
-// go.
+// body is one invocation as its body sees it: the process, the clock's one
+// reading, and where its facts go.
 type body struct {
-	p      Process
-	loaded config.Loaded
-	now    time.Time
-	stored *command.StoreFacts
-	told   func(command.VerbsFacts)
+	p   Process
+	now time.Time
+	rec command.Recorder
 }
 
 // dispatch binds each command to its body. Every verb runs the steps of §5
-// in order on every call: open and fold, then its own body.
-func dispatch(r body, table, admin cli.Table, cmd cli.Command) cli.Outcome {
+// in order on every call: open and fold, the version in force loaded, then
+// its own body.
+func dispatch(r body, table cli.Table, groups []cli.Group, cmd cli.Command) cli.Outcome {
 	switch c := cmd.(type) {
 	case cli.Help:
-		return written(io.WriteString(r.p.Out, cli.HelpText(table, admin, r.loaded.Schema().Table())))
+		return written(io.WriteString(r.p.Out, cli.HelpText(table, groups, r.fields())))
 	case cli.Get:
-		return verb(r.p, r.stored, func(f fold.Folded) cli.Outcome { return r.get(f, c.Paths()) })
+		return r.verb(func(v inForce) cli.Outcome { return v.get(c.Paths()) })
 	case cli.Set:
-		return verb(r.p, r.stored, func(f fold.Folded) cli.Outcome { return r.write(f, verbs.Set, pairs(c.Pairs()), c.Flags()) })
+		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Set, pairs(c.Pairs()), c.Flags()) })
 	case cli.Add:
-		return verb(r.p, r.stored, func(f fold.Folded) cli.Outcome { return r.write(f, verbs.Add, pairs(c.Pairs()), c.Flags()) })
+		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Add, pairs(c.Pairs()), c.Flags()) })
 	case cli.Rm:
-		return verb(r.p, r.stored, func(f fold.Folded) cli.Outcome { return r.write(f, verbs.Rm, paths(c.Paths()), c.Flags()) })
+		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Rm, paths(c.Paths()), c.Flags()) })
 	case cli.AdminInit:
 		return r.init()
 	case cli.AdminSync:
 		return notBuilt("admin sync")
+	case cli.ConfigCommit:
+		return r.stored(opened.commit)
+	case cli.ConfigStatus:
+		return r.stored(opened.status)
 	}
 	panic(fmt.Sprintf("root: %T is not a Command", cmd))
 }

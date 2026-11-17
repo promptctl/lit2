@@ -212,32 +212,38 @@ func TestEverySubjectRoundTripsAndNoOtherShapeReads(t *testing.T) {
 	}
 }
 
-func TestAShortIDParsesBareOrUnderTheActivePrefixOnly(t *testing.T) {
+func TestAShortIDParsesBareOrUnderAKnownPrefixOnly(t *testing.T) {
+	known := KnownPrefixes(prefix, mustPrefix("old"))
 	for s, want := range map[string]ShortID{
 		"1f9":                    Segments{s: "1f9"},
 		"1f9.zc7":                Segments{s: "1f9.zc7"},
 		"lit-1f9.zc7":            Segments{s: "1f9.zc7"},
 		anItem.String():          FullID{ID: anItem},
 		"lit-" + anItem.String(): FullID{ID: anItem},
+		// a prefix a version in the log once declared still reads
+		"old-1f9.zc7": Segments{s: "1f9.zc7"},
 		// Crockford's decoding: case ignored, i and l are 1, o is 0
 		"LIT-1F9.ZC7": Segments{s: "1f9.zc7"},
 		"1fi":         Segments{s: "1f1"},
 		"lo0":         Segments{s: "100"},
 	} {
-		if got, err := ParseShortID(s, prefix); err != nil || got != want {
+		if got, err := ParseShortID(s, known); err != nil || got != want {
 			t.Errorf("ParseShortID(%q) = %#v, %v; want %#v", s, got, err, want)
 		}
 	}
-	if _, err := ParseShortID("rin-1f9", prefix); err == nil || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "another project") {
-		t.Errorf("an id under another prefix reads, or its refusal does not name it: %v", err)
+	if _, err := ParseShortID("rin-1f9", known); err == nil || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "another project") || !strings.Contains(err.Error(), "is lit") {
+		t.Errorf("an id under another prefix reads, or its refusal does not name it and the active one: %v", err)
+	}
+	if _, err := ParseShortID("lit-1f9", Prefixes{}); err == nil {
+		t.Error("the zero Prefixes reads an id under a prefix; it admits only a bare id")
 	}
 	for _, s := range []string{"", "1f", "1f9.", "1f9..zc7", "1fu", "lit-", "lit_1f9", "1f9/zc7", "unfiled", "\u212a12", "\u0130f9"} {
-		if got, err := ParseShortID(s, prefix); err == nil {
+		if got, err := ParseShortID(s, known); err == nil {
 			t.Errorf("ParseShortID(%q) = %#v; want it refused", s, got)
 		}
 	}
 	// a whole id's last digit holds two zero bits, as a segment or a full id
-	if _, err := ParseShortID(anItem.String()[:fullWidth-1]+"z", prefix); err == nil || !strings.Contains(err.Error(), "two zeros") {
+	if _, err := ParseShortID(anItem.String()[:fullWidth-1]+"z", known); err == nil || !strings.Contains(err.Error(), "two zeros") {
 		t.Errorf("26 digits whose last holds a set pad bit: %v; want the pad bits named", err)
 	}
 	segs := Segments{s: "1f9.zc7"}.List()

@@ -4,15 +4,23 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/promptctl/lit2/internal/address"
+	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/fold"
 )
 
-var schema = must(config.Load(config.NeverCommitted{}, running)).Schema()
+var schema = must(config.Load(assets.DefaultWorkspace.Bytes(), running))
+
+// parse is text parsed against s under sc, as a verb's view reads it.
+func parse(s fold.State, sc config.Schema, text string) (address.Address, address.Refusal) {
+	return address.Parse(evaluate.Of(s, sc, time.Time{}), text)
+}
 
 func comment(of events.ItemID) events.Draft {
 	return events.CreateElement{Of: of, Payload: events.CommentAdd{Body: events.SealPlain("note")}}
@@ -50,7 +58,7 @@ func TestEveryPathFormNamesItsNode(t *testing.T) {
 		{seg + "/comments/" + note.ID.String() + "/deleted", "lit-" + seg + "/comments/" + note.Segment().String() + "/deleted", field.Comment{}},
 		{seg + "/ready", "lit-" + seg + "/ready", field.Node{Level: two}},
 	} {
-		a, r := address.Parse(s, schema, c.text)
+		a, r := parse(s, schema, c.text)
 		if r != nil {
 			t.Errorf("%s: %v", c.text, r)
 			continue
@@ -59,10 +67,10 @@ func TestEveryPathFormNamesItsNode(t *testing.T) {
 			t.Errorf("%s = %s at %#v; want %s at %#v", c.text, a, a.Place, c.canon, c.place)
 		}
 	}
-	if a, _ := address.Parse(s, schema, seg+"/comments/"+note.Segment().String()); a.Node != (address.Element{Of: feature.ID, ID: note.ID, Rendered: "lit-" + seg + "/comments/" + note.Segment().String()}) {
+	if a, _ := parse(s, schema, seg+"/comments/"+note.Segment().String()); a.Node != (address.Element{Of: feature.ID, ID: note.ID, Rendered: "lit-" + seg + "/comments/" + note.Segment().String()}) {
 		t.Errorf("a comment's path names %#v; want the comment, a node", a.Node)
 	}
-	if a, _ := address.Parse(s, schema, seg+"/ready"); !isCheck(a) {
+	if a, _ := parse(s, schema, seg+"/ready"); !isCheck(a) {
 		t.Errorf("%s/ready = %#v; want the check row", seg, a.Target)
 	}
 }
@@ -112,12 +120,12 @@ func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
 		seg + "//title":         "syntax",
 		note + "//body":         "syntax",
 	} {
-		_, r := address.Parse(s, schema, text)
+		_, r := parse(s, schema, text)
 		if r == nil || r.Reason() != reason {
 			t.Errorf("%q refused with %v; want %s", text, r, reason)
 		}
 	}
-	_, r := address.Parse(s, schema, seg+"/nope")
+	_, r := parse(s, schema, seg+"/nope")
 	var unknown address.UnknownField
 	if !errors.As(r, &unknown) {
 		t.Fatalf("nope = %v", r)
@@ -144,7 +152,7 @@ func TestAnAmbiguousCommentListsBoth(t *testing.T) {
 	if a.Segment() != b.Segment() {
 		t.Fatalf("the comments fixed %s and %s; the test wants one", a.Segment(), b.Segment())
 	}
-	_, r := address.Parse(s, schema, feature.Segment().String()+"/comments/"+a.Segment().String())
+	_, r := parse(s, schema, feature.Segment().String()+"/comments/"+a.Segment().String())
 	var amb address.Ambiguous
 	if !errors.As(r, &amb) || !slices.Equal(amb.Candidates, []string{a.ID.String(), b.ID.String()}) {
 		t.Errorf("the shared segment = %v; want both comments listed", r)
@@ -158,7 +166,7 @@ func TestAnItemTheFoldCannotPlaceIsUnplaced(t *testing.T) {
 	ghost := must(events.ParseItemID("g0000000000000000000000000"))
 	forged := events.CreateItem{Payload: events.ItemCreate{Place: events.BelowParent{Parent: ghost}}}
 	s, ec := mint(t, s, s, 0xa, forged, [16]byte{0x20})
-	_, r := address.Parse(s, schema, made(ec).ID.String())
+	_, r := parse(s, schema, made(ec).ID.String())
 	if r == nil || r.Reason() != "unplaced" {
 		t.Errorf("an orphan = %v; want unplaced", r)
 	}
@@ -171,7 +179,7 @@ func TestADeclaredFieldIsAddressable(t *testing.T) {
 	declared := must(config.Parse(text, "workspace.toml", running))
 	var s fold.State
 	s, ev := mint(t, s, s, 0xa, top(1), [16]byte{0x10})
-	a, r := address.Parse(s, declared, made(ev).Segment().String()+"/points")
+	a, r := parse(s, declared, made(ev).Segment().String()+"/points")
 	if r != nil {
 		t.Fatal(r)
 	}

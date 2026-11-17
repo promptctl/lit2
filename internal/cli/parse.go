@@ -2,8 +2,8 @@
 // out.
 //
 // Its layer in architecture.md §6: argv → typed command; rendering; exit
-// codes; --json (§5 step 7, path-addressed-cli.md). One pair of tables, the
-// verbs and the admin commands, is both the parser and --help, so help
+// codes; --json (§5 step 7, path-addressed-cli.md). The tables, the verbs and
+// each group's commands, are both the parser and --help, so help
 // cannot disagree with the parser `[LAW:one-source-of-truth]`. A flag is
 // --name anywhere on the line, -- ends the flags, and - is a value (D4).
 package cli
@@ -15,7 +15,7 @@ import (
 	"github.com/promptctl/lit2/internal/reason"
 )
 
-// Table is one command table, the verbs or the admin commands, in the order
+// Table is one command table, the verbs or a group's commands, in the order
 // --help prints it. Only this package makes one, so its rows are the ones
 // the parser knows.
 type Table struct{ rows []Row }
@@ -46,7 +46,7 @@ type TakesPaths struct {
 // TakesPairs is one or more path-value pairs: set, add.
 type TakesPairs struct{ Make func([]Pair, Flags) Command }
 
-// TakesNothing is no operands: the admin commands.
+// TakesNothing is no operands: a group's commands.
 type TakesNothing struct{ Make func() Command }
 
 func (TakesPaths) operands()   {}
@@ -111,13 +111,21 @@ type AdminInit struct{}
 // AdminSync publishes this checkout's events and fetches every writer's.
 type AdminSync struct{}
 
-func (Help) command()      {}
-func (Get) command()       {}
-func (Rm) command()        {}
-func (Set) command()       {}
-func (Add) command()       {}
-func (AdminInit) command() {}
-func (AdminSync) command() {}
+// ConfigCommit applies the committed workspace file as the next version.
+type ConfigCommit struct{}
+
+// ConfigStatus reports the version in force against the file.
+type ConfigStatus struct{}
+
+func (Help) command()         {}
+func (Get) command()          {}
+func (Rm) command()           {}
+func (Set) command()          {}
+func (Add) command()          {}
+func (AdminInit) command()    {}
+func (AdminSync) command()    {}
+func (ConfigCommit) command() {}
+func (ConfigStatus) command() {}
 
 // PathText is a path as typed. It is not yet an address: a short id
 // resolves against the fold, so address parses it at §5 step 4
@@ -133,11 +141,16 @@ type Pair struct {
 	Value ValueText
 }
 
-// adminWord is the word that selects the admin table.
-const adminWord = "admin"
+// Group is a table selected by its first word, outside the verbs: lit2
+// admin init, lit2 config commit.
+type Group struct {
+	Word  string
+	Table Table
+}
 
-// Parse reads argv against the two tables. Its error is a ParseFailure.
-func Parse(verbs, admin Table, args []string) (Command, error) {
+// Parse reads argv against the verbs and the groups. Its error is a
+// ParseFailure.
+func Parse(verbs Table, groups []Group, args []string) (Command, error) {
 	words, help, flags, err := scan(args)
 	if err != nil {
 		return nil, err
@@ -150,14 +163,17 @@ func Parse(verbs, admin Table, args []string) (Command, error) {
 		// as a get's are
 		words = []string{"get", "/"}
 	}
-	all := known(verbs, admin)
-	if words[0] != adminWord {
-		return verbs.parse("", all, words, flags)
+	all := known(verbs, groups)
+	for _, g := range groups {
+		if words[0] != g.Word {
+			continue
+		}
+		if len(words) == 1 {
+			return nil, ParseFailure{Code: Usage, Detail: g.Word + " takes a command; the commands are " + all}
+		}
+		return g.Table.parse(g.Word+" ", all, words[1:], flags)
 	}
-	if len(words) == 1 {
-		return nil, ParseFailure{Code: Usage, Detail: "admin takes a command; the commands are " + all}
-	}
-	return admin.parse(adminWord+" ", all, words[1:], flags)
+	return verbs.parse("", all, words, flags)
 }
 
 // scan splits argv into operands and flags. The flags are --help and
@@ -237,14 +253,16 @@ func (r Row) parse(name string, operands []string, flags Flags) (Command, error)
 	panic(fmt.Sprintf("cli: %T is not Operands", r.Operands))
 }
 
-// known names every command the two tables hold, for a failure to list.
-func known(verbs, admin Table) string {
+// known names every command the tables hold, for a failure to list.
+func known(verbs Table, groups []Group) string {
 	var names []string
 	for _, r := range verbs.rows {
 		names = append(names, r.Name)
 	}
-	for _, r := range admin.rows {
-		names = append(names, adminWord+" "+r.Name)
+	for _, g := range groups {
+		for _, r := range g.Table.rows {
+			names = append(names, g.Word+" "+r.Name)
+		}
 	}
 	return strings.Join(names, ", ")
 }

@@ -14,8 +14,8 @@ var (
 )
 
 // FirstFacts is the kinds of the first slice: items, fields, members of a
-// set, moves between columns and comments, each a payload and one rule
-// over the shapes.
+// set, moves between columns, comments and the workspace's versions, each
+// a payload and one rule over the shapes.
 func FirstFacts() []Kind {
 	return []Kind{
 		On(NewItems, func(f Fact[events.ItemCreate]) Applies {
@@ -45,5 +45,8 @@ func FirstFacts() []Kind {
 				Write{At: OnElement{Of: el.Of, ID: el.ID}, Field: Body, Value: events.Prose{Body: f.Payload.Body}},
 			}}
 		}, events.ReadCommentAdd),
+		On(Root, func(f Fact[events.WorkspaceApply]) Applies {
+			return Changes{List: []Change{Apply{Blob: f.Payload.Blob(), Bytes: f.Payload.Version(), Over: f.Payload.Over}}}
+		}, events.ReadWorkspaceApply),
 	}
 }

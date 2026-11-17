@@ -41,8 +41,8 @@ func TestFindIsTheOnePlaceRule(t *testing.T) {
 	if _, err := tbl.Find(field.Root{}, "nope"); !errors.As(err, &unknown) {
 		t.Fatalf("nope = %v, want UnknownField", err)
 	}
-	if !reflect.DeepEqual(unknown.Known, []field.Path{"children", "lanes", "next"}) {
-		t.Errorf("the root's rows are %v, want children, lanes and next", unknown.Known)
+	if !reflect.DeepEqual(unknown.Known, []field.Path{"children", "lanes", "next", "workspace"}) {
+		t.Errorf("the root's rows are %v, want children, lanes, next and workspace", unknown.Known)
 	}
 	if b, d, c := tbl.Origins(); d != 1 || c != 1 || b == 0 {
 		t.Errorf("origins = %d built-in, %d declared, %d checks; want 1 declared and 1 check", b, d, c)

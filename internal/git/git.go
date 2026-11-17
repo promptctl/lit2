@@ -6,9 +6,10 @@
 // tree, the checkout's private git dir and the common dir every worktree of
 // a clone shares, read in process from git's own layout (D10), with no git
 // binary and no GIT_DIR; the code repository's object format, read from its
-// config; and lit's own repository's Objects and Refs, a bare repository on
-// disk through go-git and its twin in memory. go-git types never cross
-// this package's seam, and no transport package is imported.
+// config; the code repository's HEAD and history, read and never written;
+// and lit's own repository's Objects and Refs, a bare repository on disk
+// through go-git and its twin in memory. go-git types never cross this
+// package's seam, and no transport package is imported.
 package git
 
 import (

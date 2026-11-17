@@ -7,20 +7,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/verbs"
 )
 
 // Twin is lit2 in process: Run over a fixed clock, seeded entropy, a
-// fixed writer and a store over the in-memory twins, with its streams and
-// its command log kept for a test to read.
+// fixed writer and a store over the in-memory twins, with its streams, its
+// command log, its work tree and its code repository kept for a test to
+// read and write.
 type Twin struct {
 	Process  Process
 	Out, Err *bytes.Buffer
 	Commands *command.Memory
+	Tree     *store.MemoryFiles
+	Code     *git.CodeMemory
 }
 
 // The twin's checkout and the id it is minted with.
@@ -48,8 +53,27 @@ func twinReader() config.ReaderVersion {
 	return r
 }
 
-// NewTwin is a twin whose checkout is minted, so its writer is known.
+// NewTwin is a twin as admin init leaves a checkout: minted, so its
+// writer is known, with the default profile in its work tree, committed,
+// and applied as version one. Its streams and command log hold nothing of
+// the init.
 func NewTwin() Twin {
+	t := NewFreshTwin()
+	t.Code.Commit(map[string][]byte{verbs.WorkspaceFile: assets.DefaultWorkspace.Bytes()})
+	if status := Run(t.Process, []string{"admin", "init"}); status != 0 {
+		panic(fmt.Sprintf("root: the twin's admin init exited %d: %s", status, t.Err))
+	}
+	t.Out.Reset()
+	t.Err.Reset()
+	t.Commands = &command.Memory{}
+	t.Process.Commands = t.Commands
+	return t
+}
+
+// NewFreshTwin is a twin whose checkout is minted and whose store, work
+// tree and code repository hold nothing: a checkout before admin init
+// applies version one.
+func NewFreshTwin() Twin {
 	out, errOut, commands := &bytes.Buffer{}, &bytes.Buffer{}, &command.Memory{}
 	// the store draws from its own source, so a log it creates moves no
 	// trace id the twin mints
@@ -57,6 +81,8 @@ func NewTwin() Twin {
 	stored := rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 's', 't', 'o', 'r', 'e'})
 	repo := git.NewMemory()
 	ports := store.Ports{Files: store.NewMemoryFiles(), Objects: repo, Refs: repo, Entropy: stored}
+	opened := command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1}
+	tree, code := store.NewMemoryFiles(), &git.CodeMemory{}
 	// the twin is minted: its identity files hold its id and key, so init
 	// finds them there
 	shared, private := store.NewMemoryFiles(), store.NewMemoryFiles()
@@ -72,7 +98,10 @@ func NewTwin() Twin {
 			Entropy:       entropy,
 			Agent:         events.Unlabeled{},
 			Place:         command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}},
-			Store:         command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1},
+			Store:         opened,
+			Open:          func(git.Checkout, command.Minted) command.Opening { return opened },
+			WorkTree:      func(git.Checkout) store.Files { return tree },
+			Code:          func(git.Checkout, git.ObjectFormat) git.Code { return code },
 			Fold:          foldEnv(2),
 			Reader:        twinReader(),
 			Commands:      commands,
@@ -84,5 +113,7 @@ func NewTwin() Twin {
 		Out:      out,
 		Err:      errOut,
 		Commands: commands,
+		Tree:     tree,
+		Code:     code,
 	}
 }

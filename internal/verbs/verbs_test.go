@@ -184,7 +184,7 @@ func (b *book) get(path string) string {
 // under another version could have filed it, by its path.
 func under(b *book, parent string) string {
 	b.t.Helper()
-	a, r := address.Parse(b.st, b.schema, parent)
+	a, r := address.Parse(b.world(b.st).View, parent)
 	if r != nil {
 		b.t.Fatal(r)
 	}

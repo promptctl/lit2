@@ -8,7 +8,6 @@ import (
 	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
-	"github.com/promptctl/lit2/internal/git"
 )
 
 // running is the reader every parse test reads under: a release new enough for
@@ -56,11 +55,10 @@ func refusalsOf(t *testing.T, text string) []Refusal {
 // TestDefaultProfileParsesToTheDocumentedModel holds the shipped default to
 // what the design documents say it ships.
 func TestDefaultProfileParsesToTheDocumentedModel(t *testing.T) {
-	s, err := Load(NeverCommitted{}, running)
+	sc, err := Load(assets.DefaultWorkspace.Bytes(), running)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sc := s.Schema()
 	if sc.Prefix().String() != "lit" {
 		t.Errorf("prefix = %s, want lit", sc.Prefix())
 	}
@@ -139,30 +137,17 @@ func TestDefaultProfileParsesToTheDocumentedModel(t *testing.T) {
 	}
 }
 
-// TestNoCommittedVersionReadsAsTheDefault holds the two sources to one parse:
-// a workspace with no committed version reads the default, and the config-ref
-// is the id git gives the default's bytes (architecture.md §3.15, Δ8).
-func TestNoCommittedVersionReadsAsTheDefault(t *testing.T) {
-	def, err := Load(NeverCommitted{}, running)
-	if err != nil {
-		t.Fatal(err)
+// TestAVersionsPrefixReadsAlone: the prefix a version declared reads
+// without the rest of it, so a prefix every id once rendered under still
+// parses after the version is replaced (§3.2).
+func TestAVersionsPrefixReadsAlone(t *testing.T) {
+	if p, ok := DeclaredPrefix([]byte("prefix = \"rin\"\n[columns.x]\nnot = \"read\"\n")); !ok || p.String() != "rin" {
+		t.Errorf("DeclaredPrefix = %v, %v; want rin", p, ok)
 	}
-	if _, ok := def.Source().(FromDefault); !ok {
-		t.Errorf("source = %T, want FromDefault", def.Source())
-	}
-	want := git.HashBlob(git.SHA1, assets.DefaultWorkspace.Bytes())
-	if got := def.Ref(git.SHA1); got != want {
-		t.Errorf("ref = %s, want the default's blob id %s", got, want)
-	}
-	logged, err := Load(Committed{Bytes: []byte(minimal)}, running)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := logged.Source().(FromLog); !ok {
-		t.Errorf("source = %T, want FromLog", logged.Source())
-	}
-	if logged.Ref(git.SHA1) != git.HashBlob(git.SHA1, []byte(minimal)) {
-		t.Error("a committed version's ref is the id git gives its bytes")
+	for _, b := range []string{"", "prefix = 7", "prefix = \"No\"", "[[["} {
+		if p, ok := DeclaredPrefix([]byte(b)); ok {
+			t.Errorf("DeclaredPrefix(%q) = %v; want none", b, p)
+		}
 	}
 }
 
@@ -414,7 +399,7 @@ func TestOneLevelFileHasNoHome(t *testing.T) {
 // version, naming the upgrade.
 func TestLoadRefusesWhatTheReaderCannotRead(t *testing.T) {
 	gated := replace(`prefix = "lit"`, "prefix = \"lit\"\nmin-reader-version = \"9.0.0\"")(minimal)
-	_, err := Load(Committed{Bytes: []byte(gated)}, running)
+	_, err := Load([]byte(gated), running)
 	var r *Refused
 	if !errors.As(err, &r) || r.Refusals[0].Reason != ReasonReaderTooOld {
 		t.Fatalf("want reader-too-old, got %v", err)
@@ -566,7 +551,7 @@ func TestARefusedHomeNamesItsLevel(t *testing.T) {
 // sections' columns as well as the root's.
 func TestFactsCountEveryRequirement(t *testing.T) {
 	text := replace("[columns.backlog]", "[nodes.unfiled.columns.audit]\nnext = [\"done\"]\nentry = [{ test = \"description\", severity = \"error\" }]\n\n[columns.backlog]")(minimal)
-	l, err := Load(Committed{Bytes: []byte(text)}, running)
+	l, err := Load([]byte(text), running)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +672,7 @@ func TestACheckCycleNamesItsPath(t *testing.T) {
 // same columns, the root's and the sections'.
 func TestFactsCountSectionColumns(t *testing.T) {
 	text := replace("[columns.backlog]", "[nodes.unfiled.columns.audit]\nnext = [\"done\"]\n\n[columns.backlog]")(minimal)
-	l, err := Load(Committed{Bytes: []byte(text)}, running)
+	l, err := Load([]byte(text), running)
 	if err != nil {
 		t.Fatal(err)
 	}

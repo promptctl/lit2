@@ -1,6 +1,7 @@
-# The default profile: the workspace model in force until a person commits a
-# version. config.Parse reads it like any other version. Its git blob id is the
-# config-ref of every event written before a version is committed.
+# This project's lit2 model: its levels, columns, labels, checks and links.
+# lit2 admin init wrote it and applied it as version one. Edit it, commit it,
+# then run lit2 config commit to put the committed version in force; until
+# then every command runs on the version applied last.
 
 prefix = "lit"
 claim_ttl = "6h"

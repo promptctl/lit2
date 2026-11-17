@@ -96,6 +96,10 @@ func Summarize(c Command) Summary {
 		return Summary{Name: "admin init"}
 	case AdminSync:
 		return Summary{Name: "admin sync"}
+	case ConfigCommit:
+		return Summary{Name: "config commit"}
+	case ConfigStatus:
+		return Summary{Name: "config status"}
 	}
 	panic(fmt.Sprintf("cli: %T is not a Command", c))
 }

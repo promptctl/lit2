@@ -23,8 +23,8 @@ type Asset struct{ path string }
 // The shipped files. Adding one is a file and one value here, and the test
 // that holds declared and embedded equal fails until both exist.
 var (
-	// DefaultWorkspace is the default profile: the workspace model in force
-	// until a person commits a version (architecture.md §3.15).
+	// DefaultWorkspace is the default profile: the file admin init writes
+	// when there is none, and applies as version one (architecture.md §3.15).
 	DefaultWorkspace = Asset{"workspace/default.toml"}
 	// BIP39English is BIP-39's English word list, one word per line.
 	BIP39English = Asset{"bip39/english.txt"}

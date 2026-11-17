@@ -67,6 +67,9 @@ const (
 	ReasonNoInitial      Reason = "no-initial"
 	ReasonManyInitial    Reason = "many-initial"
 	ReasonNoTerminal     Reason = "no-terminal"
+	// A version that drops a column tickets are in, with no alias saying
+	// where they go (§3.5).
+	ReasonColumnHeld Reason = "column-held"
 
 	// Requirements and checks.
 	ReasonBadAtom         Reason = "bad-atom"

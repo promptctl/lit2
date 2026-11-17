@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/fold"
@@ -125,7 +126,8 @@ func (a Address) String() string {
 // a row for, and the step after it a key. An element's key names a node
 // of its own, whose steps are read at its place in turn. Its refusal says
 // why the path names nothing.
-func Parse(st fold.State, schema config.Schema, text string) (Address, Refusal) {
+func Parse(v evaluate.View, text string) (Address, Refusal) {
+	st, schema := v.State(), v.Schema()
 	if text == "" {
 		return Address{}, Syntax{Text: text, Why: "a path is / or names a home or an item"}
 	}
@@ -140,7 +142,7 @@ func Parse(st fold.State, schema config.Schema, text string) (Address, Refusal) 
 		hasSteps = steps != ""
 	} else {
 		var r Refusal
-		if a.Node, a.Place, it, r = node(st, schema, head); r != nil {
+		if a.Node, a.Place, it, r = node(st, schema, v.Prefixes(), head); r != nil {
 			return Address{}, r
 		}
 	}
@@ -151,15 +153,16 @@ func Parse(st fold.State, schema config.Schema, text string) (Address, Refusal) 
 	return target(schema.Table(), a, it, steps)
 }
 
-// node reads a path's first step: a declared home's name, or an item's id.
-func node(st fold.State, schema config.Schema, head string) (Node, field.Place, fold.Item, Refusal) {
+// node reads a path's first step: a declared home's name, or an item's id
+// bare or under a known prefix.
+func node(st fold.State, schema config.Schema, known events.Prefixes, head string) (Node, field.Place, fold.Item, Refusal) {
 	for n := 2; n <= schema.Levels(); n++ {
 		if lv, _ := schema.Level(n); lv.Home == head {
 			l, _ := events.ParseLevel(n)
 			return Home{Level: l, Name: head}, field.Home{Level: l}, fold.Item{}, nil
 		}
 	}
-	short, err := events.ParseShortID(head, schema.Prefix())
+	short, err := events.ParseShortID(head, known)
 	if err != nil {
 		return nil, nil, fold.Item{}, Syntax{Text: head, Why: err.Error() + ", nor a home"}
 	}
@@ -222,7 +225,7 @@ func keyed(t config.Table, a Address, it fold.Item, path field.Path, r config.Ro
 		a.Target = Member{Path: path, Decl: row.Decl, Name: n}
 		return a, nil
 	case field.Elements:
-		short, err := events.ParseShortID(key, events.Prefix{})
+		short, err := events.ParseShortID(key, events.Prefixes{})
 		if err != nil || strings.Contains(key, ".") {
 			return Address{}, Syntax{Text: key, Why: fmt.Sprintf("an element of %s is named by its id or its one segment", path)}
 		}

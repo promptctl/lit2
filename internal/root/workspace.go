@@ -1,0 +1,242 @@
+package root
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/promptctl/lit2/internal/assets"
+	"github.com/promptctl/lit2/internal/cli"
+	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/fold"
+	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/reason"
+	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/verbs"
+)
+
+// inForce is an opened run under the version in force, loaded, beside the
+// workspace file as this run read it: what every verb reads (§3.15).
+type inForce struct {
+	opened
+	schema config.Schema
+	// ref is the version's blob, the config-ref every event written under
+	// it records.
+	ref  git.ObjectID
+	file verbs.File
+}
+
+// load loads the version the fold put in force and reads the file. Only an
+// applied version is in force, so a store with none refuses every verb,
+// naming the command that applies one, and a draft in the work tree never
+// reaches a command.
+func (o opened) load() (inForce, error) {
+	in, ok := o.folded.State.Workspace().(fold.InForce)
+	if !ok {
+		return inForce{}, workspaceFailure{err: fmt.Errorf("no version is in force: lit2 config commit applies the committed %s", verbs.WorkspaceFile)}
+	}
+	schema, err := config.Load(in.Active.Bytes, o.p.Reader)
+	if err != nil {
+		return inForce{}, workspaceFailure{err: fmt.Errorf("the version in force, %s, does not read under this release: %w", in.Active.Blob, err)}
+	}
+	o.rec.Configured(command.ConfigFacts{Facts: schema.Facts(), Ref: in.Active.Blob.String()})
+	_, file := o.workspaceFile()
+	return inForce{opened: o, schema: schema, ref: in.Active.Blob, file: file}, nil
+}
+
+// verb runs do under the version in force.
+func (r body) verb(do func(inForce) cli.Outcome) cli.Outcome {
+	o, err := r.open()
+	if err != nil {
+		return failed(err)
+	}
+	v, err := o.load()
+	if err != nil {
+		return failed(err)
+	}
+	return do(v)
+}
+
+// fields is the field table help prints: the version in force's, or why
+// there is none. Help never fails for want of one.
+func (r body) fields() cli.Fields {
+	o, err := r.open()
+	if err != nil {
+		return cli.NoFields{Why: err.Error()}
+	}
+	v, err := o.load()
+	if err != nil {
+		return cli.NoFields{Why: err.Error()}
+	}
+	return cli.ActiveFields{Table: v.schema.Table()}
+}
+
+// workspaceFile is .lit/workspace.toml as this run read it: its bytes, and
+// the file as the board says it. It is never parsed here.
+func (o opened) workspaceFile() ([]byte, verbs.File) {
+	b, err := read(o.p.WorkTree(o.checkout), verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })
+	var none store.NotFound
+	switch {
+	case errors.As(err, &none):
+		return nil, verbs.NoFile{}
+	case err != nil:
+		return nil, verbs.UnreadableFile{Err: err}
+	}
+	return b, verbs.OnDisk{Blob: git.HashBlob(o.store.Format, b)}
+}
+
+// commit is config commit: the file, once it is HEAD's, applied as the
+// next version over every live one, through the one judge, Admit. A file
+// that is absent, uncommitted or changed since HEAD is refused, naming the
+// step that makes it HEAD's; a file already in force with nothing
+// contending writes nothing.
+func (o opened) commit() cli.Outcome {
+	b, file := o.workspaceFile()
+	var disk verbs.OnDisk
+	switch f := file.(type) {
+	case verbs.OnDisk:
+		disk = f
+	case verbs.NoFile:
+		return cli.Failed{Failure: commitRefused{why: fmt.Sprintf("there is no %s to apply: write it, commit it, then lit2 config commit", verbs.WorkspaceFile)}}
+	case verbs.UnreadableFile:
+		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading %s: %w", verbs.WorkspaceFile, f.Err)}}
+	}
+	at, err := o.p.Code(o.checkout, o.store.Format).AtHead(verbs.WorkspaceFile)
+	if err != nil {
+		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading the code repository: %w", err)}}
+	}
+	switch at := at.(type) {
+	case git.Untracked:
+		return cli.Failed{Failure: commitRefused{why: fmt.Sprintf("%[1]s is not in HEAD: git add %[1]s and git commit, then lit2 config commit", verbs.WorkspaceFile)}}
+	case git.Tracked:
+		if at.Blob != disk.Blob {
+			return cli.Failed{Failure: commitRefused{why: fmt.Sprintf("%[1]s differs from HEAD's %[2]s: git commit %[1]s, then lit2 config commit", verbs.WorkspaceFile, at.Blob)}}
+		}
+	}
+	st := o.folded.State
+	// version one is written under itself; any later under the version in
+	// force when it was written
+	ref := disk.Blob
+	if in, ok := st.Workspace().(fold.InForce); ok {
+		if in.Active.Blob == disk.Blob && len(in.Contending) == 0 {
+			return written(fmt.Fprintf(o.p.Out, "%s is already in force\n", disk.Blob))
+		}
+		ref = in.Active.Blob
+	}
+	return o.apply(b, disk.Blob, ref, fmt.Sprintf("applied %s\n", disk.Blob))
+}
+
+// apply judges version and, admitted, writes it as one apply under ref,
+// then says said.
+func (o opened) apply(version []byte, blob, ref git.ObjectID, said string) cli.Outcome {
+	act, err := verbs.Admit(o.folded.State, version, o.store.Format, o.p.Reader)
+	if err != nil {
+		return failed(err)
+	}
+	m, err := o.mint([]events.Draft{act}, ref)
+	if err != nil {
+		return failed(err)
+	}
+	if err := o.append(m); err != nil {
+		return failed(err)
+	}
+	return written(io.WriteString(o.p.Out, said))
+}
+
+// status is config status: the board's workspace line, and whether the
+// version in force was ever committed on HEAD's branch.
+func (o opened) status() cli.Outcome {
+	_, file := o.workspaceFile()
+	st := o.folded.State
+	lines := []string{verbs.Workspace(st, file)}
+	if in, ok := st.Workspace().(fold.InForce); ok {
+		ever, err := o.p.Code(o.checkout, o.store.Format).EverAt(verbs.WorkspaceFile, in.Active.Blob)
+		if err != nil {
+			return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading the code repository: %w", err)}}
+		}
+		history := "in HEAD's history: yes"
+		if !ever {
+			history = fmt.Sprintf("in HEAD's history: no, %s was never %s on this branch", in.Active.Blob, verbs.WorkspaceFile)
+		}
+		lines = append(lines, history)
+	}
+	return written(io.WriteString(o.p.Out, strings.Join(lines, "\n")+"\n"))
+}
+
+// init is admin init: the checkout's id and the principal's key, each
+// minted once, and the principal printed, with the recovery phrase when
+// this run made the key; then, in a store that holds no event, the
+// workspace's version one: the file in the work tree, or the default
+// profile written there when there is none.
+func (r body) init() cli.Outcome {
+	in, ok := r.p.Place.(command.InCheckout)
+	if !ok {
+		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer, and this is none")}}
+	}
+	shared, private := r.p.IdentityFiles(in.Checkout)
+	minted, fresh, err := MintIdentity(shared, private, r.p.Entropy)
+	if err != nil {
+		return cli.Failed{Failure: storeFailure{err: err}}
+	}
+	r.rec.Stored.Inits = append(r.rec.Stored.Inits, fresh)
+	said := fmt.Sprintf("principal %s\n", minted.Key.Principal())
+	if fresh.Key == store.Created {
+		said += fmt.Sprintf("recovery phrase: %s\nwrite it down: it is the one way to restore this key\n", minted.Key.Phrase())
+	}
+	// the phrase is said before anything else can fail: it is shown once
+	if out, failed := written(io.WriteString(r.p.Out, said)).(cli.Failed); failed {
+		return out
+	}
+	opening := r.p.Open(in.Checkout, minted)
+	r.rec.Stored.Opening = opening
+	so, ok := opening.(command.Opened)
+	if !ok {
+		return cli.Failed{Failure: storeFailure{err: opening.(command.Unopened).Why}}
+	}
+	o, err := r.openAs(so, in.Checkout, minted)
+	if err != nil {
+		return failed(err)
+	}
+	if o.folded.Facts.Records > 0 {
+		return cli.Done{}
+	}
+	b, err := versionOne(r.p.WorkTree(in.Checkout))
+	if err != nil {
+		return cli.Failed{Failure: workspaceFailure{err: err}}
+	}
+	blob := git.HashBlob(so.Format, b)
+	return o.apply(b, blob, blob, fmt.Sprintf("workspace %s applied as version one\n", blob))
+}
+
+// versionOne is the file in the work tree, the default profile created
+// there first when there is none; read back, so a race to create it
+// applies the winner's.
+func versionOne(tree store.Files) ([]byte, error) {
+	if _, err := tree.CreateOnce(verbs.WorkspaceFile, assets.DefaultWorkspace.Bytes()); err != nil {
+		return nil, fmt.Errorf("writing %s: %w", verbs.WorkspaceFile, err)
+	}
+	b, err := read(tree, verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", verbs.WorkspaceFile, err)
+	}
+	return b, nil
+}
+
+// workspaceFailure is a run that cannot read the workspace's version, its
+// file or the code repository: the environment's.
+type workspaceFailure struct{ err error }
+
+func (f workspaceFailure) Error() string     { return f.err.Error() }
+func (workspaceFailure) Class() reason.Class { return reason.ClassEnvironment }
+func (workspaceFailure) Reason() string      { return "workspace" }
+
+// commitRefused is a file config commit will not apply until a step is
+// taken, the step named.
+type commitRefused struct{ why string }
+
+func (c commitRefused) Error() string     { return c.why }
+func (commitRefused) Class() reason.Class { return reason.ClassRefused }
+func (commitRefused) Reason() string      { return "workspace" }

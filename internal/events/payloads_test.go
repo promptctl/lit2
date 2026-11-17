@@ -7,11 +7,16 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
+	"github.com/promptctl/lit2/internal/git"
 )
 
 // first is the first facts' decode table.
 var first = NewKinds(Row[ItemCreate](ReadItemCreate), Row[FieldSet](ReadFieldSet), Row[MemberAdd](ReadMemberAdd),
-	Row[MemberRm](ReadMemberRm), Row[Transition](ReadTransition), Row[CommentAdd](ReadCommentAdd))
+	Row[MemberRm](ReadMemberRm), Row[Transition](ReadTransition), Row[CommentAdd](ReadCommentAdd),
+	Row[WorkspaceApply](ReadWorkspaceApply))
+
+// aVersion is a workspace version's bytes, which no payload reads.
+var aVersion = []byte("prefix = \"lit\"\n")
 
 var labels = MustName("labels")
 
@@ -70,6 +75,11 @@ func TestTheFirstFactsReadBackAsMinted(t *testing.T) {
 			}},
 		{CreateElement{Of: id, Payload: CommentAdd{Body: text("a comment")}},
 			func(p Payload) bool { return p.(CommentAdd).Body.Commitment() == text("a comment").Commitment() }},
+		{Act{About: Root{}, Payload: NewWorkspaceApply(aVersion, git.SHA256, over)},
+			func(p Payload) bool {
+				a := p.(WorkspaceApply)
+				return bytes.Equal(a.Version(), aVersion) && a.Blob() == git.HashBlob(git.SHA256, aVersion) && slices.Equal(a.Over, over)
+			}},
 	} {
 		m := mint(t, context(1, Frontier{}, Known{}), k, 1, c.draft)
 		e := decoded(t, first, records(m)[0])
@@ -122,6 +132,7 @@ func TestTheFirstFactsKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 		{MemberRm{Field: labels, Member: MustName("a")}, ReadMemberRm},
 		{Transition{From: MustName("a"), To: MustName("b")}, ReadTransition},
 		{CommentAdd{Body: text("c")}, ReadCommentAdd},
+		{NewWorkspaceApply(aVersion, git.SHA1, []EventID{{1}}), ReadWorkspaceApply},
 	} {
 		v, err := c.read(wire.NewReader(append(payloadBytes(c.p), future...)))
 		if err != nil {
@@ -243,6 +254,12 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		w.Bytes(1, b)
 		return w.Encoded()
 	}
+	// an apply's blob is git's id for the bytes it carries, or it is refused
+	var otherBlob, noBlob, noVersion wire.Writer
+	otherBlob.Bytes(1, aVersion)
+	otherBlob.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, []byte("other")), "blob"))
+	noBlob.Bytes(1, aVersion)
+	noVersion.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
 	for _, c := range []struct {
 		name string
 		read func(*wire.Reader) (Versioned, error)
@@ -258,6 +275,9 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		{"a transition with two tos", ReadTransition, twoTos.Encoded()},
 		{"a field.set with two fields", ReadFieldSet, twoFields.Encoded()},
 		{"a comment.add with no body", ReadCommentAdd, nil},
+		{"a workspace.apply whose blob names other bytes", ReadWorkspaceApply, otherBlob.Encoded()},
+		{"a workspace.apply with no blob", ReadWorkspaceApply, noBlob.Encoded()},
+		{"a workspace.apply with no version", ReadWorkspaceApply, noVersion.Encoded()},
 	} {
 		if _, err := c.read(wire.NewReader(c.b)); err == nil {
 			t.Errorf("%s reads", c.name)

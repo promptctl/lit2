@@ -6,6 +6,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/events/wire"
+	"github.com/promptctl/lit2/internal/git"
 )
 
 // Rule is one kind's fold rule: the changes its event makes. It sees its
@@ -66,10 +67,15 @@ type OnNewItem struct{ New events.NewItem }
 // OnNewElement is the element a create makes.
 type OnNewElement struct{ New events.NewElement }
 
+// OnRoot is the root, the workspace an apply changes the model of. It is
+// no Node, so no field write can target it `[LAW:types-are-the-program]`.
+type OnRoot struct{}
+
 func (OnItem) target()       {}
 func (OnElement) target()    {}
 func (OnNewItem) target()    {}
 func (OnNewElement) target() {}
+func (OnRoot) target()       {}
 func (OnItem) node()         {}
 func (OnElement) node()      {}
 
@@ -88,6 +94,8 @@ const (
 	NewItems
 	// NewElements is the element a create makes.
 	NewElements
+	// Root is the root alone.
+	Root
 )
 
 // target narrows about to the node a kind of this aim writes; false is an
@@ -103,7 +111,7 @@ func (a Aim) target(about events.About) (Target, bool) {
 	case events.NewElement:
 		return OnNewElement{New: at}, a == NewElements
 	case events.Root:
-		return nil, false
+		return OnRoot{}, a == Root
 	}
 	panic(fmt.Sprintf("fold: %T is not an About", about))
 }
@@ -121,6 +129,8 @@ func (a Aim) misaddressed() Misaddressed {
 		return Misaddressed{Want: "the item it creates"}
 	case NewElements:
 		return Misaddressed{Want: "the element it creates"}
+	case Root:
+		return Misaddressed{Want: "the root"}
 	}
 	panic(fmt.Sprintf("fold: %d is not an Aim", uint8(a)))
 }
@@ -213,11 +223,20 @@ type Remove struct {
 	Observed []events.EventID
 }
 
+// Apply makes the version Bytes, whose git id is Blob, the workspace's,
+// replacing the applies Over.
+type Apply struct {
+	Blob  git.ObjectID
+	Bytes []byte
+	Over  []events.EventID
+}
+
 func (CreateItem) change()    {}
 func (CreateElement) change() {}
 func (Write) change()         {}
 func (Add) change()           {}
 func (Remove) change()        {}
+func (Apply) change()         {}
 
 // Stamp is which event made a fact, where it sorts, who wrote it and the
 // writer's clock when it did: data, never order (INV:wall-time-is-data).

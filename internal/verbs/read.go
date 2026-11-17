@@ -14,8 +14,13 @@ import (
 )
 
 // World is what a verb reads: the view of the folded state under the
-// schema in force at now, so every read is evaluate's (architecture.md §3.3).
-type World struct{ evaluate.View }
+// schema in force at now, so every read is evaluate's (architecture.md §3.3),
+// and the workspace file as the root read it, which only the root's
+// workspace line reads.
+type World struct {
+	evaluate.View
+	File File
+}
 
 // Read is the values the row at path holds on node n: the one
 // reader get and a check's tests call `[LAW:single-enforcer]`, but for a
@@ -350,8 +355,9 @@ var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 		c, _ := fold.CreateOf(w.element(n.(address.Element)).Origin) // an element a path names is created
 		return []string{writer(c.Stamp.By)}, nil
 	},
-	"stage":  stage,
-	"rollup": rollup,
+	"stage":     stage,
+	"rollup":    rollup,
+	"workspace": workspace,
 	"lanes": func(w World, _ address.Node) ([]string, error) {
 		lanes := w.State().Lanes()
 		out := make([]string, len(lanes))

@@ -231,15 +231,20 @@ func (s Schema) Effective(a Ancestry) (Effective, error) {
 			ttl, ttlOrigin = v, SectionOrigin{Key: a[i]}
 		}
 	}
-	keyOf := func(name string) KeyPath {
-		if so, ok := origin[name].(SectionOrigin); ok {
-			return keyed(keyed("nodes", nodeSegment(so.Key)), "columns."+name)
-		}
-		return "columns." + KeyPath(name)
-	}
-	g, refusals := buildGraph(merged, keyOf)
+	g, refusals := buildGraph(merged, func(name string) KeyPath { return ColumnKey(origin[name], name) })
 	if len(refusals) > 0 {
 		return Effective{}, &ResolutionRefused{Ancestry: a, Refusals: refusals}
 	}
 	return Effective{Columns: g, ClaimTTL: ttl, ColumnOrigin: origin, TTLOrigin: ttlOrigin}, nil
+}
+
+// ColumnKey is the key path that declares column name where o is: the
+// root's `columns.<name>`, or a section's `nodes.<key>.columns.<name>`.
+func ColumnKey(o Origin, name string) KeyPath {
+	switch o := o.(type) {
+	case SectionOrigin:
+		return keyed(keyed("nodes", nodeSegment(o.Key)), "columns."+name)
+	case RootOrigin:
+	}
+	return "columns." + KeyPath(name)
 }
