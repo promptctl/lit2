@@ -6,7 +6,7 @@ import (
 )
 
 // KeyPath is where in a workspace file a fault is: `levels.2.home`,
-// `columns.impl.entry[0].test`, `nodes."lit-7k2".columns.audit.next`.
+// `columns.impl.entry[0].test`, `nodes.unfiled.columns.audit.next`.
 type KeyPath string
 
 // Reason is one kind of fault. Its token is what a refusal prints and what

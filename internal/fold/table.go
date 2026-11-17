@@ -2,7 +2,6 @@ package fold
 
 import (
 	"encoding/binary"
-	"hash/fnv"
 	"hash/maphash"
 	"math/bits"
 	"slices"
@@ -53,11 +52,11 @@ const (
 
 // The tables' hashers.
 type (
-	// byItem is the item id's bits under idSeed.
+	// byItem is the item id under seed.
 	byItem struct{}
-	// byElement is the element id's bits under idSeed.
+	// byElement is the element id under seed.
 	byElement struct{}
-	// byName is FNV-1a over a name's text.
+	// byName is a name's text under seed.
 	byName struct{}
 	// byEvent is the event id's first eight bytes: the id is a hash.
 	byEvent struct{}
@@ -65,23 +64,17 @@ type (
 	byRecord struct{}
 )
 
-// idSeed keys the id hashes. An id is bits its writer chose, never a digest
-// of anything, so an unkeyed hash would let one writer pile its ids into one
-// leaf and make every lookup a scan; the seed is drawn once per process and
-// never written again.
-var idSeed = maphash.MakeSeed()
+// seed keys the hashes of the keys a writer chooses, ids and names, which
+// are never digests of anything: an unkeyed hash would let one writer pile
+// its keys into one leaf and make every lookup a scan. It is drawn once per
+// process and never written again; no output reads a table's order.
+var seed = maphash.MakeSeed()
 
-func (byItem) hash(id events.ItemID) uint64 {
-	b := id.Bytes()
-	return maphash.Bytes(idSeed, b[:])
-}
+func (byItem) hash(id events.ItemID) uint64 { return maphash.Comparable(seed, id) }
 
-func (byElement) hash(id events.ElementID) uint64 {
-	b := id.Bytes()
-	return maphash.Bytes(idSeed, b[:])
-}
+func (byElement) hash(id events.ElementID) uint64 { return maphash.Comparable(seed, id) }
 
-func (byName) hash(name string) uint64 { return fnv64a(name) }
+func (byName) hash(name string) uint64 { return maphash.String(seed, name) }
 
 func (byEvent) hash(id events.EventID) uint64 { return binary.LittleEndian.Uint64(id[:8]) }
 
@@ -197,14 +190,6 @@ func (t table[K, R, H]) each(f func(R)) {
 	if t.root != nil {
 		walk(t.root)
 	}
-}
-
-// fnv64a is the 64-bit FNV-1a hash of s, the standard library's: the one
-// hash this table needs, and one not worth hand-rolling.
-func fnv64a(s string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte(s))
-	return h.Sum64()
 }
 
 // sorted is every record, ordered by compare.

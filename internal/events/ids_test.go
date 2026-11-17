@@ -231,7 +231,7 @@ func TestAShortIDParsesBareOrUnderTheActivePrefixOnly(t *testing.T) {
 	if _, err := ParseShortID("rin-1f9", prefix); err == nil || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "another project") {
 		t.Errorf("an id under another prefix reads, or its refusal does not name it: %v", err)
 	}
-	for _, s := range []string{"", "1f", "1f9.", "1f9..zc7", "1fu", "lit-", "lit_1f9", "1f9/zc7", "unfiled"} {
+	for _, s := range []string{"", "1f", "1f9.", "1f9..zc7", "1fu", "lit-", "lit_1f9", "1f9/zc7", "unfiled", "\u212a12", "\u0130f9"} {
 		if got, err := ParseShortID(s, prefix); err == nil {
 			t.Errorf("ParseShortID(%q) = %#v; want it refused", s, got)
 		}

@@ -6,7 +6,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"unicode"
 )
 
 // Prefix is the project prefix ids render under: [a-z][a-z0-9]{2,}, the
@@ -49,12 +48,6 @@ func (id ItemID) String() string { return digits(id.b, fullWidth) }
 
 // String is the full id: 26 Crockford digits.
 func (id ElementID) String() string { return digits(id.b, fullWidth) }
-
-// Bytes is the id's 128 bits.
-func (id ItemID) Bytes() [16]byte { return id.b }
-
-// Bytes is the id's 128 bits.
-func (id ElementID) Bytes() [16]byte { return id.b }
 
 // Compare orders ids as their text does, by their bits, which Crockford's
 // digits keep in order.
@@ -313,12 +306,15 @@ func ParseShortID(s string, active Prefix) (ShortID, error) {
 	return Segments{s: body}, nil
 }
 
-// crockfordDecoded is s with Crockford's decoding applied: case is ignored, i and l
+// crockfordDecoded is s with Crockford's decoding applied: ASCII case is ignored, i and l
 // read as 1, and o as 0, so an id read aloud or copied by hand still names
 // its item.
 func crockfordDecoded(s string) string {
 	return strings.Map(func(r rune) rune {
-		switch r = unicode.ToLower(r); r {
+		if 'A' <= r && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		switch r {
 		case 'i', 'l':
 			return '1'
 		case 'o':

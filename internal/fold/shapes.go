@@ -41,6 +41,7 @@ type (
 type creation struct {
 	stamp   Stamp
 	in      Container
+	ns      events.Namespace
 	segment events.Segment
 }
 

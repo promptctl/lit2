@@ -122,7 +122,7 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 		case Act:
 			p, at = d.Payload, d.About
 		case CreateItem:
-			id, w, err := name(namespaceOf(d.Payload.Place))
+			id, w, err := name(NamespaceOf(d.Payload.Place))
 			if err != nil {
 				return Minted{}, err
 			}
@@ -165,8 +165,10 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 	return m, nil
 }
 
-// namespaceOf is the namespace an item placed at p is named in.
-func namespaceOf(p Placement) Namespace {
+// NamespaceOf is the namespace an item placed at p is named in: every level's
+// home is the one top-level namespace. Mint widens by it and the fold counts
+// fill by it `[LAW:one-source-of-truth]`.
+func NamespaceOf(p Placement) Namespace {
 	switch p := p.(type) {
 	case AtLevel:
 		return Top{}

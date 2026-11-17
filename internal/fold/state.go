@@ -413,7 +413,7 @@ func (s State) Known() events.Known {
 			}
 		})
 		if !r.creates.empty() {
-			b.Created(namespaceOf(r.firstCreate().in))
+			b.Created(r.firstCreate().ns)
 		}
 		r.elements.each(func(el *element) {
 			b.Saw(el.id)
@@ -424,18 +424,6 @@ func (s State) Known() events.Known {
 	})
 	s.integrity.unapplied.each(func(u Unapplied) { saw(u.About) })
 	return b.Known()
-}
-
-// namespaceOf is the namespace the items in c are named in: every home is
-// the top-level one.
-func namespaceOf(c Container) events.Namespace {
-	switch c := c.(type) {
-	case Home:
-		return events.Top{}
-	case Under:
-		return events.ChildOf{Parent: c.Parent}
-	}
-	panic(fmt.Sprintf("fold: %T is not a Container", c))
 }
 
 // Frontier is the highest position among the verified events folded.

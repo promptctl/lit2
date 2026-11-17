@@ -133,7 +133,7 @@ func (s State) apply(st Stamp, c Change) State {
 	switch c := c.(type) {
 	case CreateItem:
 		return s.update(c.New.ID, func(r *item) *item {
-			return r.withCreate(creation{stamp: st, in: containerOf(c.Place), segment: c.New.Segment()})
+			return r.withCreate(creation{stamp: st, in: containerOf(c.Place), ns: events.NamespaceOf(c.Place), segment: c.New.Segment()})
 		})
 	case CreateElement:
 		return s.update(c.New.Of, func(r *item) *item {
