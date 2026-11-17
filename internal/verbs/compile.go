@@ -34,7 +34,7 @@ type Wrote struct {
 type Moved struct {
 	Who    Who
 	Path   field.Path
-	From   string
+	From   evaluate.Column
 	To     string
 	Source Source
 	Op     int
@@ -153,7 +153,7 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 	name := events.MustName(string(wr.path))
 	live := facts.Live(name)
 	if _, column := wr.decl.Kind.(field.Column); column {
-		eff, err := effective(w.Schema(), wr.subject.In)
+		eff, err := evaluate.Effective(w.Schema(), wr.subject.In)
 		if err != nil {
 			return nil, nil, refuse("configuration", "%v", err)
 		}
@@ -161,14 +161,14 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 		if !ok {
 			return nil, nil, refuse("value", "%s is not a column this item can be in; the columns are %s", canon, strings.Join(eff.Columns.Names(), ", "))
 		}
-		from := evaluate.StatusIn(eff, facts)
-		if from == col.Name() && len(live) <= 1 {
+		from := evaluate.ColumnIn(eff, facts)
+		if from.Name == col.Name() && len(live) <= 1 {
 			return nil, nil, nil
 		}
-		t := events.Transition{From: events.MustName(from), To: events.MustName(col.Name()), Over: live}
-		if from == col.Name() {
+		t := events.Transition{From: events.MustName(from.Name), To: events.MustName(col.Name()), Over: live}
+		if from.Name == col.Name() {
 			// the column it already reads settles a conflicted register and arrives nowhere
-			return []piece{fact{t}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Before: []string{from}, After: from, Source: wr.source}}, nil
+			return []piece{fact{t}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Before: []string{from.Name}, After: from.Name, Source: wr.source}}, nil
 		}
 		return []piece{fact{t}}, []Change{Moved{Who: wr.subject.At, Path: wr.path, From: from, To: col.Name(), Source: wr.source}}, nil
 	}

@@ -107,7 +107,7 @@ func (r body) world(st fold.State) verbs.World {
 
 // facts is the verbs block of what a body did.
 func (r body) facts(c verbs.Compiled, dry bool, minted []events.Event) command.VerbsFacts {
-	f := command.VerbsFacts{Drafts: len(c.Drafts), Kinds: map[string]int{}, DryRun: dry, Requirements: command.RequirementCounts(c.Tally())}
+	f := command.VerbsFacts{Drafts: len(c.Drafts), Kinds: map[string]int{}, DryRun: dry, Requirements: command.RequirementCounts(c.Tally)}
 	for _, o := range c.Operands {
 		switch o := o.(type) {
 		case verbs.Accepted:

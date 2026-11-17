@@ -1,7 +1,6 @@
 package verbs
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -70,18 +69,6 @@ func (w World) held(n address.Node) (Existing, config.Ancestry, fold.Facts) {
 	panic(fmt.Sprintf("verbs: %#v holds no stored field", n))
 }
 
-// effective is the graph an item is judged under, or the configuration's
-// refusal of it: the one call a read and a write make, so a fault in the
-// configuration refuses both alike.
-func effective(schema config.Schema, in config.Ancestry) (config.Effective, error) {
-	eff, err := schema.Effective(in)
-	var refused *config.ResolutionRefused
-	if err != nil && !errors.As(err, &refused) {
-		panic(fmt.Sprintf("verbs: Effective answered %v", err))
-	}
-	return eff, err
-}
-
 // stored is a stored register's or set's values in facts: prose opened,
 // a plain value as its canonical text, a status through the graph the
 // item is judged under, a set as its live members. A write reads the same
@@ -102,7 +89,7 @@ func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path fie
 		panic(fmt.Sprintf("verbs: %s holds %s, which no register stores", path, d.Multi))
 	}
 	if _, column := d.Kind.(field.Column); column {
-		eff, err := effective(schema, in)
+		eff, err := evaluate.Effective(schema, in)
 		if err != nil {
 			return nil, err
 		}

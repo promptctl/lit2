@@ -16,15 +16,10 @@ import (
 // written. It is the one renderer of a change `[LAW:single-enforcer]`.
 func Echo(w World, c Compiled, minted []events.Event) string {
 	about := drafted(c.Drafts, minted)
-	filed := map[int]int{}
-	for _, ch := range c.Changes {
-		if f, ok := ch.(Filed); ok {
-			filed[f.N] = f.Draft
-		}
-	}
+	filed := newItems(c, minted)
 	who := func(x Who) string {
-		if n, created := x.(Created); created && about != nil {
-			return w.render(about[filed[n.N]].(events.NewItem).ID)
+		if n, created := x.(Created); created && filed != nil {
+			return w.render(filed[n.N])
 		}
 		return unwritten(x)
 	}
@@ -54,7 +49,7 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 			if _, created := ch.Who.(Created); created {
 				fmt.Fprintf(&b, "⇒ %s/%s = %s%s\n", who(ch.Who), ch.Path, ch.To, tagged(ch.Source))
 			} else {
-				fmt.Fprintf(&b, "%s/%s %s → %s\n", who(ch.Who), ch.Path, ch.From, ch.To)
+				fmt.Fprintf(&b, "%s/%s %s → %s\n", who(ch.Who), ch.Path, column(ch.From), ch.To)
 			}
 			b.WriteString(ch.Judged.echo(who))
 		case Added:
@@ -78,6 +73,24 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 		b.WriteString("(dry run: nothing written)\n")
 	}
 	return b.String()
+}
+
+// newItems is the item each new one the command files was minted as, by
+// its number: the one mapping from (new N) to an item the gate judges and
+// the echo names `[LAW:one-source-of-truth]`. A dry run's echo minted
+// nothing and has none.
+func newItems(c Compiled, minted []events.Event) map[int]events.ItemID {
+	about := drafted(c.Drafts, minted)
+	if about == nil {
+		return nil
+	}
+	ids := map[int]events.ItemID{}
+	for _, ch := range c.Changes {
+		if f, ok := ch.(Filed); ok {
+			ids[f.N] = about[f.Draft].(events.NewItem).ID
+		}
+	}
+	return ids
 }
 
 // unwritten is x as a line names it before anything is stored: an

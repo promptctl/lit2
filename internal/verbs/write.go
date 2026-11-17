@@ -217,12 +217,26 @@ func Compile(w World, verb Verb, operands []Operand, stdin func() (string, error
 	return c
 }
 
-// Compiled is a write command compiled: each operand's result, and when no
-// operand was refused, the drafts it mints and the changes the echo shows.
+// attributed is r, a refusal of a write from source, as its operand's: a
+// value a level template gave is the template's to answer for, at compile
+// and at the gate alike, but for a fault in the configuration, which is
+// the configuration's.
+func attributed(source Source, r *refusal) *refusal {
+	if t, ok := source.(FromTemplate); ok && r.reason != "configuration" {
+		return refuse("template", "level %s's template sets %s: %v", t.Level, t.Field, r.err)
+	}
+	return r
+}
+
+// Compiled is a write command compiled:each operand's result, and when no
+// operand was refused, the drafts it mints and the changes the echo shows;
+// and once Gate has run, the requirements it judged, refused or not, which
+// the command event records.
 type Compiled struct {
 	Operands []Result
 	Drafts   []events.Draft
 	Changes  []Change
+	Tally    Tally
 }
 
 // Refusal is the first operand's refusal, the command's, and false when
@@ -288,10 +302,7 @@ func (c *Compiled) operand(w World, verb Verb, n int, op Operand, stdin func() (
 	for _, wr := range x.writes {
 		pieces, chs, ks, r := compile(w, wr)
 		if r != nil {
-			if t, ok := wr.source.(FromTemplate); ok && r.reason != "configuration" {
-				return no(refuse("template", "level %s's template sets %s: %v", t.Level, t.Field, r.err))
-			}
-			return no(r)
+			return no(attributed(wr.source, r))
 		}
 		claims = append(claims, ks...)
 		for i, ch := range chs {

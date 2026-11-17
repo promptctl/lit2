@@ -1,6 +1,7 @@
 package evaluate
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/promptctl/lit2/internal/config"
@@ -37,6 +38,19 @@ func AncestryOf(s fold.State, schema config.Schema, c fold.Container) config.Anc
 // in.
 func ItemAncestry(s fold.State, schema config.Schema, id events.ItemID) config.Ancestry {
 	return append(config.Ancestry{config.ItemNode(id)}, AncestryOf(s, schema, s.Container(id))...)
+}
+
+// Effective is the graph a thing read through in is judged under, or the
+// configuration's refusal of it: the one call every read and write make,
+// so a fault in the configuration refuses them all alike, and any other
+// answer is a defect.
+func Effective(schema config.Schema, in config.Ancestry) (config.Effective, error) {
+	eff, err := schema.Effective(in)
+	var refused *config.ResolutionRefused
+	if err != nil && !errors.As(err, &refused) {
+		panic(fmt.Sprintf("evaluate: Effective answered %v", err))
+	}
+	return eff, err
 }
 
 // StatusIn is the column facts are in under eff: the settled column read

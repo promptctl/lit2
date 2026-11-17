@@ -34,7 +34,7 @@ type UnmetRequirement struct {
 type arrival struct {
 	who  Who
 	id   events.ItemID
-	from *string
+	from *evaluate.Column
 	to   string
 }
 
@@ -46,17 +46,14 @@ type arrival struct {
 // list every arrival, a leaf's filing into the initial column included.
 // Every list is evaluated whole, so a refusal names everything unmet at
 // once. An unmet error refuses the command and it writes nothing; an unmet
-// warning rides on the echo, in the judgment the arriving change carries
-// (transition-requirements.md).
+// warning rides on the echo, in the judgment the arriving change carries,
+// and every judgment's counts on the command event, a refused one's
+// included (transition-requirements.md).
 func Gate(w World, c Compiled, minted []events.Event) Compiled {
-	about := drafted(c.Drafts, minted)
-	filed := map[int]events.ItemID{}
+	filed := newItems(c, minted)
 	created := map[events.ItemID]int{}
-	for _, ch := range c.Changes {
-		if f, ok := ch.(Filed); ok {
-			id := about[f.Draft].(events.NewItem).ID
-			filed[f.N], created[id] = id, f.N
-		}
+	for n, id := range filed {
+		created[id] = n
 	}
 	// an item the command files is named by its number, which every line
 	// renders as the echo does `[LAW:one-source-of-truth]`
@@ -85,6 +82,10 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 		case Moved:
 			ch.Judged, r = judge(w, arrival{who: ch.Who, id: item(ch.Who), from: &ch.From, to: ch.To}, whoOf)
 			changes[i], op = ch, ch.Op
+			c.Tally = c.Tally.plus(ch.Judged.tally())
+			if r != nil {
+				r = attributed(ch.Source, r)
+			}
 		case Filed:
 			id := filed[ch.N]
 			if !w.Leaf(id) {
@@ -92,6 +93,7 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 			}
 			ch.Judged, r = judge(w, arrival{who: Created{N: ch.N}, id: id}, whoOf)
 			changes[i], op = ch, ch.Op
+			c.Tally = c.Tally.plus(ch.Judged.tally())
 		case Wrote, Added, Removed, Commented:
 			continue // no arrival
 		}
@@ -118,7 +120,7 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 	}
 	c.Operands = operands
 	if len(refused) > 0 {
-		c.Drafts = nil // the changes stay, so the command event records what was judged
+		c.Drafts, c.Changes = nil, nil
 	}
 	return c
 }
@@ -128,7 +130,7 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 // item as no store holds it yet.
 func judge(w World, a arrival, whoOf func(events.ItemID) Who) (Judgment, *refusal) {
 	at := unwritten(a.who)
-	eff, err := effective(w.Schema(), evaluate.ItemAncestry(w.State(), w.Schema(), a.id))
+	eff, err := evaluate.Effective(w.Schema(), evaluate.ItemAncestry(w.State(), w.Schema(), a.id))
 	if err != nil {
 		return Judgment{}, refuse("configuration", "%v", err)
 	}
@@ -139,13 +141,13 @@ func judge(w World, a arrival, whoOf func(events.ItemID) Who) (Judgment, *refusa
 	var sides []string
 	if a.from != nil {
 		col, _ := g.Resolve(a.to) // compile resolved it, and no write of a command changes a graph
-		to, move = col, fmt.Sprintf("%s/status %s → %s", at, *a.from, col.Name())
-		kind, reached := g.Reach(*a.from, col.Name())
+		to, move = col, fmt.Sprintf("%s/status %s → %s", at, column(*a.from), col.Name())
+		kind, reached := g.Reach(a.from.Name, col.Name())
 		if !reached {
 			return Judgment{}, refuse("edge", "%s: %s is entered only from %s; nothing written", move, col.Name(), strings.Join(g.EnteredFrom(col.Name()), ", "))
 		}
 		if kind == config.Forward {
-			src, _ := g.Resolve(*a.from) // a forward edge leaves a declared column
+			src, _ := g.Resolve(a.from.Name) // a forward edge leaves a declared column
 			lists, sides = append(lists, src.Exit()), append(sides, src.Name()+"/exit")
 		}
 	}
@@ -221,23 +223,9 @@ func (j Judgment) tally() Tally {
 	return t
 }
 
-// Tally is every arrival's judgment summed, which the command event
-// records, an advisory passed over included (transition-requirements.md).
-func (c Compiled) Tally() Tally {
-	var t Tally
-	for _, ch := range c.Changes {
-		var j Judgment
-		switch ch := ch.(type) {
-		case Moved:
-			j = ch.Judged
-		case Filed:
-			j = ch.Judged
-		case Wrote, Added, Removed, Commented:
-		}
-		n := j.tally()
-		t.Evaluated, t.Warnings, t.Errors = t.Evaluated+n.Evaluated, t.Warnings+n.Warnings, t.Errors+n.Errors
-	}
-	return t
+// plus is t and n summed.
+func (t Tally) plus(n Tally) Tally {
+	return Tally{Evaluated: t.Evaluated + n.Evaluated, Warnings: t.Warnings + n.Warnings, Errors: t.Errors + n.Errors}
 }
 
 // echo is what a judgment adds under its change's line: each warning, an

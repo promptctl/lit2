@@ -108,7 +108,7 @@ func (v View) Rollup(id events.ItemID) ([]Count, error) {
 
 // Column is leaf id's column under the graph it is judged under.
 func (v View) Column(id events.ItemID) (Column, error) {
-	eff, err := v.schema.Effective(ItemAncestry(v.state, v.schema, id))
+	eff, err := Effective(v.schema, ItemAncestry(v.state, v.schema, id))
 	if err != nil {
 		return Column{}, err
 	}

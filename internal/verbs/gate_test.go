@@ -97,7 +97,18 @@ func TestANegativeAncestorsTestNamesTheAncestorThatBrokeIt(t *testing.T) {
 	}
 }
 
-// TestSettlingAConflictedStatusIsNoMove: two concurrent moves leave the
+// TestATemplatesStatusTheGateRefusesIsTheTemplates: a move a level
+// template gives is refused naming the template, as compile names it for
+// any other value a template gives.
+func TestATemplatesStatusTheGateRefusesIsTheTemplates(t *testing.T) {
+	b := newBook(t, strings.Replace(profile(""), "name = \"story\"\n", "name = \"story\"\n[levels.1.template]\nstatus = \"done\"\n", 1))
+	feature := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
+	if got := b.refusal(verbs.Add, op(feature+"/children", "{title: s}")); !strings.HasPrefix(got, "template: level story's template sets status: (new 1)/status backlog → done: done is entered only from plan") {
+		t.Errorf("a template's move off the graph is refused as %q", got)
+	}
+}
+
+// TestSettlingAConflictedStatusIsNoMove:two concurrent moves leave the
 // status two live writes; setting the column it reads settles them and
 // takes no edge, though no next leads from that column to itself.
 func TestSettlingAConflictedStatusIsNoMove(t *testing.T) {
@@ -133,7 +144,7 @@ func TestAnUndeclaredColumnStandsAndIsReported(t *testing.T) {
 	if got := b.refused(verbs.Set, op(s+"/status", "done")); got != "edge" {
 		t.Errorf("a move from an undeclared column along no edge is refused as %s", got)
 	}
-	if echo := b.do(verbs.Set, op(s+"/status", "backlog")); echo != s+"/status audit → backlog\n" {
+	if echo := b.do(verbs.Set, op(s+"/status", "backlog")); echo != s+"/status audit (undeclared) → backlog\n" {
 		t.Errorf("the way out echoes %q", echo)
 	}
 }
