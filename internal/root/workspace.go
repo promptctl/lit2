@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/cli"
@@ -40,7 +39,7 @@ func (o opened) load() (inForce, error) {
 	}
 	schema, err := config.Load(in.Active.Bytes, o.p.Reader)
 	if err != nil {
-		return inForce{}, workspaceFailure{err: fmt.Errorf("the version in force, %s, does not read under this release: %w", in.Active.Blob, err)}
+		return inForce{}, verbs.Unreadable{Blob: in.Active.Blob, Err: err}
 	}
 	o.rec.Configured(command.ConfigFacts{Facts: schema.Facts(), Ref: in.Active.Blob.String()})
 	_, file := o.workspaceFile()
@@ -116,15 +115,18 @@ func (o opened) commit() cli.Outcome {
 			return cli.Failed{Failure: commitRefused{why: fmt.Sprintf("%[1]s differs from HEAD's %[2]s: git commit %[1]s, then lit2 config commit", verbs.WorkspaceFile, at.Blob)}}
 		}
 	}
-	st := o.folded.State
 	// version one is written under itself; any later under the version in
-	// force when it was written
+	// force, which the run loads, so its event says the version it ran under
 	ref := disk.Blob
-	if in, ok := st.Workspace().(fold.InForce); ok {
-		if in.Active.Blob == disk.Blob && len(in.Contending) == 0 {
+	if in, ok := o.folded.State.Workspace().(fold.InForce); ok {
+		v, err := o.load()
+		if err != nil {
+			return failed(err)
+		}
+		if v.ref == disk.Blob && len(in.Contending) == 0 {
 			return written(fmt.Fprintf(o.p.Out, "%s is already in force\n", disk.Blob))
 		}
-		ref = in.Active.Blob
+		ref = v.ref
 	}
 	return o.apply(b, disk.Blob, ref, fmt.Sprintf("applied %s\n", disk.Blob))
 }
@@ -147,28 +149,33 @@ func (o opened) apply(version []byte, blob, ref git.ObjectID, said string) cli.O
 }
 
 // status is config status: the board's workspace line, and whether the
-// version in force was ever committed on HEAD's branch.
+// version in force was ever committed on HEAD's branch. The line is said
+// first, so a code repository that does not read refuses the history half
+// alone.
 func (o opened) status() cli.Outcome {
 	_, file := o.workspaceFile()
 	st := o.folded.State
-	lines := []string{verbs.Workspace(st, file)}
-	if in, ok := st.Workspace().(fold.InForce); ok {
-		ever, err := o.p.Code(o.checkout, o.store.Format).EverAt(verbs.WorkspaceFile, in.Active.Blob)
-		if err != nil {
-			return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading the code repository: %w", err)}}
-		}
-		history := "in HEAD's history: yes"
-		if !ever {
-			history = fmt.Sprintf("in HEAD's history: no, %s was never %s on this branch", in.Active.Blob, verbs.WorkspaceFile)
-		}
-		lines = append(lines, history)
+	if out, failed := written(io.WriteString(o.p.Out, verbs.Workspace(st, file)+"\n")).(cli.Failed); failed {
+		return out
 	}
-	return written(io.WriteString(o.p.Out, strings.Join(lines, "\n")+"\n"))
+	in, ok := st.Workspace().(fold.InForce)
+	if !ok {
+		return cli.Done{}
+	}
+	ever, err := o.p.Code(o.checkout, o.store.Format).EverAt(verbs.WorkspaceFile, in.Active.Blob)
+	if err != nil {
+		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading the code repository: %w", err)}}
+	}
+	history := "in HEAD's history: yes"
+	if !ever {
+		history = fmt.Sprintf("in HEAD's history: no, %s was never %s on this branch", in.Active.Blob, verbs.WorkspaceFile)
+	}
+	return written(io.WriteString(o.p.Out, history+"\n"))
 }
 
 // init is admin init: the checkout's id and the principal's key, each
 // minted once, and the principal printed, with the recovery phrase when
-// this run made the key; then, in a store that holds no event, the
+// this run made the key; then, in a store no version is in force in, the
 // workspace's version one: the file in the work tree, or the default
 // profile written there when there is none.
 func (r body) init() cli.Outcome {
@@ -200,7 +207,7 @@ func (r body) init() cli.Outcome {
 	if err != nil {
 		return failed(err)
 	}
-	if o.folded.Facts.Records > 0 {
+	if _, ok := o.folded.State.Workspace().(fold.InForce); ok {
 		return cli.Done{}
 	}
 	b, err := versionOne(r.p.WorkTree(in.Checkout))

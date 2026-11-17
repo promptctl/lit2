@@ -22,19 +22,16 @@ func CheckApply(st fold.State, live []config.Schema, next config.Schema) []confi
 }
 
 // unresolved is every refusal next's Effective gives on an ancestry the
-// state reaches: the root's, each home section's, each item section's, and
-// each created item's, a section layered over its ancestors as every read
-// layers it. Parse checks the root graph alone; a stacked graph needs an
-// ancestry, so it is checked here. Each fault once.
+// state reaches: the root's, each home section's, and each created item's,
+// a section layered over its ancestors as every read layers it. An item
+// section is judged on its item's ancestry, which an item this store has
+// not seen does not have here. Parse checks the root graph
+// alone; a stacked graph needs an ancestry, so it is checked here. Each
+// fault once.
 func unresolved(st fold.State, next config.Schema) []config.Refusal {
 	ancestries := []config.Ancestry{nil}
 	for key := range next.Sections() {
-		switch id, isItem := key.Item(); {
-		case !isItem:
-			ancestries = append(ancestries, config.Ancestry{key})
-		case created(st, id):
-			ancestries = append(ancestries, ItemAncestry(st, next, id))
-		default:
+		if _, isItem := key.Item(); !isItem {
 			ancestries = append(ancestries, config.Ancestry{key})
 		}
 	}
@@ -115,15 +112,6 @@ func declaredIn(st fold.State, live []config.Schema, id events.ItemID, recorded 
 
 func resolves(eff config.Effective, name string) bool {
 	_, ok := eff.Columns.Resolve(name)
-	return ok
-}
-
-func created(st fold.State, id events.ItemID) bool {
-	f, ok := st.Item(id).(fold.Found)
-	if !ok {
-		return false
-	}
-	_, ok = fold.CreateOf(f.Item.Origin)
 	return ok
 }
 

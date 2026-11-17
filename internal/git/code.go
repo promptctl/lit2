@@ -8,6 +8,7 @@ import (
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/filesystem"
@@ -47,14 +48,17 @@ type codeRepo struct {
 	f ObjectFormat
 }
 
-// head is HEAD's commit, or none when HEAD names a branch with no
-// commit. go-git v5 reads SHA-1 objects only, so a SHA-256 repository is
-// refused, naming why.
-func (r codeRepo) head() (*object.Commit, error) {
+// storage is the repository's objects and refs. go-git v5 reads SHA-1
+// objects only, so a SHA-256 repository is refused, naming why.
+func (r codeRepo) storage() (*filesystem.Storage, error) {
 	if r.f != SHA1 {
 		return nil, fmt.Errorf("the code repository at %s is %s, and this build reads only sha1 code repositories", r.c.WorkTree, r.f)
 	}
-	s := filesystem.NewStorage(dotgit.NewRepositoryFilesystem(osfs.New(r.c.GitDir), osfs.New(r.c.CommonDir)), cache.NewObjectLRUDefault())
+	return filesystem.NewStorage(dotgit.NewRepositoryFilesystem(osfs.New(r.c.GitDir), osfs.New(r.c.CommonDir)), cache.NewObjectLRUDefault()), nil
+}
+
+// headCommit is HEAD's commit, or none when HEAD names a branch with no commit.
+func headCommit(s *filesystem.Storage) (*object.Commit, error) {
 	ref, err := storer.ResolveReference(s, plumbing.HEAD)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return nil, nil
@@ -82,27 +86,51 @@ func blobAt(c *object.Commit, path string) (HeadBlob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("finding %s in commit %s: %w", path, c.Hash, err)
 	}
-	if !e.Mode.IsFile() {
+	if e.Mode != filemode.Regular && e.Mode != filemode.Executable {
 		return Untracked{}, nil
 	}
 	return Tracked{Blob: sha1ID(e.Hash)}, nil
 }
 
 func (r codeRepo) AtHead(path string) (HeadBlob, error) {
-	c, err := r.head()
+	s, err := r.storage()
+	if err != nil {
+		return nil, err
+	}
+	c, err := headCommit(s)
 	if err != nil || c == nil {
 		return Untracked{}, err
 	}
 	return blobAt(c, path)
 }
 
+// EverAt walks the history the clone holds. A shallow clone holds none past
+// its boundary, so a blob not found before it is unknown, and refused as
+// such, never answered no.
 func (r codeRepo) EverAt(path string, id ObjectID) (bool, error) {
-	c, err := r.head()
+	s, err := r.storage()
+	if err != nil {
+		return false, err
+	}
+	c, err := headCommit(s)
 	if err != nil || c == nil {
 		return false, err
 	}
+	shallow, err := s.Shallow()
+	if err != nil {
+		return false, fmt.Errorf("reading the shallow boundary: %w", err)
+	}
+	// the boundary commits' parents are not in the clone: the walk stops there
+	var beyond []plumbing.Hash
+	for _, h := range shallow {
+		b, err := object.GetCommit(s, h)
+		if err != nil {
+			return false, fmt.Errorf("reading the shallow boundary's commit %s: %w", h, err)
+		}
+		beyond = append(beyond, b.ParentHashes...)
+	}
 	found := false
-	err = object.NewCommitPreorderIter(c, nil, nil).ForEach(func(c *object.Commit) error {
+	err = object.NewCommitPreorderIter(c, nil, beyond).ForEach(func(c *object.Commit) error {
 		at, err := blobAt(c, path)
 		if err != nil {
 			return err
@@ -113,6 +141,9 @@ func (r codeRepo) EverAt(path string, id ObjectID) (bool, error) {
 		}
 		return nil
 	})
+	if err == nil && !found && len(shallow) > 0 {
+		return false, fmt.Errorf("this clone is shallow, so whether %s was ever %s is not known from the history it holds: fetch it whole (--unshallow), then ask again", id, path)
+	}
 	return found, err
 }
 

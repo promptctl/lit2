@@ -1,10 +1,12 @@
 package root
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/assets"
+	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/verbs"
@@ -232,6 +234,70 @@ func TestAnIDUnderAFormerPrefixStillResolves(t *testing.T) {
 	}
 	if r := s.lit("get", "qqq-"+seg+"/title"); r.status == 0 || !strings.Contains(r.err, "another project's") {
 		t.Errorf("an id under a prefix no version declared: status %d, %q", r.status, r.err)
+	}
+}
+
+// TestInitAppliesVersionOneToAStoreWithEventsAndNoVersion: a store whose
+// events predate any apply runs nothing until init applies version one.
+func TestInitAppliesVersionOneToAStoreWithEventsAndNoVersion(t *testing.T) {
+	s := freshSession(t)
+	three(t, *s.twin, 1)
+	def := assets.DefaultWorkspace.Bytes()
+	if r := s.lit("admin", "init"); r.status != 0 || !strings.Contains(r.out, "workspace "+blob(def).String()+" applied as version one\n") || appends(r.event) != 1 {
+		t.Fatalf("admin init over events and no version: status %d, out %q, stderr %q", r.status, r.out, r.err)
+	}
+	if r := s.lit("get", "/"); r.status != 0 {
+		t.Errorf("after init get / is %d, %q; want it run under version one", r.status, r.err)
+	}
+}
+
+// TestConfigCommitRecordsTheVersionItRanUnder: the run that applies a
+// later version names the one in force when it wrote.
+func TestConfigCommitRecordsTheVersionItRanUnder(t *testing.T) {
+	s := newSession(t)
+	next := append(assets.DefaultWorkspace.Bytes(), "# the next version\n"...)
+	s.file(next)
+	s.commit(next)
+	if r := s.lit("config", "commit"); r.status != 0 || r.event.Config == nil || r.event.Config.Ref != blob(assets.DefaultWorkspace.Bytes()).String() {
+		t.Errorf("config commit: status %d, config %+v; want the default's ref", r.status, r.event.Config)
+	}
+}
+
+// TestAVersionInForceThisReleaseCannotReadRefusesConfigCommit: the
+// environment's, naming the release, never a lit2 bug.
+func TestAVersionInForceThisReleaseCannotReadRefusesConfigCommit(t *testing.T) {
+	s := freshSession(t)
+	s.file(append([]byte("min-reader-version = \"0.4.0\"\n"), noPlan...))
+	s.ok("admin", "init")
+	older, err := config.ReadReaderVersion("v0.3.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.twin.Process.Reader = older
+	s.file(noPlan)
+	s.commit(noPlan)
+	if r := s.lit("config", "commit"); r.status != 78 || reasonOf(r.event) != "workspace" || !strings.Contains(r.err, "does not read under this release") || appends(r.event) != 0 {
+		t.Errorf("config commit under an unreadable version: status %d, stderr %q, %d appends", r.status, r.err, appends(r.event))
+	}
+}
+
+// unreadableHistory is a code repository whose history does not read.
+type unreadableHistory struct{ git.Code }
+
+func (unreadableHistory) EverAt(string, git.ObjectID) (bool, error) {
+	return false, errors.New("the history is gone")
+}
+
+// TestConfigStatusSaysTheLineWhenTheHistoryDoesNotRead: only the history
+// half is refused.
+func TestConfigStatusSaysTheLineWhenTheHistoryDoesNotRead(t *testing.T) {
+	s := newSession(t)
+	code := s.twin.Code
+	s.twin.Process.Code = func(git.Checkout, git.ObjectFormat) git.Code { return unreadableHistory{Code: code} }
+	r := s.lit("config", "status")
+	def := blob(assets.DefaultWorkspace.Bytes()).String()
+	if r.status != 78 || reasonOf(r.event) != "workspace" || r.out != def[:7]+" in force · .lit/workspace.toml matches\n" || !strings.Contains(r.err, "the history is gone") {
+		t.Errorf("config status with no history: status %d, out %q, stderr %q", r.status, r.out, r.err)
 	}
 }
 

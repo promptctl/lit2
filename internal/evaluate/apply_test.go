@@ -119,6 +119,16 @@ func TestTheViewKnowsEveryPrefixAVersionDeclared(t *testing.T) {
 	}
 }
 
+// An item section whose item this store has not seen has no ancestry to be
+// judged on here, so it refuses nothing: read alone, over the root, its
+// next to a column only its home declares would refuse a valid version.
+func TestAnUnseenItemsSectionIsNotJudgedAlone(t *testing.T) {
+	more := "[nodes.unfiled.columns.qa]\nterminal = true\n[nodes.k7k20000000000000000000000.columns.audit]\nnext = [\"qa\"]\n"
+	if got := CheckApply(fold.State{}, nil, version(t, withAudit, more)); len(got) != 0 {
+		t.Errorf("CheckApply = %v; want none", got)
+	}
+}
+
 // The stacked shapes that parse and then refuse every read under their
 // ancestry are refused at apply, each with its key path. (A root next only
 // a section declares is Parse's to refuse: the root graph stands alone.)

@@ -34,7 +34,7 @@ func Admit(st fold.State, version []byte, f git.ObjectFormat, running config.Rea
 		for _, v := range liveVersions(w) {
 			l, err := config.Load(v.Bytes, running)
 			if err != nil {
-				return events.Act{}, err
+				return events.Act{}, Unreadable{Blob: v.Blob, Err: err}
 			}
 			live = append(live, l)
 		}
@@ -45,8 +45,8 @@ func Admit(st fold.State, version []byte, f git.ObjectFormat, running config.Rea
 	return events.Act{About: events.Root{}, Payload: events.NewWorkspaceApply(version, f, over)}, nil
 }
 
-// liveVersions is the active version and each contending one: every live
-// blob once, the ones that agree with the active version being its bytes.
+// liveVersions is the active version and each contending one; the live
+// applies that agree with the active version are its bytes.
 func liveVersions(w fold.InForce) []fold.Version {
 	return append([]fold.Version{w.Active}, w.Contending...)
 }
@@ -57,6 +57,19 @@ type VersionRefused struct{ Refused *config.Refused }
 func (v VersionRefused) Error() string     { return v.Refused.Error() }
 func (VersionRefused) Class() reason.Class { return reason.ClassRefused }
 func (VersionRefused) Reason() string      { return "workspace" }
+
+// Unreadable is a live version this release does not read, one a newer
+// lit2 applied: the environment's, the upgrade being the step.
+type Unreadable struct {
+	Blob git.ObjectID
+	Err  error
+}
+
+func (u Unreadable) Error() string {
+	return fmt.Sprintf("the live version %s does not read under this release: %v", u.Blob, u.Err)
+}
+func (Unreadable) Class() reason.Class { return reason.ClassEnvironment }
+func (Unreadable) Reason() string      { return "workspace" }
 
 // File is `.lit/workspace.toml` as the root read it this run: git's id for
 // its bytes, none, or why it could not be read. It is never parsed, so a
