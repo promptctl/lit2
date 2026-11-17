@@ -182,7 +182,7 @@ func encode(e Event) ([]byte, error) {
 		Config:     configBlock(e.Config),
 		Store:      storeBlock(e.Store),
 		Fold:       foldBlock(e.Store.Folds),
-		Verbs:      verbsBlock(e.Verbs),
+		Verbs:      verbsBlock(e.Verbs, len(e.Store.Appends) > 0),
 		Place:      placeLine(e.Place),
 	}
 	switch o := e.Outcome.(type) {

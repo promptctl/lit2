@@ -35,6 +35,7 @@ func HelpText(verbTable, admin Table, fields config.Table) string {
 	var b strings.Builder
 	b.WriteString("lit2 keeps this repository's backlog as a tree of nodes in its own git object database.\n\n")
 	b.WriteString("usage: lit2 <verb> <operand>...   lit2 admin <command>   lit2 --help\n")
+	b.WriteString("lit2 alone is get /: the tree, the lanes in rank order, and what is next\n")
 	b.WriteString("--help anywhere prints this; --dry-run shows what a write would do; -- ends the flags; - is a value\n")
 	section(&b, "verbs", "", verbTable)
 	section(&b, "admin", adminWord+" ", admin)

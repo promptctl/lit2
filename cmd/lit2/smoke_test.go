@@ -28,12 +28,12 @@ func TestSmoke(t *testing.T) {
 		brokenPipe   bool
 		dir          string
 	}{
-		{nil, 0, "admin sync", "", false, tmp},
+		{[]string{"--help"}, 0, "admin sync", "", false, tmp},
 		{[]string{"--help"}, 0, "admin init", "", false, tmp},
 		{[]string{"frobnicate"}, 64, "", "error (reason=unknown_verb): ", false, tmp},
-		{nil, 0, "", "", true, tmp},
-		{nil, 0, "admin sync", "", false, broken},
-		{nil, 0, "admin sync", "", false, parses},
+		{[]string{"--help"}, 0, "", "", true, tmp},
+		{[]string{"--help"}, 0, "admin sync", "", false, broken},
+		{[]string{"--help"}, 0, "admin sync", "", false, parses},
 	} {
 		cmd := exec.Command(bin, tc.args...)
 		cmd.Dir, cmd.Env = tc.dir, append(os.Environ(), "XDG_STATE_HOME="+state)
@@ -136,6 +136,9 @@ func TestSmokeWorksATicket(t *testing.T) {
 	lit("set", id+"/deleted", "false")
 	if got := lit("get", id+"/deleted"); got != "false\n" {
 		t.Errorf("a restored item's deleted = %q", got)
+	}
+	if got := lit(); !strings.Contains(got, "$/children\t"+id+" · initial · b\n") || !strings.Contains(got, "$/lanes\t(none)\n") {
+		t.Errorf("a bare lit2 does not show the feature in the tree and no lanes:\n%s", got)
 	}
 }
 

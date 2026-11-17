@@ -48,11 +48,22 @@ func TestEachRowParsesToItsCommand(t *testing.T) {
 	}
 }
 
-func TestHelpIsAskedForAnywhereOrByNothing(t *testing.T) {
-	for _, args := range [][]string{{}, {"--help"}, {"get", "x", "--help"}, {"--help", "frobnicate"}, {"admin", "--help"}, {"--"}, {"--bogus", "--help"}, {"get", "--bogus", "--help"}} {
+func TestHelpIsAskedForAnywhere(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"get", "x", "--help"}, {"--help", "frobnicate"}, {"admin", "--help"}, {"--bogus", "--help"}, {"get", "--bogus", "--help"}} {
 		if got, err := parse(args...); err != nil || got != (Help{}) {
 			t.Errorf("Parse(%q) = %#v, %v; want Help", args, got, err)
 		}
+	}
+}
+
+func TestABareLit2IsAGetOfTheRoot(t *testing.T) {
+	for _, args := range [][]string{{}, {"--"}} {
+		if got, err := parse(args...); err != nil || !reflect.DeepEqual(got, Get{paths: []PathText{"/"}}) {
+			t.Errorf("Parse(%q) = %#v, %v; want get /", args, got, err)
+		}
+	}
+	if _, err := parse("--dry-run"); err == nil {
+		t.Error("lit2 --dry-run parsed; a get takes no --dry-run")
 	}
 }
 

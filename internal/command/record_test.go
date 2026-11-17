@@ -126,6 +126,19 @@ func TestTheLineCarriesTheDefaultFieldsAndZeroCounts(t *testing.T) {
 	}
 }
 
+func TestAVerbsLineSaysWhetherTheStoreTookAnAppend(t *testing.T) {
+	for _, tc := range []struct {
+		appends []store.Appended
+		want    bool
+	}{{nil, false}, {[]store.Appended{{Records: 1, Log: store.Created}}, true}} {
+		m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "set"}, Started: t0, Store: StoreFacts{Appends: tc.appends}, Verbs: &VerbsFacts{}, Outcome: cli.Done{}})
+		v, _ := m["verbs"].(map[string]any)
+		if v["written"] != tc.want {
+			t.Errorf("with %d appends the verbs block is %v; want written %v", len(tc.appends), v, tc.want)
+		}
+	}
+}
+
 func TestAFailedLineSaysWhy(t *testing.T) {
 	m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: cli.Unparsed}, Started: t0, Outcome: cli.Failed{Failure: Internal{Err: errors.New("broke")}}})
 	if m["outcome"] != "internal" || m["reason"] != "internal" || m["error"] != "broke" || m["exit_code"] != 70.0 {

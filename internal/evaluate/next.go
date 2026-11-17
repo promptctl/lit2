@@ -1,0 +1,77 @@
+package evaluate
+
+import (
+	"github.com/promptctl/lit2/internal/config"
+	"github.com/promptctl/lit2/internal/events"
+)
+
+// Next is what /next serves: the head it settled on, every lane passed
+// over before it with why, and how many lanes the walk visited, so an
+// empty backlog and a passed-over one do not read alike (scenarios.md 1).
+type Next struct {
+	Head       Head
+	Passed     []Passed
+	Considered int
+}
+
+// Head is the leaf /next serves, or none.
+//
+//sumtype:decl
+type Head interface{ head() }
+
+// Served is the leaf /next serves.
+type Served struct{ ID events.ItemID }
+
+// NoHead is a walk that served nothing.
+type NoHead struct{}
+
+func (Served) head() {}
+func (NoHead) head() {}
+
+// Passed is a lane whose head /next would not serve, and why.
+type Passed struct {
+	Head events.ItemID
+	Why  Why
+}
+
+// Why is the reason a head is passed over.
+//
+//sumtype:decl
+type Why interface{ why() }
+
+// Undeclared is a head in a column its graph no longer declares
+// (architecture.md §3.5).
+type Undeclared struct{ Column string }
+
+func (Undeclared) why() {}
+
+// Next walks the lanes in rank order and serves the first head it can
+// (architecture.md §3.7): a lane's head is its first member rm has not
+// removed and whose stage is not terminal, and a lane with none is
+// finished. Claims and held refine the walk in slice 4 without changing
+// its path. A graph the configuration refuses is its refusal.
+func (v View) Next() (Next, error) {
+	n := Next{Head: NoHead{}}
+	for _, lane := range v.state.Lanes() {
+		n.Considered++
+		for _, id := range lane.Members {
+			if Removed(v.item(id).Facts) {
+				continue
+			}
+			c, err := v.Column(id)
+			if err != nil {
+				return Next{}, err
+			}
+			if c.Stage == config.Terminal {
+				continue
+			}
+			if !c.Declared {
+				n.Passed = append(n.Passed, Passed{Head: id, Why: Undeclared{Column: c.Name}})
+				break
+			}
+			n.Head = Served{ID: id}
+			return n, nil
+		}
+	}
+	return n, nil
+}

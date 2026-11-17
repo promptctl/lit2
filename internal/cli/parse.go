@@ -60,7 +60,7 @@ func (TakesNothing) operands() {}
 //sumtype:decl
 type Command interface{ command() }
 
-// Help is --help anywhere on the line, or a bare lit2.
+// Help is --help anywhere on the line.
 type Help struct{}
 
 // Get reads the nodes at its paths.
@@ -142,8 +142,13 @@ func Parse(verbs, admin Table, args []string) (Command, error) {
 	if err != nil {
 		return nil, err
 	}
-	if help || len(words) == 0 {
+	if help {
 		return Help{}, nil
+	}
+	if len(words) == 0 {
+		// a bare lit2 is get /, parsed as typed, so its flags are judged
+		// as a get's are
+		words = []string{"get", "/"}
 	}
 	all := known(verbs, admin)
 	if words[0] != adminWord {

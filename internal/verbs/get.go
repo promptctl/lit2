@@ -78,20 +78,27 @@ func Get(w World, paths []string) Got {
 }
 
 // read is the lines the address holds, each at its canonical path: a
-// node's fields, then its lists' elements. A member it does not hold reads
-// as nothing, and one its kind refuses is refused, which is how a typo
-// shows, as rm's is.
+// node's fields, the tree below it at its children row, then its lists'
+// elements. A member it does not hold reads as nothing, and one its kind
+// refuses is refused, which is how a typo shows, as rm's is.
 func read(w World, a address.Address) ([]line, *refusal) {
 	base := strings.TrimSuffix(a.String(), "/")
 	switch t := a.Target.(type) {
 	case address.Whole:
 		var fields, lists []line
 		for _, r := range w.Schema().Table().Rows(a.Place) {
-			ls, no := rowLines(w, a, base, r.Path(), r)
+			f, isField := r.(config.FieldRow)
+			var ls []line
+			var no *refusal
+			if isField && f.Decl.Multi == field.Children {
+				ls, no = tree(w, a.Node, base+"/"+string(r.Path()))
+			} else {
+				ls, no = rowLines(w, a, base, r.Path(), r)
+			}
 			if no != nil {
 				return nil, no
 			}
-			if f, ok := r.(config.FieldRow); ok && f.Decl.Multi == field.Elements {
+			if isField && f.Decl.Multi == field.Elements {
 				lists = append(lists, ls...)
 			} else {
 				fields = append(fields, ls...)

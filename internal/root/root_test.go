@@ -36,7 +36,7 @@ func reasonOf(e command.Event) string {
 }
 
 func TestHelpPrintsTheVerbsAndExitsZero(t *testing.T) {
-	for _, args := range [][]string{{"--help"}, {}} {
+	for _, args := range [][]string{{"--help"}, {"get", "--help"}} {
 		twin := NewTwin()
 		status, e := run(t, twin, args...)
 		for _, verb := range []string{"get", "set", "add", "rm", "admin init", "admin sync"} {

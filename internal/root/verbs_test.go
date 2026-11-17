@@ -367,6 +367,60 @@ func TestAnItemReadsItsFieldsThenItsComments(t *testing.T) {
 	}
 }
 
+// TestABareLit2IsTheBoardOfAnEmptyWorkspace: a fresh workspace reads its
+// homes, no lanes, and nothing next out of none considered, and bare lit2
+// is that read (scenarios.md 1).
+func TestABareLit2IsTheBoardOfAnEmptyWorkspace(t *testing.T) {
+	s := newSession(t)
+	want := "$ = /\n$/children\tunassigned · home\n$/children\tunfiled · home\n$/lanes\t(none)\n$/next\t(none)\n$/next\tlanes considered: 0\n"
+	if got := s.ok(); got != want {
+		t.Errorf("a bare lit2 prints\n%s\nwant\n%s", got, want)
+	}
+	if r := s.lit(); r.event.Command.Name != "get" || len(r.event.Command.Paths) != 1 || r.event.Command.Paths[0] != "/" {
+		t.Errorf("a bare lit2 records %+v; want a get of /", r.event.Command)
+	}
+}
+
+// TestTheBoardIsTheTreeTheLanesAndNext: get / shows every node with its
+// stage, each leaf its own lane in the order it was filed, and next the
+// first lane's head; once that head is done, next serves the second
+// (scenarios.md 2 and 14, at slice 1's depth).
+func TestTheBoardIsTheTreeTheLanesAndNext(t *testing.T) {
+	s := newSession(t)
+	feature := filed(t, s.ok("add", "unfiled/children", "{title: board}"))
+	first := filed(t, s.ok("add", feature+"/children", "{title: tree}"))
+	second := filed(t, s.ok("add", feature+"/children", "{title: lanes}"))
+	want := "$ = /\n" +
+		"$/children\tunassigned · home\n" +
+		"$/children\tunfiled · home\n" +
+		"$/children\t" + feature + " · initial · backlog 2 · board\n" +
+		"$/children\t" + first + " · backlog · tree\n" +
+		"$/children\t" + second + " · backlog · lanes\n" +
+		"$/lanes\t" + first + " · backlog · tree\n" +
+		"$/lanes\t" + second + " · backlog · lanes\n" +
+		"$/next\t" + first + " · backlog · tree\n" +
+		"$/next\tlanes considered: 1\n"
+	if got := s.ok("get", "/"); got != want {
+		t.Errorf("get / prints\n%s\nwant\n%s", got, want)
+	}
+	s.ok("set", first+"/status", "obsolete", first+"/reason", "superseded by the board")
+	want = "/next\t" + second + " · backlog · lanes\n/next\tlanes considered: 2\n"
+	if got := s.ok("get", "/next"); got != want {
+		t.Errorf("once the first is closed get /next prints\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestTheBoardsRowsAreDerived: lanes and next are the engine's, so a
+// write to either is refused as derived and nothing is written.
+func TestTheBoardsRowsAreDerived(t *testing.T) {
+	s := newSession(t)
+	for _, p := range []string{"/lanes", "/next"} {
+		if r := s.refused("derived", "set", p, "x"); appends(r.event) != 0 {
+			t.Errorf("set %s x appended %d", p, appends(r.event))
+		}
+	}
+}
+
 // TestAMoveTheGateRefusesWritesNothing: a dry run asks the gate as a run
 // does, and a refused move appends nothing and records the gate's reason;
 // a move whose requirements the same command meets lands.

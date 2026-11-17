@@ -210,6 +210,7 @@ var (
 	items      = PlaceSet{Leaf: true, Node: true}
 	leaves     = PlaceSet{Leaf: true}
 	nodes      = PlaceSet{Node: true}
+	root       = PlaceSet{Root: true}
 	containers = PlaceSet{Root: true, Home: true, Node: true}
 	comments   = PlaceSet{Comment: true}
 	removable  = PlaceSet{Leaf: true, Node: true, Comment: true}
@@ -252,6 +253,8 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 		"blockers":     derived(Text{}, Set, items),
 		"stage":        derived(stage, One, items),
 		"rollup":       derived(Text{}, One, nodes),
+		"lanes":        derived(Text{}, One, root),
+		"next":         derived(Text{}, One, root),
 		"pr/verdict":   derived(verdict, One, items),
 		"plan/verdict": derived(verdict, One, items),
 	}

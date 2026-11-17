@@ -41,6 +41,21 @@ func TestAChildIsOneLevelBelowItsParentAndUnderIt(t *testing.T) {
 	}
 }
 
+func TestEachPlacedLeafIsALaneInTheOrderOfItsCreate(t *testing.T) {
+	w := newWorld(t)
+	epic := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(2)}))[0])
+	first := idOf(w.mint(a, w.state(), createUnder(epic))[0])
+	second := idOf(w.mint(b, w.state(), create(events.AtLevel{Level: level(1)}))[0])
+	idOf(w.mint(a, w.state(), createUnder(second))[0]) // under a leaf: placed nowhere
+	var got [][]events.ItemID
+	for _, l := range w.state().Lanes() {
+		got = append(got, l.Members)
+	}
+	if want := [][]events.ItemID{{first}, {second}}; !slices.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("the lanes are %v; want %v: one per placed leaf, a later create ranked last, the node and the leaf's child in none", got, want)
+	}
+}
+
 func TestAChildOfALeafIsUnderLeaf(t *testing.T) {
 	w := newWorld(t)
 	leaf := idOf(w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0])

@@ -64,7 +64,11 @@ func (w World) held(n address.Node) (Existing, config.Ancestry, fold.Facts) {
 		return Existing{At: events.Item{ID: n.ID}, Rendered: n.Rendered}, evaluate.ItemAncestry(w.State(), w.Schema(), n.ID), w.item(n.ID).Facts
 	case address.Element:
 		return Existing{At: events.Element{Of: n.Of, ID: n.ID}, Rendered: n.Rendered}, evaluate.ItemAncestry(w.State(), w.Schema(), n.Of), w.element(n).Facts
-	case address.Root, address.Home:
+	case address.Root:
+		// the root stores no field, so a write to one reaches compile's
+		// gate, which refuses what it names as derived
+		return Existing{At: events.Root{}, Rendered: "/"}, nil, fold.Facts{}
+	case address.Home:
 	}
 	panic(fmt.Sprintf("verbs: %#v holds no stored field", n))
 }
@@ -180,22 +184,31 @@ func writer(a events.Attribution) string {
 	return a.Principal.String()
 }
 
-// children is what is placed at n, deleted items included: filtering is a
+// children is what is placed at n, as a path names each.
+func children(w World, n address.Node) []string {
+	var out []string
+	for _, c := range below(w, n) {
+		out = append(out, name(c))
+	}
+	return out
+}
+
+// below is the nodes placed at n, deleted items included: filtering is a
 // selector's (architecture.md). The root holds the declared homes and the
 // parentless items of every level that declares none; a home its level's
 // parentless items; an item the items below it.
-func children(w World, n address.Node) []string {
+func below(w World, n address.Node) []address.Node {
 	var ids []events.ItemID
-	var out []string
+	var out []address.Node
 	switch n := n.(type) {
 	case address.Root:
 		for l := w.Schema().Levels(); l >= 1; l-- {
 			lv, _ := w.Schema().Level(l)
+			level, _ := events.ParseLevel(l)
 			if lv.Home != "" {
-				out = append(out, lv.Home)
+				out = append(out, address.Home{Level: level, Name: lv.Home})
 				continue
 			}
-			level, _ := events.ParseLevel(l)
 			ids = append(ids, w.State().Children(fold.Home{Holds: level})...)
 		}
 	case address.Home:
@@ -206,16 +219,121 @@ func children(w World, n address.Node) []string {
 		panic("verbs: a comment's table has no children row")
 	}
 	for _, id := range ids {
-		out = append(out, w.render(id))
+		out = append(out, w.node(id))
 	}
 	return out
 }
 
-// derivations is every derived built-in's reading. A link, a lane or a
-// review is not folded at this slice, so of and blockers are truthfully
-// empty and the verdicts truthfully unset; a test holds every Derived
-// row to having one here. Stage and rollup are evaluate's, read through
-// the view; a graph the configuration refuses is their refusal.
+// node is item id as an address names it.
+func (w World) node(id events.ItemID) address.Item {
+	return address.Item{ID: id, Rendered: w.render(id)}
+}
+
+// name is a home or an item as a path names it.
+func name(n address.Node) string {
+	switch n := n.(type) {
+	case address.Home:
+		return n.Name
+	case address.Item:
+		return n.Rendered
+	case address.Root, address.Element:
+	}
+	panic(fmt.Sprintf("verbs: %#v is placed nowhere", n))
+}
+
+// tree is the nodes below n, depth first, each a line at the children row
+// of the node read, valued as a member of a view: the tree a whole read of
+// a container shows, where a field read of children lists names that
+// pipe. A leaf holds nothing below it.
+func tree(w World, n address.Node, at string) ([]line, *refusal) {
+	var out []line
+	for _, c := range below(w, n) {
+		v, err := member(w, c)
+		if err != nil {
+			return nil, refuse("configuration", "%v", err)
+		}
+		out = append(out, line{at: at, value: v})
+		if it, ok := c.(address.Item); ok && w.Leaf(it.ID) {
+			continue
+		}
+		deeper, no := tree(w, c, at)
+		if no != nil {
+			return nil, no
+		}
+		out = append(out, deeper...)
+	}
+	return out, nil
+}
+
+// summary is a node as one line of a view reads it, its parts joined by
+// ` · `: removed, when rm removed it; a leaf's column, or a node's stage
+// and rollup; then its title. A home has no stage row and reads as a home.
+func summary(w World, n address.Node) (string, error) {
+	it, isItem := n.(address.Item)
+	if !isItem {
+		return "home", nil
+	}
+	var parts []string
+	facts := w.item(it.ID).Facts
+	if evaluate.Removed(facts) {
+		parts = append(parts, "(deleted)")
+	}
+	if w.Leaf(it.ID) {
+		c, err := w.Column(it.ID)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, column(c))
+	} else {
+		for _, derive := range []func(World, address.Node) ([]string, error){stage, rollup} {
+			vs, err := derive(w, n)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, vs...)
+		}
+	}
+	parts = append(parts, texts(facts.Text(events.MustName(string(field.Title))))...)
+	return strings.Join(parts, " · "), nil
+}
+
+// member is a node as one entry of a view: its name, then its summary.
+func member(w World, n address.Node) (string, error) {
+	s, err := summary(w, n)
+	if err != nil {
+		return "", err
+	}
+	return name(n) + " · " + s, nil
+}
+
+// lane is a lane as /lanes lists it: its members, in order.
+func lane(w World, l fold.Lane) (string, error) {
+	members := make([]string, len(l.Members))
+	for i, id := range l.Members {
+		v, err := member(w, w.node(id))
+		if err != nil {
+			return "", err
+		}
+		members[i] = v
+	}
+	return strings.Join(members, ", "), nil
+}
+
+// why is a reason a head is passed over, as /next names it.
+func why(y evaluate.Why) string {
+	switch y := y.(type) {
+	case evaluate.Undeclared:
+		return fmt.Sprintf("its column %s is undeclared", y.Column)
+	}
+	panic(fmt.Sprintf("verbs: %T is not a Why", y))
+}
+
+// derivations is every derived built-in's reading. A link or a review is
+// not folded at this slice, so of and blockers are truthfully empty and
+// the verdicts truthfully unset; a test holds every Derived row to having
+// one here. Stage, rollup and next are evaluate's, read through the view,
+// and lanes the fold's; a graph the configuration refuses is their
+// refusal.
 var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 	"level": ofItem(func(_ World, it fold.Item) []string {
 		if l, ok := it.Level.(fold.Leveled); ok {
@@ -232,24 +350,67 @@ var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 		c, _ := fold.CreateOf(w.element(n.(address.Element)).Origin) // an element a path names is created
 		return []string{writer(c.Stamp.By)}, nil
 	},
-	"stage": func(w World, n address.Node) ([]string, error) {
-		s, err := w.Stage(n.(address.Item).ID)
+	"stage":  stage,
+	"rollup": rollup,
+	"lanes": func(w World, _ address.Node) ([]string, error) {
+		lanes := w.State().Lanes()
+		if len(lanes) == 0 {
+			return []string{"(none)"}, nil
+		}
+		out := make([]string, len(lanes))
+		for i, l := range lanes {
+			v, err := lane(w, l)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = v
+		}
+		return out, nil
+	},
+	"next": func(w World, _ address.Node) ([]string, error) {
+		n, err := w.Next()
 		if err != nil {
 			return nil, err
 		}
-		return []string{s.String()}, nil
-	},
-	"rollup": func(w World, n address.Node) ([]string, error) {
-		counts, err := w.Rollup(n.(address.Item).ID)
-		if err != nil || len(counts) == 0 {
-			return nil, err
+		var out []string
+		switch h := n.Head.(type) {
+		case evaluate.Served:
+			v, err := member(w, w.node(h.ID))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		case evaluate.NoHead:
+			out = append(out, "(none)")
 		}
-		parts := make([]string, len(counts))
-		for i, c := range counts {
-			parts[i] = fmt.Sprintf("%s %d", column(c.Column), c.N)
+		for _, p := range n.Passed {
+			out = append(out, fmt.Sprintf("passed %s: %s", w.render(p.Head), why(p.Why)))
 		}
-		return []string{strings.Join(parts, " · ")}, nil
+		return append(out, fmt.Sprintf("lanes considered: %d", n.Considered)), nil
 	},
+}
+
+// stage is an item's stage, evaluate's.
+func stage(w World, n address.Node) ([]string, error) {
+	s, err := w.Stage(n.(address.Item).ID)
+	if err != nil {
+		return nil, err
+	}
+	return []string{s.String()}, nil
+}
+
+// rollup is a node's count of leaves per column, evaluate's, and nothing
+// when it has none.
+func rollup(w World, n address.Node) ([]string, error) {
+	counts, err := w.Rollup(n.(address.Item).ID)
+	if err != nil || len(counts) == 0 {
+		return nil, err
+	}
+	parts := make([]string, len(counts))
+	for i, c := range counts {
+		parts[i] = fmt.Sprintf("%s %d", column(c.Column), c.N)
+	}
+	return []string{strings.Join(parts, " · ")}, nil
 }
 
 // column is a column as a reader is shown it: a name the graph no longer

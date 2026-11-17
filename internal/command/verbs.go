@@ -42,6 +42,7 @@ type (
 		Kinds    map[string]int `json:"kinds"`
 		Deletes  int            `json:"deletes"`
 		DryRun   bool           `json:"dry_run"`
+		Written  bool           `json:"written"`
 		Minted   []string       `json:"minted"`
 		Rows     rowsLine       `json:"rows"`
 		Reqs     reqsLine       `json:"requirements"`
@@ -66,12 +67,14 @@ type (
 )
 
 // verbsBlock is the facts as the line's verbs block, absent when no verb
-// body ran. Every count is written, zeros included.
-func verbsBlock(v *VerbsFacts) *verbsLine {
+// body ran, and written whether the store took an append, which the store
+// block's own facts say `[LAW:one-source-of-truth]`. Every count is
+// written, zeros included.
+func verbsBlock(v *VerbsFacts, written bool) *verbsLine {
 	if v == nil {
 		return nil
 	}
-	l := &verbsLine{Operands: []operandLine{}, Drafts: v.Drafts, Kinds: map[string]int{}, Deletes: v.Deletes, DryRun: v.DryRun, Minted: append([]string{}, v.Minted...),
+	l := &verbsLine{Operands: []operandLine{}, Drafts: v.Drafts, Kinds: map[string]int{}, Deletes: v.Deletes, DryRun: v.DryRun, Written: written, Minted: append([]string{}, v.Minted...),
 		Rows: rowsLine{Builtin: v.Rows.Builtin, Declared: v.Rows.Declared, Checks: v.Rows.Checks}, Reqs: reqsLine(v.Requirements)}
 	for k, n := range v.Kinds {
 		l.Kinds[k] = n

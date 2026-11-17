@@ -367,6 +367,35 @@ func (s State) Children(c Container) []events.ItemID {
 	return ids
 }
 
+// Lane is an ordered list of leaves, its members in sequence.
+type Lane struct{ Members []events.ItemID }
+
+// Lanes is every lane in rank order (architecture.md §3.7). No lane or
+// rank intent is folded yet, so each placed leaf is its own one-member
+// lane, and a new lane ranks last: rank is the order of the leaves'
+// creates.
+func (s State) Lanes() []Lane {
+	var leaves []*item
+	s.items.each(func(r *item) {
+		if r.creates.empty() {
+			return
+		}
+		if l, ok := s.levelOf(r.id).(Leveled); ok {
+			if _, below := l.Level.Below(); !below {
+				leaves = append(leaves, r)
+			}
+		}
+	})
+	slices.SortFunc(leaves, func(a, b *item) int {
+		return events.Compare(a.firstCreate().stamp.Order, b.firstCreate().stamp.Order)
+	})
+	lanes := make([]Lane, len(leaves))
+	for i, r := range leaves {
+		lanes[i] = Lane{Members: []events.ItemID{r.id}}
+	}
+	return lanes
+}
+
 // Container is the container id is placed in, as Children lists it: its
 // home, or its parent when the parent's create sorts first, as levelOf
 // and Path read the chain. An id with no create, or whose parent link is
