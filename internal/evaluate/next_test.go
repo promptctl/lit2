@@ -56,3 +56,17 @@ func TestNextServesTheFirstLaneWithAHeadAndNamesWhatItPassed(t *testing.T) {
 		t.Errorf("next passed %+v; want only %s, its column limbo undeclared", got.Passed, stray)
 	}
 }
+
+// TestALeafUnderARemovedNodeIsNoHead: rm on a feature removes the work
+// below it, so next serves the next lane, not the feature's live leaf.
+func TestALeafUnderARemovedNodeIsNoHead(t *testing.T) {
+	s := fold.Replay(env, nil).State
+	s, feature := mint(t, s, s.Known(), create(events.AtLevel{Level: must(events.ParseLevel(2))}), [16]byte{1})
+	s, _ = mint(t, s, s.Known(), create(events.BelowParent{Parent: feature}), [16]byte{2})
+	s, _ = mint(t, s, s.Known(), events.Act{About: events.Item{ID: feature}, Payload: events.FieldSet{Field: events.MustName("deleted"), Value: events.Plain{Canonical: "true"}}}, [16]byte{1, 1})
+	s, served := leafIn(t, s, 3, nil)
+	got, err := Of(s, schema, now).Next()
+	if err != nil || got.Head != (Served{ID: served}) || got.Considered != 2 {
+		t.Errorf("next is %+v, %v; want %s served after 2 lanes considered", got, err, served)
+	}
+}

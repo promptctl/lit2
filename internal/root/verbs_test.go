@@ -372,7 +372,7 @@ func TestAnItemReadsItsFieldsThenItsComments(t *testing.T) {
 // is that read (scenarios.md 1).
 func TestABareLit2IsTheBoardOfAnEmptyWorkspace(t *testing.T) {
 	s := newSession(t)
-	want := "$ = /\n$/children\tunassigned · home\n$/children\tunfiled · home\n$/lanes\t(none)\n$/next\t(none)\n$/next\tlanes considered: 0\n"
+	want := "$ = /\n$/children\tunassigned · home\n$/children\tunfiled · home\n$/next\tlanes considered: 0\n"
 	if got := s.ok(); got != want {
 		t.Errorf("a bare lit2 prints\n%s\nwant\n%s", got, want)
 	}
@@ -382,7 +382,7 @@ func TestABareLit2IsTheBoardOfAnEmptyWorkspace(t *testing.T) {
 }
 
 // TestTheBoardIsTheTreeTheLanesAndNext: get / shows every node with its
-// stage, each leaf its own lane in the order it was filed, and next the
+// stage, each at the children row of the node holding it, each leaf its own lane in the order it was filed, and next the
 // first lane's head; once that head is done, next serves the second
 // (scenarios.md 2 and 14, at slice 1's depth).
 func TestTheBoardIsTheTreeTheLanesAndNext(t *testing.T) {
@@ -393,9 +393,9 @@ func TestTheBoardIsTheTreeTheLanesAndNext(t *testing.T) {
 	want := "$ = /\n" +
 		"$/children\tunassigned · home\n" +
 		"$/children\tunfiled · home\n" +
-		"$/children\t" + feature + " · initial · backlog 2 · board\n" +
-		"$/children\t" + first + " · backlog · tree\n" +
-		"$/children\t" + second + " · backlog · lanes\n" +
+		"unfiled/children\t" + feature + " · initial · backlog 2 · board\n" +
+		feature + "/children\t" + first + " · backlog · tree\n" +
+		feature + "/children\t" + second + " · backlog · lanes\n" +
 		"$/lanes\t" + first + " · backlog · tree\n" +
 		"$/lanes\t" + second + " · backlog · lanes\n" +
 		"$/next\t" + first + " · backlog · tree\n" +

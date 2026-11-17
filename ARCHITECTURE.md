@@ -150,7 +150,6 @@ The decisions the layout needed and the design documents did not make.
 - **D14 Rows with no body yet** parse, appear in help, and end internal (70)
   naming the ticket that builds them, from one unexported function in
   `root` that the lint forces out once the last body is bound. Bare `lit2`
-  is `get /`, the orientation handler after the board (design §3.12); until
-  that row has a body it is help.
+  is `get /`.
 - **D15 This file** is the codemap at the root; its concern table places
   what the design leaves unnamed.

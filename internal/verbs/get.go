@@ -29,7 +29,8 @@ type line struct {
 
 // Get reads the nodes at paths. One path naming one value prints it bare;
 // a node prints `$ = <node>` and a line per value it holds, each under its
-// path from `$`; several paths print each value under its path. A value a
+// path from `$`, and the tree below it each at the path of the node that
+// holds it; several paths print each value under its path. A value a
 // reader could not tell the end of prints quoted.
 func Get(w World, paths []string) Got {
 	var g Got
@@ -67,8 +68,8 @@ func Get(w World, paths []string) Got {
 		}
 		for _, l := range ls {
 			at := l.at
-			if single && whole[i] {
-				at = "$" + strings.TrimPrefix(at, strings.TrimSuffix(canon, "/"))
+			if rest, under := strings.CutPrefix(at, strings.TrimSuffix(canon, "/")+"/"); under && single && whole[i] {
+				at = "$/" + rest
 			}
 			fmt.Fprintf(&b, "%s\t%s\n", at, shown(l.value, false))
 		}
@@ -91,7 +92,7 @@ func read(w World, a address.Address) ([]line, *refusal) {
 			var ls []line
 			var no *refusal
 			if isField && f.Decl.Multi == field.Children {
-				ls, no = tree(w, a.Node, base+"/"+string(r.Path()))
+				ls, no = tree(w, a.Node, base, r.Path())
 			} else {
 				ls, no = rowLines(w, a, base, r.Path(), r)
 			}

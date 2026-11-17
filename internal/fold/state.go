@@ -357,14 +357,18 @@ func (s State) Children(c Container) []events.ItemID {
 			in = append(in, r)
 		}
 	})
-	slices.SortFunc(in, func(a, b *item) int {
-		return events.Compare(a.firstCreate().stamp.Order, b.firstCreate().stamp.Order)
-	})
+	slices.SortFunc(in, byCreate)
 	ids := make([]events.ItemID, len(in))
 	for i, r := range in {
 		ids[i] = r.id
 	}
 	return ids
+}
+
+// byCreate orders items by their first creates in total order: the order
+// children and lanes are both in.
+func byCreate(a, b *item) int {
+	return events.Compare(a.firstCreate().stamp.Order, b.firstCreate().stamp.Order)
 }
 
 // Lane is an ordered list of leaves, its members in sequence.
@@ -386,9 +390,7 @@ func (s State) Lanes() []Lane {
 			}
 		}
 	})
-	slices.SortFunc(leaves, func(a, b *item) int {
-		return events.Compare(a.firstCreate().stamp.Order, b.firstCreate().stamp.Order)
-	})
+	slices.SortFunc(leaves, byCreate)
 	lanes := make([]Lane, len(leaves))
 	for i, r := range leaves {
 		lanes[i] = Lane{Members: []events.ItemID{r.id}}

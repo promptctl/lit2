@@ -3,6 +3,7 @@ package evaluate
 import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/fold"
 )
 
 // Next is what /next serves: the head it settled on, every lane passed
@@ -47,7 +48,7 @@ func (Undeclared) why() {}
 
 // Next walks the lanes in rank order and serves the first head it can
 // (architecture.md §3.7): a lane's head is its first member rm has not
-// removed and whose stage is not terminal, and a lane with none is
+// removed, itself or above it, and whose stage is not terminal, and a lane with none is
 // finished. Claims and held refine the walk in slice 4 without changing
 // its path. A graph the configuration refuses is its refusal.
 func (v View) Next() (Next, error) {
@@ -55,7 +56,7 @@ func (v View) Next() (Next, error) {
 	for _, lane := range v.state.Lanes() {
 		n.Considered++
 		for _, id := range lane.Members {
-			if Removed(v.item(id).Facts) {
+			if v.gone(id) {
 				continue
 			}
 			c, err := v.Column(id)
@@ -74,4 +75,18 @@ func (v View) Next() (Next, error) {
 		}
 	}
 	return n, nil
+}
+
+// gone is whether rm removed id or a node above it: a removed subtree is
+// no work, as Stage and Rollup read it.
+func (v View) gone(id events.ItemID) bool {
+	if Removed(v.item(id).Facts) {
+		return true
+	}
+	switch in := v.state.Container(id).(type) {
+	case fold.Under:
+		return v.gone(in.Parent)
+	case fold.Home:
+	}
+	return false
 }

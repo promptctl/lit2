@@ -241,22 +241,22 @@ func name(n address.Node) string {
 	panic(fmt.Sprintf("verbs: %#v is placed nowhere", n))
 }
 
-// tree is the nodes below n, depth first, each a line at the children row
-// of the node read, valued as a member of a view: the tree a whole read of
-// a container shows, where a field read of children lists names that
-// pipe. A leaf holds nothing below it.
-func tree(w World, n address.Node, at string) ([]line, *refusal) {
+// tree is the nodes below n, at path, depth first, each a line at the
+// children row of the node holding it, valued as a member of a view: the
+// tree a whole read of a container shows, where a field read of children
+// lists names that pipe. A leaf holds nothing below it.
+func tree(w World, n address.Node, path string, children field.Path) ([]line, *refusal) {
 	var out []line
 	for _, c := range below(w, n) {
 		v, err := member(w, c)
 		if err != nil {
 			return nil, refuse("configuration", "%v", err)
 		}
-		out = append(out, line{at: at, value: v})
+		out = append(out, line{at: path + "/" + string(children), value: v})
 		if it, ok := c.(address.Item); ok && w.Leaf(it.ID) {
 			continue
 		}
-		deeper, no := tree(w, c, at)
+		deeper, no := tree(w, c, name(c), children)
 		if no != nil {
 			return nil, no
 		}
@@ -354,9 +354,6 @@ var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 	"rollup": rollup,
 	"lanes": func(w World, _ address.Node) ([]string, error) {
 		lanes := w.State().Lanes()
-		if len(lanes) == 0 {
-			return []string{"(none)"}, nil
-		}
 		out := make([]string, len(lanes))
 		for i, l := range lanes {
 			v, err := lane(w, l)
@@ -381,7 +378,6 @@ var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 			}
 			out = append(out, v)
 		case evaluate.NoHead:
-			out = append(out, "(none)")
 		}
 		for _, p := range n.Passed {
 			out = append(out, fmt.Sprintf("passed %s: %s", w.render(p.Head), why(p.Why)))

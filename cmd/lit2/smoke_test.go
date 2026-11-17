@@ -137,7 +137,7 @@ func TestSmokeWorksATicket(t *testing.T) {
 	if got := lit("get", id+"/deleted"); got != "false\n" {
 		t.Errorf("a restored item's deleted = %q", got)
 	}
-	if got := lit(); !strings.Contains(got, "$/children\t"+id+" · initial · b\n") || !strings.Contains(got, "$/lanes\t(none)\n") {
+	if got := lit(); !strings.Contains(got, "unfiled/children\t"+id+" · initial · b\n") || strings.Contains(got, "$/lanes") {
 		t.Errorf("a bare lit2 does not show the feature in the tree and no lanes:\n%s", got)
 	}
 }
