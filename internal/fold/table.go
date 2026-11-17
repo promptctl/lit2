@@ -3,6 +3,7 @@ package fold
 import (
 	"encoding/binary"
 	"hash/fnv"
+	"hash/maphash"
 	"math/bits"
 	"slices"
 
@@ -52,9 +53,9 @@ const (
 
 // The tables' hashers.
 type (
-	// byItem is the item id's first eight bytes: the id is random bits.
+	// byItem is the item id's bits under idSeed.
 	byItem struct{}
-	// byElement is the element id's first eight bytes, the same way.
+	// byElement is the element id's bits under idSeed.
 	byElement struct{}
 	// byName is FNV-1a over a name's text.
 	byName struct{}
@@ -64,14 +65,20 @@ type (
 	byRecord struct{}
 )
 
+// idSeed keys the id hashes. An id is bits its writer chose, never a digest
+// of anything, so an unkeyed hash would let one writer pile its ids into one
+// leaf and make every lookup a scan; the seed is drawn once per process and
+// never written again.
+var idSeed = maphash.MakeSeed()
+
 func (byItem) hash(id events.ItemID) uint64 {
 	b := id.Bytes()
-	return binary.LittleEndian.Uint64(b[:8])
+	return maphash.Bytes(idSeed, b[:])
 }
 
 func (byElement) hash(id events.ElementID) uint64 {
 	b := id.Bytes()
-	return binary.LittleEndian.Uint64(b[:8])
+	return maphash.Bytes(idSeed, b[:])
 }
 
 func (byName) hash(name string) uint64 { return fnv64a(name) }

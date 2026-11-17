@@ -3,6 +3,7 @@ package events
 import (
 	"bytes"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func TestWidthGrowsWithTheNamespaceAndKeepsAMatchUnlikely(t *testing.T) {
 		}
 		prev = w
 	}
-	for fill, want := range map[int]int{0: 3, 31: 3, 32: 4, 1023: 4, 1024: 5, 32767: 5} {
+	for fill, want := range map[int]int{0: 3, 31: 3, 32: 4, 1023: 4, 1024: 5, 32767: 5, math.MaxInt: 15} {
 		if got := Width(fill); got != want {
 			t.Errorf("Width(%d) = %d; want %d", fill, got, want)
 		}
@@ -218,6 +219,10 @@ func TestAShortIDParsesBareOrUnderTheActivePrefixOnly(t *testing.T) {
 		"lit-1f9.zc7":            Segments{s: "1f9.zc7"},
 		anItem.String():          FullID{ID: anItem},
 		"lit-" + anItem.String(): FullID{ID: anItem},
+		// Crockford's decoding: case ignored, i and l are 1, o is 0
+		"LIT-1F9.ZC7": Segments{s: "1f9.zc7"},
+		"1fi":         Segments{s: "1f1"},
+		"lo0":         Segments{s: "100"},
 	} {
 		if got, err := ParseShortID(s, prefix); err != nil || got != want {
 			t.Errorf("ParseShortID(%q) = %#v, %v; want %#v", s, got, err, want)
@@ -226,10 +231,14 @@ func TestAShortIDParsesBareOrUnderTheActivePrefixOnly(t *testing.T) {
 	if _, err := ParseShortID("rin-1f9", prefix); err == nil || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "another project") {
 		t.Errorf("an id under another prefix reads, or its refusal does not name it: %v", err)
 	}
-	for _, s := range []string{"", "1f", "1f9.", "1f9..zc7", "1fi", "Lit-1f9", "lit-", "lit_1f9", "1f9/zc7", "unfiled"} {
+	for _, s := range []string{"", "1f", "1f9.", "1f9..zc7", "1fu", "lit-", "lit_1f9", "1f9/zc7", "unfiled"} {
 		if got, err := ParseShortID(s, prefix); err == nil {
 			t.Errorf("ParseShortID(%q) = %#v; want it refused", s, got)
 		}
+	}
+	// a whole id's last digit holds two zero bits, as a segment or a full id
+	if _, err := ParseShortID(anItem.String()[:fullWidth-1]+"z", prefix); err == nil || !strings.Contains(err.Error(), "two zeros") {
+		t.Errorf("26 digits whose last holds a set pad bit: %v; want the pad bits named", err)
 	}
 	segs := Segments{s: "1f9.zc7"}.List()
 	if got := Render(mustPrefix("abc"), anItem, segs); got != "abc-1f9.zc7" {

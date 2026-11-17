@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Prefix is the project prefix ids render under: [a-z][a-z0-9]{2,}, the
@@ -138,10 +139,16 @@ func sharedDigits(a, b [16]byte) int {
 // fixed at mint, which is how an id is rendered (§3.2).
 type Segment struct{ s string }
 
-// ParseSegment reads one segment.
+// ParseSegment reads one segment. A segment of every digit is the whole id,
+// so its last digit holds the id's two zero bits.
 func ParseSegment(s string) (Segment, error) {
 	if len(s) < minWidth || len(s) > fullWidth || strings.Trim(s, crockford) != "" {
 		return Segment{}, fmt.Errorf("%q is not an id segment: %d to %d lowercase Crockford base32 digits", s, minWidth, fullWidth)
+	}
+	if len(s) == fullWidth {
+		if _, err := parseFull(s); err != nil {
+			return Segment{}, fmt.Errorf("%q is not an id segment: %w", s, err)
+		}
 	}
 	return Segment{s: s}, nil
 }
@@ -154,8 +161,10 @@ func (s Segment) String() string { return s.s }
 // most 1/1024, and the width grows as the namespace fills (3 digits to 31
 // names, 4 to 1,023, 5 to 32,767).
 func Width(fill int) int {
-	w, room := minWidth, uint64(1)<<(5*minWidth)
-	for need := 1024 * (uint64(fill) + 1); room < need; w, room = w+1, room<<5 {
+	// 1024·(fill+1) ≤ 32^w is fill+1 ≤ 2^(5w-10), compared by exponent so
+	// no product wraps; past 2^63 every fill fits
+	w, need := minWidth, uint64(fill)+1
+	for ; 5*w-10 < 64 && uint64(1)<<(5*w-10) < need; w++ {
 	}
 	return w
 }
@@ -276,12 +285,14 @@ func (s Segments) List() []Segment {
 
 func (s Segments) String() string { return s.s }
 
-// ParseShortID reads an item reference: bare, or under the active prefix
-// as `<prefix>-…`; a full id or segments. Any other prefix is refused as
-// another project's (§3.2).
+// ParseShortID reads an item reference a person typed: bare, or under the
+// active prefix as `<prefix>-…`; a full id or segments, their digits read
+// as Crockford decodes them. Any other prefix is refused as another
+// project's (§3.2).
 func ParseShortID(s string, active Prefix) (ShortID, error) {
 	body := s
 	if pre, rest, ok := strings.Cut(s, "-"); ok {
+		pre = strings.ToLower(pre)
 		if _, err := ParsePrefix(pre); err != nil {
 			return nil, fmt.Errorf("%q is not an item id: %w", s, err)
 		}
@@ -290,6 +301,7 @@ func ParseShortID(s string, active Prefix) (ShortID, error) {
 		}
 		body = rest
 	}
+	body = crockfordDecoded(body)
 	if id, err := ParseItemID(body); err == nil {
 		return FullID{ID: id}, nil
 	}
@@ -299,6 +311,21 @@ func ParseShortID(s string, active Prefix) (ShortID, error) {
 		}
 	}
 	return Segments{s: body}, nil
+}
+
+// crockfordDecoded is s with Crockford's decoding applied: case is ignored, i and l
+// read as 1, and o as 0, so an id read aloud or copied by hand still names
+// its item.
+func crockfordDecoded(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r = unicode.ToLower(r); r {
+		case 'i', 'l':
+			return '1'
+		case 'o':
+			return '0'
+		}
+		return r
+	}, s)
 }
 
 // Render is an item's text under prefix: its segments, the top-most first,

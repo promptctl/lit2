@@ -415,12 +415,12 @@ func (s State) Known() events.Known {
 		if !r.creates.empty() {
 			b.Created(namespaceOf(r.firstCreate().in))
 		}
-		for _, el := range r.sortedElements() {
+		r.elements.each(func(el *element) {
 			b.Saw(el.id)
 			if !el.creates.empty() {
 				b.Created(events.ElementOf{Item: r.id})
 			}
-		}
+		})
 	})
 	s.integrity.unapplied.each(func(u Unapplied) { saw(u.About) })
 	return b.Known()

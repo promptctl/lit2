@@ -804,9 +804,9 @@ func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Sectio
 	}
 	sections := map[NodeKey]Section{}
 	for _, key := range sortedKeys(tbl) {
-		node, err := nodeKey(key, homes)
-		if err != nil {
-			p.fail(keyed("nodes", `"`+key+`"`), ReasonBadNodeKey, "%q is not a declared home, and %v", key, err)
+		node, ok := nodeKey(key, homes)
+		if !ok {
+			p.fail(keyed("nodes", `"`+key+`"`), ReasonBadNodeKey, "%q is neither a declared home nor an item's full id, its 26 digits bare; a section never names its item by a short id, which can come to name two", key)
 			continue
 		}
 		at := keyed("nodes", nodeSegment(node))
@@ -830,15 +830,12 @@ func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Sectio
 // bare, its one spelling. A committed file outlives every sync, and a
 // segment two offline writers fixed for two items names neither, so a key
 // is the item's identity, never its short form (§3.2).
-func nodeKey(key string, homes map[string]bool) (NodeKey, error) {
+func nodeKey(key string, homes map[string]bool) (NodeKey, bool) {
 	if homes[key] {
-		return HomeNode(key), nil
+		return HomeNode(key), true
 	}
 	id, err := events.ParseItemID(key)
-	if err != nil {
-		return NodeKey{}, err
-	}
-	return ItemNode(id), nil
+	return ItemNode(id), err == nil
 }
 
 // duration reads a claim lifetime: a positive Go duration.

@@ -45,7 +45,7 @@ func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
 	case events.Segments:
 		want := id.List()
 		var matches []events.ItemID
-		for _, it := range st.Items() {
+		for _, it := range st.Items() { // by id, so the candidates are listed in that order
 			path := st.Path(it.ID)
 			if len(path) >= len(want) && slices.Equal(path[len(path)-len(want):], want) {
 				matches = append(matches, it.ID)
@@ -57,7 +57,6 @@ func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
 		case 1:
 			return matches[0], nil
 		}
-		slices.SortFunc(matches, events.ItemID.Compare)
 		return events.ItemID{}, Ambiguous{ID: id, Candidates: matches}
 	}
 	panic(fmt.Sprintf("address: %T is not a ShortID", id))

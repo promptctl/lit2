@@ -248,14 +248,14 @@ func countsOf(s State) StateCounts {
 		}
 		c.Labels += len(r.facts.Members(labels))
 		c.facts(r.facts)
-		for _, el := range r.sortedElements() {
+		r.elements.each(func(el *element) {
 			o := el.origin(r.id)
 			if _, uncreated := o.(Uncreated); !uncreated && el.firstCreate().in == comments {
 				c.Comments++
 			}
 			c.origin(o)
 			c.facts(el.facts)
-		}
+		})
 	})
 	return c
 }
