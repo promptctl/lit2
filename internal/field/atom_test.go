@@ -82,7 +82,7 @@ func TestAtomValues(t *testing.T) {
 			t.Errorf("ParseAtom(%q): %v", tc.atom, err)
 			continue
 		}
-		if got := a.Holds(tc.found); got != tc.want {
+		if got := a.Holds(Text{}, tc.found); got != tc.want {
 			t.Errorf("%s holds %v against %v, want %v", tc.atom, got, tc.found, tc.want)
 		}
 	}
@@ -109,7 +109,7 @@ func TestHoldsTable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseAtom(%q): %v", tc.atom, err)
 		}
-		if got := a.Holds(found); got != tc.want {
+		if got := a.Holds(Text{}, found); got != tc.want {
 			t.Errorf("%s holds %v against %v, want %v", tc.atom, got, found, tc.want)
 		}
 	}

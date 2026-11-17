@@ -80,6 +80,7 @@ const (
 	ReasonCheckCollides   Reason = "check-collides"
 
 	// Links.
+	ReasonBadLinkName         Reason = "bad-link-name"
 	ReasonBadLinkKind         Reason = "bad-link-kind"
 	ReasonEmptyBetween        Reason = "empty-between"
 	ReasonBadPair             Reason = "bad-pair"

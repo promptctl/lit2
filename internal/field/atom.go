@@ -57,23 +57,37 @@ type Truth bool
 // many for a list. Nothing held is an empty Found, which is absence.
 type Found []string
 
-// Holds evaluates an atom over what the item holds at its path. This is the
-// one evaluation of an atom: a requirement and a selector both reach it
-// `[LAW:single-enforcer]`.
-func (a Atom) Holds(f Found) Truth {
+// Holds evaluates an atom over what the item holds at its path, whose field
+// is of kind k. This is the one evaluation of an atom: a requirement and a
+// selector both reach it `[LAW:single-enforcer]`.
+func (a Atom) Holds(k Kind, f Found) Truth {
 	switch op := a.op.(type) {
 	case Present:
 		return Truth(len(f) > 0)
 	case Absent:
 		return Truth(len(f) == 0)
 	case Equals:
-		return Truth(contains(f, func(v string) bool { return slices.Contains(op.Values, v) }))
+		return Truth(contains(f, oneOf(k, op.Values)))
 	case NotEquals:
-		return !Truth(contains(f, func(v string) bool { return slices.Contains(op.Values, v) }))
+		return !Truth(contains(f, oneOf(k, op.Values)))
 	case Matches:
 		return Truth(contains(f, op.Re.MatchString))
 	}
 	panic(fmt.Sprintf("field: %T is not an Op", a.op))
+}
+
+// oneOf is whether a stored value is one of values, compared as k writes
+// them: an item stores a value in its kind's canonical form, so `est=1.0` meets
+// the 1 a number field stores. A value k does not parse is one no item of that
+// kind holds.
+func oneOf(k Kind, values []string) func(string) bool {
+	canonical := make([]string, 0, len(values))
+	for _, v := range values {
+		if c, err := k.Parse(v); err == nil {
+			canonical = append(canonical, c)
+		}
+	}
+	return func(stored string) bool { return slices.Contains(canonical, stored) }
 }
 
 func contains(f Found, hit func(string) bool) bool {

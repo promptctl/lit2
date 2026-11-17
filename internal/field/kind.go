@@ -115,12 +115,14 @@ func NewEnum(values []string) (Enum, error) {
 	return Enum{values: slices.Clone(values)}, nil
 }
 
-// NewPattern compiles a declared pattern.
+// NewPattern compiles a declared pattern. A pattern is the shape of a whole
+// value, so it matches anchored at both ends whether or not src says so.
 func NewPattern(src string) (Pattern, error) {
-	re, err := regexp.Compile(src)
-	if err != nil {
+	if _, err := regexp.Compile(src); err != nil {
 		return Pattern{}, fmt.Errorf("%q is not a regular expression: %w", src, err)
 	}
+	// src compiles alone, so wrapping it cannot close a group it opened.
+	re := regexp.MustCompile(`^(?:` + src + `)$`)
 	return Pattern{src: src, re: re}, nil
 }
 

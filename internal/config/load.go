@@ -82,7 +82,8 @@ type Facts struct {
 	Counts Counts
 }
 
-// Counts is how many of each declaration the version holds.
+// Counts is how many of each declaration the version holds. Columns and
+// requirements count the root's and every section's.
 type Counts struct {
 	Levels, Columns, Labels, Requirements, Checks, Links, Sections int
 }
@@ -90,9 +91,10 @@ type Counts struct {
 // Facts reads a loaded version's facts for the command event.
 func (l Loaded) Facts() Facts {
 	s := l.schema
-	reqs := 0
-	count := func(cols map[string]Column) {
-		for _, c := range cols {
+	cols, reqs := 0, 0
+	count := func(cs map[string]Column) {
+		cols += len(cs)
+		for _, c := range cs {
 			reqs += len(c.Entry()) + len(c.Exit())
 		}
 	}
@@ -113,7 +115,7 @@ func (l Loaded) Facts() Facts {
 		Gate:   gate,
 		Counts: Counts{
 			Levels:       len(s.levels),
-			Columns:      len(s.root.Declared),
+			Columns:      cols,
 			Labels:       len(s.labels.Values()),
 			Requirements: reqs,
 			Checks:       len(s.checks),

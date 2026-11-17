@@ -228,11 +228,7 @@ func (s Schema) Effective(a Ancestry) (Effective, error) {
 		}
 		return "columns." + KeyPath(name)
 	}
-	visible := make(map[string]bool, len(merged))
-	for name := range merged {
-		visible[name] = true
-	}
-	g, refusals := buildGraph(merged, visible, keyOf)
+	g, refusals := buildGraph(merged, keyOf)
 	if len(refusals) > 0 {
 		return Effective{}, &ResolutionRefused{Ancestry: a, Refusals: refusals}
 	}

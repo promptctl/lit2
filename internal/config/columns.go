@@ -123,11 +123,9 @@ func (g ColumnGraph) Names() []string {
 }
 
 // buildGraph is the one enforcer of a column graph's shape `[LAW:single-enforcer]`.
-// cs are the columns the graph holds; visible is every name a next may reach,
-// which for a root is the union of the root and every section, since a
-// section's column may be reached from another section. keyOf names each
-// column's key path for its refusals.
-func buildGraph(cs map[string]Column, visible map[string]bool, keyOf func(string) KeyPath) (ColumnGraph, []Refusal) {
+// cs are the columns the graph holds, and every next names one of them. keyOf
+// names each column's key path for its refusals.
+func buildGraph(cs map[string]Column, keyOf func(string) KeyPath) (ColumnGraph, []Refusal) {
 	var refusals []Refusal
 	g := ColumnGraph{byName: map[string]Column{}, aliases: map[string]string{}}
 	var initials []string
@@ -160,7 +158,7 @@ func buildGraph(cs map[string]Column, visible map[string]bool, keyOf func(string
 	for _, name := range sortedKeys(cs) {
 		c := cs[name]
 		for _, next := range c.Next() {
-			if !visible[next] {
+			if _, declared := cs[next]; !declared {
 				refusals = append(refusals, Refusal{Key: keyed(keyOf(name), "next"), Reason: ReasonNextUndeclared, Message: fmt.Sprintf("next names %s, which no column declares", next)})
 			}
 		}

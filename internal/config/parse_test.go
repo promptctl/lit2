@@ -224,6 +224,7 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"check-undeclared", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nentry = [{ check = \"ghost\", severity = \"error\" }]"), ReasonCheckUndeclared},
 		{"check-cycle", replace("[columns.done]", "[checks.a]\ntests = [{ check = \"b\" }]\n\n[checks.b]\ntests = [{ check = \"a\" }]\n\n[columns.done]"), ReasonCheckCycle},
 		{"check-collides", replace("[columns.done]", "[checks.description]\ntests = []\n\n[columns.done]"), ReasonCheckCollides},
+		{"bad-link-name", replace("[columns.backlog]", "[links.Blocks]\nkind = \"relates\"\nbetween = [[1, 1]]\n\n[columns.backlog]"), ReasonBadLinkName},
 		{"bad-link-kind", replace("[columns.backlog]", "[links.x]\nkind = \"blah\"\nbetween = [[1, 1]]\n\n[columns.backlog]"), ReasonBadLinkKind},
 		{"empty-between", replace("[columns.backlog]", "[links.x]\nkind = \"relates\"\nbetween = []\n\n[columns.backlog]"), ReasonEmptyBetween},
 		{"bad-pair", replace("[columns.backlog]", "[links.x]\nkind = \"relates\"\nbetween = [[1]]\n\n[columns.backlog]"), ReasonBadPair},
@@ -543,6 +544,72 @@ func TestFactsCountEveryRequirement(t *testing.T) {
 	}
 	if got := l.Facts().Counts.Requirements; got != 1 {
 		t.Errorf("requirements = %d, want the section's one", got)
+	}
+}
+
+// TestTheRootIsAGraphAlone: a root column whose next only a section declares
+// is refused, since an item under no section would have no such column.
+func TestTheRootIsAGraphAlone(t *testing.T) {
+	text := replace(`next = ["done"]`, `next = ["audit"]`)(minimal)
+	text = replace("[columns.backlog]", "[nodes.unfiled.columns.audit]\nnext = [\"done\"]\n\n[columns.backlog]")(text)
+	refusals := refusalsOf(t, text)
+	if len(refusals) != 1 || refusals[0].Key != "columns.backlog.next" || refusals[0].Reason != ReasonNextUndeclared {
+		t.Errorf("refusals = %v, want next-target-undeclared at columns.backlog.next", refusals)
+	}
+}
+
+// TestEachFaultOnce: a key of the wrong type is refused for its type, and
+// nothing else is said about the value it does not have.
+func TestEachFaultOnce(t *testing.T) {
+	cases := map[string]string{
+		"a link kind that is not a string": replace("[columns.backlog]", "[links.x]\nkind = 5\nbetween = [[1, 1]]\n\n[columns.backlog]")(minimal),
+		"a between that is not a list":     replace("[columns.backlog]", "[links.x]\nkind = \"relates\"\nbetween = 5\n\n[columns.backlog]")(minimal),
+		"enum values that are not a list":  replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"enum\"\nvalues = \"a\"")(minimal),
+	}
+	for name, text := range cases {
+		if refusals := refusalsOf(t, text); len(refusals) != 1 || refusals[0].Reason != ReasonWrongType {
+			t.Errorf("%s: refusals = %v, want wrong-type alone", name, refusals)
+		}
+	}
+	noColumns := minimal[:strings.Index(minimal, "[columns.backlog]")]
+	for _, r := range refusalsOf(t, noColumns) {
+		if r.Reason == ReasonMissingKey {
+			t.Errorf("a file with no columns says so as the graph's faults, not also as missing-key: %v", r)
+		}
+	}
+}
+
+// TestAGateIsAFullVersion: min-reader-version is MAJOR.MINOR.PATCH, so one
+// gate has one spelling in the log.
+func TestAGateIsAFullVersion(t *testing.T) {
+	for _, v := range []string{"9", "1.2", "1.2.3+build"} {
+		text := replace(`prefix = "lit"`, "prefix = \"lit\"\nmin-reader-version = \""+v+"\"")(minimal)
+		if refusals := refusalsOf(t, text); len(refusals) != 1 || refusals[0].Reason != ReasonBadVersion {
+			t.Errorf("min-reader-version %s: refusals = %v, want bad-version", v, refusals)
+		}
+	}
+}
+
+// TestACheckCycleNamesItsPath: a cycle through other checks names each check
+// on it.
+func TestACheckCycleNamesItsPath(t *testing.T) {
+	text := replace("[columns.done]", "[checks.a]\ntests = [{ check = \"b\" }]\n\n[checks.b]\ntests = [{ check = \"a\" }]\n\n[columns.done]")(minimal)
+	refusals := refusalsOf(t, text)
+	if len(refusals) != 1 || !strings.Contains(refusals[0].Message, "a -> b -> a") {
+		t.Errorf("refusals = %v, want one naming a -> b -> a", refusals)
+	}
+}
+
+// TestFactsCountSectionColumns: columns and requirements are counted over the
+// same columns, the root's and the sections'.
+func TestFactsCountSectionColumns(t *testing.T) {
+	text := replace("[columns.backlog]", "[nodes.unfiled.columns.audit]\nnext = [\"done\"]\n\n[columns.backlog]")(minimal)
+	l, err := Load(Committed{Bytes: []byte(text)}, running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.Facts().Counts.Columns; got != 3 {
+		t.Errorf("columns = %d, want the root's two and the section's one", got)
 	}
 }
 

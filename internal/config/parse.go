@@ -112,28 +112,37 @@ func (p *parser) schema(raw map[string]any, gate ReaderGate) Schema {
 	}
 
 	rootCols := p.columns(raw, "")
-	if !p.has(raw, "columns") {
-		p.fail("columns", ReasonMissingKey, "the root declares its columns: one column sets initial = true")
-	}
-	var sectionCols map[NodeKey]map[string]Column
-	s.sections, sectionCols = p.sections(raw, s.levels)
-
-	visible := map[string]bool{}
-	for name := range rootCols {
-		visible[name] = true
-	}
-	for _, cols := range sectionCols {
-		for name := range cols {
-			visible[name] = true
-		}
-	}
-	rootGraph, refusals := buildGraph(rootCols, visible, func(name string) KeyPath {
+	rootGraph, refusals := buildGraph(rootCols, func(name string) KeyPath {
 		return "columns." + KeyPath(name)
 	})
 	p.refusals = append(p.refusals, refusals...)
-	p.checkSectionNexts(sectionCols, visible)
-
 	s.root = RootFrame{Columns: rootGraph, Declared: rootCols, ClaimTTL: ttl}
+
+	// The root is a graph alone, since an item with no section on its
+	// ancestry is judged by it alone. A section's column may reach a column
+	// an ancestor's section declares, and which sections stack is known only
+	// from the items, so here a section's next targets are checked only against
+	// every column declared anywhere; each stacked graph is checked at apply.
+	s.sections = p.sections(raw, s.levels)
+	declared := map[string]bool{}
+	for name := range rootCols {
+		declared[name] = true
+	}
+	for _, sec := range s.sections {
+		for name := range sec.Columns {
+			declared[name] = true
+		}
+	}
+	for _, node := range sortedNodeKeys(s.sections) {
+		cols := s.sections[node].Columns
+		for _, name := range sortedKeys(cols) {
+			for _, next := range cols[name].Next() {
+				if !declared[next] {
+					p.fail(keyed(keyed(keyed("nodes", nodeSegment(node)), "columns."+name), "next"), ReasonNextUndeclared, "next names %s, which no column declares", next)
+				}
+			}
+		}
+	}
 	return s
 }
 
@@ -154,7 +163,7 @@ func (p *parser) gate(raw map[string]any) ReaderGate {
 	if !strings.HasPrefix(canon, "v") {
 		canon = "v" + canon
 	}
-	if !semver.IsValid(canon) {
+	if semver.Canonical(canon) != canon {
 		p.fail("min-reader-version", ReasonBadVersion, "%q is not a version: MAJOR.MINOR.PATCH", v)
 		return NoGate{}
 	}
@@ -336,7 +345,10 @@ func (p *parser) fieldDecl(at KeyPath, name string, v any) (field.FieldDecl, boo
 			p.fail(keyed(at, "values"), ReasonKindParameter, "an enum declares its values")
 			return field.FieldDecl{}, false
 		}
-		values, _ := p.strings(m, at, "values")
+		values, ok := p.strings(m, at, "values")
+		if !ok {
+			return field.FieldDecl{}, false
+		}
 		e, err := field.NewEnum(values)
 		if err != nil {
 			p.fail(keyed(at, "values"), ReasonKindParameter, "%v", err)
@@ -441,7 +453,7 @@ func (p *parser) readChecks(raw map[string]any) map[string]Check {
 	for name := range tbl {
 		p.checkNames[name] = true
 	}
-	p.checks = &expander{p: p, raw: tbl, open: map[string]bool{}, done: map[string]expansion{}}
+	p.checks = &expander{p: p, raw: tbl, done: map[string]expansion{}}
 	out := map[string]Check{}
 	for _, name := range sortedKeys(tbl) {
 		if tests, ok := p.checks.expand(name); ok {
@@ -458,7 +470,7 @@ func (p *parser) readChecks(raw map[string]any) map[string]Check {
 type expander struct {
 	p    *parser
 	raw  map[string]any
-	open map[string]bool
+	open []string // the checks being expanded, outermost first
 	done map[string]expansion
 }
 
@@ -474,13 +486,13 @@ func (x *expander) expand(name string) ([]Test, bool) {
 		return e.tests, e.ok
 	}
 	at := keyed("checks", name)
-	if x.open[name] {
-		x.p.fail(at, ReasonCheckCycle, "check %s includes itself", name)
+	if i := slices.Index(x.open, name); i >= 0 {
+		x.p.fail(at, ReasonCheckCycle, "check %s includes itself: %s", name, strings.Join(slices.Concat(x.open[i:], []string{name}), " -> "))
 		return nil, false
 	}
-	x.open[name] = true
+	x.open = append(x.open, name)
 	tests, ok := x.body(name, at)
-	delete(x.open, name)
+	x.open = x.open[:len(x.open)-1]
 	x.done[name] = expansion{tests: tests, ok: ok}
 	return tests, ok
 }
@@ -623,6 +635,10 @@ func (p *parser) links(raw map[string]any, levelCount int) map[string]LinkType {
 	out := map[string]LinkType{}
 	for _, name := range sortedKeys(tbl) {
 		at := keyed("links", name)
+		if !segmentPattern.MatchString(name) {
+			p.fail(at, ReasonBadLinkName, "%q is not a link name: a lowercase word", name)
+			continue
+		}
 		m, ok := tbl[name].(map[string]any)
 		if !ok {
 			p.fail(at, ReasonWrongType, "a link type is a table")
@@ -630,7 +646,13 @@ func (p *parser) links(raw map[string]any, levelCount int) map[string]LinkType {
 		}
 		p.unknown(m, at, "kind", "between")
 		var lt LinkType
-		kindWord, _ := p.text(m, at, "kind")
+		kindWord, ok := p.text(m, at, "kind")
+		if !ok {
+			if !p.has(m, "kind") {
+				p.fail(keyed(at, "kind"), ReasonMissingKey, "a link type names its kind: dependency or relates")
+			}
+			continue
+		}
 		switch kindWord {
 		case "dependency":
 			lt.Kind = Dependency
@@ -640,7 +662,10 @@ func (p *parser) links(raw map[string]any, levelCount int) map[string]LinkType {
 			p.fail(keyed(at, "kind"), ReasonBadLinkKind, "a link kind is dependency or relates, not %q", kindWord)
 			continue
 		}
-		pairs, _ := p.list(m, at, "between")
+		pairs, ok := p.list(m, at, "between")
+		if !ok && p.has(m, "between") {
+			continue
+		}
 		if len(pairs) == 0 {
 			p.fail(keyed(at, "between"), ReasonEmptyBetween, "a link type names at least one pair of levels")
 			continue
@@ -776,9 +801,8 @@ func (p *parser) severity(m map[string]any, at KeyPath) (Severity, bool) {
 }
 
 // sections reads the node sections: per-node columns and claim lifetimes,
-// keyed by a full item id or a declared home. It returns each section and its
-// columns, the columns separately for the next-target check.
-func (p *parser) sections(raw map[string]any, levels []Level) (map[NodeKey]Section, map[NodeKey]map[string]Column) {
+// keyed by a full item id or a declared home.
+func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Section {
 	tbl, _ := p.table(raw, "", "nodes")
 	homes := map[string]bool{}
 	for _, lv := range levels {
@@ -787,7 +811,6 @@ func (p *parser) sections(raw map[string]any, levels []Level) (map[NodeKey]Secti
 		}
 	}
 	sections := map[NodeKey]Section{}
-	cols := map[NodeKey]map[string]Column{}
 	for _, key := range sortedKeys(tbl) {
 		node, ok := nodeKey(key, homes)
 		if !ok {
@@ -807,24 +830,8 @@ func (p *parser) sections(raw map[string]any, levels []Level) (map[NodeKey]Secti
 		}
 		sec.Columns = p.columns(m, at)
 		sections[node] = sec
-		cols[node] = sec.Columns
 	}
-	return sections, cols
-}
-
-// checkSectionNexts checks the next names of section columns against every name
-// visible to them; the root's are checked by buildGraph.
-func (p *parser) checkSectionNexts(sectionCols map[NodeKey]map[string]Column, visible map[string]bool) {
-	for _, node := range sortedNodeKeys(sectionCols) {
-		cols := sectionCols[node]
-		for _, name := range sortedKeys(cols) {
-			for _, next := range cols[name].Next() {
-				if !visible[next] {
-					p.fail(keyed(keyed(keyed("nodes", nodeSegment(node)), "columns."+name), "next"), ReasonNextUndeclared, "next names %s, which no column declares", next)
-				}
-			}
-		}
-	}
+	return sections
 }
 
 // nodeKey reads a section key: a full id, or a declared home.
