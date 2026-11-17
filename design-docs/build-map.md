@@ -55,7 +55,7 @@ ever, because each of those makes the things around it expensive to replace.
 - a `create` that stores a record as given
 
 **look**
-- ▶ every view is a path over `evaluate(fold(events), now)`: `/`, `x`,
+- ▶ every view is a path over `evaluate(fold(events), config, now)`: `/`, `x`,
   `x/field`, `x/history`, `/lanes`, `/next`, `/members`, `/me`; one
   renderer that redacts what the reader cannot open; `--json` keyed by
   path; selectors and globs expand once

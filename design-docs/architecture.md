@@ -163,8 +163,8 @@ and reviews of each reviewable (§4), the applied workspace versions (§3.15),
 and every
 unresolved concurrent contradiction as a value on the thing it concerns.
 `evaluate(state, config, now) → view`: `held`, claim
-expiry, staleness, stage, rollup, the labels declared with `where` (§3.11). Every read is `evaluate(fold(events), now)`;
-every write is evaluated against the same. Neither function performs I/O.
+expiry, staleness, stage, rollup, the labels declared with `where` (§3.11). Every read is `evaluate(fold(events), config, now)`;
+every write is judged against the same. Neither function performs I/O.
 The fold reads no configuration: an event's legality under the model was
 judged by the one enforcer at its write, under the active version its writer
 ran under, and evaluate applies the active version its reader ran under, which is
@@ -649,7 +649,7 @@ same test fails when the two disagree.
  guidance   moments → resolved handlers → text after the data
  verbs      get/set/add/rm on typed addresses; requirements; verb → intents; echo
  address    path grammar; selectors; globs
- evaluate   clocked derivations: held, expiry, staleness, stage, rollup
+ evaluate   derivations under the clock or the config: held, expiry, staleness, stage, rollup
  config     the active workspace version (§3.15) → one typed schema value; the field table
  field      field kinds and their value parsers; the built-in fields; the atom; the literal grammar
  fold       events → state; validation engine; rank; holders; conflicts
@@ -717,8 +717,8 @@ decided in the body.
 
 ## 8. Constraints on later work
 
-- A new ticket fact is an event kind plus a fold rule and, if it has a clock,
-  an evaluate rule. A new piece of the model is a key in `.lit/workspace.toml`.
+- A new ticket fact is an event kind plus a fold rule and, if it reads the
+  clock or the configuration, an evaluate rule. A new piece of the model is a key in `.lit/workspace.toml`.
   Never a table, never a second store.
 - Every mutating verb on a path has a capability `(verb, path glob,
   binding)`; what cannot be spelled as a path write cannot be authorized,
@@ -732,7 +732,7 @@ decided in the body.
   requirement that reads prose by content is evaluated by its writer, who
   holds the key; a reader without it sees that requirement's verdict as
   `unknown (tier)`, a third value of the verdict type, never a guess.
-- The fold reads no clock; evaluate reads one. A derivation that wants both is
+- The fold reads no clock; evaluate reads `now`, handed to it, never the clock. A derivation that wants both is
   two derivations.
 - No network on a foreground path; no lock on the cache.
 - A handler produces text and nothing else.

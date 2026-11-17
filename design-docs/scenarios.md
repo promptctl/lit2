@@ -434,8 +434,8 @@ inside the budgets.
 
 **Walk.** 10,000 items, 200,000 events, 400 lanes. `get '*/title'` is one
 walk of folded state. `/next` is a walk of the lane order, linear in lanes.
-Evaluate runs each rule's selector over every ticket on every read, linear in
-tickets times rules. A warm read is a snapshot load plus a delta fold. A cold
+On every read, evaluate runs each rule's selector over every ticket, linear
+in tickets times rules. A warm read is a snapshot load plus a delta fold. A cold
 refold applies 200,000 events in under a second, which sets the bar for the
 codec and for the fold's data structures, and is measured in the harness
 before anything else is built on them. The snapshot holds the folded lane
