@@ -105,6 +105,16 @@ func ItemPlace(l events.Level) Place {
 	return Leaf{}
 }
 
+// ElementPlace is the place of an element of the built-in list at path,
+// the one reading of a list as its elements' place: a comment's for
+// comments, the one list of elements.
+func ElementPlace(list Path) Place {
+	if list == "comments" {
+		return Comment{}
+	}
+	panic(fmt.Sprintf("field: %s is no list of elements", list))
+}
+
 // Places is the places a field exists at.
 //
 //sumtype:decl

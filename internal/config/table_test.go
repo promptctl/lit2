@@ -62,3 +62,20 @@ func TestPlacesNameOnlyDeclaredHomes(t *testing.T) {
 		t.Errorf("places = %#v, want %#v", got, want)
 	}
 }
+
+// TestALevelMayTakeAName: a comment's built-in fields are no item's, so a
+// level may declare a field by one of their names, and each place reads
+// its own.
+func TestALevelMayTakeAName(t *testing.T) {
+	text := replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.by]\nkind = \"text\"")(minimal)
+	s, err := parseText(t, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.Table().Find(field.Leaf{}, "by"); err != nil || r.(FieldRow).Decl.Origin != field.Declared {
+		t.Errorf("by at a leaf = %v, %v; want level 1's declared field", r, err)
+	}
+	if r, err := s.Table().Find(field.Comment{}, "by"); err != nil || r.(FieldRow).Decl.Writability != field.Derived {
+		t.Errorf("by at a comment = %v, %v; want the derived writer", r, err)
+	}
+}

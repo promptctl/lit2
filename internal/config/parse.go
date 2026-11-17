@@ -267,8 +267,9 @@ func (p *parser) readLevels(raw map[string]any, builtins map[field.Path]field.Fi
 					continue
 				}
 				path := field.Path(fname)
-				if _, builtin := builtins[path]; builtin {
-					p.fail(fat, ReasonBuiltinRedeclared, "%s is a built-in field: a level cannot declare it", fname)
+				// a comment's built-ins are no item's, so a level may take their names
+				if b, builtin := builtins[path]; builtin && b.At.OfItems() {
+					p.fail(fat, ReasonBuiltinRedeclared, "%s is a built-in field of items: a level cannot declare it", fname)
 					continue
 				}
 				p.table.rows = append(p.table.rows, FieldRow{At: path, Decl: decl})

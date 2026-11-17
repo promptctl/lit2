@@ -368,3 +368,22 @@ func TestTwiceIsTheRepeatersOwn(t *testing.T) {
 		t.Errorf("a refused command drafted %d", len(got.Drafts))
 	}
 }
+
+// TestARemovedCommentMeetsNoTest: a check whose test reads comments holds
+// while a comment stands and is unmet once rm removes it, though get
+// still lists it.
+func TestARemovedCommentMeetsNoTest(t *testing.T) {
+	b := newBook(t, profile("\n[checks.discussed]\ntests = [{ test = \"comments\" }]\n"))
+	id := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
+	note := strings.TrimPrefix(strings.TrimSuffix(b.do(verbs.Add, op(id+"/comments", "seen")), "\n"), "+ ")
+	if got := b.get(id + "/discussed"); got != "holds\n" {
+		t.Fatalf("a commented item's check = %q; want holds", got)
+	}
+	b.do(verbs.Rm, op(note, ""))
+	if got := b.get(id + "/discussed"); got != "unmet comments (discussed)\n" {
+		t.Errorf("the check over a removed comment = %q; want it unmet", got)
+	}
+	if got := b.get(id + "/comments"); !strings.HasPrefix(got, "(deleted) ") {
+		t.Errorf("the removed comment lists as %q; want it listed, marked", got)
+	}
+}

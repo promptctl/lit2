@@ -23,7 +23,8 @@ type World struct {
 // Read is the values the row at path holds on node n: the one
 // reader get and a check's tests call `[LAW:single-enforcer]`. A stored
 // field reads through stored, on an item or a comment alike; comments
-// read the item's elements; children what is placed there; a derived
+// read the item's elements rm has not removed, since only a check's test
+// reads a list here and get lists each element itself; children what is placed there; a derived
 // field its derivation; a check its verdict. Only an item's table has the
 // rows that are no stored field. A status the configuration cannot judge
 // is its refusal, as a write's is.
@@ -45,7 +46,9 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 	case d.Multi == field.Elements:
 		var out []string
 		for _, e := range elements(w.item(n.(address.Item).ID), events.MustName(string(path))) {
-			out = append(out, e.text)
+			if !e.deleted {
+				out = append(out, e.text)
+			}
 		}
 		return out, nil
 	}

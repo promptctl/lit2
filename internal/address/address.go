@@ -230,7 +230,7 @@ func keyed(t config.Table, a Address, it fold.Item, path field.Path, r config.Ro
 		if err != nil {
 			return Address{}, lookup(err)
 		}
-		el := Address{Node: Element{Of: it.ID, ID: id, Rendered: fmt.Sprintf("%s/%s/%s", Address{Node: a.Node, Target: Whole{}}, path, seg)}, Place: field.Comment{}, Target: Whole{}}
+		el := Address{Node: Element{Of: it.ID, ID: id, Rendered: fmt.Sprintf("%s/%s/%s", Address{Node: a.Node, Target: Whole{}}, path, seg)}, Place: field.ElementPlace(path), Target: Whole{}}
 		if !deeper {
 			return el, nil
 		}
