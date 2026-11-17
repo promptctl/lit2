@@ -80,8 +80,8 @@ row; the architecture test fails on one without.
 | §3.19 Tier and envelope | `events`, `verbs` | the envelope and suite in events; prose sealed in verbs, so no layer below sees it |
 | §3.20 Verification | `fold`, `store` | one fold rule via the suite in events; run by store at receive |
 | §5.1 Open | `store` | ref heads, every open log under the common dir and the snapshot read |
-| §5.2 Parse | `config` | the workspace file into the schema value |
-| §5.3 Fold | `fold` | events newer than the snapshot, verified |
+| §5.2 Fold | `fold` | events newer than the snapshot, verified |
+| §5.3 Parse | `config` | the active workspace version the fold names, into the schema value |
 | §5.4 Address | `address` | paths into typed addresses; selectors and globs expanded once |
 | §5.5 Evaluate | `verbs`, `tick` | the description of a write; the answer of a get |
 | §5.6 Perform | `verbs`, `store` | the intents signed in verbs' perform step; appended to the log by store |
