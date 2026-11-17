@@ -528,7 +528,7 @@ holding its lane's claim. A role is a named bundle of capabilities, and the
 default profile ships the access-control design's four, observer,
 contributor, editor and owner, spelled as path globs: contributor is
 `add */children`, `add own/*`, `set own/*`, `set */status`,
-`add */comments`, `rm own/comments/*`, `rm own/*` at level 1, the leaf. A
+`add */comments`, `rm own/*/*`, `rm own/*` at level 1, the leaf. A
 column is no capability's condition: only the writer's file declares
 columns, so no verifier could judge one, and the workflow gate holds where
 a status may move. The capability verdict is the fold's (§3.20): a command folds

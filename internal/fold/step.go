@@ -106,11 +106,13 @@ func (r Registry) step(s State, c checked) (State, Outcome) {
 	changes, intent, why := r.changes(st, h, e.Body())
 	if why != nil {
 		// only an enrollment is judged with no policy in force, and its
-		// writer founds the store
+		// writer founds the store, whether or not this release reads it
 		if p := s.policy.active; p != nil {
 			if _, listed := p.Policy.Role(st.By.Principal); !listed {
 				return s.carry(e, NotAMemberWrote{}), CarriedFor{Why: NotAMemberWrote{}}
 			}
+		} else {
+			s.policy.founding = &st.Event
 		}
 		s.frontier = s.frontier.Observe(h)
 		s.policy = s.policy.cites(h)

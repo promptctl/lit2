@@ -44,7 +44,7 @@ func TestAContributorsRefusalNamesEveryCapabilityOfTheVerbAndWhatItMissed(t *tes
 	theirs := idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(1)}))[0])
 	epic := idOf(w.mint(b, w.state(), create(events.AtLevel{Level: level(2)}))[0])
 	rmOwn := events.MustCapability("rm own/* (level=1)")
-	rmComment := events.MustCapability("rm own/comments/*")
+	rmComment := events.MustCapability("rm own/*/*")
 	for _, c := range []struct {
 		name   string
 		draft  events.Draft

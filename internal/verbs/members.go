@@ -175,7 +175,7 @@ func lacks(pr fold.Proposal) string {
 
 // govern compiles a governed write: the policy in force with the one change
 // it names, proposed as the next version, and approved in the same command
-// when the writer's approval alone satisfies it; or an approval of a
+// when the writer's approval counts toward it; or an approval of a
 // proposal. The fold judges both, as every replica does, so govern only
 // shapes them.
 func govern(w World, wr write) ([]piece, []Change, []claim, *refusal) {
@@ -222,7 +222,7 @@ func govern(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 	prop := in.Proposal(next)
 	pieces := []piece{fact{prop}}
 	changes := []Change{Proposed{Digest: prop.Digest(), Base: in.Version(), Writes: diff}}
-	if w.State().Satisfied(next, []events.PrincipalID{w.Me}) {
+	if w.State().Approves(next, w.Me) {
 		pieces = append(pieces, fact{events.Approve{Proposal: prop.Digest()}})
 		changes = append(changes, Approved{Digest: prop.Digest(), Base: in.Version()})
 	}

@@ -115,14 +115,17 @@ func (p policyState) equal(o policyState) bool {
 	if (p.active == nil) != (o.active == nil) {
 		return false
 	}
-	if p.active != nil && (!policyEqual(p.active.Policy, o.active.Policy) || !p.active.Since.equal(o.active.Since) || p.active.Enrollment != o.active.Enrollment) {
+	if (p.founding == nil) != (o.founding == nil) || p.founding != nil && *p.founding != *o.founding {
+		return false
+	}
+	if p.active != nil && (!policyEqual(p.active.Policy, o.active.Policy) || !p.active.Since.equal(o.active.Since)) {
 		return false
 	}
 	byDigest := func(a, b pendingRec) int { return slices.Compare(a.digest[:], b.digest[:]) }
 	return slices.EqualFunc(p.pending.sorted(byDigest), o.pending.sorted(byDigest), func(x, y pendingRec) bool {
 		return x.digest == y.digest && x.by.equal(y.by) && x.activated == y.activated && slices.Equal(sortedPrincipals(x.approvals), sortedPrincipals(y.approvals))
 	}) && slices.EqualFunc(p.requests.sorted(byPrincipalKey), o.requests.sorted(byPrincipalKey), func(x, y requestRec) bool {
-		return x.principal == y.principal && x.stamp.equal(y.stamp)
+		return x.principal == y.principal && x.stamp.equal(y.stamp) && x.admitted == y.admitted
 	}) && slices.Equal(p.cited.sorted(byCheckoutKey), o.cited.sorted(byCheckoutKey))
 }
 

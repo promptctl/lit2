@@ -17,23 +17,27 @@ type PolicyInForce interface{ policyInForce() }
 // Unenrolled is a store with no enrollment folded.
 type Unenrolled struct{}
 
-// Enrolled is the policy in force, Since the event that activated it, and
-// Enrollment the enrollment verification seeded at.
+// Enrolled is the policy in force, Since the event that activated it.
 type Enrolled struct {
-	Policy     events.Policy
-	Since      Stamp
-	Enrollment events.EventID
+	Policy events.Policy
+	Since  Stamp
 }
 
 func (Unenrolled) policyInForce() {}
 func (Enrolled) policyInForce()   {}
 
-// policyState is the policy folded so far: the version in force, every
-// proposal with its approvals, every membership request, and the version
-// each writer last cited. The fold walks the total order, so the version in
-// force when an event is judged is the one folded before it (§3.20).
+// policyState is the policy folded so far: the enrollment that founded
+// the store, the version in force, every proposal with its approvals,
+// every membership request, and the version each writer last cited. The
+// fold walks the total order, so the version in force when an event is
+// judged is the one folded before it (§3.20).
 type policyState struct {
-	// active is the version in force; nil before the enrollment.
+	// founding is the first enrollment in total order, which every later
+	// one yields to, read or not: a replica that cannot read it founds on
+	// no other; nil before it.
+	founding *events.EventID
+	// active is the version in force; nil before the enrollment, and on a
+	// replica that cannot read it.
 	active   *Enrolled
 	pending  table[events.Digest, pendingRec, byDigest]
 	requests table[events.PrincipalID, requestRec, byPrincipal]
@@ -50,9 +54,11 @@ type pendingRec struct {
 	activated bool
 }
 
+// requestRec is a principal's request, admitted once a version lists them.
 type requestRec struct {
 	principal events.PrincipalID
 	stamp     Stamp
+	admitted  bool
 }
 
 type citedRec struct {
@@ -85,8 +91,8 @@ func (p policyState) version() events.PolicyVersion {
 func (p policyState) admits(h events.Header) Reason {
 	enrolling := h.Kind() == enrollKind
 	switch {
-	case enrolling && p.active != nil:
-		return EnrollmentYielded{To: p.active.Enrollment}
+	case enrolling && p.founding != nil:
+		return EnrollmentYielded{To: *p.founding}
 	case !enrolling && p.active == nil:
 		return NoPolicyInForce{}
 	case h.Policy() > p.version():
@@ -110,15 +116,21 @@ func (p policyState) cites(h events.Header) policyState {
 
 // judge is the policy rule's verdict on act, made by st, or nil when
 // it applies: a proposal needs the version in force as its base, a policy
-// NewPolicy accepts, a writer granted every path its diff writes, and a
-// requirement its approvers can meet; an approval, a pending proposal and
-// an approver its requirement names. An enrollment and a request certify
-// themselves.
+// NewPolicy accepts that differs from it, a writer granted every path its
+// diff writes, and a requirement its approvers can meet; an approval, a
+// proposal pending on the version in force and an approver its
+// requirement names; a request, a writer no version lists. An enrollment
+// certifies itself.
 func (s State) judge(st Stamp, act PolicyAct) Reason {
 	p := s.policy.active
 	who := st.By.Principal
 	switch ch := act.(type) {
-	case EnrollPolicy, RequestMembership:
+	case EnrollPolicy:
+		return nil
+	case RequestMembership:
+		if _, listed := p.Policy.Role(who); listed {
+			return Inadmissible{Why: "its writer is a member"}
+		}
 		return nil
 	case ProposePolicy:
 		if ch.Propose.Base != p.Policy.Version() {
@@ -128,7 +140,11 @@ func (s State) judge(st Stamp, act PolicyAct) Reason {
 		if err != nil {
 			return Inadmissible{Why: err.Error()}
 		}
-		for _, w := range Diff(p.Policy, next) {
+		diff := Diff(p.Policy, next)
+		if len(diff) == 0 {
+			return Inadmissible{Why: "it changes nothing"}
+		}
+		for _, w := range diff {
 			if r, refused := s.authorize(p.Policy, who, w).(Refused); refused {
 				return Unauthorized{Intent: w, Refused: r}
 			}
@@ -141,6 +157,9 @@ func (s State) judge(st Stamp, act PolicyAct) Reason {
 		rec, ok := s.policy.pending.get(ch.Proposal)
 		if !ok {
 			return UnknownProposal(ch)
+		}
+		if rec.propose.Base != p.Policy.Version() {
+			return Inadmissible{Why: fmt.Sprintf("it approves a change to version %d; version %d is in force", rec.propose.Base, p.Policy.Version())}
 		}
 		if !s.approves(p.Policy, rec.need, who) {
 			return NotAnApprover(ch)
@@ -174,13 +193,14 @@ func (s State) holdsEvery(prev events.Policy, who events.PrincipalID, targets []
 
 // applyPolicy is s with the judged policy act, made by st, folded:
 // the enrollment seeds version one; a proposal waits for its approvals;
-// an approval that completes its proposal's requirement while its base is
-// in force activates the next version.
+// an approval that completes its proposal's requirement activates the next
+// version, admitting each request of a member it lists; a request waits,
+// replacing one its writer made before a removal.
 func (s State) applyPolicy(st Stamp, act PolicyAct) State {
 	p := s.policy
 	switch ch := act.(type) {
 	case EnrollPolicy:
-		p.active = &Enrolled{Policy: ch.Enroll.Policy(st.By.Principal), Since: st, Enrollment: st.Event}
+		p.founding, p.active = &st.Event, &Enrolled{Policy: ch.Enroll.Policy(st.By.Principal), Since: st}
 	case ProposePolicy:
 		d := ch.Propose.Digest()
 		if _, ok := p.pending.get(d); ok {
@@ -195,14 +215,19 @@ func (s State) applyPolicy(st Stamp, act PolicyAct) State {
 			rec.approvals = append(slices.Clone(rec.approvals), st.By.Principal)
 			p.pending = p.pending.set(rec)
 		}
-		in := p.active.Policy
-		if rec.propose.Base == in.Version() && s.satisfied(in, rec.need, rec.approvals) {
-			p.active = &Enrolled{Policy: rec.next, Since: st, Enrollment: p.active.Enrollment}
+		if s.satisfied(p.active.Policy, rec.need, rec.approvals) {
+			p.active = &Enrolled{Policy: rec.next, Since: st}
 			rec.activated = true
 			p.pending = p.pending.set(rec)
+			for _, m := range rec.next.Members() {
+				if r, ok := p.requests.get(m.Principal); ok {
+					r.admitted = true
+					p.requests = p.requests.set(r)
+				}
+			}
 		}
 	case RequestMembership:
-		if _, ok := p.requests.get(st.By.Principal); !ok {
+		if r, ok := p.requests.get(st.By.Principal); !ok || r.admitted {
 			p.requests = p.requests.set(requestRec{principal: st.By.Principal, stamp: st})
 		}
 	default:
@@ -327,15 +352,12 @@ func (s State) satisfied(prev events.Policy, r Requirement, approvers []events.P
 	panic(fmt.Sprintf("fold: %T is not a Requirement", r))
 }
 
-// Satisfied is whether approvers alone meet what the change from the
-// policy in force to next requires: what a writer asks before it adds its
-// own approval to its proposal.
-func (s State) Satisfied(next events.Policy, approvers []events.PrincipalID) bool {
-	in := s.policy.active
-	if in == nil {
-		return false
-	}
-	return s.satisfied(in.Policy, Require(in.Policy, next), approvers)
+// Approves is whether who's approval counts toward the change from the
+// policy in force to next: what a writer asks before it approves its own
+// proposal.
+func (s State) Approves(next events.Policy, who events.PrincipalID) bool {
+	in := s.policy.active.Policy
+	return s.approves(in, Require(in, next), who)
 }
 
 // Policy is the policy in force.
@@ -381,17 +403,13 @@ type Request struct {
 	Stamp     Stamp
 }
 
-// Requests is every request by a principal not a member of the policy in
-// force, in total order.
+// Requests is every request no version has admitted, in total order.
 func (s State) Requests() []Request {
 	var out []Request
 	for _, r := range s.policy.requests.sorted(func(a, b requestRec) int { return events.Compare(a.stamp.Order, b.stamp.Order) }) {
-		if s.policy.active != nil {
-			if _, member := s.policy.active.Policy.Role(r.principal); member {
-				continue
-			}
+		if !r.admitted {
+			out = append(out, Request{Principal: r.principal, Stamp: r.stamp})
 		}
-		out = append(out, Request{Principal: r.principal, Stamp: r.stamp})
 	}
 	return out
 }

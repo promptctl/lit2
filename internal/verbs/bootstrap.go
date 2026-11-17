@@ -13,13 +13,12 @@ var Owner = events.MustName("owner")
 // DefaultRoles is the default profile's roles below owner, spelled as path
 // globs (access-control/design.md, Roles): observer writes nothing;
 // contributor files work, moves any ticket, comments, and edits and
-// removes what it created, removing only a leaf of its items and any of
-// its comments; editor writes and removes every path of every item. A
+// removes what it created, removing only a leaf of its items; editor writes and removes every path of every item. A
 // column condition the fold cannot judge from its own facts is no
 // capability's, so contributor's status moves are bound all.
 func DefaultRoles() map[events.Name][]events.Capability {
 	contributor := capabilities("add */children", "add own/*", "set own/*", "set */status", "add */comments",
-		"rm own/comments/*", "rm own/* (level=1)")
+		"rm own/*/*", "rm own/* (level=1)")
 	return map[events.Name][]events.Capability{
 		events.MustName("observer"):    nil,
 		events.MustName("contributor"): contributor,

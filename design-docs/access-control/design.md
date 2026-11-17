@@ -151,7 +151,7 @@ not restated stronger here), spelled as path globs in the default profile:
 | Role | Capabilities (beyond the previous row) |
 |---|---|
 | observer | `get` (holds the tier keys granted to them; no write verbs) |
-| contributor | `add */children`; `set */status` bound `all` (pulling the top of the shared queue regardless of creator *is* the agent workflow; a column is no capability's condition, since only the writer's file declares columns and no verifier could judge one, so the workflow gate holds where a status may move); `add own/*`; `set own/*`; `add */comments`; `rm own/comments/*`; `rm own/*` at level 1 |
+| contributor | `add */children`; `set */status` bound `all` (pulling the top of the shared queue regardless of creator *is* the agent workflow; a column is no capability's condition, since only the writer's file declares columns and no verifier could judge one, so the workflow gate holds where a status may move); `add own/*`; `set own/*`; `add */comments`; `rm own/*/*`; `rm own/*` at level 1 |
 | editor | `set */*` and `rm */*` bound `all` at level 1 and above; `set */rank`; `add */blocks`, `add */relates`; `set */tier` |
 | owner | everything, including `rm * --purge`, `rm * --destroy`, `member.admin`, `policy.admin`, `set /policy/*` |
 

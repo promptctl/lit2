@@ -84,7 +84,7 @@ var (
 	owner       = name("owner")
 	contributor = name("contributor")
 	roles       = map[events.Name][]events.Capability{contributor: capabilities(
-		"add */children", "add own/*", "set own/*", "set */status", "add */comments", "rm own/comments/*", "rm own/* (level=1)")}
+		"add */children", "add own/*", "set own/*", "set */status", "add */comments", "rm own/*/*", "rm own/* (level=1)")}
 	// founder enrolls every world, under A's key, on a ref of its own, and
 	// founderB approves B into it, so the founding sorts before any test's
 	// event

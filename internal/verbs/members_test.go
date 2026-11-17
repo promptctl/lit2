@@ -36,13 +36,14 @@ func TestBootstrapIsInitsStepOverTheLocalFold(t *testing.T) {
 	}
 }
 
-// TestASoloOwnersAddDraftsTheProposalAndItsApproval: one owner is the
-// threshold, so admitting a contributor is one command; an incoming owner
-// approves their own admission, so adding one drafts the proposal alone.
+// TestASoloOwnersAddDraftsTheProposalAndItsApproval: the owner's approval
+// counts toward every change, so both an add of a contributor and of an
+// owner draft it beside the proposal; the incoming owner's own approval is
+// theirs to give.
 func TestASoloOwnersAddDraftsTheProposalAndItsApproval(t *testing.T) {
 	for role, want := range map[string][]events.Kind{
 		"contributor": {events.Propose{}.Kind(), events.Approve{}.Kind()},
-		"owner":       {events.Propose{}.Kind()},
+		"owner":       {events.Propose{}.Kind(), events.Approve{}.Kind()},
 	} {
 		b := newBook(t, profile(""))
 		b.st = foldtest.Founded(env, key.Signer(), events.Enroll{Owner: verbs.Owner, Roles: verbs.DefaultRoles()})
