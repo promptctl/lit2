@@ -76,7 +76,7 @@ is this ticket stuck" is answered on the line, and "why is this ticket in
 
 Two constraints the computed model needed become structural. Derivations never
 write facts: there is no action that could. Derivations never loop: a derived
-field reads stored facts, stored columns and the clock, never another rule's
+field reads stored facts, stored columns and `now`, never another rule's
 output, so which configuration evaluate applies and how competing placements
 resolve have nothing left to decide. Derived fields under the active version,
 columns from the trail.

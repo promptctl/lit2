@@ -621,7 +621,7 @@ of (events, clock, argv, writer); the rest is the hearth
    schema value.
 4. **Address.** Parse each path into a typed address; expand selectors and
    globs once.
-5. **Evaluate.** `get` computes its answer with evaluate and the clock. A write
+5. **Evaluate.** `get` computes its answer with evaluate, handed `now`. A write
    computes a description: the intents it would mint, the requirement and
    capability verdicts, the derivations, the echo. Refusal of any path
    refuses the whole.
@@ -717,9 +717,9 @@ decided in the body.
 
 ## 8. Constraints on later work
 
-- A new ticket fact is an event kind plus a fold rule and, if it reads the
-  clock or the configuration, an evaluate rule. A new piece of the model is a key in `.lit/workspace.toml`.
-  Never a table, never a second store.
+- A new ticket fact is an event kind plus a fold rule and, if it needs the
+  clock or the configuration, an evaluate rule. A new piece of the model is a
+  key in `.lit/workspace.toml`. Never a table, never a second store.
 - Every mutating verb on a path has a capability `(verb, path glob,
   binding)`; what cannot be spelled as a path write cannot be authorized,
   and a path write with no capability does not ship.
@@ -732,8 +732,9 @@ decided in the body.
   requirement that reads prose by content is evaluated by its writer, who
   holds the key; a reader without it sees that requirement's verdict as
   `unknown (tier)`, a third value of the verdict type, never a guess.
-- The fold reads no clock; evaluate reads `now`, handed to it, never the clock. A derivation that wants both is
-  two derivations.
+- The fold reads no clock, and evaluate reads none either: it is handed `now`.
+  A derivation that wants both events and `now` is two derivations, a fold
+  rule and an evaluate rule.
 - No network on a foreground path; no lock on the cache.
 - A handler produces text and nothing else.
 
