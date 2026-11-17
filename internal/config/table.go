@@ -125,13 +125,13 @@ func (t Table) Find(p field.Place, path field.Path) (Row, error) {
 	return nil, UnknownField{Path: path, Known: known}
 }
 
-// Named is every field path names, at any place: what a test's atom reads,
-// since its scope can reach items of every level. None is a path no field
-// takes.
+// Named is every field path names at an item of any level: what a test's
+// atom reads, since its scope can reach items of every level, and a
+// comment's fields are no item's. None is a path no item's field takes.
 func (t Table) Named(path field.Path) []field.FieldDecl {
 	var out []field.FieldDecl
 	for _, r := range t.rows {
-		if f, ok := r.(FieldRow); ok && f.At == path {
+		if f, ok := r.(FieldRow); ok && f.At == path && f.Decl.At.OfItems() {
 			out = append(out, f.Decl)
 		}
 	}

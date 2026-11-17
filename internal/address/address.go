@@ -129,8 +129,8 @@ func Parse(st fold.State, schema config.Schema, text string) (Address, Refusal) 
 	if text == "" {
 		return Address{}, Syntax{Text: text, Why: "a path is / or names a home or an item"}
 	}
-	if text != "/" && strings.HasSuffix(text, "/") {
-		return Address{}, Syntax{Text: text, Why: "a path does not end in /"}
+	if text != "/" && strings.HasSuffix(text, "/") || strings.Contains(text, "//") {
+		return Address{}, Syntax{Text: text, Why: "a path has no empty step and does not end in /"}
 	}
 	head, steps, hasSteps := strings.Cut(text, "/")
 	var a Address
@@ -181,21 +181,25 @@ func node(st fold.State, schema config.Schema, head string) (Node, field.Place, 
 }
 
 // target reads the steps after a's node against the table at its place.
-// When no run of the steps is a row, the refusal is the whole steps',
-// which names a field at another place as such.
+// When no run of the steps is a row here, the refusal is the longest run
+// that is a field at another place, or else the first step's.
 func target(t config.Table, a Address, it fold.Item, steps string) (Address, Refusal) {
-	r, whole := t.Find(a.Place, field.Path(steps))
-	if whole == nil {
+	r, refusal := t.Find(a.Place, field.Path(steps))
+	if refusal == nil {
 		a.Target = Field{Path: field.Path(steps), Row: r}
 		return a, nil
 	}
 	for i := strings.LastIndex(steps, "/"); i >= 0; i = strings.LastIndex(steps[:i], "/") {
 		path := field.Path(steps[:i])
-		if r, err := t.Find(a.Place, path); err == nil {
+		r, err := t.Find(a.Place, path)
+		if err == nil {
 			return keyed(t, a, it, path, r, steps[i+1:])
 		}
+		if _, elsewhere := refusal.(config.NotOnLevel); !elsewhere {
+			refusal = err
+		}
 	}
-	return Address{}, found(whole)
+	return Address{}, found(refusal)
 }
 
 // keyed reads the steps after row r of a's node: a member of a set, which

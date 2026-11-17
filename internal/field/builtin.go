@@ -110,6 +110,8 @@ func ItemPlace(l events.Level) Place {
 //sumtype:decl
 type Places interface {
 	Holds(Place) bool
+	// OfItems is whether an item of some level is among the places.
+	OfItems() bool
 	places()
 }
 
@@ -139,6 +141,12 @@ func (s PlaceSet) Holds(p Place) bool {
 	}
 	panic(fmt.Sprintf("field: %T is not a Place", p))
 }
+
+// OfItems is whether the set names a kind of item.
+func (s PlaceSet) OfItems() bool { return s.Leaf || s.Node }
+
+// OfItems is true: a declared field is its level's items'.
+func (OnLevel) OfItems() bool { return true }
 
 // Holds is whether p is an item of the level.
 func (o OnLevel) Holds(p Place) bool {

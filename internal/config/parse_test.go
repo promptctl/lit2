@@ -222,6 +222,7 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"no-terminal", replace("terminal = true", ""), ReasonNoTerminal},
 		{"bad-atom", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nentry = [{ test = \"=bad\", severity = \"error\" }]"), ReasonBadAtom},
 		{"path-undeclared", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nentry = [{ test = \"nope\", severity = \"error\" }]"), ReasonPathUndeclared},
+		{"path-a-comment-field", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nentry = [{ test = \"body\", severity = \"error\" }]"), ReasonPathUndeclared},
 		{"path-is-check", replace("[columns.done]\nterminal = true", "[checks.ready]\ntests = [{ test = \"description\" }]\n\n[columns.done]\nterminal = true\nentry = [{ test = \"ready\", severity = \"error\" }]"), ReasonPathIsCheck},
 		{"atom-value", func(s string) string {
 			s = replace(`prefix = "lit"`, "prefix = \"lit\"\nlabels = [\"ready\"]")(s)
