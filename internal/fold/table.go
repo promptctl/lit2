@@ -52,9 +52,9 @@ const (
 
 // The tables' hashers.
 type (
-	// byItem is FNV-1a over the id's text.
+	// byItem is the item id's first eight bytes: the id is random bits.
 	byItem struct{}
-	// byElement is FNV-1a over the element id's text.
+	// byElement is the element id's first eight bytes, the same way.
 	byElement struct{}
 	// byName is FNV-1a over a name's text.
 	byName struct{}
@@ -64,9 +64,15 @@ type (
 	byRecord struct{}
 )
 
-func (byItem) hash(id events.ItemID) uint64 { return fnv64a(id.String()) }
+func (byItem) hash(id events.ItemID) uint64 {
+	b := id.Bytes()
+	return binary.LittleEndian.Uint64(b[:8])
+}
 
-func (byElement) hash(id events.ElementID) uint64 { return fnv64a(id.String()) }
+func (byElement) hash(id events.ElementID) uint64 {
+	b := id.Bytes()
+	return binary.LittleEndian.Uint64(b[:8])
+}
 
 func (byName) hash(name string) uint64 { return fnv64a(name) }
 

@@ -169,7 +169,7 @@ func (r *item) withElement(id events.ElementID, f func(*element) *element) *item
 // sortedElements is r's elements in id order: a table holds no order, so
 // a reader that needs one sorts what it reads.
 func (r *item) sortedElements() []*element {
-	return r.elements.sorted(func(a, b *element) int { return cmp.Compare(a.id.String(), b.id.String()) })
+	return r.elements.sorted(func(a, b *element) int { return a.id.Compare(b.id) })
 }
 
 func (el *element) withListing(l listing) *element {

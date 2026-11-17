@@ -115,16 +115,15 @@ type Declared[T any] struct {
 // Get is the declared value and whether it was declared.
 func (d Declared[T]) Get() (T, bool) { return d.v, d.ok }
 
-// NodeKey names the node a section belongs to: an item as a person types
-// it, resolved against the fold by whoever builds an Ancestry, or a
+// NodeKey names the node a section belongs to: an item by its full id, or a
 // declared home by its name. Exactly one of the two is set.
 type NodeKey struct {
-	item events.ShortID
+	item events.ItemID
 	home string
 }
 
 // ItemNode is the section key of one item.
-func ItemNode(id events.ShortID) NodeKey { return NodeKey{item: id} }
+func ItemNode(id events.ItemID) NodeKey { return NodeKey{item: id} }
 
 // HomeNode is the section key of a declared home.
 func HomeNode(home string) NodeKey { return NodeKey{home: home} }

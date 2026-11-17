@@ -20,7 +20,7 @@ func layered(t *testing.T) Schema {
 
 func itemNode(t *testing.T, id string) NodeKey {
 	t.Helper()
-	parsed, err := events.ParseShortID(id, layered(t).Prefix())
+	parsed, err := events.ParseItemID(id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestEffectiveRootAlone(t *testing.T) {
 func TestEffectiveSectionAddsAColumn(t *testing.T) {
 	s := layered(t)
 	// review's next names audit, which the home declares, so the home is in the ancestry.
-	a := Ancestry{itemNode(t, "lit-7k2"), HomeNode("unfiled")}
+	a := Ancestry{itemNode(t, anItem), HomeNode("unfiled")}
 	e, err := s.Effective(a)
 	if err != nil {
 		t.Fatal(err)
@@ -63,9 +63,9 @@ func TestEffectiveSectionAddsAColumn(t *testing.T) {
 		t.Errorf("review = %s, want active", review.Stage())
 	}
 	if origin, ok := e.ColumnOrigin["review"].(SectionOrigin); !ok || origin.Key != a[0] {
-		t.Errorf("review's origin = %#v, want the lit-7k2 section", e.ColumnOrigin["review"])
+		t.Errorf("review's origin = %#v, want the item's section", e.ColumnOrigin["review"])
 	}
-	// lit-7k2 declares no claim_ttl, so the home's 2h is the nearest one that does.
+	// The item's section declares no claim_ttl, so the home's 2h is the nearest one that does.
 	if e.ClaimTTL.String() != "2h0m0s" {
 		t.Errorf("claim_ttl = %s, want the home's 2h", e.ClaimTTL)
 	}
@@ -91,7 +91,7 @@ func TestEffectiveHomeClaimLifetime(t *testing.T) {
 // refused without the home on it.
 func TestEffectiveNextReachesAcrossAncestors(t *testing.T) {
 	s := layered(t)
-	item := itemNode(t, "lit-7k2")
+	item := itemNode(t, anItem)
 	_, err := s.Effective(Ancestry{item})
 	var refused *ResolutionRefused
 	if !errors.As(err, &refused) {

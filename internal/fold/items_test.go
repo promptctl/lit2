@@ -152,6 +152,14 @@ func TestAParentCreatedAfterItsChildIsNoLinkAndTheWalkEnds(t *testing.T) {
 			t.Errorf("%s in a forged cycle renders by no segments", id)
 		}
 	}
+	// p is under child, whose create sorts first, as p's path renders it;
+	// child's link to p sorts after, so the walk down from child ends at p
+	if got := s.Children(fold.Under{Parent: idOf(child)}); !slices.Equal(got, []events.ItemID{p}) {
+		t.Errorf("child's children are %v; want p", got)
+	}
+	if got := s.Children(fold.Under{Parent: p}); len(got) != 0 {
+		t.Errorf("p's children are %v; want none, the forged back-link unfollowed", got)
+	}
 }
 
 func TestTwoCreatesOfOneIDCollideAndTheFirstPlacesIt(t *testing.T) {

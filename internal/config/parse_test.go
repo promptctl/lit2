@@ -231,7 +231,7 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"bad-pair", replace("[columns.backlog]", "[links.x]\nkind = \"relates\"\nbetween = [[1]]\n\n[columns.backlog]"), ReasonBadPair},
 		{"pair-level-undeclared", replace("[columns.backlog]", "[links.x]\nkind = \"relates\"\nbetween = [[1, 9]]\n\n[columns.backlog]"), ReasonPairLevelUndeclared},
 		{"bad-duration", replace(`claim_ttl = "6h"`, `claim_ttl = "soon"`), ReasonBadDuration},
-		{"bad-node-key", replace("[columns.backlog]", "[nodes.\"zzz-7k2\"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]"), ReasonBadNodeKey},
+		{"bad-node-key", replace("[columns.backlog]", "[nodes.zzz]\nclaim_ttl = \"1h\"\n\n[columns.backlog]"), ReasonBadNodeKey},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -341,7 +341,7 @@ entry = [{ check = "sized", severity = "error" }]
 [nodes.unfiled]
 claim_ttl = "2h"
 
-[nodes."lit-7k2".columns.review]
+[nodes.k7k20000000000000000000000.columns.review]
 next = ["audit"]
 entry = [{ test = "labels=needs-design", scope = "ancestors", severity = "warning" }]
 
@@ -365,7 +365,7 @@ func TestEverySectionParses(t *testing.T) {
 	if lv, _ := s.Level(1); lv.Fields["size"].Kind == nil {
 		t.Error("a declared field is in its level's field table")
 	}
-	// unfiled is one section though two tables name it; lit-7k2 is the other.
+	// unfiled is one section though two tables name it; the item is the other.
 	if len(s.Sections()) != 2 {
 		t.Errorf("sections = %d, want 2", len(s.Sections()))
 	}
@@ -598,37 +598,40 @@ func TestEachFaultOnce(t *testing.T) {
 // TestAHomeIsAHomeWhateverItsName: a section keyed by a declared home is that
 // home's, even when the name could also be read as an item id.
 func TestAHomeIsAHomeWhateverItsName(t *testing.T) {
-	text := replace(`home = "unfiled"`, `home = "lit-7k2"`)(minimal)
-	text = replace("[columns.backlog]", "[nodes.\"lit-7k2\"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(text)
+	text := replace(`home = "unfiled"`, `home = "`+anItem+`"`)(minimal)
+	text = replace("[columns.backlog]", "[nodes."+anItem+"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(text)
 	s, err := parseText(t, text)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.Sections()[HomeNode("lit-7k2")]; !ok {
-		t.Errorf("sections = %v, want the home lit-7k2's", s.Sections())
+	if _, ok := s.Sections()[HomeNode(anItem)]; !ok {
+		t.Errorf("sections = %v, want the home %s's", s.Sections(), anItem)
 	}
 }
 
-// TestAnItemKeyIsBareOrUnderTheFilesOwnPrefix: "lit-7k2" and "7k2" key
-// one node, as an id typed either way names one item; a key under another
-// prefix is another project's, and its refusal names that prefix.
-func TestAnItemKeyIsBareOrUnderTheFilesOwnPrefix(t *testing.T) {
-	for _, key := range []string{`"lit-7k2"`, "7k2"} {
-		s, err := parseText(t, replace("[columns.backlog]", "[nodes."+key+"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(minimal))
-		if err != nil {
-			t.Fatal(err)
-		}
-		bare, err := events.ParseShortID("7k2", s.Prefix())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := s.Sections()[ItemNode(bare)]; !ok {
-			t.Errorf("[nodes.%s]: sections = %v, want 7k2's", key, s.Sections())
-		}
+// anItem is an item's full id that is also a home's name.
+const anItem = "k7k20000000000000000000000"
+
+// TestAnItemKeyIsItsFullID: a section names its item by the full id, its one
+// spelling; a short id or a prefixed one is refused, so two keys never name
+// one item and a key's meaning survives every sync.
+func TestAnItemKeyIsItsFullID(t *testing.T) {
+	s, err := parseText(t, replace("[columns.backlog]", "[nodes."+anItem+"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(minimal))
+	if err != nil {
+		t.Fatal(err)
 	}
-	refusals := refusalsOf(t, replace("[columns.backlog]", "[nodes.\"zzz-7k2\"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(minimal))
-	if len(refusals) != 1 || refusals[0].Reason != ReasonBadNodeKey || !strings.Contains(refusals[0].Message, "zzz") {
-		t.Errorf("a key under another prefix: refusals = %v, want one bad-node-key naming zzz", refusals)
+	id, err := events.ParseItemID(anItem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Sections()[ItemNode(id)]; !ok {
+		t.Errorf("sections = %v, want %s's", s.Sections(), anItem)
+	}
+	for _, key := range []string{"k7k", `"lit-k7k"`, `"lit-` + anItem + `"`} {
+		refusals := refusalsOf(t, replace("[columns.backlog]", "[nodes."+key+"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(minimal))
+		if len(refusals) != 1 || refusals[0].Reason != ReasonBadNodeKey {
+			t.Errorf("[nodes.%s]: refusals = %v, want one bad-node-key", key, refusals)
+		}
 	}
 }
 

@@ -49,6 +49,19 @@ func (id ItemID) String() string { return digits(id.b, fullWidth) }
 // String is the full id: 26 Crockford digits.
 func (id ElementID) String() string { return digits(id.b, fullWidth) }
 
+// Bytes is the id's 128 bits.
+func (id ItemID) Bytes() [16]byte { return id.b }
+
+// Bytes is the id's 128 bits.
+func (id ElementID) Bytes() [16]byte { return id.b }
+
+// Compare orders ids as their text does, by their bits, which Crockford's
+// digits keep in order.
+func (id ItemID) Compare(o ItemID) int { return compareBits(id.b, o.b) }
+
+// Compare orders ids as their text does, by their bits.
+func (id ElementID) Compare(o ElementID) int { return compareBits(id.b, o.b) }
+
 // Segment is the id's first w digits: its short form at width w.
 func (id ItemID) Segment(w int) Segment { return Segment{s: digits(id.b, w)} }
 

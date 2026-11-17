@@ -1,7 +1,6 @@
 package address
 
 import (
-	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -31,15 +30,15 @@ func (a Ambiguous) Error() string {
 	return fmt.Sprintf("%s names %d items: %s", a.ID, len(a.Candidates), strings.Join(names, ", "))
 }
 
-// Resolve is the one item id names in st. A full id names its item
-// wherever it sits; segments name the created items whose rendered path
+// Resolve is the one created item id names in st. A full id names its
+// item wherever it sits; segments name the created items whose rendered path
 // ends with them, so the last is the item's own segment, unique among every
 // id its writer had folded, and any before it are its ancestors' nearest
 // last. Hierarchy narrows a match and never makes one (§3.2).
 func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
 	switch id := id.(type) {
 	case events.FullID:
-		if _, ok := st.Item(id.ID).(fold.Found); ok {
+		if f, ok := st.Item(id.ID).(fold.Found); ok && created(f.Item) {
 			return id.ID, nil
 		}
 		return events.ItemID{}, NotFound{ID: id}
@@ -58,8 +57,18 @@ func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
 		case 1:
 			return matches[0], nil
 		}
-		slices.SortFunc(matches, func(a, b events.ItemID) int { return cmp.Compare(a.String(), b.String()) })
+		slices.SortFunc(matches, events.ItemID.Compare)
 		return events.ItemID{}, Ambiguous{ID: id, Candidates: matches}
 	}
 	panic(fmt.Sprintf("address: %T is not a ShortID", id))
+}
+
+// created is whether it was created: an id that facts only name is no item.
+func created(it fold.Item) bool {
+	switch it.Origin.(type) {
+	case fold.Created, fold.Collided:
+		return true
+	case fold.Uncreated:
+	}
+	return false
 }

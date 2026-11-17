@@ -104,6 +104,18 @@ func TestASegmentTwoOfflineWritersFixedIsAmbiguousAndListsBoth(t *testing.T) {
 	}
 }
 
+func TestAFullIDNamesOnlyACreatedItem(t *testing.T) {
+	ghost := events.FullID{ID: must(events.ParseItemID("g0000000000000000000000000"))}
+	s, _ := mint(t, fold.State{}, fold.State{}, 1, events.Act{About: events.Item{ID: ghost.ID},
+		Payload: events.FieldSet{Field: must(events.ParseName("title")), Value: events.Prose{Body: events.SealPlain("t")}}}, [16]byte{})
+	if _, ok := s.Item(ghost.ID).(fold.Found); !ok {
+		t.Fatalf("the fold holds no record of %s, which a fact names", ghost)
+	}
+	if _, err := address.Resolve(s, ghost); !errors.As(err, new(address.NotFound)) {
+		t.Errorf("an id facts only name resolves: %v; want NotFound", err)
+	}
+}
+
 func TestSegmentsResolveByTheItemsOwnAndItsAncestors(t *testing.T) {
 	var s fold.State
 	s, epic := mint(t, s, s, 0xa, top(3), [16]byte{0x10})

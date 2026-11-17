@@ -363,11 +363,13 @@ func (s State) Items() []Item {
 	return out
 }
 
-// Children is the items created in c, in creation order.
+// Children is the items placed in c, in creation order: a child is under
+// its parent only when the parent's create sorts first, as levelOf and
+// Path read the chain, so no walk down the tree meets a cycle.
 func (s State) Children(c Container) []events.ItemID {
 	var in []*item
 	s.items.each(func(r *item) {
-		if !r.creates.empty() && r.firstCreate().in == c {
+		if !r.creates.empty() && s.placedIn(r.firstCreate(), c) {
 			in = append(in, r)
 		}
 	})
@@ -403,13 +405,13 @@ func (s State) Known() events.Known {
 	}
 	s.items.each(func(r *item) {
 		b.Saw(r.id)
-		for _, c := range r.sortedCreates() {
+		r.creates.each(func(c creation) {
 			switch in := c.in.(type) {
 			case Under:
 				b.Saw(in.Parent)
 			case Home:
 			}
-		}
+		})
 		if !r.creates.empty() {
 			b.Created(namespaceOf(r.firstCreate().in))
 		}
@@ -492,7 +494,7 @@ func (s State) Advisories() []Advisory {
 func (s State) records() []*item {
 	var rs []*item
 	s.items.each(func(r *item) { rs = append(rs, r) })
-	slices.SortFunc(rs, func(a, b *item) int { return cmp.Compare(a.id.String(), b.id.String()) })
+	slices.SortFunc(rs, func(a, b *item) int { return a.id.Compare(b.id) })
 	return rs
 }
 
@@ -554,6 +556,22 @@ func (s State) placing(id events.ItemID, child *events.OrderKey) (creation, bool
 		return creation{}, false
 	}
 	return c, true
+}
+
+// placedIn is whether create k places its item in c: a home always, a
+// parent only when the parent's own placing create sorts before k.
+func (s State) placedIn(k creation, c Container) bool {
+	if k.in != c {
+		return false
+	}
+	switch in := c.(type) {
+	case Home:
+		return true
+	case Under:
+		_, ok := s.placing(in.Parent, &k.stamp.Order)
+		return ok
+	}
+	panic(fmt.Sprintf("fold: %T is not a Container", c))
 }
 
 // Path is the segments id renders by, the top-most first (§3.2): each

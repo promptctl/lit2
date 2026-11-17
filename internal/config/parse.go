@@ -120,7 +120,7 @@ func (p *parser) schema(raw map[string]any, gate ReaderGate) Schema {
 	// an ancestor's section declares, and which sections stack is known only
 	// from the items, so here a section's next targets are checked only against
 	// every column declared anywhere; each stacked graph is checked at apply.
-	s.sections = p.sections(raw, s.levels, s.prefix)
+	s.sections = p.sections(raw, s.levels)
 	declared := map[string]bool{}
 	for name := range rootCols {
 		declared[name] = true
@@ -793,8 +793,8 @@ func (p *parser) severity(m map[string]any, at KeyPath) (Severity, bool) {
 }
 
 // sections reads the node sections: per-node columns and claim lifetimes,
-// keyed by an item id under the file's prefix or bare, or a declared home.
-func (p *parser) sections(raw map[string]any, levels []Level, prefix events.Prefix) map[NodeKey]Section {
+// keyed by an item's full id or a declared home.
+func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Section {
 	tbl, _ := p.table(raw, "", "nodes")
 	homes := map[string]bool{}
 	for _, lv := range levels {
@@ -804,7 +804,7 @@ func (p *parser) sections(raw map[string]any, levels []Level, prefix events.Pref
 	}
 	sections := map[NodeKey]Section{}
 	for _, key := range sortedKeys(tbl) {
-		node, err := nodeKey(key, homes, prefix)
+		node, err := nodeKey(key, homes)
 		if err != nil {
 			p.fail(keyed("nodes", `"`+key+`"`), ReasonBadNodeKey, "%q is not a declared home, and %v", key, err)
 			continue
@@ -826,13 +826,15 @@ func (p *parser) sections(raw map[string]any, levels []Level, prefix events.Pref
 	return sections
 }
 
-// nodeKey reads a section key: a declared home, or else an item id, as
-// events reads one under the active prefix `[LAW:single-enforcer]`.
-func nodeKey(key string, homes map[string]bool, prefix events.Prefix) (NodeKey, error) {
+// nodeKey reads a section key: a declared home, or else an item's full id,
+// bare, its one spelling. A committed file outlives every sync, and a
+// segment two offline writers fixed for two items names neither, so a key
+// is the item's identity, never its short form (§3.2).
+func nodeKey(key string, homes map[string]bool) (NodeKey, error) {
 	if homes[key] {
 		return HomeNode(key), nil
 	}
-	id, err := events.ParseShortID(key, prefix)
+	id, err := events.ParseItemID(key)
 	if err != nil {
 		return NodeKey{}, err
 	}

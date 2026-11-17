@@ -1,6 +1,8 @@
 package events
 
 import (
+	"bytes"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -157,6 +159,17 @@ func TestAnEntropySourceThatRepeatsFailsMint(t *testing.T) {
 	}
 	if _, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate, topCreate), keyOf(1).Signer(), drawing(anItem, anItem)); err == nil {
 		t.Error("one command drawing one id twice mints")
+	}
+}
+
+func TestAnEntropySourceThatFailsFailsMint(t *testing.T) {
+	for name, src := range map[string]io.Reader{
+		"no id":   bytes.NewReader(nil),
+		"no salt": bytes.NewReader(anItem.b[:]),
+	} {
+		if m, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate), keyOf(1).Signer(), src); err == nil || !strings.Contains(err.Error(), "drawing") {
+			t.Errorf("entropy with %s mints %v, %v; want an error naming the draw", name, m.Events, err)
+		}
 	}
 }
 
