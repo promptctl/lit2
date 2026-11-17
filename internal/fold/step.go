@@ -84,10 +84,10 @@ func (LeftFor) outcome()    {}
 // step folds one checked event into s, in this order, the first failure
 // its outcome (§3.20): a signature that does not verify is carried; an
 // event the policy cannot judge from its header is carried; a verified
-// event whose payload no rule applies is observed and left unapplied; its
-// intent is judged under the policy in force, and a refused one carried;
-// the rest are observed and applied. A carried event moves neither the
-// frontier nor the names.
+// event whose payload no rule applies is carried when no member wrote it,
+// and observed and left unapplied otherwise; its intent is judged under
+// the policy in force, and a refused one carried; the rest are observed
+// and applied. A carried event moves neither the frontier nor the names.
 func (r Registry) step(s State, c checked) (State, Outcome) {
 	e, h := c.event, c.event.Header()
 	switch c.verdict {
@@ -105,6 +105,13 @@ func (r Registry) step(s State, c checked) (State, Outcome) {
 	st := stampOf(e)
 	changes, intent, why := r.changes(st, h, e.Body())
 	if why != nil {
+		// only an enrollment is judged with no policy in force, and its
+		// writer founds the store
+		if p := s.policy.active; p != nil {
+			if _, listed := p.Policy.Role(st.By.Principal); !listed {
+				return s.carry(e, NotAMemberWrote{}), CarriedFor{Why: NotAMemberWrote{}}
+			}
+		}
 		s.frontier = s.frontier.Observe(h)
 		s.policy = s.policy.cites(h)
 		return s.leave(Unapplied{Stamp: st, Kind: h.Kind(), About: h.About(), Why: why}), LeftFor{Why: why}

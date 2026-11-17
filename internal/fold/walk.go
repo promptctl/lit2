@@ -165,7 +165,7 @@ type PolicyCounts struct {
 func newFacts() FoldFacts {
 	f := FoldFacts{Decoded: DecodeCounts{Unread: map[string]int{}}, Carried: map[string]int{}, Unapplied: map[string]int{}}
 	for _, r := range []Reason{BadSignature{}, UnknownSuite{}, NoPolicyInForce{}, EnrollmentYielded{}, CitesFutureVersion{},
-		VersionRegressed{}, Unauthorized{}, NotAnApprover{}, UnknownProposal{}, Inadmissible{}} {
+		VersionRegressed{}, Unauthorized{}, NotAnApprover{}, UnknownProposal{}, Inadmissible{}, NotAMemberWrote{}} {
 		f.Carried[ReasonName(r)] = 0
 	}
 	for _, w := range []UnappliedWhy{Unread{}, Erased{}, Uncommitted{}, Misaddressed{}} {
@@ -232,6 +232,8 @@ func ReasonName(r Reason) string {
 		return "unknown_proposal"
 	case Inadmissible:
 		return "inadmissible"
+	case NotAMemberWrote:
+		return "not_a_member"
 	}
 	panic(fmt.Sprintf("fold: %T is not a Reason", r))
 }

@@ -109,9 +109,10 @@ func (p policyState) cites(h events.Header) policyState {
 }
 
 // judge is the policy rule's verdict on act, made by st, or nil when
-// it applies: a proposal needs a writer granted every path its diff writes
-// and a policy NewPolicy accepts; an approval, a pending proposal and an
-// approver its requirement names. An enrollment and a request certify
+// it applies: a proposal needs the version in force as its base, a policy
+// NewPolicy accepts, a writer granted every path its diff writes, and a
+// requirement its approvers can meet; an approval, a pending proposal and
+// an approver its requirement names. An enrollment and a request certify
 // themselves.
 func (s State) judge(st Stamp, act PolicyAct) Reason {
 	p := s.policy.active
@@ -120,6 +121,9 @@ func (s State) judge(st Stamp, act PolicyAct) Reason {
 	case EnrollPolicy, RequestMembership:
 		return nil
 	case ProposePolicy:
+		if ch.Propose.Base != p.Policy.Version() {
+			return Inadmissible{Why: fmt.Sprintf("it changes version %d; version %d is in force", ch.Propose.Base, p.Policy.Version())}
+		}
 		next, err := p.Policy.Next(ch.Propose.Members, ch.Propose.Threshold)
 		if err != nil {
 			return Inadmissible{Why: err.Error()}
@@ -128,6 +132,9 @@ func (s State) judge(st Stamp, act PolicyAct) Reason {
 			if r, refused := s.authorize(p.Policy, who, w).(Refused); refused {
 				return Unauthorized{Intent: w, Refused: r}
 			}
+		}
+		if q, ok := Require(p.Policy, next).(OwnerQuorum); ok && q.Need > len(q.Eligible) {
+			return Inadmissible{Why: fmt.Sprintf("it needs %d owners' approvals and keeps %d owners to give them; strip one owner at a time", q.Need, len(q.Eligible))}
 		}
 		return nil
 	case ApprovePolicy:
@@ -249,7 +256,7 @@ func Diff(prev, next events.Policy) []PathWrite {
 			out = append(out, PathWrite{Verb: events.Set, At: OfRoot{}, Field: []string{"members", id, "role"}})
 		}
 	}
-	if events.ThresholdText(prev.Threshold()) != events.ThresholdText(next.Threshold()) {
+	if prev.Threshold() != next.Threshold() {
 		out = append(out, PathWrite{Verb: events.Set, At: OfRoot{}, Field: []string{"policy", "threshold"}})
 	}
 	return out
@@ -257,33 +264,38 @@ func Diff(prev, next events.Policy) []PathWrite {
 
 // Require is what the change from prev to next needs: the owner quorum
 // when the owner set or the threshold differs, by comparing the two
-// policies; one holder of every path the diff writes otherwise. The
-// quorum's eligible owners are prev's minus those the change removes or
-// demotes, or all of them when that leaves none, so a sole owner hands
-// over by signing; the removed owner is not in the quorum that removes
-// them (§3.17).
+// policies; one holder of every path the diff writes otherwise. The quorum
+// is prev's threshold of prev's owners, counted one fewer when the change
+// removes or demotes any: the owner being removed is not in the quorum
+// that removes them (§3.17), and stripping several at once lowers the
+// count by that one alone. The owners the change keeps approve, or prev's
+// when it keeps none, so a sole owner hands over by signing.
 func Require(prev, next events.Policy) Requirement {
 	was, is := prev.Owners(), next.Owners()
-	if slices.Equal(was, is) && events.ThresholdText(prev.Threshold()) == events.ThresholdText(next.Threshold()) {
+	if slices.Equal(was, is) && prev.Threshold() == next.Threshold() {
 		return OneHolder{Targets: Diff(prev, next)}
 	}
-	var eligible, incoming []events.PrincipalID
+	var kept, incoming []events.PrincipalID
 	for _, o := range was {
 		if slices.Contains(is, o) {
-			eligible = append(eligible, o)
+			kept = append(kept, o)
 		}
-	}
-	if len(eligible) == 0 {
-		eligible = was
 	}
 	for _, o := range is {
 		if !slices.Contains(was, o) {
 			incoming = append(incoming, o)
 		}
 	}
-	need := len(eligible)/2 + 1
+	counted, eligible := len(was), kept
+	if len(kept) < len(was) {
+		counted--
+	}
+	if len(kept) == 0 {
+		eligible = was
+	}
+	need := counted/2 + 1
 	if f, ok := prev.Threshold().(events.Fixed); ok {
-		need = min(int(f.N), len(eligible))
+		need = max(1, min(int(f.N), counted))
 	}
 	return OwnerQuorum{Eligible: eligible, Incoming: incoming, Need: need}
 }

@@ -88,45 +88,49 @@ var governedReads = map[field.Path]func(World, address.Node) []string{
 // shortDigest is a digest as a reader names it: a prefix any command resolves.
 func shortDigest(d events.Digest) string { return d.String()[:12] }
 
-// policyDerivations is the policy's derived rows: the membership
-// requests, the version in force, each proposal and what it lacks, and the
-// events the fold carried.
-var policyDerivations = map[field.Path]func(World, address.Node) ([]string, error){
-	"members/requests": func(w World, _ address.Node) ([]string, error) {
-		var out []string
-		for _, r := range w.State().Requests() {
-			out = append(out, r.Principal.String())
-		}
-		return out, nil
-	},
-	"policy": func(w World, _ address.Node) ([]string, error) {
-		p := w.inForce()
-		return []string{fmt.Sprintf("version %d · %d members", p.Version(), len(p.Members()))}, nil
-	},
-	"policy/proposals": func(w World, _ address.Node) ([]string, error) {
-		var out []string
-		for _, pr := range w.State().Proposals() {
-			out = append(out, fmt.Sprintf("%s · %s · %s", shortDigest(pr.Digest), writes(w, fold.Diff(w.inForce(), pr.Next)), lacks(pr)))
-		}
-		return out, nil
-	},
-	"integrity": func(w World, _ address.Node) ([]string, error) {
-		carried := w.State().Integrity().Carried
-		var out []string
-		count := map[string]int{}
-		for _, c := range carried {
-			reason := fold.ReasonName(c.Reason)
-			count[reason]++
-			out = append(out, fmt.Sprintf("%s by %s (checkout %s) at %s: %s", c.Event, c.Principal, c.Writer, c.RecordedAt.Format("2006-01-02T15:04:05Z07:00"), reason))
-		}
-		for _, r := range slices.Sorted(maps.Keys(count)) {
-			out = append(out, fmt.Sprintf("carried %s: %d", r, count[r]))
-		}
-		if len(carried) == 0 {
-			out = append(out, "carried: none")
-		}
-		return out, nil
-	},
+// requestsRow is /members/requests: each principal that asked to join.
+func requestsRow(w World, _ address.Node) ([]string, error) {
+	var out []string
+	for _, r := range w.State().Requests() {
+		out = append(out, r.Principal.String())
+	}
+	return out, nil
+}
+
+// policyRow is /policy: the version in force and its members.
+func policyRow(w World, _ address.Node) ([]string, error) {
+	p := w.inForce()
+	return []string{fmt.Sprintf("version %d · %d members", p.Version(), len(p.Members()))}, nil
+}
+
+// proposalsRow is /policy/proposals: each pending proposal, what it
+// writes and what it lacks.
+func proposalsRow(w World, _ address.Node) ([]string, error) {
+	var out []string
+	for _, pr := range w.State().Proposals() {
+		out = append(out, fmt.Sprintf("%s · %s · %s", shortDigest(pr.Digest), writes(w, fold.Diff(w.inForce(), pr.Next)), lacks(pr)))
+	}
+	return out, nil
+}
+
+// integrityRow is /integrity: each event the fold carried, and a count per
+// reason.
+func integrityRow(w World, _ address.Node) ([]string, error) {
+	carried := w.State().Integrity().Carried
+	var out []string
+	count := map[string]int{}
+	for _, c := range carried {
+		reason := fold.ReasonName(c.Reason)
+		count[reason]++
+		out = append(out, fmt.Sprintf("%s by %s (checkout %s) at %s: %s", c.Event, c.Principal, c.Writer, c.RecordedAt.Format("2006-01-02T15:04:05Z07:00"), reason))
+	}
+	for _, r := range slices.Sorted(maps.Keys(count)) {
+		out = append(out, fmt.Sprintf("carried %s: %d", r, count[r]))
+	}
+	if len(carried) == 0 {
+		out = append(out, "carried: none")
+	}
+	return out, nil
 }
 
 // writes is each path a proposal writes, as its operands are typed.
@@ -212,7 +216,7 @@ func govern(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 		return nil, nil, nil, refuse("value", "%s: %v", wr.path, err)
 	}
 	diff := fold.Diff(in, next)
-	if len(diff) == 0 && events.ThresholdText(in.Threshold()) == events.ThresholdText(threshold) {
+	if len(diff) == 0 {
 		return nil, nil, []claim{policyClaim}, nil // the policy already reads so
 	}
 	prop := in.Proposal(next)

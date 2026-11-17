@@ -3,6 +3,7 @@ package verbs
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/lit2/internal/events"
@@ -13,20 +14,57 @@ import (
 // over seen, the world it compiled against, and that world: first the
 // policy's verdict on each event, the one every replica reaches when it
 // folds them `[LAW:single-enforcer]`, then the gate's on each arrival. A
-// command the policy refuses any event of writes nothing, so its refusal
-// names every event refused. The fold's outcome on each event is
-// returned beside them, for the run to record.
+// command the policy refuses any event of writes nothing: each operand
+// with an event refused is refused, the first naming every event refused.
+// The fold's outcome on each event is returned beside them, for the run to
+// record.
 func Folded(e fold.Env, seen World, c Compiled, minted []events.Event) (World, Compiled, []fold.Outcome) {
 	ext := fold.Extend(e, seen.State(), minted)
-	after := World{View: seen.Of(ext.State), File: seen.File}
+	after := seen
+	after.View = seen.Of(ext.State)
 	no, carried := Carried(seen, ext.Outcomes)
 	if !carried {
 		return after, Gate(after, c, minted), ext.Outcomes
 	}
-	operands := append([]Result(nil), c.Operands...)
-	operands[0] = Refused{Text: operands[0].(Accepted).Text, Reason: no.Reason, Err: no.Err}
+	byOperand := map[int][]fold.Outcome{}
+	for i, op := range mintedBy(c) {
+		byOperand[op] = append(byOperand[op], ext.Outcomes[i])
+	}
+	operands := slices.Clone(c.Operands)
+	first := true
+	for i, res := range operands {
+		r, refused := Carried(seen, byOperand[i])
+		if !refused {
+			continue
+		}
+		if first {
+			r.Err, first = no.Err, false
+		}
+		operands[i] = Refused{Text: res.(Accepted).Text, Reason: r.Reason, Err: r.Err}
+	}
 	c.Operands, c.Drafts, c.Changes = operands, nil, nil
 	return after, c, ext.Outcomes
+}
+
+// mintedBy is the operand each event c mints is of, in mint order: an
+// operand's drafts are consecutive, and a create's Then follow it. Only a
+// command compile refused no operand of is minted, so each is Accepted.
+func mintedBy(c Compiled) []int {
+	var out []int
+	d := 0
+	for i, r := range c.Operands {
+		for range r.(Accepted).Drafts {
+			n := 1
+			if ci, ok := c.Drafts[d].(events.CreateItem); ok {
+				n += len(ci.Then)
+			}
+			for range n {
+				out = append(out, i)
+			}
+			d++
+		}
+	}
+	return out
 }
 
 // Carried is the refusal of a command whose events the fold carried any
@@ -79,7 +117,7 @@ func (w World) carried(why fold.Reason) error {
 }
 
 // pathOf is a write's path as its operand was typed: an item by its id, a
-// home by its name, the root as /.
+// comment by its item and its segment, a home by its name, the root as /.
 func (w World) pathOf(p fold.PathWrite) string {
 	var at string
 	switch s := p.At.(type) {
@@ -90,6 +128,8 @@ func (w World) pathOf(p fold.PathWrite) string {
 		at = l.Home
 	case fold.OfItem:
 		at = w.render(s.ID)
+	case fold.OfElement:
+		at = w.render(s.Of) + "/comments/" + w.segmentOf(s)
 	}
 	return strings.Join(append([]string{at}, p.Field...), "/")
 }
@@ -114,11 +154,24 @@ func (w World) failure(at fold.Subject, c events.Capability, f fold.Failure) str
 	panic(fmt.Sprintf("verbs: %T is not a Failure", f))
 }
 
+// segmentOf is the segment comment e's create fixed, which a path names it
+// by; its id when nothing created it.
+func (w World) segmentOf(e fold.OfElement) string {
+	if f, ok := w.State().Item(e.Of).(fold.Found); ok {
+		for _, el := range f.Item.Elements {
+			if c, ok := fold.CreateOf(el.Origin); ok && el.ID == e.ID {
+				return c.Segment.String()
+			}
+		}
+	}
+	return e.ID.String()
+}
+
 // levelOf is the level subject sits at, as a level condition reads it.
 func (w World) levelOf(at fold.Subject) string {
 	it, ok := at.(fold.OfItem)
 	if !ok {
-		return "a home has no level"
+		return "only an item has a level"
 	}
 	if f, ok := w.State().Item(it.ID).(fold.Found); ok {
 		if l, ok := f.Item.Level.(fold.Leveled); ok {

@@ -46,11 +46,11 @@ func FirstFacts() []Kind {
 		}, func(f Fact[events.FieldSet]) Intent {
 			// rm x is the write of its deleted flag, so the flag set is
 			// judged as the rm it compiled from
-			at, path := nodePath(f.At.(Node))
+			at := subjectOf(f.At.(Node))
 			if p, ok := f.Payload.Value.(events.Plain); ok && f.Payload.Field == Deleted && p.Canonical == "true" {
-				return PathWrite{Verb: events.Rm, At: at, Field: path}
+				return PathWrite{Verb: events.Rm, At: at}
 			}
-			return PathWrite{Verb: events.Set, At: at, Field: append(path, f.Payload.Field.String())}
+			return PathWrite{Verb: events.Set, At: at, Field: []string{f.Payload.Field.String()}}
 		}, events.ReadFieldSet),
 		On(Items, func(f Fact[events.MemberAdd]) Applies {
 			return Changes{List: []Change{Add{At: f.At.(Node), Set: f.Payload.Field, Member: f.Payload.Member}}}
@@ -95,15 +95,13 @@ func governs[P events.Payload](act func(P) PolicyAct, decode func(*wire.Reader) 
 		func(f Fact[P]) Intent { return Governed{Act: act(f.Payload)} }, decode)
 }
 
-// nodePath is the subject and the steps of node n's own path: an item is
-// its own subject, and an element is a path below its item, by its list
-// and its id.
-func nodePath(n Node) (Subject, []string) {
+// subjectOf is the subject node n is: an item, or an element.
+func subjectOf(n Node) Subject {
 	switch n := n.(type) {
 	case OnItem:
-		return OfItem(n), nil
+		return OfItem(n)
 	case OnElement:
-		return OfItem{ID: n.Of}, []string{comments.String(), n.ID.String()}
+		return OfElement(n)
 	}
 	panic("fold: a node is an item or an element")
 }

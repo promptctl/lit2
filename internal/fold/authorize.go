@@ -41,7 +41,7 @@ func (w PathWrite) String() string {
 }
 
 // Subject is what an intent path starts from: the root, a level's home,
-// or an item.
+// an item, or an element of an item: the node an own binding reads.
 //
 //sumtype:decl
 type Subject interface {
@@ -58,13 +58,33 @@ type OfHome struct{ Holds events.Level }
 // OfItem is an item.
 type OfItem struct{ ID events.ItemID }
 
-func (OfRoot) subject() {}
-func (OfHome) subject() {}
-func (OfItem) subject() {}
+// OfElement is element ID of item Of: its path is the item's, then its
+// list and its id.
+type OfElement struct {
+	Of events.ItemID
+	ID events.ElementID
+}
+
+func (OfRoot) subject()    {}
+func (OfHome) subject()    {}
+func (OfItem) subject()    {}
+func (OfElement) subject() {}
 
 func (OfRoot) String() string   { return "/" }
 func (h OfHome) String() string { return fmt.Sprintf("(home of level %d)", h.Holds.Int()) }
 func (i OfItem) String() string { return i.ID.String() }
+func (e OfElement) String() string {
+	return e.Of.String() + "/" + comments.String() + "/" + e.ID.String()
+}
+
+// steps is w's path below its item, which a capability's glob matches:
+// an element's list and id first.
+func (w PathWrite) steps() []string {
+	if e, ok := w.At.(OfElement); ok {
+		return append([]string{comments.String(), e.ID.String()}, w.Field...)
+	}
+	return w.Field
+}
 
 // Authorization is the capability verdict on one path write.
 //
@@ -181,7 +201,7 @@ func (s State) fails(who events.PrincipalID, c events.Capability, w PathWrite) [
 		return []Failure{PathOutside{}}
 	}
 	var out []Failure
-	if !c.Field.Matches(w.Field) {
+	if !c.Field.Matches(w.steps()) {
 		out = append(out, PathOutside{})
 	}
 	if !s.binds(c.Binding, who, w.At) {
@@ -195,8 +215,9 @@ func (s State) fails(who events.PrincipalID, c events.Capability, w PathWrite) [
 	return out
 }
 
-// binds is whether b matches at for who: every item and home for all; an
-// item who created for own. No holder is folded yet, so assignee matches
+// binds is whether b matches at for who: every item and home for all; a
+// node who created for own, so a comment is its author's whoever created
+// its item. No holder is folded yet, so assignee matches
 // nothing and own-or-assignee what own matches.
 func (s State) binds(b events.Binding, who events.PrincipalID, at Subject) bool {
 	switch b {
@@ -211,8 +232,8 @@ func (s State) binds(b events.Binding, who events.PrincipalID, at Subject) bool 
 	panic(fmt.Sprintf("fold: %d is not a Binding", uint8(b)))
 }
 
-// holds is whether at holds c: a home has no level, so a level condition
-// holds only on a leveled item.
+// holds is whether at holds c: a home and an element have no level, so a
+// level condition holds only on a leveled item.
 func (s State) holds(c events.Condition, at Subject) bool {
 	switch c := c.(type) {
 	case events.LevelIs:
@@ -226,17 +247,23 @@ func (s State) holds(c events.Condition, at Subject) bool {
 	panic(fmt.Sprintf("fold: %T is not a Condition", c))
 }
 
-// Creator is the principal whose create placed the item at, and false for
-// a home, the root, or an item nothing created.
+// Creator is the principal whose create placed the node at, and false for
+// a home, the root, or a node nothing created.
 func (s State) Creator(at Subject) (events.PrincipalID, bool) {
-	it, ok := at.(OfItem)
-	if !ok {
-		return events.PrincipalID{}, false
+	var o Origin = Uncreated{}
+	switch at := at.(type) {
+	case OfRoot, OfHome:
+	case OfItem:
+		if r, ok := s.items.get(at.ID); ok {
+			o = r.origin()
+		}
+	case OfElement:
+		if r, ok := s.items.get(at.Of); ok {
+			if el, ok := r.elements.get(at.ID); ok {
+				o = el.origin(at.Of)
+			}
+		}
 	}
-	r, ok := s.items.get(it.ID)
-	if !ok {
-		return events.PrincipalID{}, false
-	}
-	c, ok := CreateOf(r.origin())
+	c, ok := CreateOf(o)
 	return c.Stamp.By.Principal, ok
 }

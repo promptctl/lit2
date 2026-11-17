@@ -128,7 +128,7 @@ func (p policyState) equal(o policyState) bool {
 
 func policyEqual(a, b events.Policy) bool {
 	return a.Version() == b.Version() && a.Owner() == b.Owner() && slices.Equal(a.Members(), b.Members()) &&
-		events.ThresholdText(a.Threshold()) == events.ThresholdText(b.Threshold())
+		a.Threshold() == b.Threshold()
 }
 
 func byPrincipalKey(a, b requestRec) int { return events.ComparePrincipals(a.principal, b.principal) }

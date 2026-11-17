@@ -239,31 +239,34 @@ func (r body) init() cli.Outcome {
 		r.rec.Policy.Bootstrap = "already_requested"
 		return written(fmt.Fprintf(r.p.Out, "membership requested: no owner has admitted %s yet\n", me))
 	}
-	// the version the frame is written under: the one in force, or the
-	// work tree's, which a member applies as version one in the same frame
+	// the version the frame is written under: the one in force; with none,
+	// the work tree's, which a member applies as version one in the same
+	// frame, and for a requester, which applies nothing and so writes no
+	// file, the default profile's
+	_, inForce := o.folded.State.Workspace().(fold.InForce)
 	var ref git.ObjectID
-	if _, ok := o.folded.State.Workspace().(fold.InForce); ok {
+	switch {
+	case inForce && len(drafts) == 0:
+		return cli.Done{}
+	case inForce:
 		v, err := o.load()
 		if err != nil {
 			return failed(err)
 		}
 		ref = v.ref
-	} else {
+	case member:
 		b, err := versionOne(r.p.WorkTree(in.Checkout))
 		if err != nil {
 			return cli.Failed{Failure: workspaceFailure{err: err}}
 		}
 		ref = git.HashBlob(so.Format, b)
-		if member {
-			act, err := verbs.Admit(o.folded.State, b, so.Format, r.p.Reader)
-			if err != nil {
-				return failed(err)
-			}
-			drafts, said = append(drafts, act), said+fmt.Sprintf("workspace %s applied as version one\n", ref)
+		act, err := verbs.Admit(o.folded.State, b, so.Format, r.p.Reader)
+		if err != nil {
+			return failed(err)
 		}
-	}
-	if len(drafts) == 0 {
-		return cli.Done{}
+		drafts, said = append(drafts, act), said+fmt.Sprintf("workspace %s applied as version one\n", ref)
+	default:
+		ref = git.HashBlob(so.Format, assets.DefaultWorkspace.Bytes())
 	}
 	return o.judged(drafts, ref, said)
 }

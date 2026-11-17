@@ -297,9 +297,19 @@ func ParseThreshold(s string) (Threshold, error) {
 	if s == "majority" {
 		return Majority{}, nil
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n < 1 || n > 255 {
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
 		return nil, fmt.Errorf("%q is not a threshold: majority, or a number of owners from 1", s)
+	}
+	return fixedOf(n)
+}
+
+// fixedOf is the threshold of n owners, from 1 to 255: the one judge the
+// text and the wire readers share, so no two spellings read as one
+// threshold `[LAW:single-enforcer]`.
+func fixedOf(n uint64) (Threshold, error) {
+	if n < 1 || n > 255 {
+		return nil, fmt.Errorf("%d is not a threshold: a number of owners is from 1 to 255", n)
 	}
 	return Fixed{N: uint8(n)}, nil
 }
@@ -680,7 +690,11 @@ func readThreshold(b []byte) (Threshold, error) {
 			r.Bytes()
 			made = append(made, Majority{})
 		case thresholdFixed:
-			made = append(made, Fixed{N: uint8(min(r.Uvarint(), 255))})
+			f, err := fixedOf(r.Uvarint())
+			if err != nil {
+				return err
+			}
+			made = append(made, f)
 		}
 		return nil
 	})

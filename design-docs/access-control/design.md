@@ -125,8 +125,8 @@ verbs `get`, `set`, `add`, `rm`; a glob over paths; and a binding from the
 declared enum **own | assignee | own-or-assignee | all**. Verb-split
 permissions, own-vs-all splits, and relative principals are the three
 dimensions that recur across the market's permission-rich products (R V-a).
-`own` binds to the item's creating principal, read from its create event's
-attribution; `assignee` to the principal holding its lane's claim
+`own` binds to the creating principal of the node the path names, an item
+or a comment, read from its create event's attribution; `assignee` to the principal holding its lane's claim
 ([work-claims.md](../work-claims.md)); and the disjunction is first-class
 because the market's dynamic principals are. The glob names the scope: a
 subtree, a level, a field. "Can't delete epics" is `rm` granted on paths at
@@ -151,7 +151,7 @@ not restated stronger here), spelled as path globs in the default profile:
 | Role | Capabilities (beyond the previous row) |
 |---|---|
 | observer | `get` (holds the tier keys granted to them; no write verbs) |
-| contributor | `add */children`; `set */status` out of the initial column, bound `all` (pulling the top of the shared queue regardless of creator *is* the agent workflow); `add own/*`; `set own/*`; `add */comments`; `rm own/*/comments/*`; `set */status` into a terminal column bound `own-or-assignee` (so an agent who claimed a ticket can finish it — the market's author-or-assignee disjunction, R V-d); `rm own/*` at level 1 |
+| contributor | `add */children`; `set */status` bound `all` (pulling the top of the shared queue regardless of creator *is* the agent workflow; a column is no capability's condition, since only the writer's file declares columns and no verifier could judge one, so the workflow gate holds where a status may move); `add own/*`; `set own/*`; `add */comments`; `rm own/comments/*`; `rm own/*` at level 1 |
 | editor | `set */*` and `rm */*` bound `all` at level 1 and above; `set */rank`; `add */blocks`, `add */relates`; `set */tier` |
 | owner | everything, including `rm * --purge`, `rm * --destroy`, `member.admin`, `policy.admin`, `set /policy/*` |
 

@@ -2,7 +2,6 @@ package verbs
 
 import (
 	"fmt"
-	"maps"
 	"strconv"
 	"strings"
 
@@ -346,6 +345,10 @@ func why(y evaluate.Why) string {
 // and lanes the fold's; a graph the configuration refuses is their
 // refusal.
 var derivations = map[field.Path]func(World, address.Node) ([]string, error){
+	"members/requests": requestsRow,
+	"policy":           policyRow,
+	"policy/proposals": proposalsRow,
+	"integrity":        integrityRow,
 	"level": ofItem(func(_ World, it fold.Item) []string {
 		if l, ok := it.Level.(fold.Leveled); ok {
 			return []string{strconv.Itoa(l.Level.Int())}
@@ -397,8 +400,6 @@ var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 		return append(out, fmt.Sprintf("lanes considered: %d", n.Considered)), nil
 	},
 }
-
-func init() { maps.Copy(derivations, policyDerivations) }
 
 // stage is an item's stage, evaluate's.
 func stage(w World, n address.Node) ([]string, error) {

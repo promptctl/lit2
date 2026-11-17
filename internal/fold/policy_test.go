@@ -120,8 +120,10 @@ func TestAContributorsRmOfAnotherOwnersEpicIsRefusedNamingWhatItNeeded(t *testin
 	moved := w.mint(b, w.state(), events.Act{About: events.Item{ID: leaf}, Payload: events.Transition{From: name("backlog"), To: name("done")}})[0]
 	s := w.state()
 	wantCarried(t, s, rm, fold.Unauthorized{Intent: fold.PathWrite{Verb: events.Rm, At: fold.OfItem{ID: epic}},
-		Refused: fold.Refused{As: fold.AsRole{Role: contributor}, Misses: []fold.Miss{{Capability: events.MustCapability("rm own/* (level=1)"),
-			Failed: []fold.Failure{fold.BindingUnmet{}, fold.ConditionUnmet{Condition: events.LevelIs{Op: events.Eq, Level: level(1)}}}}}}})
+		Refused: fold.Refused{As: fold.AsRole{Role: contributor}, Misses: []fold.Miss{
+			{Capability: events.MustCapability("rm own/comments/*"), Failed: []fold.Failure{fold.PathOutside{}, fold.BindingUnmet{}}},
+			{Capability: events.MustCapability("rm own/* (level=1)"),
+				Failed: []fold.Failure{fold.BindingUnmet{}, fold.ConditionUnmet{Condition: events.LevelIs{Op: events.Eq, Level: level(1)}}}}}}})
 	if _, deleted := found(t, s, epic).Facts.Plain(fold.Deleted).(fold.Settled); deleted {
 		t.Error("the refused rm deleted the epic")
 	}

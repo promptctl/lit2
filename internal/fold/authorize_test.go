@@ -44,15 +44,18 @@ func TestAContributorsRefusalNamesEveryCapabilityOfTheVerbAndWhatItMissed(t *tes
 	theirs := idOf(w.mint(a, w.base, create(events.AtLevel{Level: level(1)}))[0])
 	epic := idOf(w.mint(b, w.state(), create(events.AtLevel{Level: level(2)}))[0])
 	rmOwn := events.MustCapability("rm own/* (level=1)")
+	rmComment := events.MustCapability("rm own/comments/*")
 	for _, c := range []struct {
 		name   string
 		draft  events.Draft
 		misses []fold.Miss
 	}{
-		{"an rm of another's ticket", set(theirs, fold.Deleted, plain("true")),
-			[]fold.Miss{{Capability: rmOwn, Failed: []fold.Failure{fold.BindingUnmet{}}}}},
-		{"an rm of its own epic", set(epic, fold.Deleted, plain("true")),
-			[]fold.Miss{{Capability: rmOwn, Failed: []fold.Failure{fold.ConditionUnmet{Condition: events.LevelIs{Op: events.Eq, Level: level(1)}}}}}},
+		{"an rm of another's ticket", set(theirs, fold.Deleted, plain("true")), []fold.Miss{
+			{Capability: rmComment, Failed: []fold.Failure{fold.PathOutside{}, fold.BindingUnmet{}}},
+			{Capability: rmOwn, Failed: []fold.Failure{fold.BindingUnmet{}}}}},
+		{"an rm of its own epic", set(epic, fold.Deleted, plain("true")), []fold.Miss{
+			{Capability: rmComment, Failed: []fold.Failure{fold.PathOutside{}}},
+			{Capability: rmOwn, Failed: []fold.Failure{fold.ConditionUnmet{Condition: events.LevelIs{Op: events.Eq, Level: level(1)}}}}}},
 		{"a title on another's ticket", set(theirs, title, prose("t")), []fold.Miss{
 			{Capability: events.MustCapability("set own/*"), Failed: []fold.Failure{fold.BindingUnmet{}}},
 			{Capability: events.MustCapability("set */status"), Failed: []fold.Failure{fold.PathOutside{}}}}},

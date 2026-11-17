@@ -329,6 +329,10 @@ type UnknownProposal struct{ Proposal events.Digest }
 // Inadmissible is a proposal no policy can be, Why as NewPolicy says.
 type Inadmissible struct{ Why string }
 
+// NotAMemberWrote is an event no rule reads by a writer the policy in force
+// does not list: its intent cannot be judged, its writer's standing can.
+type NotAMemberWrote struct{}
+
 func (BadSignature) reason()       {}
 func (UnknownSuite) reason()       {}
 func (NoPolicyInForce) reason()    {}
@@ -339,6 +343,7 @@ func (Unauthorized) reason()       {}
 func (NotAnApprover) reason()      {}
 func (UnknownProposal) reason()    {}
 func (Inadmissible) reason()       {}
+func (NotAMemberWrote) reason()    {}
 
 // Unapplied is a verified event whose facts the fold did not apply.
 type Unapplied struct {
