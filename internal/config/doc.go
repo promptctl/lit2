@@ -6,5 +6,6 @@
 // refuses, naming every fault, what the designs say it refuses, the column-graph
 // check of §3.5 among them. It sits above fold because the fold reads no
 // configuration (decision H), and above field, whose kinds and atoms it parses
-// into (D8).
+// into (D8). It owns the field table: the one answer to what a path names at
+// a place, built-in fields, declared fields and checks alike.
 package config

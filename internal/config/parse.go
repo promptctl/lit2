@@ -47,30 +47,14 @@ func Parse(text []byte, source string, running ReaderVersion) (Schema, error) {
 }
 
 // parser collects every refusal in one version. A parse never stops at the
-// first fault, so a person sees them all at once. Once the fields and checks
-// are read, they are held here, because a requirement anywhere reads both.
+// first fault, so a person sees them all at once. The table is built here,
+// fields first, so a template and a test read the one table the schema
+// keeps, and checks last, since a check's tests read the fields.
 type parser struct {
 	refusals   []Refusal
-	builtins   map[field.Path]field.FieldDecl
-	levels     []Level
+	table      Table
 	checkNames map[string]bool
 	checks     *expander
-}
-
-// decls is every declaration a path names: the built-in, or the field of that
-// name on each level that declares it, since the same name on two levels is
-// two fields. None is a path nothing declares.
-func (p *parser) decls(path field.Path) []field.FieldDecl {
-	if b, ok := p.builtins[path]; ok {
-		return []field.FieldDecl{b}
-	}
-	var out []field.FieldDecl
-	for _, lv := range p.levels {
-		if d, ok := lv.Fields[path]; ok {
-			out = append(out, d)
-		}
-	}
-	return out
 }
 
 func (p *parser) fail(key KeyPath, r Reason, format string, args ...any) {
@@ -96,11 +80,19 @@ func (p *parser) schema(raw map[string]any, gate ReaderGate) Schema {
 		}
 	}
 	s.labels = p.labels(raw)
-	p.builtins = field.Builtins(s.labels)
-	s.levels = p.readLevels(raw)
-	p.levels = s.levels
+	builtins := field.Builtins(s.labels)
+	for _, path := range sortedKeys(builtins) {
+		p.table.rows = append(p.table.rows, FieldRow{At: path, Decl: builtins[path]})
+	}
+	s.levels = p.readLevels(raw, builtins)
+	p.table.levels = s.levels
+	p.templates(raw, s.levels)
 
 	s.checks = p.readChecks(raw)
+	for _, name := range sortedKeys(s.checks) {
+		p.table.rows = append(p.table.rows, CheckRow{Check: s.checks[name]})
+	}
+	s.table = p.table
 	s.links = p.links(raw, len(s.levels))
 
 	ttl, ok := p.duration(raw, "", "claim_ttl")
@@ -206,8 +198,8 @@ func (p *parser) labels(raw map[string]any) field.Enum {
 
 // readLevels reads the level tables, each with the fields it declares. It
 // returns the levels by number, leaf first.
-func (p *parser) readLevels(raw map[string]any) []Level {
-	tbl, ok := p.table(raw, "", "levels")
+func (p *parser) readLevels(raw map[string]any, builtins map[field.Path]field.FieldDecl) []Level {
+	tbl, ok := p.tableAt(raw, "", "levels")
 	if !ok || len(tbl) == 0 {
 		p.fail("levels", ReasonNoLevels, "the workspace declares no levels: level 1 is the leaf")
 		return nil
@@ -237,7 +229,7 @@ func (p *parser) readLevels(raw map[string]any) []Level {
 			p.fail(at, ReasonWrongType, "a level is a table")
 			continue
 		}
-		lv := Level{Fields: map[field.Path]field.FieldDecl{}, Template: map[field.Path][]string{}}
+		lv := Level{Template: map[field.Path][]string{}}
 		p.unknown(m, at, "name", "home", "fields", "template")
 		if name, ok := p.need(m, at, "name", ReasonMissingKey, "a level has a name"); ok {
 			lv.Name = name
@@ -264,24 +256,20 @@ func (p *parser) readLevels(raw map[string]any) []Level {
 				lv.Home = home
 			}
 		}
-		if fieldsTbl, ok := p.table(m, at, "fields"); ok {
+		if fieldsTbl, ok := p.tableAt(m, at, "fields"); ok {
+			level, _ := events.ParseLevel(n)
 			for _, fname := range sortedKeys(fieldsTbl) {
 				fat := keyed(keyed(at, "fields"), fname)
-				decl, ok := p.fieldDecl(fat, fname, fieldsTbl[fname])
+				decl, ok := p.fieldDecl(fat, fname, fieldsTbl[fname], field.OnLevel{Level: level})
 				if !ok {
 					continue
 				}
 				path := field.Path(fname)
-				if _, builtin := p.builtins[path]; builtin {
+				if _, builtin := builtins[path]; builtin {
 					p.fail(fat, ReasonBuiltinRedeclared, "%s is a built-in field: a level cannot declare it", fname)
 					continue
 				}
-				lv.Fields[path] = decl
-			}
-		}
-		if tmpl, ok := p.table(m, at, "template"); ok {
-			for _, key := range sortedKeys(tmpl) {
-				p.templateValue(keyed(keyed(at, "template"), key), field.Path(key), tmpl[key], lv.Fields, lv.Template)
+				p.table.rows = append(p.table.rows, FieldRow{At: path, Decl: decl})
 			}
 		}
 		levels[i] = lv
@@ -316,7 +304,7 @@ func (p *parser) checkHomes(levels []Level, nums []int) {
 
 // fieldDecl reads one declared field: its kind and the parameters that kind
 // takes, and nothing else.
-func (p *parser) fieldDecl(at KeyPath, name string, v any) (field.FieldDecl, bool) {
+func (p *parser) fieldDecl(at KeyPath, name string, v any, on field.OnLevel) (field.FieldDecl, bool) {
 	if !isName(name) {
 		p.fail(at, ReasonBadFieldName, "%q is not a field name: a lowercase word", name)
 		return field.FieldDecl{}, false
@@ -382,65 +370,107 @@ func (p *parser) fieldDecl(at KeyPath, name string, v any) (field.FieldDecl, boo
 				p.fail(keyed(at, "many"), ReasonKindParameter, "only an enum holds many values, not a %s", kindWord)
 				return field.FieldDecl{}, false
 			}
-			multi = field.Many
+			// A set's members are names, so a value that is none could
+			// never be added.
+			for _, v := range kind.(field.Enum).Values() {
+				if _, err := events.ParseName(v); err != nil {
+					p.fail(keyed(at, "values"), ReasonKindParameter, "a many enum's values are its members, each a name: %v", err)
+					return field.FieldDecl{}, false
+				}
+			}
+			multi = field.Set
 		}
 	}
-	return field.FieldDecl{Kind: kind, Multi: multi, Origin: field.Declared, Writability: field.Settable}, true
+	return field.FieldDecl{Kind: kind, Multi: multi, Origin: field.Declared, Writability: field.Settable, At: on}, true
 }
 
-// templateValue reads one template default: a field the level declares or a
-// settable built-in, and a value that parses under its kind.
-func (p *parser) templateValue(at KeyPath, path field.Path, v any, levelFields map[field.Path]field.FieldDecl, out map[field.Path][]string) {
-	decl, known := levelFields[path]
-	if !known {
-		decl, known = p.builtins[path]
+// templates reads each level's template, once every field is a row: a key
+// is read by the table at the level's items, as a key of a child object
+// is, so the two take the same fields.
+func (p *parser) templates(raw map[string]any, levels []Level) {
+	tbl, _ := raw["levels"].(map[string]any)
+	for i, lv := range levels {
+		n := strconv.Itoa(i + 1)
+		m, _ := tbl[n].(map[string]any)
+		at := keyed("levels", n)
+		tmpl, ok := p.tableAt(m, at, "template")
+		if !ok || lv.Template == nil {
+			continue
+		}
+		l, _ := events.ParseLevel(i + 1)
+		for _, key := range sortedKeys(tmpl) {
+			path := field.Path(key)
+			if v, ok := p.templateValue(keyed(keyed(at, "template"), key), field.ItemPlace(l), path, tmpl[key]); ok {
+				lv.Template[path] = v
+			}
+		}
 	}
-	if !known {
-		p.fail(at, ReasonTemplateFieldUndeclared, "%s is neither a built-in field nor declared on this level", path)
-		return
+}
+
+// templateValue reads one template default: a field the table has at
+// place, a person writes, and holds one value or a set, and a value that
+// parses under its kind, a set's members each once.
+func (p *parser) templateValue(at KeyPath, place field.Place, path field.Path, v any) ([]string, bool) {
+	r, err := p.table.Find(place, path)
+	if err != nil {
+		p.fail(at, ReasonTemplateFieldUndeclared, "%v", err)
+		return nil, false
 	}
-	if decl.Writability == field.Derived {
-		p.fail(at, ReasonTemplateFieldDerived, "%s is derived: a template sets only what a person writes", path)
-		return
+	row, isField := r.(FieldRow)
+	if !isField {
+		p.fail(at, ReasonTemplateFieldDerived, "%s is a check: the engine computes it, and a template sets only what a person writes", path)
+		return nil, false
+	}
+	if err := field.Writable(row.Decl); err != nil {
+		p.fail(at, ReasonTemplateFieldDerived, "%s: %v; a template sets only what a person writes", path, err)
+		return nil, false
+	}
+	if err := field.Keyable(row.Decl); err != nil {
+		p.fail(at, ReasonTemplateFieldNotKeyable, "%s: %v", path, err)
+		return nil, false
 	}
 	var raw []string
 	switch v := v.(type) {
 	case string:
 		raw = []string{v}
 	case []any:
-		if decl.Multi == field.One {
+		if row.Decl.Multi == field.One {
 			p.fail(at, ReasonWrongType, "%s holds one value: a string", path)
-			return
+			return nil, false
 		}
 		for _, item := range v {
 			s, ok := item.(string)
 			if !ok {
 				p.fail(at, ReasonWrongType, "a value of %s is a string", path)
-				return
+				return nil, false
 			}
 			raw = append(raw, s)
 		}
 	default:
 		p.fail(at, ReasonWrongType, "%s holds a string or a list of strings", path)
-		return
+		return nil, false
 	}
 	canon := make([]string, 0, len(raw))
 	for _, r := range raw {
-		c, err := decl.Kind.Parse(r)
+		c, err := row.Decl.Kind.Parse(r)
 		if err != nil {
 			p.fail(at, ReasonTemplateValue, "%v", err)
-			return
+			return nil, false
+		}
+		if slices.Contains(canon, c) {
+			p.fail(at, ReasonTemplateValue, "%s names %s twice", path, c)
+			return nil, false
 		}
 		canon = append(canon, c)
 	}
-	out[path] = canon
+	return canon, true
 }
 
 // readChecks reads the check tables and expands each into its flat list of
 // tests. A check holds the tests it names and the checks it names,
 // transitively; a cycle among them is refused where it closes.
 func (p *parser) readChecks(raw map[string]any) map[string]Check {
-	tbl, _ := p.table(raw, "", "checks")
+	tbl, _ := p.tableAt(raw, "", "checks")
 	// Every test in a check is read against these names, so they are set
 	// before the first expansion, not after.
 	p.checkNames = map[string]bool{}
@@ -497,7 +527,7 @@ func (x *expander) body(name string, at KeyPath) ([]Test, bool) {
 		x.p.fail(at, ReasonBadCheckName, "%q is not a check name: a lowercase word", name)
 		return nil, false
 	}
-	if len(x.p.decls(field.Path(name))) > 0 {
+	if len(x.p.table.Named(field.Path(name))) > 0 {
 		x.p.fail(at, ReasonCheckCollides, "%s is a field's name, so a check cannot take it", name)
 		return nil, false
 	}
@@ -594,13 +624,11 @@ func (p *parser) test(src string, m map[string]any, at KeyPath, declaredIn strin
 		return Test{}, false
 	}
 	path := atom.Path()
-	// unmet_requirements is derived from the tests themselves, so a test that
-	// read it would read its own outcome. A field's name is the field's: a
-	// check that takes one is refused for that, and no test that reads the
-	// field is.
-	decls := p.decls(path)
-	if path == "unmet_requirements" || len(decls) == 0 && p.checkNames[string(path)] {
-		p.fail(keyed(at, "test"), ReasonPathIsCheck, "%s names a check or unmet_requirements: name the check with check = %q", path, path)
+	// A field's name is the field's: a check that takes one is refused for
+	// that, and no test that reads the field is.
+	decls := p.table.Named(path)
+	if len(decls) == 0 && p.checkNames[string(path)] {
+		p.fail(keyed(at, "test"), ReasonPathIsCheck, "%s names a check: name it with check = %q", path, path)
 		return Test{}, false
 	}
 	if len(decls) == 0 {
@@ -627,7 +655,7 @@ func (p *parser) test(src string, m map[string]any, at KeyPath, declaredIn strin
 
 // links reads the link types.
 func (p *parser) links(raw map[string]any, levelCount int) map[string]LinkType {
-	tbl, _ := p.table(raw, "", "links")
+	tbl, _ := p.tableAt(raw, "", "links")
 	out := map[string]LinkType{}
 	for _, name := range sortedKeys(tbl) {
 		at := keyed("links", name)
@@ -696,7 +724,7 @@ func (p *parser) links(raw map[string]any, levelCount int) map[string]LinkType {
 // columns reads the columns table of m, the root's or a section's. at is the
 // key path of m, so every refusal names where it is.
 func (p *parser) columns(m map[string]any, at KeyPath) map[string]Column {
-	tbl, _ := p.table(m, at, "columns")
+	tbl, _ := p.tableAt(m, at, "columns")
 	out := map[string]Column{}
 	for _, name := range sortedKeys(tbl) {
 		cat := keyed(keyed(at, "columns"), name)
@@ -795,7 +823,7 @@ func (p *parser) severity(m map[string]any, at KeyPath) (Severity, bool) {
 // sections reads the node sections: per-node columns and claim lifetimes,
 // keyed by an item's full id or a declared home.
 func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Section {
-	tbl, _ := p.table(raw, "", "nodes")
+	tbl, _ := p.tableAt(raw, "", "nodes")
 	homes := map[string]bool{}
 	for _, lv := range levels {
 		if lv.Home != "" {
@@ -888,7 +916,7 @@ func (p *parser) unknown(m map[string]any, at KeyPath, allowed ...string) {
 	}
 }
 
-func (p *parser) table(m map[string]any, at KeyPath, key string) (map[string]any, bool) {
+func (p *parser) tableAt(m map[string]any, at KeyPath, key string) (map[string]any, bool) {
 	v, ok := m[key]
 	if !ok {
 		return nil, false

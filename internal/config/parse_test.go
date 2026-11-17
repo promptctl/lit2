@@ -203,6 +203,12 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"template-field-undeclared", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nnope = \"x\""), ReasonTemplateFieldUndeclared},
 		{"template-field-derived", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\n\"plan/verdict\" = \"pass\""), ReasonTemplateFieldDerived},
 		{"template-value", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"number\"\n[levels.1.template]\npts = \"abc\""), ReasonTemplateValue},
+		{"template-member-twice", func(s string) string {
+			return replace(`prefix = "lit"`, "prefix = \"lit\"\nlabels = [\"a\"]")(replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nlabels = [\"a\", \"a\"]")(s))
+		}, ReasonTemplateValue},
+		{"template-field-not-keyable", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\ncomments = \"x\""), ReasonTemplateFieldNotKeyable},
+		{"template-field-not-on-level", replace(`home = "unfiled"`, "home = \"unfiled\"\n[levels.2.template]\nstatus = \"backlog\""), ReasonTemplateFieldUndeclared},
+		{"many-enum-value-not-a-name", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.area]\nkind = \"enum\"\nmany = true\nvalues = [\"Front End\"]"), ReasonKindParameter},
 		{"bad-column-name", replace("[columns.done]", "[columns.Done]"), ReasonBadColumnName},
 		{"initial-and-terminal", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\ninitial = true"), ReasonInitialAndTerm},
 		{"exit-on-terminal", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nexit = []"), ReasonExitOnTerminal},
@@ -362,8 +368,8 @@ func TestEverySectionParses(t *testing.T) {
 	if s.Checks()["sized"].Tests[0].DeclaredIn != "ready" {
 		t.Errorf("a test from an included check keeps its declaring name: got %q", s.Checks()["sized"].Tests[0].DeclaredIn)
 	}
-	if lv, _ := s.Level(1); lv.Fields["size"].Kind == nil {
-		t.Error("a declared field is in its level's field table")
+	if r, err := s.Table().Find(field.Leaf{}, "size"); err != nil || r.(FieldRow).Decl.Kind == nil {
+		t.Errorf("a declared field is a row at its level's items: %v", err)
 	}
 	// unfiled is one section though two tables name it; the item is the other.
 	if len(s.Sections()) != 2 {
@@ -453,13 +459,14 @@ func TestTheSameNameOnTwoLevelsIsTwoFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf, _ := s.Level(1)
-	feature, _ := s.Level(2)
-	if _, ok := leaf.Fields["points"].Kind.(field.Number); !ok {
-		t.Errorf("level 1's points = %#v, want a number", leaf.Fields["points"])
+	two, _ := events.ParseLevel(2)
+	leaf, _ := s.Table().Find(field.Leaf{}, "points")
+	feature, _ := s.Table().Find(field.Node{Level: two}, "points")
+	if _, ok := leaf.(FieldRow).Decl.Kind.(field.Number); !ok {
+		t.Errorf("level 1's points = %#v, want a number", leaf)
 	}
-	if _, ok := feature.Fields["points"].Kind.(field.Enum); !ok {
-		t.Errorf("level 2's points = %#v, want an enum", feature.Fields["points"])
+	if _, ok := feature.(FieldRow).Decl.Kind.(field.Enum); !ok {
+		t.Errorf("level 2's points = %#v, want an enum", feature)
 	}
 	refusals := refusalsOf(t, replace("points=3", "points=2")(held))
 	if len(refusals) != 1 || refusals[0].Reason != ReasonAtomValue {

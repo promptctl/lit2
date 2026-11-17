@@ -73,6 +73,9 @@ func ParseLevel(n int) (Level, error) {
 	return Level{n: uint8(n)}, nil
 }
 
+// Int is the level's number, 1 at the leaf.
+func (l Level) Int() int { return int(l.n) }
+
 // Below is the level one down, the level of this level's children; a
 // leaf has none.
 func (l Level) Below() (Level, bool) {

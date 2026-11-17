@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/promptctl/lit2/internal/events"
 )
 
 // Kind is what a field holds. Parse is the one value parser for it: a raw
@@ -39,17 +41,65 @@ type Pattern struct {
 	re  *regexp.Regexp
 }
 
+// The engine kinds hold what the engine names, so no workspace file
+// declares one.
+
+// Column is a column's name. Which columns an item may enter is its
+// resolved graph's to say, at the write.
+type Column struct{}
+
+// ItemRef is an item, as its path renders it.
+type ItemRef struct{}
+
+// Level is a level, 1 to 5.
+type Level struct{}
+
 func (Text) isKind()    {}
 func (Number) isKind()  {}
 func (Date) isKind()    {}
 func (Enum) isKind()    {}
 func (Pattern) isKind() {}
+func (Column) isKind()  {}
+func (ItemRef) isKind() {}
+func (Level) isKind()   {}
 
 func (Text) Name() string    { return "text" }
 func (Number) Name() string  { return "number" }
 func (Date) Name() string    { return "date" }
 func (Enum) Name() string    { return "enum" }
 func (Pattern) Name() string { return "pattern" }
+func (Column) Name() string  { return "column" }
+func (ItemRef) Name() string { return "item" }
+func (Level) Name() string   { return "level" }
+
+// Parse reads a column's name.
+func (Column) Parse(raw string) (string, error) {
+	n, err := events.ParseName(raw)
+	if err != nil {
+		return "", fmt.Errorf("a column: %w", err)
+	}
+	return n.String(), nil
+}
+
+// Parse reads an item as a path renders it: one word.
+func (ItemRef) Parse(raw string) (string, error) {
+	if raw == "" || strings.ContainsAny(raw, " \t\n\r\"") {
+		return "", fmt.Errorf("%q is not an item: an id, as its path renders it", raw)
+	}
+	return raw, nil
+}
+
+// Parse reads a level.
+func (Level) Parse(raw string) (string, error) {
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return "", fmt.Errorf("%q is not a level: 1 to 5", raw)
+	}
+	if _, err := events.ParseLevel(n); err != nil {
+		return "", err
+	}
+	return strconv.Itoa(n), nil
+}
 
 // Parse reads a text value: anything but nothing.
 func (Text) Parse(raw string) (string, error) {

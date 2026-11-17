@@ -178,11 +178,11 @@ func buildGraph(cs map[string]Column, keyOf func(string) KeyPath) (ColumnGraph, 
 	return g, refusals
 }
 
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
+func sortedKeys[K ~string, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }

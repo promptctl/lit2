@@ -54,6 +54,7 @@ const (
 	// Templates.
 	ReasonTemplateFieldUndeclared Reason = "template-field-undeclared"
 	ReasonTemplateFieldDerived    Reason = "template-field-derived"
+	ReasonTemplateFieldNotKeyable Reason = "template-field-not-keyable"
 	ReasonTemplateValue           Reason = "template-value"
 
 	// Columns.

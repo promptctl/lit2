@@ -18,6 +18,7 @@ type Schema struct {
 	gate     ReaderGate
 	labels   field.Enum
 	levels   []Level
+	table    Table
 	links    map[string]LinkType
 	checks   map[string]Check
 	root     RootFrame
@@ -25,13 +26,12 @@ type Schema struct {
 }
 
 // Level is one declared level. Index 0 is level 1, the leaf, which has no
-// home; every level above it names one. Fields are the fields this level
-// declares, beside the built-ins every level has; the same name on another
-// level is another field.
+// home; every level above it names one. The fields it declares are rows of
+// the table, at its items. Template is the values a new item of the level
+// starts with, each canonical in its field's kind.
 type Level struct {
 	Name     string
 	Home     string
-	Fields   map[field.Path]field.FieldDecl
 	Template map[field.Path][]string
 }
 
@@ -128,6 +128,9 @@ func ItemNode(id events.ItemID) NodeKey { return NodeKey{item: id} }
 // HomeNode is the section key of a declared home.
 func HomeNode(home string) NodeKey { return NodeKey{home: home} }
 
+// Item is the item the key names, and false for a home.
+func (k NodeKey) Item() (events.ItemID, bool) { return k.item, k.home == "" }
+
 // Ancestry is the nodes an item's effective configuration is read through,
 // nearest first, starting at the item itself. The root is implicit.
 type Ancestry []NodeKey
@@ -172,6 +175,12 @@ func (s Schema) Level(n int) (Level, bool) {
 	}
 	return s.levels[n-1], true
 }
+
+// Levels is how many levels the version declares.
+func (s Schema) Levels() int { return len(s.levels) }
+
+// Table is the version's field table.
+func (s Schema) Table() Table { return s.table }
 
 // Prefix is the project prefix.
 func (s Schema) Prefix() events.Prefix { return s.prefix }

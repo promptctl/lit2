@@ -1,5 +1,7 @@
 // Package field is the field language config and address both stand on:
-// field kinds with their value parsers, the built-in fields, the atom.
+// field kinds with their value parsers, the built-in fields and where each
+// exists, the rules for writing one, the atom, and the literal grammar a
+// command value is read by.
 //
 // Its layer in architecture.md §6: field kinds and their value parsers; the
 // built-in fields; the atom (§3.1, §3.6). The atom is one test over one path
