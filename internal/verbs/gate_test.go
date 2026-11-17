@@ -76,15 +76,47 @@ func TestAnUnmetWarningPrintsAndTheMoveLands(t *testing.T) {
 func TestAFilingIsAnArrivalInTheInitialColumn(t *testing.T) {
 	b := newBook(t, strings.Replace(profile(""), "[columns.backlog]\n", "[columns.backlog]\nentry = [{ test = \"description\", severity = \"error\" }]\n", 1))
 	feature := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
-	if got := b.refusal(verbs.Add, op(feature+"/children", "{title: s}")); !strings.Contains(got, "filed into backlog refused by backlog/entry") {
-		t.Errorf("a story filed with no description is refused as %q", got)
+	if got := b.refusal(verbs.Add, op(feature+"/children", "{title: s}")); !strings.HasPrefix(got, "gate: (new 1) filed into backlog refused by backlog/entry") {
+		t.Errorf("a story filed with no description is refused as %q; want it named as no store holds it", got)
 	}
 	if echo := b.do(verbs.Add, op(feature+"/children", "{title: s, description: d}")); !strings.Contains(echo, "requirements: 1 evaluated · 1 met") {
 		t.Errorf("a story filed with a description echoes %q", echo)
 	}
 }
 
-// TestAnUndeclaredColumnStandsAndIsReported: a status a later version no
+// TestANegativeAncestorsTestNamesTheAncestorThatBrokeIt: the line of an
+// unmet labels!= names the value found where it was found, not on the
+// item judged.
+func TestANegativeAncestorsTestNamesTheAncestorThatBrokeIt(t *testing.T) {
+	b := newBook(t, string(assets.DefaultWorkspace.Bytes()))
+	feature, s := story(t, b)
+	b.do(verbs.Add, op(feature+"/labels", "needs-design"))
+	got := b.refusal(verbs.Set, op(s+"/status", "plan"))
+	if want := "labels!=needs-design (ready)  found needs-design on " + feature + "\n"; !strings.Contains(got+"\n", want) {
+		t.Errorf("a story under a needs-design feature is refused as %q; want it to hold %q", got, want)
+	}
+}
+
+// TestSettlingAConflictedStatusIsNoMove: two concurrent moves leave the
+// status two live writes; setting the column it reads settles them and
+// takes no edge, though no next leads from that column to itself.
+func TestSettlingAConflictedStatusIsNoMove(t *testing.T) {
+	b := newBook(t, strings.Replace(profile(""), "[columns.plan]\nnext = [\"done\"]\n", "[columns.plan]\nnext = [\"review\", \"done\"]\n\n[columns.review]\nnext = [\"done\"]\n", 1))
+	_, s := story(t, b)
+	b.do(verbs.Set, op(s+"/status", "plan"))
+	s0 := b.st
+	b.as(one, s0, verbs.Set, op(s+"/status", "review"))
+	b.as(two, s0, verbs.Set, op(s+"/status", "done"))
+	reads := strings.TrimSuffix(b.get(s+"/status"), "\n")
+	if echo := b.do(verbs.Set, op(s+"/status", reads)); echo != s+"/status "+reads+" → "+reads+"\n" {
+		t.Errorf("settling the conflict at %s echoes %q", reads, echo)
+	}
+	if echo := b.do(verbs.Set, op(s+"/status", reads)); echo != "" {
+		t.Errorf("after the settle, the same column drafts again: %q", echo)
+	}
+}
+
+// TestAnUndeclaredColumnStandsAndIsReported:a status a later version no
 // longer declares reads marked, its stage is active, and it leaves by a
 // universal edge and by no other (scenarios.md S-6).
 func TestAnUndeclaredColumnStandsAndIsReported(t *testing.T) {

@@ -3,6 +3,7 @@ package verbs
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/lit2/internal/config"
@@ -16,22 +17,24 @@ import (
 // and each that does not hold, in list order.
 type Judgment struct {
 	Evaluated int
-	Unmet     []Requirement
+	Unmet     []UnmetRequirement
 }
 
-// Requirement is one unmet requirement as a line prints it: its severity,
-// the list that declared it, the test, what the item holds there, and the
-// item an ancestors test was read up from.
-type Requirement struct {
+// UnmetRequirement is one requirement of a column's list that does not
+// hold, as its line prints it: its severity, the list that declared it,
+// the test, and the value found on the item that decided it.
+type UnmetRequirement struct {
 	Severity config.Severity
 	Side     string
-	Unmet
-	Item string
+	Test     config.Test
+	Found    []string
+	On       Who
 }
 
 // arrival is one item entering a column: by a move from the column it
 // reads, or, with no from, by its filing into the initial one.
 type arrival struct {
+	who  Who
 	id   events.ItemID
 	from *string
 	to   string
@@ -45,14 +48,25 @@ type arrival struct {
 // list every arrival, a leaf's filing into the initial column included.
 // Every list is evaluated whole, so a refusal names everything unmet at
 // once. An unmet error refuses the command and it writes nothing; an unmet
-// warning rides on the echo (transition-requirements.md).
+// warning rides on the echo, in the judgment the arriving change carries
+// (transition-requirements.md).
 func Gate(w World, c Compiled, minted []events.Event) Compiled {
 	about := drafted(c.Drafts, minted)
 	filed := map[int]events.ItemID{}
+	created := map[events.ItemID]int{}
 	for _, ch := range c.Changes {
 		if f, ok := ch.(Filed); ok {
-			filed[f.N] = about[f.Draft].(events.NewItem).ID
+			id := about[f.Draft].(events.NewItem).ID
+			filed[f.N], created[id] = id, f.N
 		}
+	}
+	// an item the command files is named by its number, which every line
+	// renders as the echo does `[LAW:one-source-of-truth]`
+	whoOf := func(id events.ItemID) Who {
+		if n, ok := created[id]; ok {
+			return Created{N: n}
+		}
+		return Existing{At: events.Item{ID: id}, Rendered: w.render(id)}
 	}
 	item := func(x Who) events.ItemID {
 		switch x := x.(type) {
@@ -65,24 +79,24 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 	}
 	var errs []error
 	refused := map[int]*refusal{}
-	c.Judged = map[int]Judgment{}
-	for i, ch := range c.Changes {
-		var a arrival
+	changes := slices.Clone(c.Changes)
+	for i, ch := range changes {
+		var r *refusal
 		var op int
 		switch ch := ch.(type) {
 		case Moved:
-			a, op = arrival{id: item(ch.Who), from: &ch.From, to: ch.To}, ch.Op
+			ch.Judged, r = judge(w, arrival{who: ch.Who, id: item(ch.Who), from: &ch.From, to: ch.To}, whoOf)
+			changes[i], op = ch, ch.Op
 		case Filed:
 			id := filed[ch.N]
 			if _, leaf := field.ItemPlace(w.item(id).Level.(fold.Leveled).Level).(field.Leaf); !leaf {
 				continue // a node is in no column: its stage is its children's
 			}
-			a, op = arrival{id: id}, ch.Op
+			ch.Judged, r = judge(w, arrival{who: Created{N: ch.N}, id: id}, whoOf)
+			changes[i], op = ch, ch.Op
 		case Wrote, Added, Removed, Commented:
 			continue // no arrival
 		}
-		j, r := judge(w, a)
-		c.Judged[i] = j
 		if r != nil {
 			errs = append(errs, r.err)
 			if refused[op] == nil {
@@ -90,6 +104,7 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 			}
 		}
 	}
+	c.Changes = changes
 	first := true
 	for i, res := range c.Operands {
 		r, ok := refused[i]
@@ -103,15 +118,16 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 		c.Operands[i] = Refused{Text: res.(Accepted).Text, Reason: r.reason, Err: err}
 	}
 	if len(refused) > 0 {
-		c.Drafts, c.Changes, c.Judged = nil, nil, nil
+		c.Drafts, c.Changes = nil, nil
 	}
 	return c
 }
 
 // judge is one arrival judged: the edge it takes, then each requirement of
-// the lists that edge carries.
-func judge(w World, a arrival) (Judgment, *refusal) {
-	at := w.render(a.id)
+// the lists that edge carries. A refusal writes nothing, so it names every
+// item as no store holds it yet.
+func judge(w World, a arrival, whoOf func(events.ItemID) Who) (Judgment, *refusal) {
+	at := unwritten(a.who)
 	eff, err := effective(w.Schema(), evaluate.ItemAncestry(w.State(), w.Schema(), a.id))
 	if err != nil {
 		return Judgment{}, refuse("configuration", "%v", err)
@@ -144,7 +160,7 @@ func judge(w World, a arrival) (Judgment, *refusal) {
 			}
 			j.Evaluated++
 			for _, u := range unmet {
-				j.Unmet = append(j.Unmet, Requirement{Severity: req.Severity, Side: sides[k], Unmet: u, Item: at})
+				j.Unmet = append(j.Unmet, UnmetRequirement{Severity: req.Severity, Side: sides[k], Test: u.Test, Found: u.Found, On: whoOf(u.On)})
 				if req.Severity == config.Error && (len(blocked) == 0 || blocked[len(blocked)-1] != sides[k]) {
 					blocked = append(blocked, sides[k])
 				}
@@ -156,14 +172,17 @@ func judge(w World, a arrival) (Judgment, *refusal) {
 	}
 	lines := []string{fmt.Sprintf("%s refused by %s; nothing written", move, strings.Join(blocked, ", "))}
 	for _, u := range j.Unmet {
-		lines = append(lines, u.String())
+		lines = append(lines, u.line(unwritten))
 	}
 	return j, &refusal{reason: "gate", err: errors.New(strings.Join(lines, "\n"))}
 }
 
-// String is the requirement's line: severity, list, test and the check it
-// was written in, then the value found.
-func (r Requirement) String() string {
+// line is the requirement's line, its items named by name: severity,
+// list, test and the check it was written in, then the value found. An
+// ancestors test names where that value was read: the item that broke a
+// negative test, or for a positive one, which no item held, the item
+// judged and its ancestors.
+func (r UnmetRequirement) line(name func(Who) string) string {
 	severity := "error"
 	if r.Severity == config.Warning {
 		severity = "warning"
@@ -177,24 +196,31 @@ func (r Requirement) String() string {
 		found = strings.Join(r.Found, ", ")
 	}
 	if r.Test.Scope == config.Ancestors {
-		found += " on " + r.Item + " and its ancestors"
+		found += " on " + name(r.On)
+		if !negative(r.Test.Atom) {
+			found += " and its ancestors"
+		}
 	}
 	return fmt.Sprintf("  %-7s  %s  %s  found %s", severity, r.Side, test, found)
 }
 
-// summary is a judgment's counts line, and nothing when no list held a
-// requirement.
-func (j Judgment) summary() string {
+// echo is what a judgment adds under its change's line: each warning, an
+// unmet error having refused the command, then the counts, and nothing
+// when no list held a requirement.
+func (j Judgment) echo(name func(Who) string) string {
 	if j.Evaluated == 0 {
 		return ""
 	}
+	var b strings.Builder
 	var warn, err int
 	for _, u := range j.Unmet {
+		b.WriteString(u.line(name) + "\n")
 		if u.Severity == config.Warning {
 			warn++
 		} else {
 			err++
 		}
 	}
-	return fmt.Sprintf("  requirements: %d evaluated · %d met · %d unmet (warning) · %d unmet (error)\n", j.Evaluated, j.Evaluated-warn-err, warn, err)
+	fmt.Fprintf(&b, "  requirements: %d evaluated · %d met · %d unmet (warning) · %d unmet (error)\n", j.Evaluated, j.Evaluated-warn-err, warn, err)
+	return b.String()
 }

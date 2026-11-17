@@ -30,7 +30,7 @@ type Wrote struct {
 
 // Moved is a status written: a move from the column the subject reads to
 // another, which the gate judges once the command's events fold. Op is the
-// operand that wrote it.
+// operand that wrote it, and Judged what the gate found.
 type Moved struct {
 	Who    Who
 	Path   field.Path
@@ -38,6 +38,7 @@ type Moved struct {
 	To     string
 	Source Source
 	Op     int
+	Judged Judgment
 }
 
 // Added is a member added to a set.
@@ -65,12 +66,14 @@ type Commented struct {
 
 // Filed is the Nth new item, by the draft that creates it, the
 // container it is placed in, and the operand that filed it. A leaf's
-// filing is its arrival in the initial column, which the gate judges.
+// filing is its arrival in the initial column, which the gate judges into
+// Judged.
 type Filed struct {
 	N      int
 	Draft  int
 	Parent string
 	Op     int
+	Judged Judgment
 }
 
 func (Wrote) change()     {}
@@ -163,6 +166,10 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 			return nil, nil, nil
 		}
 		t := events.Transition{From: events.MustName(from), To: events.MustName(col.Name()), Over: live}
+		if from == col.Name() {
+			// the column it already reads settles a conflicted register and arrives nowhere
+			return []piece{fact{t}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Before: []string{from}, After: from, Source: wr.source}}, nil
+		}
 		return []piece{fact{t}}, []Change{Moved{Who: wr.subject.At, Path: wr.path, From: from, To: col.Name(), Source: wr.source}}, nil
 	}
 	before, _ := stored(w.Schema(), facts, wr.subject.In, wr.path, wr.decl) // no status, so nothing the configuration judges

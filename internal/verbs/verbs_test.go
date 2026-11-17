@@ -132,7 +132,11 @@ func (b *book) run(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops []v
 	}
 	before := b.st
 	minted := b.mint(w, seen, c.Drafts)
-	c = verbs.Gate(b.world(b.st), c, minted)
+	after := seen // the writer's state its own events fold onto, as the root judges
+	for _, checked := range fold.Check(env, minted) {
+		after = fold.Step(registry, after, checked)
+	}
+	c = verbs.Gate(b.world(after), c, minted)
 	if no, refused := c.Refusal(); refused {
 		b.st = before
 		if len(c.Drafts) != 0 {

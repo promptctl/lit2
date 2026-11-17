@@ -223,9 +223,6 @@ type Compiled struct {
 	Operands []Result
 	Drafts   []events.Draft
 	Changes  []Change
-	// Judged is each arrival's requirements, by the change that made it,
-	// once Gate has run.
-	Judged map[int]Judgment
 }
 
 // Refusal is the first operand's refusal, the command's, and false when

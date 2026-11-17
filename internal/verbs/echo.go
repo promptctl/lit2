@@ -9,8 +9,8 @@ import (
 
 // Echo is what a write prints: one line per change, rendered after
 // minting from the state the minted events folded onto, so a new item
-// shows by the path it now renders as, each arrival followed by the
-// warnings Gate found unmet and its counts. minted is nil under --dry-run, and
+// shows by the path it now renders as, each arrival followed by its
+// judgment's warnings and counts. minted is nil under --dry-run, and
 // then a new item shows as (new N), the Nth the command creates, and a new
 // comment as (new), and the echo ends saying nothing was
 // written. It is the one renderer of a change `[LAW:single-enforcer]`.
@@ -23,23 +23,18 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 		}
 	}
 	who := func(x Who) string {
-		switch x := x.(type) {
-		case Existing:
-			return x.Rendered
-		case Created:
-			if about == nil {
-				return fmt.Sprintf("(new %d)", x.N)
-			}
-			return w.render(about[filed[x.N]].(events.NewItem).ID)
+		if n, created := x.(Created); created && about != nil {
+			return w.render(about[filed[n.N]].(events.NewItem).ID)
 		}
-		panic(fmt.Sprintf("verbs: %T is not a Who", x))
+		return unwritten(x)
 	}
 	var b strings.Builder
-	for i, ch := range c.Changes {
+	for _, ch := range c.Changes {
 		switch ch := ch.(type) {
 		case Filed:
 			id := who(Created{N: ch.N})
 			fmt.Fprintf(&b, "+ %s\n⇒ %s/parent = %s\n", id, id, ch.Parent)
+			b.WriteString(ch.Judged.echo(who))
 		case Wrote:
 			after := shown(ch.After, ch.Prose)
 			if _, created := ch.Who.(Created); created {
@@ -58,9 +53,10 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 		case Moved:
 			if _, created := ch.Who.(Created); created {
 				fmt.Fprintf(&b, "⇒ %s/%s = %s%s\n", who(ch.Who), ch.Path, ch.To, tagged(ch.Source))
-				break
+			} else {
+				fmt.Fprintf(&b, "%s/%s %s → %s\n", who(ch.Who), ch.Path, ch.From, ch.To)
 			}
-			fmt.Fprintf(&b, "%s/%s %s → %s\n", who(ch.Who), ch.Path, ch.From, ch.To)
+			b.WriteString(ch.Judged.echo(who))
 		case Added:
 			if _, created := ch.Who.(Created); created {
 				fmt.Fprintf(&b, "⇒ %s/%s/%s%s\n", who(ch.Who), ch.Path, ch.Member, tagged(ch.Source))
@@ -77,16 +73,24 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 			}
 			fmt.Fprintf(&b, "+ %s/%s/%s\n", who(ch.Who), ch.Path, key)
 		}
-		j := c.Judged[i]
-		for _, u := range j.Unmet { // an unmet error refused the command, so each is a warning
-			b.WriteString(u.String() + "\n")
-		}
-		b.WriteString(j.summary())
 	}
 	if minted == nil {
 		b.WriteString("(dry run: nothing written)\n")
 	}
 	return b.String()
+}
+
+// unwritten is x as a line names it before anything is stored: an
+// existing item by its path, a new one as (new N), the Nth the command
+// creates.
+func unwritten(x Who) string {
+	switch x := x.(type) {
+	case Existing:
+		return x.Rendered
+	case Created:
+		return fmt.Sprintf("(new %d)", x.N)
+	}
+	panic(fmt.Sprintf("verbs: %T is not a Who", x))
 }
 
 // drafted is what each draft's first minted event is about, by draft: a

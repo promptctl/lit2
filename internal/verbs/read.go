@@ -19,7 +19,9 @@ import (
 type World struct{ evaluate.View }
 
 // Read is the values the row at path holds on node n: the one
-// reader get and a check's tests call `[LAW:single-enforcer]`. A stored
+// reader get and a check's tests call `[LAW:single-enforcer]`, but for a
+// status get prints, which it reads as the view's Column so a name the
+// graph no longer declares shows marked; both read evaluate.StatusIn. A stored
 // field reads through stored, on an item or a comment alike; comments
 // read the item's elements rm has not removed, since only a check's test
 // reads a list here and get lists each element itself; children what is placed there; a derived
@@ -314,10 +316,11 @@ func (w World) element(n address.Element) fold.Element {
 	panic(fmt.Sprintf("verbs: %s is no element of its item", n.Rendered))
 }
 
-// Unmet is a test that does not hold on an item, and what the item itself
-// holds at the test's path, so a refusal names the value found.
+// Unmet is a test that does not hold on an item, the item whose value
+// decided it, and that value, so a refusal names what was found and where.
 type Unmet struct {
 	Test  config.Test
+	On    events.ItemID
 	Found []string
 }
 
@@ -340,28 +343,35 @@ func Judge(w World, id events.ItemID, tests []config.Test) ([]Unmet, error) {
 				}
 			}
 		}
-		held, found, err := holds(w, t.Atom, scope)
+		held, on, found, err := holds(w, t.Atom, scope)
 		if err != nil {
 			return nil, err
 		}
 		if !held {
-			unmet = append(unmet, Unmet{Test: t, Found: found})
+			unmet = append(unmet, Unmet{Test: t, On: on, Found: found})
 		}
 	}
 	return unmet, nil
 }
 
+// negative is whether atom forbids a value, and so must hold on every item
+// of an ancestors scope rather than on one.
+func negative(atom field.Atom) bool {
+	switch atom.Op().(type) {
+	case field.Absent, field.NotEquals:
+		return true
+	}
+	return false
+}
+
 // holds is whether atom holds over scope, whose first item is the one
 // judged: on one item for a positive atom, on every item for a negative
-// one; and what that first item holds at the atom's path. An item whose
-// place has no field at the atom's path holds nothing there.
-func holds(w World, atom field.Atom, scope []events.ItemID) (bool, []string, error) {
-	_, negative := atom.Op().(field.Absent)
-	if _, ne := atom.Op().(field.NotEquals); ne {
-		negative = true
-	}
+// one; and the item whose value decided it, with that value: the first
+// item that breaks a negative atom, and otherwise the one judged. An item
+// whose place has no field at the atom's path holds nothing there.
+func holds(w World, atom field.Atom, scope []events.ItemID) (bool, events.ItemID, []string, error) {
+	neg := negative(atom)
 	var first []string
-	held := negative
 	for i, id := range scope {
 		it := w.item(id)
 		l, placed := it.Level.(fold.Leveled)
@@ -376,18 +386,17 @@ func holds(w World, atom field.Atom, scope []events.ItemID) (bool, []string, err
 				kind = f.Decl.Kind
 			}
 			if found, err = Read(w, address.Item{ID: id, Rendered: w.render(id)}, atom.Path(), r); err != nil {
-				return false, nil, err
+				return false, events.ItemID{}, nil, err
 			}
 		}
 		if i == 0 {
 			first = found
 		}
-		if bool(atom.Holds(kind, found)) != negative {
-			held = !negative
-			break
+		if bool(atom.Holds(kind, found)) != neg {
+			return !neg, id, found, nil
 		}
 	}
-	return held, first, nil
+	return neg, scope[0], first, nil
 }
 
 // verdict is a check's value: holds, or each test that does not, named by
