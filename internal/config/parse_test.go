@@ -571,11 +571,40 @@ func TestEachFaultOnce(t *testing.T) {
 			t.Errorf("%s: refusals = %v, want wrong-type alone", name, refusals)
 		}
 	}
+	more := map[string]string{
+		"a field kind that is not a string": replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.f]\nkind = 5")(minimal),
+		"a level name that is not a string": replace(`name = "story"`, `name = 5`)(minimal),
+		"a severity that is not a string":   replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nentry = [{ test = \"description\", severity = 5 }]")(minimal),
+		"enum values holding a number":      replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"enum\"\nvalues = [1]")(minimal),
+	}
+	for name, text := range more {
+		if refusals := refusalsOf(t, text); len(refusals) != 1 || refusals[0].Reason != ReasonWrongType {
+			t.Errorf("%s: refusals = %v, want wrong-type alone", name, refusals)
+		}
+	}
+	collides := replace("[columns.done]\nterminal = true", "[checks.description]\ntests = []\n\n[checks.ready]\ntests = [{ test = \"description\" }]\n\n[columns.done]\nterminal = true\nentry = [{ test = \"description\", severity = \"error\" }]")(minimal)
+	if refusals := refusalsOf(t, collides); len(refusals) != 1 || refusals[0].Reason != ReasonCheckCollides {
+		t.Errorf("a check named like a field: refusals = %v, want check-collides alone", refusals)
+	}
 	noColumns := minimal[:strings.Index(minimal, "[columns.backlog]")]
 	for _, r := range refusalsOf(t, noColumns) {
 		if r.Reason == ReasonMissingKey {
 			t.Errorf("a file with no columns says so as the graph's faults, not also as missing-key: %v", r)
 		}
+	}
+}
+
+// TestAHomeIsAHomeWhateverItsName: a section keyed by a declared home is that
+// home's, even when the name could also be read as an item id.
+func TestAHomeIsAHomeWhateverItsName(t *testing.T) {
+	text := replace(`home = "unfiled"`, `home = "lit-7k2"`)(minimal)
+	text = replace("[columns.backlog]", "[nodes.\"lit-7k2\"]\nclaim_ttl = \"1h\"\n\n[columns.backlog]")(text)
+	s, err := parseText(t, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Sections()[HomeNode("lit-7k2")]; !ok {
+		t.Errorf("sections = %v, want the home lit-7k2's", s.Sections())
 	}
 }
 

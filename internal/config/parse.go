@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -89,14 +88,12 @@ func (p *parser) schema(raw map[string]any, gate ReaderGate) Schema {
 	p.unknown(raw, "", "prefix", "min-reader-version", "claim_ttl", "labels", "levels", "links", "checks", "columns", "nodes")
 	s := Schema{gate: gate}
 
-	if v, ok := p.text(raw, "", "prefix"); ok {
+	if v, ok := p.need(raw, "", "prefix", ReasonMissingKey, "the workspace names its prefix"); ok {
 		if pre, err := events.ParsePrefix(v); err != nil {
 			p.fail("prefix", ReasonBadPrefix, "%v", err)
 		} else {
 			s.prefix = pre
 		}
-	} else if !p.has(raw, "prefix") {
-		p.fail("prefix", ReasonMissingKey, "the workspace names its prefix")
 	}
 	s.labels = p.labels(raw)
 	p.builtins = field.Builtins(s.labels)
@@ -242,7 +239,7 @@ func (p *parser) readLevels(raw map[string]any) []Level {
 		}
 		lv := Level{Fields: map[field.Path]field.FieldDecl{}, Template: map[field.Path][]string{}}
 		p.unknown(m, at, "name", "home", "fields", "template")
-		if name, ok := p.text(m, at, "name"); ok {
+		if name, ok := p.need(m, at, "name", ReasonMissingKey, "a level has a name"); ok {
 			lv.Name = name
 			if name == "" {
 				p.fail(keyed(at, "name"), ReasonEmptyLevelName, "a level's name is not empty")
@@ -252,8 +249,6 @@ func (p *parser) readLevels(raw map[string]any) []Level {
 					p.fail(keyed(at, "name"), ReasonDuplicateLevelName, "level name %s is declared twice", name)
 				}
 			}
-		} else {
-			p.fail(keyed(at, "name"), ReasonMissingKey, "a level has a name")
 		}
 		hasHome := p.has(m, "home")
 		switch {
@@ -263,7 +258,7 @@ func (p *parser) readLevels(raw map[string]any) []Level {
 			p.fail(at, ReasonMissingHome, "level %d names its home: home = \"unfiled\" or another name", n)
 		case hasHome:
 			if home, ok := p.text(m, at, "home"); ok {
-				if !segmentPattern.MatchString(home) {
+				if !isName(home) {
 					p.fail(keyed(at, "home"), ReasonBadHome, "%q is not a home name: a lowercase word", home)
 				}
 				lv.Home = home
@@ -322,7 +317,7 @@ func (p *parser) checkHomes(levels []Level, nums []int) {
 // fieldDecl reads one declared field: its kind and the parameters that kind
 // takes, and nothing else.
 func (p *parser) fieldDecl(at KeyPath, name string, v any) (field.FieldDecl, bool) {
-	if !segmentPattern.MatchString(name) {
+	if !isName(name) {
 		p.fail(at, ReasonBadFieldName, "%q is not a field name: a lowercase word", name)
 		return field.FieldDecl{}, false
 	}
@@ -332,9 +327,8 @@ func (p *parser) fieldDecl(at KeyPath, name string, v any) (field.FieldDecl, boo
 		return field.FieldDecl{}, false
 	}
 	p.unknown(m, at, "kind", "values", "many", "pattern")
-	kindWord, ok := p.text(m, at, "kind")
+	kindWord, ok := p.need(m, at, "kind", ReasonMissingKey, "a field declares its kind")
 	if !ok {
-		p.fail(keyed(at, "kind"), ReasonMissingKey, "a field declares its kind")
 		return field.FieldDecl{}, false
 	}
 	hasValues, hasMany, hasPattern := p.has(m, "values"), p.has(m, "many"), p.has(m, "pattern")
@@ -499,7 +493,7 @@ func (x *expander) expand(name string) ([]Test, bool) {
 
 // body reads one check's table: its name, and each of its tests.
 func (x *expander) body(name string, at KeyPath) ([]Test, bool) {
-	if !segmentPattern.MatchString(name) {
+	if !isName(name) {
 		x.p.fail(at, ReasonBadCheckName, "%q is not a check name: a lowercase word", name)
 		return nil, false
 	}
@@ -601,12 +595,14 @@ func (p *parser) test(src string, m map[string]any, at KeyPath, declaredIn strin
 	}
 	path := atom.Path()
 	// unmet_requirements is derived from the tests themselves, so a test that
-	// read it would read its own outcome.
-	if p.checkNames[string(path)] || path == "unmet_requirements" {
+	// read it would read its own outcome. A field's name is the field's: a
+	// check that takes one is refused for that, and no test that reads the
+	// field is.
+	decls := p.decls(path)
+	if path == "unmet_requirements" || len(decls) == 0 && p.checkNames[string(path)] {
 		p.fail(keyed(at, "test"), ReasonPathIsCheck, "%s names a check or unmet_requirements: name the check with check = %q", path, path)
 		return Test{}, false
 	}
-	decls := p.decls(path)
 	if len(decls) == 0 {
 		p.fail(keyed(at, "test"), ReasonPathUndeclared, "%s is neither a built-in field nor declared on any level", path)
 		return Test{}, false
@@ -635,7 +631,7 @@ func (p *parser) links(raw map[string]any, levelCount int) map[string]LinkType {
 	out := map[string]LinkType{}
 	for _, name := range sortedKeys(tbl) {
 		at := keyed("links", name)
-		if !segmentPattern.MatchString(name) {
+		if !isName(name) {
 			p.fail(at, ReasonBadLinkName, "%q is not a link name: a lowercase word", name)
 			continue
 		}
@@ -646,11 +642,8 @@ func (p *parser) links(raw map[string]any, levelCount int) map[string]LinkType {
 		}
 		p.unknown(m, at, "kind", "between")
 		var lt LinkType
-		kindWord, ok := p.text(m, at, "kind")
+		kindWord, ok := p.need(m, at, "kind", ReasonMissingKey, "a link type names its kind: dependency or relates")
 		if !ok {
-			if !p.has(m, "kind") {
-				p.fail(keyed(at, "kind"), ReasonMissingKey, "a link type names its kind: dependency or relates")
-			}
 			continue
 		}
 		switch kindWord {
@@ -723,7 +716,7 @@ func (p *parser) columns(m map[string]any, at KeyPath) map[string]Column {
 // that has an exit list and is terminal is refused before it exists.
 func (p *parser) column(at KeyPath, name string, m map[string]any) (Column, bool) {
 	p.unknown(m, at, "initial", "terminal", "next", "aliases", "entry", "exit")
-	if !segmentPattern.MatchString(name) {
+	if !isName(name) {
 		p.fail(at, ReasonBadColumnName, "%q is not a column name: a lowercase word", name)
 		return nil, false
 	}
@@ -731,7 +724,7 @@ func (p *parser) column(at KeyPath, name string, m map[string]any) (Column, bool
 	terminal, _ := p.flag(m, at, "terminal")
 	aliases, _ := p.strings(m, at, "aliases")
 	for _, a := range aliases {
-		if !segmentPattern.MatchString(a) {
+		if !isName(a) {
 			p.fail(keyed(at, "aliases"), ReasonBadColumnName, "alias %q is not a column name", a)
 		}
 	}
@@ -785,9 +778,8 @@ func (p *parser) requirements(at KeyPath, m map[string]any, key string) []Requir
 
 // severity reads an entry's severity: error or warning, and never a default.
 func (p *parser) severity(m map[string]any, at KeyPath) (Severity, bool) {
-	word, ok := p.text(m, at, "severity")
+	word, ok := p.need(m, at, "severity", ReasonBadSeverity, "an entry names its severity: error or warning")
 	if !ok {
-		p.fail(keyed(at, "severity"), ReasonBadSeverity, "an entry names its severity: error or warning")
 		return 0, false
 	}
 	switch word {
@@ -834,13 +826,13 @@ func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Sectio
 	return sections
 }
 
-// nodeKey reads a section key: a full id, or a declared home.
+// nodeKey reads a section key: a declared home, or else a full id.
 func nodeKey(key string, homes map[string]bool) (NodeKey, bool) {
-	if id, err := events.ParseItemID(key); err == nil {
-		return ItemNode(id), true
-	}
 	if homes[key] {
 		return HomeNode(key), true
+	}
+	if id, err := events.ParseItemID(key); err == nil {
+		return ItemNode(id), true
 	}
 	return NodeKey{}, false
 }
@@ -859,8 +851,12 @@ func (p *parser) duration(m map[string]any, at KeyPath, key string) (time.Durati
 	return d, true
 }
 
-// segmentPattern is a name a person writes: a lowercase word.
-var segmentPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+// isName is whether s is a name a person writes, a lowercase word, by the
+// one grammar of names, events' `[LAW:one-source-of-truth]`.
+func isName(s string) bool {
+	_, err := events.ParseName(s)
+	return err == nil
+}
 
 // nodeSegment is a section key as it is written in the file.
 func nodeSegment(n NodeKey) string {
@@ -902,6 +898,16 @@ func (p *parser) table(m map[string]any, at KeyPath, key string) (map[string]any
 		return nil, false
 	}
 	return t, true
+}
+
+// need reads a string a table must hold. An absent one is refused with r and
+// msg; one of the wrong type is refused once, by text, as wrong-type.
+func (p *parser) need(m map[string]any, at KeyPath, key string, r Reason, msg string) (string, bool) {
+	if !p.has(m, key) {
+		p.fail(keyed(at, key), r, "%s", msg)
+		return "", false
+	}
+	return p.text(m, at, key)
 }
 
 func (p *parser) text(m map[string]any, at KeyPath, key string) (string, bool) {
@@ -948,14 +954,21 @@ func (p *parser) strings(m map[string]any, at KeyPath, key string) ([]string, bo
 	if !ok {
 		return nil, false
 	}
+	// A list with an entry of the wrong type is refused whole, so nothing reads
+	// what is left of it as if the person had written that.
 	out := make([]string, 0, len(l))
+	good := true
 	for i, item := range l {
 		s, ok := item.(string)
 		if !ok {
 			p.fail(indexed(keyed(at, key), i), ReasonWrongType, "an entry of %s is a string", key)
+			good = false
 			continue
 		}
 		out = append(out, s)
+	}
+	if !good {
+		return nil, false
 	}
 	return out, true
 }

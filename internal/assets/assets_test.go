@@ -2,19 +2,29 @@ package assets
 
 import (
 	"bytes"
+	"io/fs"
 	"testing"
 )
 
-// TestEveryDeclaredAssetIsEmbedded: each handle the package declares reads its
-// file from the binary, so no shipped file is missing at run time.
-func TestEveryDeclaredAssetIsEmbedded(t *testing.T) {
-	if len(declared) == 0 {
-		t.Fatal("no asset is declared")
-	}
+// TestDeclaredAndEmbeddedAreEqual: each handle the package declares reads its
+// file from the binary, and every embedded file has a handle, so no shipped
+// file is missing at run time or shipped unnamed.
+func TestDeclaredAndEmbeddedAreEqual(t *testing.T) {
+	named := map[string]bool{}
 	for _, a := range declared {
+		named[a.path] = true
 		if len(a.Bytes()) == 0 {
 			t.Errorf("%s is embedded empty", a.path)
 		}
+	}
+	err := fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && !named[path] {
+			t.Errorf("%s is embedded and no Asset names it", path)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

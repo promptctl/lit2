@@ -104,7 +104,7 @@ const segment = `[a-z][a-z0-9_-]*`
 
 // atomGrammar is the whole grammar: an optional !, a path, and at most one
 // operator with its values, which are the rest of the text.
-var atomGrammar = regexp.MustCompile(`^(!?)(` + segment + `(?:/` + segment + `)*)(?:(!=|=|~)(.*))?$`)
+var atomGrammar = regexp.MustCompile(`(?s)^(!?)(` + segment + `(?:/` + segment + `)*)(?:(!=|=|~)(.*))?$`)
 
 // ParseAtom reads an atom from its source. It refuses what the grammar does
 // not say and a regular expression that does not compile; whether the path is
@@ -206,7 +206,7 @@ func value(s, stops string) (string, string, error) {
 		}
 	}
 	word := s[:end]
-	if word == "" || strings.ContainsAny(word, " \t\"") {
+	if word == "" || strings.ContainsAny(word, " \t\n\r\"") {
 		return "", "", fmt.Errorf("a value is a bare word or a quoted string")
 	}
 	return word, s[end:], nil

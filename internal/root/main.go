@@ -32,11 +32,12 @@ func Main(args []string) int {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 	// [LAW:no-silent-failure] a build with no version cannot say which
 	// workspace versions it reads, so it does not run. Nothing is recorded,
-	// since an invocation records the version it ran as, so it dies the way a
-	// defect of the build dies: a panic, whose status D9 reads as unrecorded.
+	// since an invocation records the version it ran as, so it exits with
+	// status 2, outside every recorded class, which D9 reads as unrecorded.
 	reader, err := config.ReadReaderVersion(buildStamp())
 	if err != nil {
-		panic("lit2: " + err.Error())
+		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
+		return 2
 	}
 	place := here()
 	return Run(Process{

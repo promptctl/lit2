@@ -48,6 +48,7 @@ func TestParseAtomRefusals(t *testing.T) {
 		"p=\"open",
 		"p=\"a\"b",
 		"p<3",
+		"p=a\nb",
 	} {
 		if _, err := ParseAtom(in); err == nil {
 			t.Errorf("ParseAtom(%q) parsed; the grammar refuses it", in)
@@ -75,6 +76,7 @@ func TestAtomValues(t *testing.T) {
 		{`reason="a b",c`, Found{"c"}, true},
 		{`title~"^\d+$"`, Found{"42"}, true},
 		{`title~^a{1,3}$`, Found{"aa"}, true},
+		{"description=\"a\nb\"", Found{"a\nb"}, true},
 	}
 	for _, tc := range cases {
 		a, err := ParseAtom(tc.atom)
