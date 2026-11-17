@@ -66,17 +66,21 @@ func Resolve(st fold.State, id events.ShortID) (events.ItemID, error) {
 	return resolve(id, cands)
 }
 
-// resolveElement is the one element of it, in the list n, that key names:
-// an element's path is its own segment.
-func resolveElement(it fold.Item, n events.Name, key events.ShortID) (ElementKey, error) {
-	var cands []candidate[ElementKey]
+// resolveElement is the one element of it, in the list n, that key names,
+// and its segment: an element's path is its own segment.
+func resolveElement(it fold.Item, n events.Name, key events.ShortID) (events.ElementID, events.Segment, error) {
+	type named struct {
+		id  events.ElementID
+		seg events.Segment
+	}
+	var cands []candidate[named]
 	for _, e := range it.Elements {
 		c, ok := fold.CreateOf(e.Origin)
 		if !ok || e.In != n {
 			continue
 		}
-		k := ElementKey{ID: e.ID, Rendered: c.Segment.String()}
-		cands = append(cands, candidate[ElementKey]{id: k, full: e.ID.String(), path: func() []events.Segment { return []events.Segment{c.Segment} }})
+		cands = append(cands, candidate[named]{id: named{e.ID, c.Segment}, full: e.ID.String(), path: func() []events.Segment { return []events.Segment{c.Segment} }})
 	}
-	return resolve(key, cands)
+	k, err := resolve(key, cands)
+	return k.id, k.seg, err
 }

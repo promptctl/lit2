@@ -100,26 +100,17 @@ func read(w World, a address.Address) ([]line, *refusal) {
 		return append(fields, lists...), nil
 	case address.Field:
 		return rowLines(w, a, strings.TrimSuffix(base, "/"+string(t.Path)), t.Path, t.Row)
-	case address.Element:
-		switch k := t.Key.(type) {
-		case address.Member:
-			held, _ := Read(w, a.Node, t.Path, config.FieldRow{At: t.Path, Decl: t.Decl}) // a set reads no status
-			if slices.Contains(held, k.Name.String()) {
-				return []line{{at: base, value: k.Name.String()}}, nil
-			}
-			if _, err := t.Decl.Kind.Parse(k.Name.String()); err != nil {
-				return nil, refuse("value", "%s: %v", t.Path, err)
-			}
-			return nil, nil
-		case address.ElementKey:
-			for _, e := range elements(w.item(a.Node.(address.Item).ID), events.MustName(string(t.Path))) {
-				if e.key == k.Rendered {
-					return []line{{at: base, value: fmt.Sprintf("[%s] %s", e.by, e.text)}}, nil
-				}
-			}
+	case address.Member:
+		held, _ := Read(w, a.Node, t.Path, config.FieldRow{At: t.Path, Decl: t.Decl}) // a set reads no status
+		if slices.Contains(held, t.Name.String()) {
+			return []line{{at: base, value: t.Name.String()}}, nil
 		}
+		if _, err := t.Decl.Kind.Parse(t.Name.String()); err != nil {
+			return nil, refuse("value", "%s: %v", t.Path, err)
+		}
+		return nil, nil
 	}
-	return nil, nil
+	panic(fmt.Sprintf("verbs: %T is not a Target", a.Target))
 }
 
 // rowLines is one row's values on a node, each at the row's path, and a
@@ -129,7 +120,7 @@ func rowLines(w World, a address.Address, node string, path field.Path, r config
 	if f, ok := r.(config.FieldRow); ok && f.Decl.Multi == field.Elements {
 		var out []line
 		for _, e := range elements(w.item(a.Node.(address.Item).ID), events.MustName(string(path))) {
-			out = append(out, line{at: at + "/" + e.key, value: fmt.Sprintf("[%s] %s", e.by, e.text)})
+			out = append(out, line{at: at + "/" + e.key, value: e.line()})
 		}
 		return out, nil
 	}

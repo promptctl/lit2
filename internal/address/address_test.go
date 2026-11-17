@@ -43,8 +43,11 @@ func TestEveryPathFormNamesItsNode(t *testing.T) {
 		{feature.ID.String() + "/title", "lit-" + seg + "/title", field.Node{Level: two}},
 		{seg + "/plan/verdict", "lit-" + seg + "/plan/verdict", field.Node{Level: two}},
 		{seg + "/labels/ready", "lit-" + seg + "/labels/ready", field.Node{Level: two}},
-		{seg + "/comments/" + note.Segment().String(), "lit-" + seg + "/comments/" + note.Segment().String(), field.Node{Level: two}},
-		{seg + "/comments/" + note.ID.String(), "lit-" + seg + "/comments/" + note.Segment().String(), field.Node{Level: two}},
+		{seg + "/comments", "lit-" + seg + "/comments", field.Node{Level: two}},
+		{seg + "/comments/" + note.Segment().String(), "lit-" + seg + "/comments/" + note.Segment().String(), field.Comment{}},
+		{seg + "/comments/" + note.ID.String(), "lit-" + seg + "/comments/" + note.Segment().String(), field.Comment{}},
+		{seg + "/comments/" + note.Segment().String() + "/body", "lit-" + seg + "/comments/" + note.Segment().String() + "/body", field.Comment{}},
+		{seg + "/comments/" + note.ID.String() + "/deleted", "lit-" + seg + "/comments/" + note.Segment().String() + "/deleted", field.Comment{}},
 		{seg + "/ready", "lit-" + seg + "/ready", field.Node{Level: two}},
 	} {
 		a, r := address.Parse(s, schema, c.text)
@@ -55,6 +58,9 @@ func TestEveryPathFormNamesItsNode(t *testing.T) {
 		if a.String() != c.canon || a.Place != c.place {
 			t.Errorf("%s = %s at %#v; want %s at %#v", c.text, a, a.Place, c.canon, c.place)
 		}
+	}
+	if a, _ := address.Parse(s, schema, seg+"/comments/"+note.Segment().String()); a.Node != (address.Element{Of: feature.ID, ID: note.ID, Rendered: "lit-" + seg + "/comments/" + note.Segment().String()}) {
+		t.Errorf("a comment's path names %#v; want the comment, a node", a.Node)
 	}
 	if a, _ := address.Parse(s, schema, seg+"/ready"); !isCheck(a) {
 		t.Errorf("%s/ready = %#v; want the check row", seg, a.Target)
@@ -77,22 +83,29 @@ func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
 	var s fold.State
 	s, ev := mint(t, s, s, 0xa, top(2), [16]byte{0x10})
 	seg := made(ev).Segment().String()
+	s, ec := mint(t, s, s, 0xa, comment(made(ev).ID), [16]byte{0x30})
+	note := seg + "/comments/" + made2(ec).Segment().String()
 	for text, reason := range map[string]string{
-		"":                    "syntax",
-		seg + "/":             "syntax",
-		seg + "/title/":       "syntax",
-		seg + "/labels/":      "syntax",
-		"Not An Id":           "syntax",
-		"zzz":                 "not_found",
-		seg + "/nope":         "unknown_field",
-		seg + "/status":       "not_on_level",
-		"/title":              "not_on_level",
-		seg + "/title/x":      "names_no_element",
-		seg + "/children/x":   "names_no_element",
-		seg + "/comments/zzz": "not_found",
-		seg + "/labels/Not A": "syntax",
-		seg + "/ready/x":      "names_no_element",
-		"unfiled/description": "not_on_level",
+		"":                      "syntax",
+		seg + "/":               "syntax",
+		seg + "/title/":         "syntax",
+		seg + "/labels/":        "syntax",
+		"Not An Id":             "syntax",
+		"zzz":                   "not_found",
+		seg + "/nope":           "unknown_field",
+		seg + "/status":         "not_on_level",
+		"/title":                "not_on_level",
+		seg + "/title/x":        "names_no_element",
+		seg + "/children/x":     "names_no_element",
+		seg + "/comments/zzz":   "not_found",
+		seg + "/labels/Not A":   "syntax",
+		seg + "/ready/x":        "names_no_element",
+		seg + "/labels/ready/x": "names_no_element",
+		"unfiled/description":   "not_on_level",
+		note + "/":              "syntax",
+		note + "/nope":          "unknown_field",
+		note + "/title":         "not_on_level",
+		note + "/body/x":        "names_no_element",
 	} {
 		_, r := address.Parse(s, schema, text)
 		if r == nil || r.Reason() != reason {

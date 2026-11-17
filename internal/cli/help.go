@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/field"
@@ -41,15 +40,18 @@ func HelpText(verbTable, admin Table, fields config.Table) string {
 	section(&b, "admin", adminWord+" ", admin)
 	for _, p := range fields.Places() {
 		fmt.Fprintf(&b, "\nfields of %s:\n", config.PlaceName(p))
-		tw := tabwriter.NewWriter(&b, 0, 0, 1, ' ', 0)
-		for _, r := range fields.Rows(p) {
+		rows := fields.Rows(p)
+		var paths, kinds int
+		for _, r := range rows {
+			paths, kinds = max(paths, len(r.Path())), max(kinds, len(kindOf(r)))
+		}
+		for _, r := range rows {
 			writers := strings.Join(verbs.VerbsOf(r), ", ")
 			if writers == "" {
 				writers = "derived"
 			}
-			fmt.Fprintf(tw, "  %s\t%s\t%s\n", r.Path(), kindOf(r), writers)
+			fmt.Fprintf(&b, "  %-*s %-*s %s\n", paths, r.Path(), kinds, kindOf(r), writers)
 		}
-		tw.Flush()
 	}
 	return b.String()
 }
@@ -60,12 +62,14 @@ func kindOf(r config.Row) string {
 	switch r := r.(type) {
 	case config.FieldRow:
 		switch r.Decl.Multi {
+		case field.One:
+			return r.Decl.Kind.Name()
 		case field.Set:
 			return "set-of-" + r.Decl.Kind.Name()
 		case field.Elements, field.Children:
 			return "list-of-" + r.Decl.Kind.Name()
 		}
-		return r.Decl.Kind.Name()
+		panic(fmt.Sprintf("cli: %d is not a Multiplicity", r.Decl.Multi))
 	case config.CheckRow:
 		return "check"
 	}

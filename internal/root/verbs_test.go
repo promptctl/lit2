@@ -109,8 +109,24 @@ func TestAPersonFilesAndWorksATicketByPath(t *testing.T) {
 	if !ok {
 		t.Fatalf("add comment echoes %q", comment)
 	}
-	if got := s.ok("get", id+"/comments/"+seg); !strings.HasSuffix(got, "] the read path is in fold\n") {
-		t.Errorf("get the comment = %q", got)
+	note := id + "/comments/" + seg
+	if got := s.ok("get", note); got != "$ = "+note+"\n$/body\tthe read path is in fold\n" {
+		t.Errorf("get the comment = %q; want its fields", got)
+	}
+	if got := s.ok("rm", note); got != note+"/deleted (unset) → true\n" {
+		t.Errorf("rm the comment echoes %q", got)
+	}
+	if got := s.ok("get", note+"/deleted"); got != "true\n" {
+		t.Errorf("a removed comment's deleted = %q", got)
+	}
+	if got := s.ok("rm", note); got != "" {
+		t.Errorf("a second rm of the comment echoes %q; want nothing drafted", got)
+	}
+	if got := s.ok("get", id+"/comments"); !strings.HasPrefix(got, "(deleted) [") || !strings.HasSuffix(got, "] the read path is in fold\n") {
+		t.Errorf("a removed comment lists as %q; want it listed, marked", got)
+	}
+	if got := s.ok("set", note+"/deleted", "false"); got != note+"/deleted true → false\n" {
+		t.Errorf("restoring the comment echoes %q", got)
 	}
 	if got := s.ok("add", id+"/labels", "ready"); got != "+ "+id+"/labels/ready\n" {
 		t.Errorf("add label echoes %q", got)
@@ -200,6 +216,9 @@ func TestACommandWritesEachTargetOnce(t *testing.T) {
 	if strings.Count(two, "+ "+id+"/comments/") != 2 {
 		t.Errorf("two comments echo %q", two)
 	}
+	note := strings.TrimPrefix(strings.SplitN(two, "\n", 2)[0], "+ ")
+	s.refused("twice", "rm", note, note)
+	s.refused("not_removable", "rm", id+"/comments")
 }
 
 // TestAWriteRefusedAnywhereWritesNothingAndRecordsEveryOperand: one bad

@@ -26,7 +26,8 @@ type Address struct {
 	Target Target
 }
 
-// Node is what a path's first step names: the root, a home, or an item.
+// Node is what a path names before its field: the root, a home, an item,
+// or an element of an item's list.
 //
 //sumtype:decl
 type Node interface{ node() }
@@ -46,12 +47,22 @@ type Item struct {
 	Rendered string
 }
 
-func (Root) node() {}
-func (Home) node() {}
-func (Item) node() {}
+// Element is a created element of item Of's list, such as a comment: a
+// node of its own, with fields, as a set's member is not. Rendered is its
+// path, the item's, the list's and its own segment.
+type Element struct {
+	Of       events.ItemID
+	ID       events.ElementID
+	Rendered string
+}
+
+func (Root) node()    {}
+func (Home) node()    {}
+func (Item) node()    {}
+func (Element) node() {}
 
 // Target is what of a node a path names: the whole node, one row of it,
-// or one element of a row that holds members or elements.
+// or one member of a set.
 //
 //sumtype:decl
 type Target interface{ target() }
@@ -65,35 +76,17 @@ type Field struct {
 	Row  config.Row
 }
 
-// Element is one member of a set, or one element of a list such as a
-// comment.
-type Element struct {
+// Member is one member of a set, by its name: a value, which holds no
+// fields.
+type Member struct {
 	Path field.Path
 	Decl field.FieldDecl
-	Key  Key
+	Name events.Name
 }
 
-func (Whole) target()   {}
-func (Field) target()   {}
-func (Element) target() {}
-
-// Key is how an element is named: a set's member by its name, or a list's
-// element by its id.
-//
-//sumtype:decl
-type Key interface{ key() }
-
-// Member is a set's member.
-type Member struct{ Name events.Name }
-
-// ElementKey is one element of a list, and its segment as it renders.
-type ElementKey struct {
-	ID       events.ElementID
-	Rendered string
-}
-
-func (Member) key()     {}
-func (ElementKey) key() {}
+func (Whole) target()  {}
+func (Field) target()  {}
+func (Member) target() {}
 
 // String is the address as it renders: the canonical spelling of the node
 // and of what it names, whatever the path typed.
@@ -105,6 +98,8 @@ func (a Address) String() string {
 		b.WriteString(n.Name)
 	case Item:
 		b.WriteString(n.Rendered)
+	case Element:
+		b.WriteString(n.Rendered)
 	}
 	switch t := a.Target.(type) {
 	case Whole:
@@ -113,14 +108,8 @@ func (a Address) String() string {
 		}
 	case Field:
 		fmt.Fprintf(&b, "/%s", t.Path)
-	case Element:
-		fmt.Fprintf(&b, "/%s/", t.Path)
-		switch k := t.Key.(type) {
-		case Member:
-			b.WriteString(k.Name.String())
-		case ElementKey:
-			b.WriteString(k.Rendered)
-		}
+	case Member:
+		fmt.Fprintf(&b, "/%s/%s", t.Path, t.Name)
 	}
 	return b.String()
 }
@@ -129,11 +118,12 @@ func (a Address) String() string {
 //
 //	path  := '/' steps? | node ('/' steps)?
 //	node  := home-name | id
-//	steps := field ('/' key)?
+//	steps := field ('/' member | '/' element ('/' steps)?)?
 //
 // It is the one maker of an Address. A field may itself hold a slash, as
-// pr/verdict does, so the whole of the steps is a field when the table has
-// one by that path, and its last step a key otherwise. Its refusal says
+// pr/verdict does, so the field is the longest run of steps the table has
+// a row for, and the step after it a key. An element's key names a node
+// of its own, whose steps are read at its place in turn. Its refusal says
 // why the path names nothing.
 func Parse(st fold.State, schema config.Schema, text string) (Address, Refusal) {
 	if text == "" {
@@ -158,12 +148,7 @@ func Parse(st fold.State, schema config.Schema, text string) (Address, Refusal) 
 		a.Target = Whole{}
 		return a, nil
 	}
-	t, r := target(schema.Table(), a.Place, it, steps)
-	if r != nil {
-		return Address{}, r
-	}
-	a.Target = t
-	return a, nil
+	return target(schema.Table(), a, it, steps)
 }
 
 // node reads a path's first step: a declared home's name, or an item's id.
@@ -195,44 +180,58 @@ func node(st fold.State, schema config.Schema, head string) (Node, field.Place, 
 	panic(fmt.Sprintf("address: %T is not a LevelOf", it.Level))
 }
 
-// target reads the steps after the node against the table at its place.
-func target(t config.Table, p field.Place, it fold.Item, steps string) (Target, Refusal) {
-	whole := field.Path(steps)
-	r, err := t.Find(p, whole)
-	if err == nil {
-		return Field{Path: whole, Row: r}, nil
+// target reads the steps after a's node against the table at its place.
+func target(t config.Table, a Address, it fold.Item, steps string) (Address, Refusal) {
+	if r, err := t.Find(a.Place, field.Path(steps)); err == nil {
+		a.Target = Field{Path: field.Path(steps), Row: r}
+		return a, nil
 	}
-	i := strings.LastIndex(steps, "/")
-	if i < 0 {
-		return nil, found(err)
+	for i := strings.LastIndex(steps, "/"); i >= 0; i = strings.LastIndex(steps[:i], "/") {
+		path := field.Path(steps[:i])
+		if r, err := t.Find(a.Place, path); err == nil {
+			return keyed(t, a, it, path, r, steps[i+1:])
+		}
 	}
-	path, key := field.Path(steps[:i]), steps[i+1:]
-	if r, err = t.Find(p, path); err != nil {
-		return nil, found(err)
-	}
+	first, _, _ := strings.Cut(steps, "/")
+	_, err := t.Find(a.Place, field.Path(first))
+	return Address{}, found(err)
+}
+
+// keyed reads the steps after row r of a's node: a member of a set, which
+// is the last step, or an element of a list, whose own steps follow it.
+func keyed(t config.Table, a Address, it fold.Item, path field.Path, r config.Row, steps string) (Address, Refusal) {
 	row, isField := r.(config.FieldRow)
 	if !isField {
-		return nil, NoElement{Path: path, Holds: "a verdict"}
+		return Address{}, NoElement{Path: path, Holds: "a verdict"}
 	}
+	key, rest, deeper := strings.Cut(steps, "/")
 	switch row.Decl.Multi {
 	case field.Set:
 		n, err := events.ParseName(key)
 		if err != nil {
-			return nil, Syntax{Text: key, Why: fmt.Sprintf("a member of %s is a name: %v", path, err)}
+			return Address{}, Syntax{Text: key, Why: fmt.Sprintf("a member of %s is a name: %v", path, err)}
 		}
-		return Element{Path: path, Decl: row.Decl, Key: Member{Name: n}}, nil
+		if deeper {
+			return Address{}, NoElement{Path: path + "/" + field.Path(key), Holds: "a name"}
+		}
+		a.Target = Member{Path: path, Decl: row.Decl, Name: n}
+		return a, nil
 	case field.Elements:
 		short, err := events.ParseShortID(key, events.Prefix{})
 		if err != nil || strings.Contains(key, ".") {
-			return nil, Syntax{Text: key, Why: fmt.Sprintf("an element of %s is named by its id or its one segment", path)}
+			return Address{}, Syntax{Text: key, Why: fmt.Sprintf("an element of %s is named by its id or its one segment", path)}
 		}
-		k, err := resolveElement(it, events.MustName(string(path)), short)
+		id, seg, err := resolveElement(it, events.MustName(string(path)), short)
 		if err != nil {
-			return nil, lookup(err)
+			return Address{}, lookup(err)
 		}
-		return Element{Path: path, Decl: row.Decl, Key: k}, nil
+		el := Address{Node: Element{Of: it.ID, ID: id, Rendered: fmt.Sprintf("%s/%s/%s", Address{Node: a.Node, Target: Whole{}}, path, seg)}, Place: field.Comment{}, Target: Whole{}}
+		if !deeper {
+			return el, nil
+		}
+		return target(t, el, it, rest)
 	case field.One, field.Children:
-		return nil, NoElement{Path: path, Holds: row.Decl.Multi.String()}
+		return Address{}, NoElement{Path: path, Holds: row.Decl.Multi.String()}
 	}
 	panic(fmt.Sprintf("address: %d is not a Multiplicity", row.Decl.Multi))
 }

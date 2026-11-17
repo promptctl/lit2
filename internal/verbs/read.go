@@ -22,35 +22,61 @@ type World struct {
 
 // Read is the values the row at path holds on node n: the one
 // reader get and a check's tests call `[LAW:single-enforcer]`. A stored
-// field reads through stored; comments read the item's elements; children
-// what is placed there; a derived field its derivation; a check its
-// verdict. A status the configuration cannot judge is its refusal, as a
-// write's is.
+// field reads through stored, on an item or a comment alike; comments
+// read the item's elements; children what is placed there; a derived
+// field its derivation; a check its verdict. Only an item's table has the
+// rows that are no stored field. A status the configuration cannot judge
+// is its refusal, as a write's is.
 func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, error) {
 	if c, ok := row.(config.CheckRow); ok {
 		unmet, err := Judge(w, n.(address.Item).ID, c.Check.Tests)
 		return verdict(unmet), err
 	}
 	d := row.(config.FieldRow).Decl
-	if d.Multi == field.Children {
+	switch {
+	case d.Multi == field.Children:
 		return children(w, n), nil
-	}
-	it := w.item(n.(address.Item).ID)
-	if d.Writability == field.Derived {
+	case d.Writability == field.Derived:
 		derive, ok := derivations[path]
 		if !ok {
 			panic(fmt.Sprintf("verbs: %s is derived and has no derivation", path))
 		}
-		return derive(w, it), nil
-	}
-	if d.Multi == field.Elements {
+		return derive(w, w.item(n.(address.Item).ID)), nil
+	case d.Multi == field.Elements:
 		var out []string
-		for _, e := range elements(it, events.MustName(string(path))) {
+		for _, e := range elements(w.item(n.(address.Item).ID), events.MustName(string(path))) {
 			out = append(out, e.text)
 		}
 		return out, nil
 	}
-	return stored(w.Schema, it.Facts, tick.ItemAncestry(w.State, w.Schema, it.ID), path, d)
+	h := w.held(n)
+	return stored(w.Schema, h.facts, h.in, path, d)
+}
+
+// held is a node the state holds, as a write and a read of its stored
+// fields take it: as its events name it, its path, the ancestry it is
+// judged under, which a comment reads through its item's, and its facts.
+type held struct {
+	at       events.About
+	rendered string
+	in       config.Ancestry
+	facts    fold.Facts
+}
+
+// held is the node n names, which exists: an item or an element of one.
+func (w World) held(n address.Node) held {
+	switch n := n.(type) {
+	case address.Item:
+		return held{at: events.Item{ID: n.ID}, rendered: n.Rendered, in: tick.ItemAncestry(w.State, w.Schema, n.ID), facts: w.item(n.ID).Facts}
+	case address.Element:
+		for _, e := range w.item(n.Of).Elements {
+			if e.ID == n.ID {
+				return held{at: events.Element{Of: n.Of, ID: n.ID}, rendered: n.Rendered, in: tick.ItemAncestry(w.State, w.Schema, n.Of), facts: e.Facts}
+			}
+		}
+	case address.Root, address.Home:
+	}
+	panic(fmt.Sprintf("verbs: %#v holds no stored field", n))
 }
 
 // effective is the graph an item is judged under, or the configuration's
@@ -80,7 +106,7 @@ func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path fie
 		}
 		return out, nil
 	case field.One:
-	default:
+	case field.Elements, field.Children:
 		panic(fmt.Sprintf("verbs: %s holds %s, which no register stores", path, d.Multi))
 	}
 	if _, column := d.Kind.(field.Column); column {
@@ -133,9 +159,25 @@ func open(e events.Envelope) string {
 }
 
 // element is one created element of a list: its key as it renders, who
-// wrote it, and its text.
+// wrote it, its text, and whether rm removed it.
 type element struct {
 	key, by, text string
+	deleted       bool
+}
+
+// line is the element as a list prints it: a removed one is still listed,
+// marked, since filtering is a selector's (architecture.md).
+func (e element) line() string {
+	if e.deleted {
+		return fmt.Sprintf("(deleted) [%s] %s", e.by, e.text)
+	}
+	return fmt.Sprintf("[%s] %s", e.by, e.text)
+}
+
+// removed is whether facts hold the deleted flag rm sets.
+func removed(f fold.Facts) bool {
+	s, ok := f.Plain(events.MustName(string(field.Deleted))).(fold.Settled)
+	return ok && s.Value == "true"
 }
 
 // elements is the created elements of it in the list n, in the order their
@@ -151,7 +193,7 @@ func elements(it fold.Item, n events.Name) []element {
 		if t := texts(e.Facts.Text(fold.Body)); len(t) > 0 {
 			text = t[0]
 		}
-		out = append(out, element{key: c.Segment.String(), by: writer(c.Stamp.By), text: text})
+		out = append(out, element{key: c.Segment.String(), by: writer(c.Stamp.By), text: text, deleted: removed(e.Facts)})
 	}
 	return out
 }
@@ -187,6 +229,8 @@ func children(w World, n address.Node) []string {
 		ids = w.State.Children(fold.Home{Holds: n.Level})
 	case address.Item:
 		ids = w.State.Children(fold.Under{Parent: n.ID})
+	case address.Element:
+		panic("verbs: a comment's table has no children row")
 	}
 	for _, id := range ids {
 		out = append(out, w.render(id))

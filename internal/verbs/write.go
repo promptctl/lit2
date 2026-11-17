@@ -48,7 +48,7 @@ type Operand struct {
 // Stdin is the operand value that reads standard input.
 const Stdin = "-"
 
-// Subject is what a write is about: an item that exists or one this
+// Subject is what a write is about: a node that exists or an item this
 // command creates, where it sits, the sections it is read through, and
 // what it holds. A created item holds the zero Facts: every register
 // unset, every set empty, so a compile function reads both alike.
@@ -59,14 +59,15 @@ type Subject struct {
 	Facts fold.Facts
 }
 
-// Who is an item a write is about.
+// Who is a node a write is about.
 //
 //sumtype:decl
 type Who interface{ who() }
 
-// Existing is an item the state holds, and its path as it renders.
+// Existing is a node the state holds, an item or an element of one, as
+// its events name it, and its path as it renders.
 type Existing struct {
-	ID       events.ItemID
+	At       events.About
 	Rendered string
 }
 
@@ -138,7 +139,7 @@ func (newElement) piece() {}
 // rm a member or the deleted flag, so no command claims a set whole and a
 // member of it.
 type claim struct {
-	who    events.ItemID
+	who    events.About
 	path   field.Path
 	member string
 }
@@ -298,9 +299,10 @@ func (c *Compiled) operand(w World, verb Verb, op Operand, stdin func() (string,
 			for _, p := range pieces {
 				switch p := p.(type) {
 				case fact:
-					drafts = append(drafts, events.Act{About: events.Item{ID: who.ID}, Payload: p.payload})
+					drafts = append(drafts, events.Act{About: who.At, Payload: p.payload})
 				case newElement:
-					drafts = append(drafts, events.CreateElement{Of: who.ID, Payload: p.payload})
+					// only an item's table has a list of elements
+					drafts = append(drafts, events.CreateElement{Of: who.At.(events.Item).ID, Payload: p.payload})
 				}
 			}
 		case Created:
@@ -419,24 +421,25 @@ func count(v field.Literal) int {
 	return 1
 }
 
-// rm is the writes of removing the node at x's address: an item's is its
-// deleted flag set true, and a set's member its removal.
+// rm is the writes of removing the node at x's address: a node's is its
+// deleted flag set true, so a node is removable where the table gives it
+// one, an item and a comment; and a set's member its removal.
 func (x *expanded) rm(w World) *refusal {
 	switch t := x.addr.Target.(type) {
 	case address.Whole:
-		if _, ok := x.addr.Node.(address.Item); !ok {
-			return refuse("not_removable", "%s is not an item: the root and a home are the tree's, and rm removes an item or a member", x.addr)
+		r, err := w.Schema.Table().Find(x.addr.Place, field.Deleted)
+		if err != nil {
+			return refuse("not_removable", "%s has no deleted flag: the root and a home are the tree's, and rm removes an item, a comment or a member", x.addr)
 		}
-		r, _ := w.Schema.Table().Find(x.addr.Place, field.Deleted)
 		x.writes = []write{{subject: existing(w, x.addr), path: field.Deleted, decl: r.(config.FieldRow).Decl, value: field.Scalar{Text: "true"}, source: FromOperand{}, shape: setOne}}
 		return nil
-	case address.Element:
-		if m, ok := t.Key.(address.Member); ok {
-			x.writes = []write{{subject: existing(w, x.addr), path: t.Path, decl: t.Decl, value: field.Scalar{Text: m.Name.String()}, source: FromOperand{}, shape: rmMember}}
-			return nil
-		}
+	case address.Member:
+		x.writes = []write{{subject: existing(w, x.addr), path: t.Path, decl: t.Decl, value: field.Scalar{Text: t.Name.String()}, source: FromOperand{}, shape: rmMember}}
+		return nil
+	case address.Field:
+		return refuse("not_removable", "rm removes an item, a comment or a member, and %s is a field", x.addr)
 	}
-	return refuse("not_removable", "rm removes an item or a member, and %s is neither", x.addr)
+	panic(fmt.Sprintf("verbs: %T is not a Target", x.addr.Target))
 }
 
 // Deletes is whether p deletes an item: its deleted flag set true, the
@@ -450,15 +453,10 @@ func Deletes(p events.Payload) bool {
 	return plain && v.Canonical == "true"
 }
 
-// existing is the subject an address names: an item the state holds.
+// existing is the subject an address names: a node the state holds.
 func existing(w World, a address.Address) Subject {
-	n := a.Node.(address.Item)
-	return Subject{
-		At:    Existing{ID: n.ID, Rendered: n.Rendered},
-		Place: a.Place,
-		In:    tick.ItemAncestry(w.State, w.Schema, n.ID),
-		Facts: w.item(n.ID).Facts,
-	}
+	h := w.held(a.Node)
+	return Subject{At: Existing{At: h.at, Rendered: h.rendered}, Place: a.Place, In: h.in, Facts: h.facts}
 }
 
 // shapeOf is what verb does to a field of d's shape, and false when it
@@ -493,15 +491,19 @@ func VerbsOf(r config.Row) []string {
 			out = append(out, v.String())
 		}
 	}
-	if f.Decl.Multi == field.Set {
+	switch f.Decl.Multi {
+	case field.Set:
 		out = append(out, "rm "+string(f.At)+"/<member>")
+	case field.Elements:
+		out = append(out, "rm "+string(f.At)+"/<id>")
+	case field.One, field.Children:
 	}
 	return out
 }
 
 func wrongVerb(verb Verb, path field.Path, r config.Row) *refusal {
 	if r == nil {
-		return refuse("wrong_verb", "%s writes a field, not a whole node or an element; rm removes an item or a member", verb)
+		return refuse("wrong_verb", "%s writes a field, not a whole node or a member; rm removes an item, a comment or a member", verb)
 	}
 	verbs := VerbsOf(r)
 	if len(verbs) == 0 {
@@ -525,7 +527,7 @@ func (x *expanded) children(w World, v field.Literal, created *int) *refusal {
 			}
 			objects = append(objects, o)
 		}
-	default:
+	case field.Scalar:
 		return refuse("value", "a child is an object, {title: …}, or a list of them")
 	}
 	for _, o := range objects {
@@ -572,6 +574,8 @@ func (x *expanded) child(w World, o field.Object, n int) *refusal {
 		above := x.addr.Place.(field.Node).Level
 		level, _ = above.Below()
 		placement, in = events.BelowParent{Parent: node.ID}, fold.Under{Parent: node.ID}
+	case address.Element:
+		panic("verbs: a comment's table has no children row")
 	}
 	sub := Subject{At: Created{N: n}, Place: field.ItemPlace(level), In: tick.AncestryOf(w.State, w.Schema, in)}
 	x.creates = append(x.creates, creation{n: n, placement: placement, in: in})

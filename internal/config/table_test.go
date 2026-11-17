@@ -57,7 +57,7 @@ func TestPlacesNameOnlyDeclaredHomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	two, _ := events.ParseLevel(2)
-	want := []field.Place{field.Root{}, field.Home{Level: two}, field.Node{Level: two}, field.Leaf{}}
+	want := []field.Place{field.Root{}, field.Home{Level: two}, field.Node{Level: two}, field.Leaf{}, field.Comment{}}
 	if got := s.Table().Places(); !slices.Equal(got, want) {
 		t.Errorf("places = %#v, want %#v", got, want)
 	}

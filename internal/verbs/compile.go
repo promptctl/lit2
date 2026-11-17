@@ -67,7 +67,7 @@ func (Filed) change()     {}
 
 // compile is one write compiled by its shape's one function. Each reads
 // the subject's facts and ancestry and never which kind of subject it is;
-// what it writes over is named, for the twice pass, only for an item that
+// what it writes over is named, for the twice pass, only for a node that
 // exists, since what a create writes is new by construction.
 func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 	// [LAW:single-enforcer] the one gate every write passes
@@ -97,6 +97,8 @@ func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 	case addComment:
 		pieces, changes, r = comment(wr)
 		keys = nil
+	case addChild:
+		panic("verbs: an add of children expands to creates and their writes, never one write")
 	default:
 		panic(fmt.Sprintf("verbs: shape %d compiles no write", wr.shape))
 	}
@@ -108,7 +110,7 @@ func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 		return pieces, changes, nil, nil
 	}
 	for i := range keys {
-		keys[i].who = e.ID
+		keys[i].who = e.At
 	}
 	return pieces, changes, keys, nil
 }
@@ -177,7 +179,7 @@ func add(wr write) ([]piece, []Change, []events.Name, *refusal) {
 			}
 			texts = append(texts, s.Text)
 		}
-	default:
+	case field.Object:
 		return nil, nil, nil, refuse("value", "%s takes a member or a list of them", wr.path)
 	}
 	name := events.MustName(string(wr.path))

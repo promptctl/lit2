@@ -48,6 +48,7 @@ func mint(t *testing.T, s fold.State, known events.Known, d events.Draft, id [16
 		return s, a.ID
 	case events.Item:
 		return s, a.ID
+	case events.Element, events.NewElement, events.Root:
 	}
 	return s, events.ItemID{}
 }

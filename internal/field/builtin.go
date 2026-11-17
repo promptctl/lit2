@@ -67,8 +67,8 @@ type FieldDecl struct {
 }
 
 // Place is where a node sits, which decides the fields it has: the root,
-// a level's home, a leaf item, or an item above the leaf. An address
-// derives it once from the node it names.
+// a level's home, a leaf item, an item above the leaf, or a comment. An
+// address derives it once from the node it names.
 //
 //sumtype:decl
 type Place interface{ place() }
@@ -85,10 +85,15 @@ type Leaf struct{}
 // Node is an item above level 1.
 type Node struct{ Level events.Level }
 
-func (Root) place() {}
-func (Home) place() {}
-func (Leaf) place() {}
-func (Node) place() {}
+// Comment is an element of an item's comments: a node of its own, with
+// fields, as a set's member is not.
+type Comment struct{}
+
+func (Root) place()    {}
+func (Home) place()    {}
+func (Leaf) place()    {}
+func (Node) place()    {}
+func (Comment) place() {}
 
 // ItemPlace is the place of an item at level l: a leaf at level 1, a node
 // above it. It is the one reading of a level as a place
@@ -103,14 +108,20 @@ func ItemPlace(l events.Level) Place {
 // Places is the places a field exists at.
 //
 //sumtype:decl
-type Places interface{ Holds(Place) bool }
+type Places interface {
+	Holds(Place) bool
+	places()
+}
 
 // PlaceSet is a built-in field's places: every place of each kind it names.
-type PlaceSet struct{ Root, Home, Leaf, Node bool }
+type PlaceSet struct{ Root, Home, Leaf, Node, Comment bool }
 
 // OnLevel is a declared field's place: the items of the level that declares
 // it.
 type OnLevel struct{ Level events.Level }
+
+func (PlaceSet) places() {}
+func (OnLevel) places()  {}
 
 // Holds is whether p is of a kind the set names.
 func (s PlaceSet) Holds(p Place) bool {
@@ -123,6 +134,8 @@ func (s PlaceSet) Holds(p Place) bool {
 		return s.Leaf
 	case Node:
 		return s.Node
+	case Comment:
+		return s.Comment
 	}
 	panic(fmt.Sprintf("field: %T is not a Place", p))
 }
@@ -135,7 +148,7 @@ func (o OnLevel) Holds(p Place) bool {
 		return !below
 	case Node:
 		return p.Level == o.Level
-	case Root, Home:
+	case Root, Home, Comment:
 		return false
 	}
 	panic(fmt.Sprintf("field: %T is not a Place", p))
@@ -179,10 +192,12 @@ var (
 	items      = PlaceSet{Leaf: true, Node: true}
 	leaves     = PlaceSet{Leaf: true}
 	containers = PlaceSet{Root: true, Home: true, Node: true}
+	comments   = PlaceSet{Comment: true}
+	removable  = PlaceSet{Leaf: true, Node: true, Comment: true}
 )
 
 // The built-in fields the verbs name: the title every new item carries,
-// and the flag rm sets.
+// and the flag rm sets on any node it removes.
 const (
 	Title   Path = "title"
 	Deleted Path = "deleted"
@@ -205,9 +220,10 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 		"description":  stored(Text{}, One, items),
 		"reason":       stored(Text{}, One, items),
 		"labels":       stored(labels, Set, items),
-		Deleted:        stored(deleted, One, items),
+		Deleted:        stored(deleted, One, removable),
 		"status":       stored(Column{}, One, leaves),
 		"comments":     stored(Text{}, Elements, items),
+		"body":         stored(Text{}, One, comments),
 		"children":     stored(ItemRef{}, Children, containers),
 		"level":        derived(Level{}, One),
 		"parent":       derived(ItemRef{}, One),
