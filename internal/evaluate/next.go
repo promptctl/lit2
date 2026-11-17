@@ -79,13 +79,15 @@ func (v View) Next() (Next, error) {
 
 // Gone is whether rm removed id or a node above it: a removed subtree is
 // no work, as Stage and Rollup read it, and every view marks it so.
-func (v View) Gone(id events.ItemID) bool {
-	if Removed(v.item(id).Facts) {
+func (v View) Gone(id events.ItemID) bool { return gone(v.state, id) }
+
+func gone(st fold.State, id events.ItemID) bool {
+	if Removed(st.Item(id).(fold.Found).Item.Facts) {
 		return true
 	}
-	switch in := v.state.Container(id).(type) {
+	switch in := st.Container(id).(type) {
 	case fold.Under:
-		return v.Gone(in.Parent)
+		return gone(st, in.Parent)
 	case fold.Home:
 	}
 	return false

@@ -260,6 +260,14 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	otherBlob.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, []byte("other")), "blob"))
 	noBlob.Bytes(1, aVersion)
 	noVersion.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
+	// one version and one blob: a second of either is refused, not read as one
+	var twoVersions, twoBlobs wire.Writer
+	twoVersions.Bytes(1, []byte("other"))
+	twoVersions.Bytes(1, aVersion)
+	twoVersions.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
+	twoBlobs.Bytes(1, aVersion)
+	twoBlobs.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
+	twoBlobs.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
 	for _, c := range []struct {
 		name string
 		read func(*wire.Reader) (Versioned, error)
@@ -278,6 +286,8 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		{"a workspace.apply whose blob names other bytes", ReadWorkspaceApply, otherBlob.Encoded()},
 		{"a workspace.apply with no blob", ReadWorkspaceApply, noBlob.Encoded()},
 		{"a workspace.apply with no version", ReadWorkspaceApply, noVersion.Encoded()},
+		{"a workspace.apply with two versions", ReadWorkspaceApply, twoVersions.Encoded()},
+		{"a workspace.apply with two blobs", ReadWorkspaceApply, twoBlobs.Encoded()},
 	} {
 		if _, err := c.read(wire.NewReader(c.b)); err == nil {
 			t.Errorf("%s reads", c.name)

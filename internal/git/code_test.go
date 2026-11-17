@@ -58,6 +58,21 @@ func TestASHA256CodeRepositoryIsRefusedByName(t *testing.T) {
 	}
 }
 
+// TestASymlinkAtThePathIsNoFile: HEAD's blob for a symlink is its target's
+// name, never the bytes the work tree reads through it.
+func TestASymlinkAtThePathIsNoFile(t *testing.T) {
+	repo := gittest.NewRepo(t)
+	repo.Commit(t, map[string][]byte{"real.toml": []byte("prefix = \"a\"\n")})
+	if err := os.Symlink("real.toml", filepath.Join(repo.Dir, "link.toml")); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Git(t, repo.Dir, "add", "link.toml")
+	gittest.Git(t, repo.Dir, "commit", "-q", "-m", "link")
+	if got, err := repo.AtHead("link.toml"); err != nil || got != (git.Untracked{}) {
+		t.Errorf("AtHead(a symlink) = %#v, %v; want Untracked", got, err)
+	}
+}
+
 // TestAShallowCloneSaysWhatItCannotKnow: a blob before the boundary is
 // found; one the walk must pass the boundary for is unknown, refused naming
 // the shallow clone, never answered no.

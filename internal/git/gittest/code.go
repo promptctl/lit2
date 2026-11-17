@@ -63,6 +63,13 @@ func Code(t *testing.T, fresh func(*testing.T) Commits) {
 		at(t, c, git.Untracked{})
 		ever(t, c, idTwo, true)
 	})
+	t.Run("a directory on the path that was a file holds nothing", func(t *testing.T) {
+		c := fresh(t)
+		c.Commit(t, map[string][]byte{".lit": one})
+		c.Commit(t, map[string][]byte{path: two})
+		ever(t, c, idTwo, true)
+		ever(t, c, idOne, false)
+	})
 	t.Run("a blob at another path is not at this one", func(t *testing.T) {
 		c := fresh(t)
 		c.Commit(t, map[string][]byte{"elsewhere.toml": one})
@@ -92,7 +99,7 @@ func NewRepo(t *testing.T) Repo {
 // Commit writes files as the work tree's whole content and commits it.
 func (r Repo) Commit(t *testing.T, files map[string][]byte) {
 	t.Helper()
-	Git(t, r.Dir, "rm", "-rq", "--cached", "--ignore-unmatch", ".")
+	Git(t, r.Dir, "rm", "-rqf", "--ignore-unmatch", ".")
 	for p, b := range files {
 		full := filepath.Join(r.Dir, filepath.FromSlash(p))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {

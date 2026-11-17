@@ -31,7 +31,7 @@ type inForce struct {
 // load loads the version the fold put in force and reads the file. Only an
 // applied version is in force, so a store with none refuses every verb,
 // naming the command that applies one, and a draft in the work tree never
-// reaches a command.
+// reaches a verb.
 func (o opened) load() (inForce, error) {
 	in, ok := o.folded.State.Workspace().(fold.InForce)
 	if !ok {

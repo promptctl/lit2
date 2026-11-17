@@ -106,6 +106,18 @@ func TestARemovedTicketHoldsNoColumn(t *testing.T) {
 	}
 }
 
+// A ticket under a removed node is no work either, as every view reads it.
+func TestATicketUnderARemovedNodeHoldsNoColumn(t *testing.T) {
+	var s fold.State
+	s, feature := mint(t, s, s.Known(), create(events.AtLevel{Level: must(events.ParseLevel(2))}), [16]byte{0x10})
+	s, story := mint(t, s, s.Known(), create(events.BelowParent{Parent: feature}), [16]byte{0x30})
+	s, _ = mint(t, s, s.Known(), events.Act{About: events.Item{ID: story}, Payload: events.Transition{From: events.MustName("backlog"), To: events.MustName("audit")}}, [16]byte{})
+	s, _ = mint(t, s, s.Known(), events.Act{About: events.Item{ID: feature}, Payload: events.FieldSet{Field: events.MustName("deleted"), Value: events.Plain{Canonical: "true"}}}, [16]byte{1})
+	if got := CheckApply(s, []config.Schema{version(t, withAudit, "")}, version(t, withoutAudit, "")); len(got) != 0 {
+		t.Errorf("a column held under a removed node is guarded: %v", got)
+	}
+}
+
 // An id typed under a prefix any applied version declared still parses
 // after the prefix changes; a prefix no version declared does not.
 func TestTheViewKnowsEveryPrefixAVersionDeclared(t *testing.T) {

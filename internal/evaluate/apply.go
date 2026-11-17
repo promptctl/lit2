@@ -55,7 +55,8 @@ func unresolved(st fold.State, next config.Schema) []config.Refusal {
 // reads nowhere for a ticket in it: the key path of the old declaration,
 // the tickets, and the aliases line that would say where they go. A
 // recorded name no live version reads is S-6's undeclared column already,
-// and blocks nothing; nor does a removed ticket, which is no work.
+// and blocks nothing; nor does a ticket rm removed, or one under a node it
+// removed, which is no work.
 func stranded(st fold.State, live []config.Schema, next config.Schema) []config.Refusal {
 	type held struct {
 		key, scope config.KeyPath
@@ -66,7 +67,7 @@ func stranded(st fold.State, live []config.Schema, next config.Schema) []config.
 	for _, it := range st.Items() {
 		l, ok := it.Level.(fold.Leveled)
 		recorded, settled := it.Facts.Plain(fold.Status).(fold.Settled)
-		if !ok || !l.Leaf() || !settled || Removed(it.Facts) {
+		if !ok || !l.Leaf() || !settled || gone(st, it.ID) {
 			continue
 		}
 		if eff, err := Effective(next, ItemAncestry(st, next, it.ID)); err != nil || resolves(eff, recorded.Value) {

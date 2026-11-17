@@ -55,9 +55,9 @@ type NoVersion struct{}
 
 // InForce is the version every command runs on, Active, the last live
 // apply in total order, so every replica holding the same events runs the
-// same one. Contending is every other live apply holding another blob,
-// in total order: two applies that named one parent, a conflict until an
-// apply names them all. Two live applies of one blob agree. Live is every
+// same one. Contending is every other blob a live apply holds, once, at its
+// first apply in total order: two applies that named one parent, a conflict
+// until an apply names them all. Two live applies of one blob agree. Live is every
 // live apply, what the next apply names in Over; Applied is every apply
 // folded, in total order.
 type InForce struct {
@@ -80,7 +80,7 @@ func (s State) Workspace() Workspace {
 	in := InForce{Active: active}
 	for _, a := range live {
 		in.Live = append(in.Live, a.key())
-		if a.blob != active.Blob {
+		if a.blob != active.Blob && !slices.ContainsFunc(in.Contending, func(c Version) bool { return c.Blob == a.blob }) {
 			in.Contending = append(in.Contending, a.version())
 		}
 	}

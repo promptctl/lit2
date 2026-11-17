@@ -93,6 +93,19 @@ func TestLiveAppliesOfOneBlobAgree(t *testing.T) {
 	}
 }
 
+// A blob two live applies hold contends once, whichever blob is active.
+func TestAContendingBlobAppliedTwiceContendsOnce(t *testing.T) {
+	w := newWorld(t)
+	one := w.mint(a, fold.State{}, apply("v1"))[0]
+	seen := w.state()
+	w.mint(a, seen, apply("B", one.ID()))
+	w.mint(b, seen, apply("B", one.ID()))
+	w.mint(b, seen, apply("C", one.ID()))
+	if in := inForce(t, w.state()); len(in.Contending) != 1 || len(in.Live) != 3 {
+		t.Errorf("B twice and C are %+v; want three live and one contending", in)
+	}
+}
+
 // An apply's Over retires an apply that arrives after it, as a field
 // write's does, so the order applies arrive in decides nothing.
 func TestAnApplyRetiresWhatItNamesInAnyArrivalOrder(t *testing.T) {

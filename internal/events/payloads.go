@@ -545,8 +545,14 @@ func ReadWorkspaceApply(r *wire.Reader) (Versioned, error) {
 		var err error
 		switch tag {
 		case 1:
+			if hasVersion {
+				return errors.New("it gives its version twice")
+			}
 			p.version, hasVersion = r.Bytes(), true
 		case 2:
+			if hasBlob {
+				return errors.New("it gives its blob twice")
+			}
 			p.blob, err = readObjectID(r.Bytes(), "the version's blob")
 			hasBlob = true
 		}

@@ -3,11 +3,13 @@ package git
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/filesystem"
@@ -72,20 +74,38 @@ func headCommit(s *filesystem.Storage) (*object.Commit, error) {
 	return c, nil
 }
 
-// blobAt is the blob c's tree holds at path, if a regular file is there.
+// blobAt is the blob c's tree holds at path, if a file is there. A
+// directory on the way that is none, a file or a submodule, holds nothing,
+// and a symlink's blob is its target's name, never the file's bytes.
 func blobAt(c *object.Commit, path string) (HeadBlob, error) {
 	tree, err := c.Tree()
 	if err != nil {
 		return nil, fmt.Errorf("reading commit %s's tree: %w", c.Hash, err)
 	}
-	e, err := tree.FindEntry(path)
-	if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+	parts := strings.Split(path, "/")
+	for _, dir := range parts[:len(parts)-1] {
+		e, err := tree.FindEntry(dir)
+		if errors.Is(err, object.ErrEntryNotFound) {
+			return Untracked{}, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("finding %s in commit %s: %w", path, c.Hash, err)
+		}
+		if e.Mode != filemode.Dir {
+			return Untracked{}, nil
+		}
+		if tree, err = tree.Tree(dir); err != nil {
+			return nil, fmt.Errorf("reading %s in commit %s: %w", dir, c.Hash, err)
+		}
+	}
+	e, err := tree.FindEntry(parts[len(parts)-1])
+	if errors.Is(err, object.ErrEntryNotFound) {
 		return Untracked{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("finding %s in commit %s: %w", path, c.Hash, err)
 	}
-	if !e.Mode.IsFile() {
+	if !e.Mode.IsFile() || e.Mode == filemode.Symlink {
 		return Untracked{}, nil
 	}
 	return Tracked{Blob: sha1ID(e.Hash)}, nil
