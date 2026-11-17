@@ -217,6 +217,7 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"exit-on-terminal", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nexit = []"), ReasonExitOnTerminal},
 		{"next-on-terminal", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nnext = []"), ReasonNextOnTerminal},
 		{"next-target-undeclared", replace(`next = ["done"]`, `next = ["nowhere"]`), ReasonNextUndeclared},
+		{"duplicate-next", replace(`next = ["done"]`, `next = ["done", "done"]`), ReasonDuplicateNext},
 		{"no-initial", replace("initial = true\n", ""), ReasonNoInitial},
 		{"many-initial", replace("[columns.done]", "[columns.plan]\ninitial = true\nnext = [\"done\"]\n\n[columns.done]"), ReasonManyInitial},
 		{"no-terminal", replace("terminal = true", ""), ReasonNoTerminal},

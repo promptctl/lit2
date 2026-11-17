@@ -86,7 +86,8 @@ func effective(schema config.Schema, in config.Ancestry) (config.Effective, erro
 // a plain value as its canonical text, a status through the graph the
 // item is judged under, a set as its live members. A write reads the same
 // function on its subject's facts, so what it compares against is what get
-// prints `[LAW:one-source-of-truth]`.
+// prints `[LAW:one-source-of-truth]`; a status both read through
+// evaluate.StatusIn, get marking a name the graph no longer declares.
 func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path field.Path, d field.FieldDecl) ([]string, error) {
 	n := events.MustName(string(path))
 	switch d.Multi {

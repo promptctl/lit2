@@ -192,6 +192,10 @@ func buildGraph(cs map[string]Column, keyOf func(string) KeyPath) (ColumnGraph, 
 			if _, declared := cs[next]; !declared {
 				refusals = append(refusals, Refusal{Key: keyed(keyOf(name), "next"), Reason: ReasonNextUndeclared, Message: fmt.Sprintf("next names %s, which no column declares", next)})
 			}
+			if slices.Contains(g.entered[next], name) {
+				refusals = append(refusals, Refusal{Key: keyed(keyOf(name), "next"), Reason: ReasonDuplicateNext, Message: fmt.Sprintf("next names %s twice", next)})
+				continue
+			}
 			g.entered[next] = append(g.entered[next], name)
 		}
 		for _, a := range c.Aliases() {

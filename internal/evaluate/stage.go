@@ -43,7 +43,7 @@ func Removed(f fold.Facts) bool {
 // nothing. A graph the configuration refuses is the refusal a status read
 // gets.
 func (v View) Stage(id events.ItemID) (config.Stage, error) {
-	if v.leaf(id) {
+	if v.Leaf(id) {
 		c, err := v.Column(id)
 		return c.Stage, err
 	}
@@ -79,7 +79,7 @@ func (v View) Rollup(id events.ItemID) ([]Count, error) {
 	var walk func(events.ItemID) error
 	walk = func(n events.ItemID) error {
 		for _, child := range v.live(n) {
-			if !v.leaf(child) {
+			if !v.Leaf(child) {
 				if err := walk(child); err != nil {
 					return err
 				}
@@ -115,8 +115,9 @@ func (v View) Column(id events.ItemID) (Column, error) {
 	return ColumnIn(eff, v.item(id).Facts), nil
 }
 
-// leaf is whether item id sits at level 1, the one level with a status.
-func (v View) leaf(id events.ItemID) bool {
+// Leaf is whether item id sits at level 1, the one level with a status:
+// the one reading of leaf or node `[LAW:one-source-of-truth]`.
+func (v View) Leaf(id events.ItemID) bool {
 	l, ok := v.item(id).Level.(fold.Leveled)
 	if !ok {
 		panic(fmt.Sprintf("evaluate: %s is placed at no level", id))

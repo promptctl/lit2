@@ -17,7 +17,7 @@ import (
 // get is get's body: the paths read against the folded state.
 func (r body) get(f fold.Folded, ps []cli.PathText) cli.Outcome {
 	got := verbs.Get(r.world(f.State), texts(ps))
-	r.told(r.facts(got.Operands, nil, false, nil))
+	r.told(r.facts(verbs.Compiled{Operands: got.Operands}, false, nil))
 	if no, refused := got.Refusal(); refused {
 		return cli.Failed{Failure: refusal{no}}
 	}
@@ -35,11 +35,11 @@ func (r body) write(f fold.Folded, verb verbs.Verb, ops []verbs.Operand, flags c
 		return string(b), err
 	})
 	if no, refused := c.Refusal(); refused {
-		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
+		r.told(r.facts(c, flags.DryRun, nil))
 		return cli.Failed{Failure: refusal{no}}
 	}
 	if len(c.Drafts) == 0 {
-		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
+		r.told(r.facts(c, flags.DryRun, nil))
 		if flags.DryRun {
 			return written(io.WriteString(r.p.Out, verbs.Echo(r.world(f.State), c, nil)))
 		}
@@ -51,7 +51,7 @@ func (r body) write(f fold.Folded, verb verbs.Verb, ops []verbs.Operand, flags c
 		Frontier: f.State.Frontier(), Known: f.State.Known(), Now: r.now}
 	m, err := events.Mint(ctx, events.NewDrafts(c.Drafts[0], c.Drafts[1:]...), id.Key.Signer(), r.p.Entropy)
 	if err != nil {
-		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
+		r.told(r.facts(c, flags.DryRun, nil))
 		return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("minting: %w", err)}}
 	}
 	st := f.State
@@ -61,22 +61,22 @@ func (r body) write(f fold.Folded, verb verbs.Verb, ops []verbs.Operand, flags c
 	after := r.world(st)
 	c = verbs.Gate(after, c, m.Events)
 	if no, refused := c.Refusal(); refused {
-		r.told(r.facts(c.Operands, c.Drafts, flags.DryRun, nil))
+		r.told(r.facts(c, flags.DryRun, nil))
 		return cli.Failed{Failure: refusal{no}}
 	}
 	if flags.DryRun {
-		r.told(r.facts(c.Operands, c.Drafts, true, nil))
+		r.told(r.facts(c, true, nil))
 		return written(io.WriteString(r.p.Out, verbs.Echo(after, c, nil)))
 	}
 	// the minted ids are told once the store holds them, so the block never
 	// names an event the store does not
-	r.told(r.facts(c.Operands, c.Drafts, false, nil))
+	r.told(r.facts(c, false, nil))
 	appended, err := opened.Store.Append(m.Batch)
 	if err != nil {
 		return cli.Failed{Failure: storeFailure{err: err}}
 	}
 	r.stored.Appends = append(r.stored.Appends, appended)
-	r.told(r.facts(c.Operands, c.Drafts, false, m.Events))
+	r.told(r.facts(c, false, m.Events))
 	return written(io.WriteString(r.p.Out, verbs.Echo(after, c, m.Events)))
 }
 
@@ -106,9 +106,9 @@ func (r body) world(st fold.State) verbs.World {
 }
 
 // facts is the verbs block of what a body did.
-func (r body) facts(ops []verbs.Result, drafts []events.Draft, dry bool, minted []events.Event) command.VerbsFacts {
-	f := command.VerbsFacts{Drafts: len(drafts), Kinds: map[string]int{}, DryRun: dry}
-	for _, o := range ops {
+func (r body) facts(c verbs.Compiled, dry bool, minted []events.Event) command.VerbsFacts {
+	f := command.VerbsFacts{Drafts: len(c.Drafts), Kinds: map[string]int{}, DryRun: dry, Requirements: command.RequirementCounts(c.Tally())}
+	for _, o := range c.Operands {
 		switch o := o.(type) {
 		case verbs.Accepted:
 			f.Operands = append(f.Operands, command.OperandFacts{Text: o.Text, Canon: o.Canon, Values: o.Values})
@@ -122,7 +122,7 @@ func (r body) facts(ops []verbs.Result, drafts []events.Draft, dry bool, minted 
 			f.Deletes++
 		}
 	}
-	for _, d := range drafts {
+	for _, d := range c.Drafts {
 		switch d := d.(type) {
 		case events.Act:
 			count(d.Payload)

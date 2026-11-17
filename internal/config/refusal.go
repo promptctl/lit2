@@ -63,6 +63,7 @@ const (
 	ReasonExitOnTerminal Reason = "exit-on-terminal"
 	ReasonNextOnTerminal Reason = "next-on-terminal"
 	ReasonNextUndeclared Reason = "next-target-undeclared"
+	ReasonDuplicateNext  Reason = "duplicate-next"
 	ReasonNoInitial      Reason = "no-initial"
 	ReasonManyInitial    Reason = "many-initial"
 	ReasonNoTerminal     Reason = "no-terminal"

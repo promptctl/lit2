@@ -379,8 +379,15 @@ func TestAMoveTheGateRefusesWritesNothing(t *testing.T) {
 		if appends(r.event) != 0 || !strings.Contains(r.err, "description (ready)  found (none)") {
 			t.Errorf("lit2 %q: appends %d, stderr %q", args, appends(r.event), r.err)
 		}
+		if got := r.event.Verbs.Requirements; got.Evaluated != 5 || got.Errors != 1 {
+			t.Errorf("lit2 %q records requirements %+v; want 5 evaluated, 1 unmet error", args, got)
+		}
 	}
-	if out := s.ok("set", story+"/description", "what", story+"/status", "plan"); !strings.Contains(out, story+"/status backlog → plan\n") {
-		t.Errorf("a move groomed in its own command echoes %q", out)
+	r := s.lit("set", story+"/description", "what", story+"/status", "plan")
+	if r.status != 0 || !strings.Contains(r.out, story+"/status backlog → plan\n") {
+		t.Errorf("a move groomed in its own command: status %d, echo %q", r.status, r.out)
+	}
+	if got := r.event.Verbs.Requirements; got != (command.RequirementCounts{Evaluated: 5}) {
+		t.Errorf("the landed move records requirements %+v; want 5 evaluated, none unmet", got)
 	}
 }

@@ -9,8 +9,6 @@ import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
-	"github.com/promptctl/lit2/internal/field"
-	"github.com/promptctl/lit2/internal/fold"
 )
 
 // Judgment is one arrival's requirements judged: how many the lists held,
@@ -89,7 +87,7 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 			changes[i], op = ch, ch.Op
 		case Filed:
 			id := filed[ch.N]
-			if _, leaf := field.ItemPlace(w.item(id).Level.(fold.Leveled).Level).(field.Leaf); !leaf {
+			if !w.Leaf(id) {
 				continue // a node is in no column: its stage is its children's
 			}
 			ch.Judged, r = judge(w, arrival{who: Created{N: ch.N}, id: id}, whoOf)
@@ -105,8 +103,9 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 		}
 	}
 	c.Changes = changes
+	operands := slices.Clone(c.Operands)
 	first := true
-	for i, res := range c.Operands {
+	for i, res := range operands {
 		r, ok := refused[i]
 		if !ok {
 			continue
@@ -115,10 +114,11 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 		if first {
 			err, first = errors.Join(errs...), false // the command's refusal lists every arrival refused
 		}
-		c.Operands[i] = Refused{Text: res.(Accepted).Text, Reason: r.reason, Err: err}
+		operands[i] = Refused{Text: res.(Accepted).Text, Reason: r.reason, Err: err}
 	}
+	c.Operands = operands
 	if len(refused) > 0 {
-		c.Drafts, c.Changes = nil, nil
+		c.Drafts = nil // the changes stay, so the command event records what was judged
 	}
 	return c
 }
@@ -204,6 +204,42 @@ func (r UnmetRequirement) line(name func(Who) string) string {
 	return fmt.Sprintf("  %-7s  %s  %s  found %s", severity, r.Side, test, found)
 }
 
+// Tally is requirements judged: how many were evaluated, and how many of
+// them are unmet, by severity.
+type Tally struct{ Evaluated, Warnings, Errors int }
+
+// tally is the judgment's counts.
+func (j Judgment) tally() Tally {
+	t := Tally{Evaluated: j.Evaluated}
+	for _, u := range j.Unmet {
+		if u.Severity == config.Warning {
+			t.Warnings++
+		} else {
+			t.Errors++
+		}
+	}
+	return t
+}
+
+// Tally is every arrival's judgment summed, which the command event
+// records, an advisory passed over included (transition-requirements.md).
+func (c Compiled) Tally() Tally {
+	var t Tally
+	for _, ch := range c.Changes {
+		var j Judgment
+		switch ch := ch.(type) {
+		case Moved:
+			j = ch.Judged
+		case Filed:
+			j = ch.Judged
+		case Wrote, Added, Removed, Commented:
+		}
+		n := j.tally()
+		t.Evaluated, t.Warnings, t.Errors = t.Evaluated+n.Evaluated, t.Warnings+n.Warnings, t.Errors+n.Errors
+	}
+	return t
+}
+
 // echo is what a judgment adds under its change's line: each warning, an
 // unmet error having refused the command, then the counts, and nothing
 // when no list held a requirement.
@@ -212,15 +248,10 @@ func (j Judgment) echo(name func(Who) string) string {
 		return ""
 	}
 	var b strings.Builder
-	var warn, err int
 	for _, u := range j.Unmet {
 		b.WriteString(u.line(name) + "\n")
-		if u.Severity == config.Warning {
-			warn++
-		} else {
-			err++
-		}
 	}
-	fmt.Fprintf(&b, "  requirements: %d evaluated · %d met · %d unmet (warning) · %d unmet (error)\n", j.Evaluated, j.Evaluated-warn-err, warn, err)
+	t := j.tally()
+	fmt.Fprintf(&b, "  requirements: %d evaluated · %d met · %d unmet (warning) · %d unmet (error)\n", t.Evaluated, t.Evaluated-t.Warnings-t.Errors, t.Warnings, t.Errors)
 	return b.String()
 }
