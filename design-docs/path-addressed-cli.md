@@ -185,7 +185,10 @@ naming the revision it judged. `dee/plan` reads the latest revision with its num
 last review naming the latest revision, or nothing. Appending a revision empties the
 derived verdict until a review names it.
 
-Values: a bare word, a `"quoted string"` taking `\"`, `\\`, `\n` and `\t`, `-` for
+Values: a bare word, a `"quoted string"` in which `""` is a literal `"` and every
+other character is itself, a newline or a backslash included, so a regex or a path
+passes through the shell and lit untouched and doubling is the one escape idiom
+beside `@@`, `-` for
 stdin (once per command; for a list path, one element per line, so a `get` of ids
 pipes in), `[a, b]` for a list, `{k:v k:v}` for an object, `@id` for the
 addressed node's own id, and inside one `add`, `@N` for the Nth object the value
@@ -378,11 +381,13 @@ paths in three escalating forms, none of which is a new verb:
   write would echo, then `(dry run: nothing written)`.
 - `get` on one scalar prints the bare value, so it pipes. `get` on many paths or a
   glob prints `path<TAB>value`, one per line, so it can be grepped and fed back to
-  `set`; a value holding a newline, a tab or an edge space prints as a quoted
-  string with the escapes above and every other value bare, so a line always
-  splits on its one tab and the round trip holds for a body. The read–edit–write round trip is the whole agent workflow and it must not
-  need JSON to work; `--json` exists for the cases that do, and prints one object
-  keyed by path.
+  `set`; a value holding a newline, a tab, a quote or an edge space prints as a
+  quoted string, `""` for a quote and everything else verbatim, and every other
+  value bare, so a line splits on its first tab, a quoted value runs to its closing
+  quote across as many lines as the body has, and the round trip holds for a body
+  with no backslash anywhere for the shell to eat. The read–edit–write round trip
+  is the whole agent workflow and it must not need JSON to work; `--json` exists
+  for the cases that do, and prints one object keyed by path.
 - `get` prints each shared ancestor once.
 - Guidance is printed after the node it belongs to, never interleaved with data.
 
