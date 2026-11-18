@@ -203,13 +203,14 @@ func TestAStatusNamingItsColumnKeepsWhatItsMoveSaid(t *testing.T) {
 }
 
 // TestADuplicateNamesTheItemItDuplicates: of is an item the store holds,
-// recorded by its id, so it reads as that item's path, and a name no item
-// has, or a path to a field, is refused.
+// other than the one that moves, recorded by its id, so it reads as that
+// item's path; a name no item has, a path to a field, or the ticket
+// itself is refused.
 func TestADuplicateNamesTheItemItDuplicates(t *testing.T) {
 	b := newBook(t, string(assets.DefaultWorkspace.Bytes()))
 	feature, s := story(t, b)
 	other := filed(t, b.do(verbs.Add, op(feature+"/children", "{title: canonical}")))
-	for _, of := range []string{"nothing-here", feature + "/title"} {
+	for _, of := range []string{"nothing-here", feature + "/title", s} {
 		if got := b.refused(verbs.Set, op(s+"/status", "{column: dup, of: "+of+"}")); got != "value" {
 			t.Errorf("a dup of %s is refused as %s", of, got)
 		}

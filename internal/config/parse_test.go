@@ -190,10 +190,11 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"alias-collides", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\naliases = [\"backlog\"]"), ReasonAliasCollides},
 		{"duplicate-alias", replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\naliases = [\"x\"]\n\n[columns.plan]\nnext = [\"done\"]\naliases = [\"x\"]"), ReasonDuplicateAlias},
 		{"template-field-undeclared", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nnope = \"x\""), ReasonTemplateFieldUndeclared},
-		{"template-field-derived", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\n\"plan/verdict\" = \"pass\""), ReasonTemplateFieldDerived},
+		{"template-field-unwritten", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\n\"plan/verdict\" = \"pass\""), ReasonTemplateFieldUnwritten},
+		{"template-sets-a-moves-field", replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\n\"status/reason\" = \"n/a\""), ReasonTemplateFieldUnwritten},
 		{"template-names-a-check", func(s string) string {
 			return replace("[columns.done]", "[checks.ready]\ntests = [{ test = \"description\" }]\n\n[columns.done]")(replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nready = \"x\"")(s))
-		}, ReasonTemplateFieldDerived},
+		}, ReasonTemplateFieldUnwritten},
 		{"template-value", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"number\"\n[levels.1.template]\npts = \"abc\""), ReasonTemplateValue},
 		{"template-member-twice", func(s string) string {
 			return replace(`prefix = "lit"`, "prefix = \"lit\"\nlabels = [\"a\"]")(replace(`name = "story"`, "name = \"story\"\n[levels.1.template]\nlabels = [\"a\", \"a\"]")(s))

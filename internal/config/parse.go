@@ -441,11 +441,11 @@ func (p *parser) templateValue(at KeyPath, place field.Place, path field.Path, v
 	}
 	row, isField := r.(FieldRow)
 	if !isField {
-		p.fail(at, ReasonTemplateFieldDerived, "%s is a check: the engine computes it, and a template sets only what a person writes", path)
+		p.fail(at, ReasonTemplateFieldUnwritten, "%s is a check: the engine computes it, and a template sets only what a write may name on its own", path)
 		return nil, false
 	}
 	if err := field.Writable(row.Decl); err != nil {
-		p.fail(at, ReasonTemplateFieldDerived, "%s: %v; a template sets only what a person writes", path, err)
+		p.fail(at, ReasonTemplateFieldUnwritten, "%s: %v; a template sets only what a write may name on its own", path, err)
 		return nil, false
 	}
 	if err := field.Keyable(row.Decl); err != nil {
