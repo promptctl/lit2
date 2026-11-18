@@ -149,7 +149,7 @@ func (o opened) judged(drafts []events.Draft, ref git.ObjectID, said string) cli
 	if err != nil {
 		return failed(err)
 	}
-	if out, refused := o.refused(o.folded.State, m); refused {
+	if _, out, refused := o.judge(o.folded.State, m); refused {
 		return out
 	}
 	if err := o.append(m); err != nil {
@@ -160,46 +160,49 @@ func (o opened) judged(drafts []events.Draft, ref git.ObjectID, said string) cli
 
 // found mints drafts, the founding enrollment first, as one frame under
 // ref, judged on a fold that enrollment founds, and, unless the fold
-// carries any of its events, appends it, pins the enrollment as the
-// clone's founding and names it in FoundingFile, then says said.
+// carries any of its events, pins the enrollment as the clone's founding,
+// appends the frame and names the enrollment in FoundingFile, then says
+// said. The pin comes first: a frame that loses the race to pin is never
+// written, since every replica would carry it `[LAW:single-enforcer]`.
 func (o opened) found(shared, tree store.Files, drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
 	m, err := o.mint(drafts, ref)
 	if err != nil {
 		return failed(err)
 	}
 	founding := fold.FoundedBy{Enrollment: m.Events[0].ID()}
-	if out, refused := o.refused(fold.Seed(founding), m); refused {
+	judged, out, refused := o.judge(fold.Seed(founding), m)
+	if refused {
 		return out
-	}
-	if err := o.append(m); err != nil {
-		return failed(err)
 	}
 	won, err := pin(shared, founding.Enrollment)
 	if err != nil {
 		return failed(err)
 	}
-	o.rec.Policy.Founding = won
 	if won != founding {
 		return failed(foundingRaced{won: won})
 	}
-	if err := writeFoundingFile(tree, founding); err != nil {
+	if err := o.append(m); err != nil {
+		return failed(err)
+	}
+	o.rec.Policy.Founding, o.rec.Policy.Under = won, judged.State.Policy()
+	if err := writeFoundingFile(tree, founding, pinPath(o.checkout)); err != nil {
 		return failed(err)
 	}
 	return written(fmt.Fprintf(o.p.Out, "%sfounding %s named in %s: commit it, and every clone adopts this store\n", said, founding.Enrollment, FoundingFile))
 }
 
-// refused is the failure of the frame m, extended onto s, when the fold
+// judge is the frame m extended onto s, and its failure when the fold
 // carries any of its events: a frame every replica would carry is never
 // written `[LAW:single-enforcer]`. Its drafts write the root, which names
 // no item or home, so a refusal reads no schema.
-func (o opened) refused(onto fold.State, m events.Minted) (cli.Outcome, bool) {
+func (o opened) judge(onto fold.State, m events.Minted) (fold.Extended, cli.Outcome, bool) {
 	seen := verbs.World{View: evaluate.Of(o.folded.State, config.Schema{}, o.now)}
-	outcomes := fold.Extend(o.p.Fold, onto, m.Events).Outcomes
-	o.rec.Policy.Verdicts = command.Verdicts(m.Events, outcomes)
-	if no, carried := verbs.Carried(seen, outcomes); carried {
-		return cli.Failed{Failure: refusal{no}}, true
+	ext := fold.Extend(o.p.Fold, onto, m.Events)
+	o.rec.Policy.Verdicts = command.Verdicts(m.Events, ext.Outcomes)
+	if no, carried := verbs.Carried(seen, ext.Outcomes); carried {
+		return ext, cli.Failed{Failure: refusal{no}}, true
 	}
-	return nil, false
+	return ext, nil, false
 }
 
 // status is config status: the board's workspace line, and whether the
@@ -259,28 +262,17 @@ func (r body) init() cli.Outcome {
 	if !ok {
 		return cli.Failed{Failure: storeFailure{err: opening.(command.Unopened).Why}}
 	}
+	tree := r.p.WorkTree(in.Checkout)
+	if err := adopt(shared, tree); err != nil {
+		return failed(err)
+	}
 	o, err := r.openAs(so, in.Checkout, minted)
 	if err != nil {
 		return failed(err)
 	}
-	tree := r.p.WorkTree(in.Checkout)
-	if _, none := o.founding.(fold.NoFounding); none {
-		named, err := foundingFileIn(tree)
-		if err != nil {
-			return failed(err)
-		}
-		if n, adopts := named.(fold.FoundedBy); adopts {
-			if _, err := pin(shared, n.Enrollment); err != nil {
-				return failed(err)
-			}
-			if o, err = r.openAs(so, in.Checkout, minted); err != nil {
-				return failed(err)
-			}
-		}
-	}
 	// the file names the clone's founding, for the next clone to adopt
 	if f, founded := o.founding.(fold.FoundedBy); founded {
-		if err := writeFoundingFile(tree, f); err != nil {
+		if err := writeFoundingFile(tree, f, pinPath(in.Checkout)); err != nil {
 			return failed(err)
 		}
 	}
@@ -299,12 +291,9 @@ func (r body) init() cli.Outcome {
 		r.rec.Policy.Bootstrap = "request"
 		drafts = append(drafts, events.Act{About: events.Root{}, Payload: events.Request{}})
 		said = fmt.Sprintf("membership requested: an owner admits you with lit2 add /members '{principal: %q, role: contributor}'\n", me.String())
-	case verbs.FoundingAbsent:
-		r.rec.Policy.Bootstrap = "founding_absent"
-		return cli.Failed{Failure: foundingAbsent(s)}
-	case verbs.FoundedUnread:
-		r.rec.Policy.Bootstrap = "founded_unread"
-		return cli.Failed{Failure: foundedUnread(s)}
+	case verbs.Unjudged:
+		r.rec.Policy.Bootstrap = "unjudged"
+		return failed(unjudged(s.Policy, in.Checkout))
 	case verbs.Asked:
 		r.rec.Policy.Bootstrap = "already_requested"
 		return written(fmt.Fprintf(r.p.Out, "membership requested: no owner has admitted %s yet\n", me))

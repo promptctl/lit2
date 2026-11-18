@@ -46,14 +46,8 @@ func (r body) open() (opened, error) {
 		if err != nil {
 			return opened{}, err
 		}
-		switch p := op.folded.State.Policy().(type) {
-		case fold.Unenrolled:
-			return opened{}, unenrolled{}
-		case fold.FoundingAbsent:
-			return opened{}, foundingAbsent(p)
-		case fold.FoundedUnread:
-			return opened{}, foundedUnread(p)
-		case fold.Enrolled:
+		if err := unjudged(op.folded.State.Policy(), in.Checkout); err != nil {
+			return opened{}, err
 		}
 		return op, nil
 	case command.Unopened:
@@ -150,23 +144,3 @@ func (unenrolled) Error() string {
 }
 func (unenrolled) Class() reason.Class { return reason.ClassEnvironment }
 func (unenrolled) Reason() string      { return "policy" }
-
-// foundingAbsent is a store founded by an enrollment it does not hold:
-// no event of it is judged until the founding arrives.
-type foundingAbsent fold.FoundingAbsent
-
-func (f foundingAbsent) Error() string {
-	return fmt.Sprintf("this store was founded by enrollment %s, which it does not hold yet: it arrives when this clone syncs", f.Enrollment)
-}
-func (foundingAbsent) Class() reason.Class { return reason.ClassEnvironment }
-func (foundingAbsent) Reason() string      { return "policy" }
-
-// foundedUnread is a store founded by an enrollment this release cannot
-// read: only a release that reads it can judge any event of the store.
-type foundedUnread fold.FoundedUnread
-
-func (f foundedUnread) Error() string {
-	return fmt.Sprintf("this store was founded by enrollment %s, which this release of lit2 cannot read: upgrade lit2", f.Enrollment)
-}
-func (foundedUnread) Class() reason.Class { return reason.ClassEnvironment }
-func (foundedUnread) Reason() string      { return "policy" }

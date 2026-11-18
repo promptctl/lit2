@@ -74,15 +74,17 @@ func (id EventID) String() string { return hex.EncodeToString(id[:]) }
 // reads: its 64 lowercase hex digits and one newline.
 func (id EventID) FileText() []byte { return []byte(id.String() + "\n") }
 
-// ReadEventIDFile reads a founding file's form, exactly; it is FileText's
-// inverse, and no error carries the file's bytes.
+// ReadEventIDFile reads a founding file: its 64 lowercase hex digits, and
+// the one line ending, LF or CRLF, or none, that a git checkout or an
+// editor leaves on a committed file. It is FileText's inverse, and no
+// error carries the file's bytes.
 func ReadEventIDFile(b []byte) (EventID, error) {
-	if form := 2*len(EventID{}) + 1; len(b) != form {
-		return EventID{}, fmt.Errorf("an event id file holds %d bytes; its form is %d", len(b), form)
+	text, crlf := bytes.CutSuffix(b, []byte("\r\n"))
+	if !crlf {
+		text, _ = bytes.CutSuffix(b, []byte("\n"))
 	}
-	text, ok := bytes.CutSuffix(b, []byte("\n"))
-	if !ok {
-		return EventID{}, errors.New("an event id file does not end in a newline")
+	if form := 2 * len(EventID{}); len(text) != form {
+		return EventID{}, fmt.Errorf("an event id file holds %d bytes before its line ending; its form is %d", len(text), form)
 	}
 	var id EventID
 	if n, err := hex.Decode(id[:], text); err != nil || n != len(id) || hex.EncodeToString(id[:]) != string(text) {

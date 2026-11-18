@@ -25,9 +25,9 @@ func (NoFounding) founding() {}
 func (FoundedBy) founding()  {}
 
 // PolicyInForce is the policy the fold reached: none with no founding
-// named; none while the founding is not in the store, or is there and
-// this release cannot read it; and after a founding it reads, the
-// version whose approvals arrived last.
+// named; none while the founding is not in the store, is there and this
+// release cannot read it, or is there and carried; and after a founding
+// it reads, the version whose approvals arrived last.
 //
 //sumtype:decl
 type PolicyInForce interface{ policyInForce() }
@@ -44,16 +44,25 @@ type FoundingAbsent struct{ Enrollment events.EventID }
 // reads it does.
 type FoundedUnread struct{ Enrollment events.EventID }
 
+// FoundingCarried is a store founded by Enrollment, which it holds and the
+// fold carried, Why: a signature that does not verify, a suite this
+// release lacks, or an event that is no enrollment.
+type FoundingCarried struct {
+	Enrollment events.EventID
+	Why        Reason
+}
+
 // Enrolled is the policy in force, Since the event that activated it.
 type Enrolled struct {
 	Policy events.Policy
 	Since  Stamp
 }
 
-func (Unenrolled) policyInForce()     {}
-func (FoundingAbsent) policyInForce() {}
-func (FoundedUnread) policyInForce()  {}
-func (Enrolled) policyInForce()       {}
+func (Unenrolled) policyInForce()      {}
+func (FoundingAbsent) policyInForce()  {}
+func (FoundedUnread) policyInForce()   {}
+func (FoundingCarried) policyInForce() {}
+func (Enrolled) policyInForce()        {}
 
 // policyState is the policy folded so far: the founding it was seeded
 // with, the version in force, every proposal with its approvals,
@@ -398,8 +407,8 @@ func (s State) Approves(next events.Policy, who events.PrincipalID) bool {
 	return s.approves(in, Require(in, next), who)
 }
 
-// Policy is the policy in force. A founding folded and left unapplied is
-// one this release cannot read.
+// Policy is the policy in force, and with none, what the fold did with
+// the founding: the integrity tables record every event it did not apply.
 func (s State) Policy() PolicyInForce {
 	switch p := s.policy; {
 	case p.founding == nil:
@@ -410,6 +419,9 @@ func (s State) Policy() PolicyInForce {
 	f := *s.policy.founding
 	if _, unread := s.integrity.unapplied.get(f); unread {
 		return FoundedUnread{Enrollment: f}
+	}
+	if c, carried := s.integrity.carried.get(f); carried {
+		return FoundingCarried{Enrollment: f, Why: c.carried.Reason}
 	}
 	return FoundingAbsent{Enrollment: f}
 }

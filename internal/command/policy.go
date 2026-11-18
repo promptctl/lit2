@@ -77,6 +77,8 @@ func policyBlock(p PolicyFacts) *policyLine {
 		l.Under = underLine{State: "founding_absent"}
 	case fold.FoundedUnread:
 		l.Under = underLine{State: "founded_unread"}
+	case fold.FoundingCarried:
+		l.Under = underLine{State: "founding_carried"}
 	case fold.Enrolled:
 		l.Under = underLine{State: "enrolled", Version: uint64(u.Policy.Version())}
 	}

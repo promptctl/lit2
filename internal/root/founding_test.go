@@ -61,7 +61,7 @@ func TestInitRefusesAFoundingFileNamingAnotherFounding(t *testing.T) {
 	}
 	s.twin.Process.WorkTree = func(git.Checkout) store.Files { return tree }
 	r := s.lit("admin", "init")
-	if r.status == 0 || reasonOf(r.event) != "founding" || !strings.Contains(r.err, "restore .lit/founding") {
+	if r.status == 0 || reasonOf(r.event) != "founding" || !strings.Contains(r.err, "the pin stands") || !strings.Contains(r.err, pinPath(twinCheckout)) {
 		t.Errorf("init over a file naming another founding: status %d, stderr %q", r.status, r.err)
 	}
 	if pin, _ := s.founding(); pin == fold.Founding(fold.FoundedBy{Enrollment: events.EventID{1}}) {

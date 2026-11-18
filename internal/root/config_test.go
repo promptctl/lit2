@@ -129,8 +129,11 @@ func TestInitAppliesTheDefaultAsVersionOne(t *testing.T) {
 	if got := s.ok("get", "/workspace"); !strings.Contains(got, blob(def).String()[:7]+" in force · .lit/workspace.toml matches") {
 		t.Errorf("the board says %q", got)
 	}
-	if p := r.event.Policy; p.Under != (fold.Unenrolled{}) || p.Bootstrap != "enroll" || len(p.Verdicts) != 2 {
-		t.Errorf("init's policy block is %+v; want it run unenrolled, enrolling, both events judged", p)
+	if p := r.event.Policy; p.Bootstrap != "enroll" || len(p.Verdicts) != 2 {
+		t.Errorf("init's policy block is %+v; want it enrolling, both events judged", p)
+	}
+	if u, ok := r.event.Policy.Under.(fold.Enrolled); !ok || u.Policy.Version() != 1 {
+		t.Errorf("init's policy block says it ended under %#v; want the version one it founded", r.event.Policy.Under)
 	}
 	for i, v := range r.event.Policy.Verdicts {
 		if _, ok := v.Outcome.(fold.Applied); !ok {

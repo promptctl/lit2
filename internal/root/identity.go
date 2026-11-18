@@ -13,7 +13,8 @@ import (
 
 // identityFiles is c's two identity directories on disk, through the
 // store's one create-once port, each file 0600: the principal's key is a
-// secret, and the checkout id is no one else's.
+// secret, and the checkout id is no one else's. The shared one also holds
+// the founding pin, which decides the store every fold of the clone reads.
 func identityFiles(c git.Checkout) (shared, private store.Files) {
 	return store.FilesAtMode(command.DirOf(command.PrincipalFile{}, c), 0o600), store.FilesAtMode(command.DirOf(command.IDFile{}, c), 0o600)
 }

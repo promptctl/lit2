@@ -31,7 +31,8 @@ type Checkout struct{ WorkTree, GitDir, CommonDir string }
 func (c Checkout) PrivateDir() string { return filepath.Join(c.GitDir, "lit", "checkout") }
 
 // SharedDir is the root of what lit2 keeps once per clone,
-// <git-common-dir>/lit, holding store/ and principal (D11).
+// <git-common-dir>/lit, holding store/, principal and founding, the pin
+// naming the enrollment that founded the store (D11, §3.17).
 func (c Checkout) SharedDir() string { return filepath.Join(c.CommonDir, "lit") }
 
 // NotFound is the walk reaching the filesystem root with no .git on the way.

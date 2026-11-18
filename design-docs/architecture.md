@@ -521,7 +521,7 @@ and pins it beside the clone's key; a clone that names none adopts the one
 request. Every fold is seeded with the pin, and any other enrollment is
 carried. A clone with neither founds a store of its own, and a
 `.lit/founding` naming another founding than the pin is refused: the pin
-stands.
+stands, and a clone joins another store only when a person removes it.
 
 ### 3.18 Capability
 

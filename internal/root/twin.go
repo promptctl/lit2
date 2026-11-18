@@ -107,7 +107,7 @@ func NewTwinBeside(t Twin) Twin {
 		panic(err)
 	}
 	if f, founded := named.(fold.FoundedBy); founded {
-		if err := writeFoundingFile(beside.Tree, f); err != nil {
+		if err := writeFoundingFile(beside.Tree, f, pinPath(besideCheckout)); err != nil {
 			panic(err)
 		}
 	}

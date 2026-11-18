@@ -46,3 +46,13 @@ func TestAFoundingTheStoreDoesNotHoldIsAbsent(t *testing.T) {
 		t.Errorf("the policy is %#v, want the founding absent", s.Policy())
 	}
 }
+
+// TestAFoundingTheFoldCarriedSaysWhy: a forged founding is in the store,
+// not absent from it.
+func TestAFoundingTheFoldCarriedSaysWhy(t *testing.T) {
+	w := unfounded(t)
+	w.found(writer{checkout: founder.checkout, signer: forger{keyA.Signer()}}, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))
+	if got, ok := w.state().Policy().(fold.FoundingCarried); !ok || got.Why != (fold.BadSignature{}) {
+		t.Errorf("the policy is %#v, want the founding carried for its signature", w.state().Policy())
+	}
+}
