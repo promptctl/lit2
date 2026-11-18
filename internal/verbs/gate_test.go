@@ -202,6 +202,21 @@ func TestAStatusNamingItsColumnKeepsWhatItsMoveSaid(t *testing.T) {
 	}
 }
 
+// TestEveryRowNamesItsWritersOrWhyNone: help prints, for each row of the
+// default table, the verbs that write it, or why none does; no row is
+// both or neither.
+func TestEveryRowNamesItsWritersOrWhyNone(t *testing.T) {
+	b := newBook(t, string(assets.DefaultWorkspace.Bytes()))
+	table := b.world(b.st).Schema().Table()
+	for _, p := range table.Places() {
+		for _, r := range table.Rows(p) {
+			if written, unwritten := len(verbs.VerbsOf(r)) > 0, verbs.Unwritten(r) != nil; written == unwritten {
+				t.Errorf("%s: verbs %v, unwritten %v; want exactly one", r.Path(), verbs.VerbsOf(r), verbs.Unwritten(r))
+			}
+		}
+	}
+}
+
 // TestADuplicateNamesTheItemItDuplicates: of is an item the store holds,
 // other than the one that moves, recorded by its id, so it reads as that
 // item's path; a name no item has, a path to a field, or the ticket
