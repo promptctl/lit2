@@ -141,8 +141,8 @@ type foundingAbsent struct {
 }
 
 func (f foundingAbsent) Error() string {
-	return fmt.Sprintf("this store was founded by enrollment %s, which it does not hold yet: it arrives when this clone syncs. If %s is not the store this clone joins, remove the pin at %s and lit2 admin init adopts the one %s names",
-		f.Enrollment, f.Enrollment, f.pin, FoundingFile)
+	return fmt.Sprintf("this store was founded by enrollment %s, which it does not hold yet: it arrives when this clone syncs. If %s is not the store this clone joins, remove the pin at %s: %s",
+		f.Enrollment, f.Enrollment, f.pin, afterUnpin)
 }
 func (foundingAbsent) Class() reason.Class { return reason.ClassEnvironment }
 func (foundingAbsent) Reason() string      { return "policy" }
@@ -166,11 +166,27 @@ type foundingCarried struct {
 }
 
 func (f foundingCarried) Error() string {
-	return fmt.Sprintf("this store's founding, enrollment %s, is carried as %s, so no policy says who may write: if its suite is unknown, upgrade lit2; if the pin at %s names the wrong event, remove it and lit2 admin init adopts the one %s names",
-		f.Enrollment, fold.ReasonName(f.Why), f.pin, FoundingFile)
+	return fmt.Sprintf("this store's founding, enrollment %s, is carried as %s, so no policy says who may write: if its suite is unknown, upgrade lit2; if the pin at %s names the wrong event, remove it: %s",
+		f.Enrollment, fold.ReasonName(f.Why), f.pin, afterUnpin)
 }
 func (foundingCarried) Class() reason.Class { return reason.ClassEnvironment }
 func (foundingCarried) Reason() string      { return "policy" }
+
+// afterUnpin is what admin init does in a clone whose pin a person removed.
+const afterUnpin = "lit2 admin init then adopts the founding " + string(FoundingFile) + " names, or founds the store when there is no file"
+
+// unwritten is a founding frame whose append failed after its enrollment
+// was pinned: the store does not hold the founding the pin names.
+type unwritten struct {
+	err error
+	pin string
+}
+
+func (u unwritten) Error() string {
+	return fmt.Sprintf("%v; the pin at %s names the founding this run did not write: remove it, and %s", u.err, u.pin, afterUnpin)
+}
+func (unwritten) Class() reason.Class { return reason.ClassEnvironment }
+func (unwritten) Reason() string      { return "store" }
 
 // foundingRaced is a founding enrollment another checkout of the clone
 // pinned first: its store is the clone's, which init joins when run again.

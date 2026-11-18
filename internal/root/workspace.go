@@ -182,7 +182,7 @@ func (o opened) found(shared, tree store.Files, drafts []events.Draft, ref git.O
 		return failed(foundingRaced{won: won})
 	}
 	if err := o.append(m); err != nil {
-		return failed(err)
+		return failed(unwritten{err: err, pin: pinPath(o.checkout)})
 	}
 	o.rec.Policy.Founding, o.rec.Policy.Under = won, judged.State.Policy()
 	if err := writeFoundingFile(tree, founding, pinPath(o.checkout)); err != nil {
