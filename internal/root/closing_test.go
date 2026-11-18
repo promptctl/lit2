@@ -68,7 +68,7 @@ func TestATransitionFieldIsItsMovesAlone(t *testing.T) {
 		t.Errorf("a bare write of the reason: stderr %q, %d appends; want refused, naming the move", r.err, appends(r.event))
 	}
 	joiner.refused("on_transition", "add", id+"/status/reason", "rewritten")
-	if echo := joiner.ok("set", id+"/status", `{column: obsolete, reason: "second"}`); !strings.Contains(echo, id+"/status obsolete → obsolete\n  "+id+"/status/reason = \"second\"\n") {
+	if echo := joiner.ok("set", id+"/status", `{column: obsolete, reason: "second"}`); !strings.Contains(echo, id+"/status obsolete → obsolete\n  requirements: 1 evaluated · 1 met · 0 unmet (warning) · 0 unmet (error)\n"+id+"/status/reason \"first\" → \"second\"\n") {
 		t.Errorf("moving into the column it is in, with a reason, echoes %q", echo)
 	}
 	if got := s.ok("get", id+"/status/reason"); got != "second\n" {

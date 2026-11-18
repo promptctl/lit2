@@ -29,15 +29,15 @@ type Wrote struct {
 }
 
 // Moved is a status written: a move from the column the subject reads to
-// another, or into the one it reads again, with the fields it carries,
-// which the gate judges once the command's events fold. Op is the operand
-// that wrote it, and Judged what the gate found.
+// another, or into the one it reads again saying something new, which the
+// gate judges once the command's events fold; each field the move carries
+// is a Wrote beside it. Op is the operand that wrote it, and Judged what
+// the gate found.
 type Moved struct {
 	Who    Who
 	Path   field.Path
 	From   evaluate.Column
 	To     string
-	Fields []events.TransitionField
 	Source Source
 	Op     int
 	Judged Judgment
@@ -152,10 +152,11 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 	if !ok {
 		return nil, nil, refuse("value", "%s holds one value", wr.path)
 	}
-	canon, err := wr.decl.Kind.Parse(s.Text)
+	v, err := w.value(wr.decl.Kind, s.Text)
 	if err != nil {
 		return nil, nil, refuse("value", "%s: %v", wr.path, err)
 	}
+	canon := w.text(wr.decl.Kind, v)
 	facts := wr.subject.Facts
 	name := events.MustName(string(wr.path))
 	live := facts.Live(name)
@@ -163,20 +164,17 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 	if len(before) == 1 && before[0] == canon && len(live) <= 1 {
 		return nil, nil, nil
 	}
-	_, prose := wr.decl.Kind.(field.Text)
-	var v events.Value = events.Plain{Canonical: canon}
-	if prose {
-		v = events.Prose{Body: events.SealPlain(canon)}
-	}
+	_, prose := v.(events.Prose)
 	set := events.FieldSet{Field: name, Value: v, Over: live}
 	return []piece{fact{set}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Prose: prose, Before: before, After: canon, Source: wr.source}}, nil
 }
 
 // move writes a status: a transition between the columns of the graph
 // the subject is judged under, carrying the fields its value gives. A
-// move into the column the item reads with no fields changes nothing, or
-// settles a conflicted register and arrives nowhere; one with fields
-// arrives again, and its entry list judges what it now says.
+// value that names the column the item reads and no fields keeps what
+// its move said, so one that says what the item already says changes
+// nothing, or settles a conflicted register and arrives nowhere; one that
+// says something new arrives again, and its entry list judges it.
 func move(w World, wr write) ([]piece, []Change, *refusal) {
 	to, fields, r := destination(w, wr)
 	if r != nil {
@@ -193,7 +191,11 @@ func move(w World, wr write) ([]piece, []Change, *refusal) {
 	facts := wr.subject.Facts
 	live := facts.Live(fold.Status)
 	from := evaluate.ColumnIn(eff, facts)
-	stays := from.Name == col.Name() && len(fields) == 0
+	said := facts.Arrival()
+	if from.Name == col.Name() && len(fields) == 0 {
+		fields = said
+	}
+	stays := from.Name == col.Name() && fold.SameArrival(fields, said)
 	if stays && len(live) <= 1 {
 		return nil, nil, nil
 	}
@@ -201,14 +203,25 @@ func move(w World, wr write) ([]piece, []Change, *refusal) {
 	if stays {
 		return []piece{fact{t}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Before: []string{from.Name}, After: from.Name, Source: wr.source}}, nil
 	}
-	return []piece{fact{t}}, []Change{Moved{Who: wr.subject.At, Path: wr.path, From: from, To: col.Name(), Fields: fields, Source: wr.source}}, nil
+	changes := []Change{Moved{Who: wr.subject.At, Path: wr.path, From: from, To: col.Name(), Source: wr.source}}
+	for _, f := range fields {
+		path := wr.path.Under(f.Field.String())
+		row, _ := w.Schema().Table().Find(wr.subject.Place, path) // destination found the field
+		d, _ := fieldOf(row, path)
+		k := d.Kind
+		_, prose := f.Value.(events.Prose)
+		changes = append(changes, Wrote{Who: wr.subject.At, Path: path, Prose: prose, Before: w.arrived(said, path, k), After: w.text(k, f.Value), Source: wr.source})
+	}
+	return []piece{fact{t}}, changes, nil
 }
 
 // destination reads a status's value: a column, or an object naming its
 // column and the fields the move carries, each a transition field of the
 // subject's place below the status, read by its kind, in name order.
 func destination(w World, wr write) (string, []events.TransitionField, *refusal) {
-	spelled := fmt.Sprintf("%s is a column, or {column: <column>, <field>: <value>…}", wr.path)
+	spelled := func(why string, a ...any) *refusal {
+		return refuse("value", "%s is a column, or {column: <column>, <field>: <value>…}: %s", wr.path, fmt.Sprintf(why, a...))
+	}
 	column := func(text string) (string, *refusal) {
 		canon, err := wr.decl.Kind.Parse(text)
 		if err != nil {
@@ -222,7 +235,7 @@ func destination(w World, wr write) (string, []events.TransitionField, *refusal)
 		to, r := column(v.Text)
 		return to, nil, r
 	case field.List:
-		return "", nil, refuse("value", "%s", spelled)
+		return "", nil, spelled("a list is neither")
 	case field.Object:
 		pairs = v.Pairs
 	}
@@ -231,7 +244,7 @@ func destination(w World, wr write) (string, []events.TransitionField, *refusal)
 	for _, p := range pairs {
 		s, ok := p.Value.(field.Scalar)
 		if !ok {
-			return "", nil, refuse("value", "%s: %s is one value", spelled, p.Key)
+			return "", nil, spelled("%s is one value", p.Key)
 		}
 		if p.Key == field.MoveColumn {
 			var r *refusal
@@ -243,7 +256,7 @@ func destination(w World, wr write) (string, []events.TransitionField, *refusal)
 		path := wr.path.Under(p.Key)
 		row, err := w.Schema().Table().Find(wr.subject.Place, path)
 		if err != nil {
-			return "", nil, refuse("unknown_field", "%s: %v", spelled, err)
+			return "", nil, refuse("unknown_field", "%s: %v", path, err)
 		}
 		d, no := fieldOf(row, path)
 		if no != nil {
@@ -252,18 +265,14 @@ func destination(w World, wr write) (string, []events.TransitionField, *refusal)
 		if d.Writability != field.OnTransition {
 			return "", nil, refuse("value", "%s is no field a move carries", path)
 		}
-		canon, err := d.Kind.Parse(s.Text)
+		v, err := w.value(d.Kind, s.Text)
 		if err != nil {
 			return "", nil, refuse("value", "%s: %v", path, err)
 		}
-		var val events.Value = events.Plain{Canonical: canon}
-		if _, prose := d.Kind.(field.Text); prose {
-			val = events.Prose{Body: events.SealPlain(canon)}
-		}
-		fields = append(fields, events.TransitionField{Field: events.MustName(p.Key), Value: val})
+		fields = append(fields, events.TransitionField{Field: events.MustName(p.Key), Value: v})
 	}
 	if to == "" {
-		return "", nil, refuse("value", "%s: it names no column", spelled)
+		return "", nil, spelled("it names no column")
 	}
 	slices.SortFunc(fields, func(a, b events.TransitionField) int { return strings.Compare(a.Field.String(), b.Field.String()) })
 	return to, fields, nil

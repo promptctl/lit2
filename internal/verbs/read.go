@@ -62,6 +62,10 @@ func Read(w World, n address.Node, path field.Path, row config.Row) ([]string, e
 		return out, nil
 	}
 	_, in, facts := w.held(n)
+	if d.Writability == field.OnTransition {
+		// the field of the move the status settles on, as the status is
+		return w.arrived(facts.Arrival(), path, d.Kind), nil
+	}
 	return stored(w.Schema(), facts, in, path, d)
 }
 
@@ -90,14 +94,6 @@ func (w World) held(n address.Node) (Existing, config.Ancestry, fold.Facts) {
 // prints `[LAW:one-source-of-truth]`; a status both read through
 // evaluate.StatusIn, get marking a name the graph no longer declares.
 func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path field.Path, d field.FieldDecl) ([]string, error) {
-	if d.Writability == field.OnTransition {
-		// the field of the move the status settles on, as the status is
-		v, ok := facts.TransitionField(events.MustName(path.Last()))
-		if !ok {
-			return nil, nil
-		}
-		return []string{valueText(v)}, nil
-	}
 	n := events.MustName(string(path))
 	switch d.Multi {
 	case field.Set:
@@ -129,16 +125,58 @@ func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path fie
 	panic(fmt.Sprintf("verbs: %T is not a PlainField", facts.Plain(n)))
 }
 
-// valueText is one value as its text: prose opened, a plain value's
-// canonical text.
-func valueText(v events.Value) string {
+// value is text read by kind k as a write records it: text sealed as
+// prose, an item as its id, which the text must name, so a path that
+// moves later still names it; anything else its canonical text.
+func (w World) value(k field.Kind, text string) (events.Value, error) {
+	if _, item := k.(field.ItemRef); item {
+		a, r := address.Parse(w.View, text)
+		if r != nil {
+			return nil, r
+		}
+		it, item := a.Node.(address.Item)
+		if _, whole := a.Target.(address.Whole); !item || !whole {
+			return nil, fmt.Errorf("%s is not an item", text)
+		}
+		return events.Plain{Canonical: it.ID.String()}, nil
+	}
+	canon, err := k.Parse(text)
+	if err != nil {
+		return nil, err
+	}
+	if _, prose := k.(field.Text); prose {
+		return events.Prose{Body: events.SealPlain(canon)}, nil
+	}
+	return events.Plain{Canonical: canon}, nil
+}
+
+// text is v, a value of kind k, as a read prints it: prose opened, an
+// item as its path renders now, anything else its canonical text. An
+// item's value another writer gave that is no id prints as written.
+func (w World) text(k field.Kind, v events.Value) string {
 	switch v := v.(type) {
 	case events.Prose:
 		return open(v.Body)
 	case events.Plain:
+		if _, item := k.(field.ItemRef); item {
+			if id, err := events.ParseItemID(v.Canonical); err == nil {
+				return w.render(id)
+			}
+		}
 		return v.Canonical
 	}
 	panic(fmt.Sprintf("verbs: %T is not a Value", v))
+}
+
+// arrived is field path, of kind k, of the move that carried fields, as a
+// read prints it: none when the move carried none.
+func (w World) arrived(fields []events.TransitionField, path field.Path, k field.Kind) []string {
+	for _, f := range fields {
+		if f.Field.String() == path.Last() {
+			return []string{w.text(k, f.Value)}
+		}
+	}
+	return nil
 }
 
 // texts is a prose field's live texts, opened.

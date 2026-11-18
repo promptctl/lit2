@@ -135,3 +135,34 @@ func TestAFieldInBothFormsIsMixedUntilAWriteNamesTheProse(t *testing.T) {
 		t.Errorf("a plain write over the prose leaves %#v and %v; want the prose retired", found(t, s, id).Facts.Text(priority), s.Advisories())
 	}
 }
+
+// TestTwoClosesIntoOneColumnWithDifferentReasonsConflict: a status says
+// its column and the fields its move carried, so two concurrent closes
+// into one column contradict each other when their reasons differ, and
+// agree when they say the same.
+func TestTwoClosesIntoOneColumnWithDifferentReasonsConflict(t *testing.T) {
+	close := func(why string) events.Payload {
+		return events.Transition{From: name("backlog"), To: name("obsolete"), Fields: []events.TransitionField{{Field: name("reason"), Value: prose(why)}}}
+	}
+	for _, c := range []struct {
+		name     string
+		a, b     string
+		conflict bool
+	}{
+		{"different reasons", "replaced", "not needed", true},
+		{"one reason", "replaced", "replaced", false},
+	} {
+		w, id := item(t)
+		seen := w.state()
+		w.mint(a, seen, events.Act{About: events.Item{ID: id}, Payload: close(c.a)})
+		w.mint(b, seen, events.Act{About: events.Item{ID: id}, Payload: close(c.b)})
+		s := w.state()
+		settled := found(t, s, id).Facts.Plain(fold.Status).(fold.Settled)
+		if got := len(settled.Overruled) > 0; settled.Value != "obsolete" || got != c.conflict {
+			t.Errorf("%s: the status settles as %#v; want obsolete, overruled %v", c.name, settled, c.conflict)
+		}
+		if got := advised(s, fold.OnItem{ID: id}, fold.Conflict{Field: fold.Status}); got != c.conflict {
+			t.Errorf("%s: a status conflict on /integrity is %v; want %v: %v", c.name, got, c.conflict, s.Advisories())
+		}
+	}
+}

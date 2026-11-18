@@ -227,11 +227,12 @@ func (Conflicted) textField() {}
 func (Unset) plainField()     {}
 func (Settled) plainField()   {}
 
-// Candidate is one value of a field and the live writes that hold it, in
-// total order.
+// Candidate is one value of a field, with the fields a status's move
+// carried, and the live writes that hold it, in total order.
 type Candidate struct {
-	Value events.Value
-	By    []Stamp
+	Value  events.Value
+	Fields []events.TransitionField
+	By     []Stamp
 }
 
 // Member is one member of a set and its live adds, in total order.

@@ -458,8 +458,9 @@ func (p Transition) AppendTo(w *wire.Writer) {
 	w.Keep(p.unknown)
 }
 
-// ReadTransition reads transition at version 1. A field named twice is
-// refused, since one move says one thing about each.
+// ReadTransition reads transition at version 1. Its fields are in strict
+// name order, so a field named twice is refused, since one move says one
+// thing about each, and two moves that say the same compare equal.
 func ReadTransition(r *wire.Reader) (Versioned, error) {
 	var p Transition
 	err := readNamed(r, map[uint32]named{1: {&p.From, "from"}, 2: {&p.To, "to"}}, map[uint32]*[]EventID{3: &p.Over},
@@ -471,8 +472,8 @@ func ReadTransition(r *wire.Reader) (Versioned, error) {
 			if err != nil {
 				return err
 			}
-			if slices.ContainsFunc(p.Fields, func(g TransitionField) bool { return g.Field == f.Field }) {
-				return fmt.Errorf("it gives its field %s twice", f.Field)
+			if n := len(p.Fields); n > 0 && p.Fields[n-1].Field.String() >= f.Field.String() {
+				return fmt.Errorf("its field %s follows %s: a transition gives each field once, in name order", f.Field, p.Fields[n-1].Field)
 			}
 			p.Fields = append(p.Fields, f)
 			return nil

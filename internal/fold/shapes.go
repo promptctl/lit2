@@ -310,8 +310,7 @@ func (r register) settled() PlainField {
 	if !held {
 		return Unset{}
 	}
-	settled := last.value.(events.Plain).Canonical
-	return Settled{Value: settled, By: last.stamp, Overruled: r.plain(settled)}
+	return Settled{Value: last.value.(events.Plain).Canonical, By: last.stamp, Overruled: r.plain(last)}
 }
 
 // lastPlain is the register's last live plain write in total order: the
@@ -327,19 +326,13 @@ func (r register) lastPlain() (candidate, bool) {
 	return last, held
 }
 
-// TransitionField is field n of the move the status settles on: the
-// value that move carried, and false when it carried none, or nothing
-// has moved the item. It reads the write Plain(Status) settles on, so a
-// status and its fields always come from one move
-// `[LAW:one-source-of-truth]`.
-func (f Facts) TransitionField(n events.Name) (events.Value, bool) {
+// Arrival is the fields the move the status settles on carried: none
+// when it carried none, or nothing has moved the item. It is the write
+// Plain(Status) settles on, so a status and its fields always come from
+// one move `[LAW:one-source-of-truth]`.
+func (f Facts) Arrival() []events.TransitionField {
 	last, _ := f.register(Status).lastPlain()
-	for _, tf := range last.fields {
-		if tf.Field == n {
-			return tf.Value, true
-		}
-	}
-	return nil, false
+	return last.fields
 }
 
 // Members is set's members with a live add, by name.
@@ -433,18 +426,20 @@ func (r register) prose() []Candidate {
 	return out
 }
 
-// plain is the register's live plain values other than settled, each with
-// the writes holding it, ordered by each value's first write.
-func (r register) plain(settled string) []Candidate {
+// plain is the register's live plain writes that say other than
+// settled, each with the writes saying it, ordered by each one's first
+// write. A status says its column and the fields its move carried, so two
+// closes into one column with different reasons contradict each other.
+func (r register) plain(settled candidate) []Candidate {
 	var out []Candidate
 	for _, c := range r.liveWrites() {
 		p, ok := c.value.(events.Plain)
-		if !ok || p.Canonical == settled {
+		if !ok || c.says(settled) {
 			continue
 		}
-		i := slices.IndexFunc(out, func(o Candidate) bool { return o.Value.(events.Plain).Canonical == p.Canonical })
+		i := slices.IndexFunc(out, func(o Candidate) bool { return c.says(candidate{value: o.Value, fields: o.Fields}) })
 		if i < 0 {
-			out = append(out, Candidate{Value: p})
+			out = append(out, Candidate{Value: p, Fields: c.fields})
 			i = len(out) - 1
 		}
 		out[i].By = append(out[i].By, c.stamp)

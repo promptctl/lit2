@@ -273,15 +273,18 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		w.Bytes(1, b)
 		return w.Encoded()
 	}
-	// a move says one thing about each field it carries, and says it
+	// a move says one thing about each field it carries, in name order, and says it
 	reason := TransitionField{Field: MustName("reason"), Value: Plain{Canonical: "x"}}.wire()
-	var twiceCarried, noCarriedValue, carriedNoValue wire.Writer
-	for _, w := range []*wire.Writer{&twiceCarried, &noCarriedValue} {
+	of := TransitionField{Field: MustName("of"), Value: Plain{Canonical: "x"}}.wire()
+	var twiceCarried, outOfOrder, noCarriedValue, carriedNoValue wire.Writer
+	for _, w := range []*wire.Writer{&twiceCarried, &outOfOrder, &noCarriedValue} {
 		w.Bytes(1, []byte("plan"))
 		w.Bytes(2, []byte("obsolete"))
 	}
 	twiceCarried.Bytes(4, reason)
 	twiceCarried.Bytes(4, reason)
+	outOfOrder.Bytes(4, reason)
+	outOfOrder.Bytes(4, of)
 	carriedNoValue.Bytes(1, []byte("reason"))
 	noCarriedValue.Bytes(4, carriedNoValue.Encoded())
 	// an apply's blob is git's id for the bytes it carries, or it is refused
@@ -312,6 +315,7 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		{"a member.add of no member", ReadMemberAdd, place([]byte("labels"))},
 		{"a transition with two tos", ReadTransition, twoTos.Encoded()},
 		{"a transition carrying one field twice", ReadTransition, twiceCarried.Encoded()},
+		{"a transition carrying its fields out of name order", ReadTransition, outOfOrder.Encoded()},
 		{"a transition carrying a field with no value", ReadTransition, noCarriedValue.Encoded()},
 		{"a field.set with two fields", ReadFieldSet, twoFields.Encoded()},
 		{"a comment.add with no body", ReadCommentAdd, nil},

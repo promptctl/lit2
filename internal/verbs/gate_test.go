@@ -52,7 +52,7 @@ func TestAMoveUnderTheDefaultProfile(t *testing.T) {
 	if got := b.refusal(verbs.Set, op(s+"/status", "wontfix")); !strings.Contains(got, s+"/status plan → wontfix refused by wontfix/entry") {
 		t.Errorf("closing with no reason is refused as %q", got)
 	}
-	if echo := b.do(verbs.Set, op(s+"/status", `{column: wontfix, reason: "not needed"}`)); !strings.Contains(echo, s+"/status plan → wontfix\n  "+s+"/status/reason = \"not needed\"\n  requirements: 1 evaluated · 1 met") {
+	if echo := b.do(verbs.Set, op(s+"/status", `{column: wontfix, reason: "not needed"}`)); !strings.Contains(echo, s+"/status plan → wontfix\n  requirements: 1 evaluated · 1 met · 0 unmet (warning) · 0 unmet (error)\n"+s+"/status/reason (unset) → \"not needed\"\n") {
 		t.Errorf("closing with a reason in the move echoes %q", echo)
 	}
 	if got := b.get(s + "/stage"); got != "terminal\n" {
@@ -174,5 +174,48 @@ func TestANodesStageAndRollupAreItsLeaves(t *testing.T) {
 	}
 	if got := b.get(feature + "/rollup"); got != "done 1\n" {
 		t.Errorf("the rollup with a removed leaf reads %q", got)
+	}
+}
+
+// TestAStatusNamingItsColumnKeepsWhatItsMoveSaid: a status written as the
+// column the ticket is in, with no fields, keeps the fields of the move it
+// settles on: it settles two concurrent closes on one reason rather than
+// dropping both, and a close sent again says nothing new and drafts
+// nothing.
+func TestAStatusNamingItsColumnKeepsWhatItsMoveSaid(t *testing.T) {
+	b := newBook(t, string(assets.DefaultWorkspace.Bytes()))
+	_, s := story(t, b)
+	s0 := b.st
+	b.as(one, s0, verbs.Set, op(s+"/status", `{column: obsolete, reason: "replaced"}`))
+	b.as(two, s0, verbs.Set, op(s+"/status", `{column: obsolete, reason: "not needed"}`))
+	reason := strings.TrimSuffix(b.get(s+"/status/reason"), "\n")
+	if echo := b.do(verbs.Set, op(s+"/status", "obsolete")); echo != s+"/status obsolete → obsolete\n" {
+		t.Errorf("settling two closes into obsolete echoes %q", echo)
+	}
+	if got := b.get(s + "/status/reason"); got != reason+"\n" {
+		t.Errorf("after the settle the reason reads %q; want %q, the one the status settled on", got, reason)
+	}
+	for _, again := range []string{"obsolete", "{column: obsolete}", `{column: obsolete, reason: "` + reason + `"}`} {
+		if echo := b.do(verbs.Set, op(s+"/status", again)); echo != "" {
+			t.Errorf("writing %s over what the ticket says drafts %q", again, echo)
+		}
+	}
+}
+
+// TestADuplicateNamesTheItemItDuplicates: of is an item the store holds,
+// recorded by its id, so it reads as that item's path, and a name no item
+// has, or a path to a field, is refused.
+func TestADuplicateNamesTheItemItDuplicates(t *testing.T) {
+	b := newBook(t, string(assets.DefaultWorkspace.Bytes()))
+	feature, s := story(t, b)
+	other := filed(t, b.do(verbs.Add, op(feature+"/children", "{title: canonical}")))
+	for _, of := range []string{"nothing-here", feature + "/title"} {
+		if got := b.refused(verbs.Set, op(s+"/status", "{column: dup, of: "+of+"}")); got != "value" {
+			t.Errorf("a dup of %s is refused as %s", of, got)
+		}
+	}
+	b.do(verbs.Set, op(s+"/status", "{column: dup, of: "+other+"}"))
+	if got := b.get(s + "/status/of"); got != other+"\n" {
+		t.Errorf("the dup's of reads %q; want %s", got, other)
 	}
 }
