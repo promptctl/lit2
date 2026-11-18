@@ -29,13 +29,15 @@ type Wrote struct {
 }
 
 // Moved is a status written: a move from the column the subject reads to
-// another, which the gate judges once the command's events fold. Op is the
-// operand that wrote it, and Judged what the gate found.
+// another, or into the one it reads again, with the fields it carries,
+// which the gate judges once the command's events fold. Op is the operand
+// that wrote it, and Judged what the gate found.
 type Moved struct {
 	Who    Who
 	Path   field.Path
 	From   evaluate.Column
 	To     string
+	Fields []events.TransitionField
 	Source Source
 	Op     int
 	Judged Judgment
@@ -89,8 +91,8 @@ func (Filed) change()     {}
 // exists, since what a create writes is new by construction.
 func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 	// [LAW:single-enforcer] the one gate every write passes
-	if err := field.Writable(wr.decl); err != nil {
-		return nil, nil, nil, refuse("derived", "%s: %v", wr.path, err)
+	if no := field.Writable(wr.decl); no != nil {
+		return nil, nil, nil, refuse(no.Reason(), "%s: %v", wr.path, no)
 	}
 	var pieces []piece
 	var changes []Change
@@ -136,14 +138,16 @@ func compile(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 	return pieces, changes, keys, nil
 }
 
-// one sets a register. A status is a move between the columns of the
-// graph the subject is judged under; any other register a field.set, of
-// prose for text and of the canonical value otherwise. Over is every live
-// write of the register, so the write replaces what it read and leaves a
-// write it did not read live beside it. A write that changes nothing,
-// the field already reading exactly this value by at most one live write,
-// drafts nothing.
+// one sets a register. A status is a move, which move compiles; any other
+// register a field.set, of prose for text and of the canonical value
+// otherwise. Over is every live write of the register, so the write
+// replaces what it read and leaves a write it did not read live beside
+// it. A write that changes nothing, the field already reading exactly
+// this value by at most one live write, drafts nothing.
 func one(w World, wr write) ([]piece, []Change, *refusal) {
+	if _, column := wr.decl.Kind.(field.Column); column {
+		return move(w, wr)
+	}
 	s, ok := wr.value.(field.Scalar)
 	if !ok {
 		return nil, nil, refuse("value", "%s holds one value", wr.path)
@@ -155,26 +159,6 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 	facts := wr.subject.Facts
 	name := events.MustName(string(wr.path))
 	live := facts.Live(name)
-	if _, column := wr.decl.Kind.(field.Column); column {
-		eff, err := evaluate.Effective(w.Schema(), wr.subject.In)
-		if err != nil {
-			return nil, nil, refuse("configuration", "%v", err)
-		}
-		col, ok := eff.Columns.Resolve(canon)
-		if !ok {
-			return nil, nil, refuse("value", "%s is not a column this item can be in; the columns are %s", canon, strings.Join(eff.Columns.Names(), ", "))
-		}
-		from := evaluate.ColumnIn(eff, facts)
-		if from.Name == col.Name() && len(live) <= 1 {
-			return nil, nil, nil
-		}
-		t := events.Transition{From: events.MustName(from.Name), To: events.MustName(col.Name()), Over: live}
-		if from.Name == col.Name() {
-			// the column it already reads settles a conflicted register and arrives nowhere
-			return []piece{fact{t}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Before: []string{from.Name}, After: from.Name, Source: wr.source}}, nil
-		}
-		return []piece{fact{t}}, []Change{Moved{Who: wr.subject.At, Path: wr.path, From: from, To: col.Name(), Source: wr.source}}, nil
-	}
 	before, _ := stored(w.Schema(), facts, wr.subject.In, wr.path, wr.decl) // no status, so nothing the configuration judges
 	if len(before) == 1 && before[0] == canon && len(live) <= 1 {
 		return nil, nil, nil
@@ -186,6 +170,103 @@ func one(w World, wr write) ([]piece, []Change, *refusal) {
 	}
 	set := events.FieldSet{Field: name, Value: v, Over: live}
 	return []piece{fact{set}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Prose: prose, Before: before, After: canon, Source: wr.source}}, nil
+}
+
+// move writes a status: a transition between the columns of the graph
+// the subject is judged under, carrying the fields its value gives. A
+// move into the column the item reads with no fields changes nothing, or
+// settles a conflicted register and arrives nowhere; one with fields
+// arrives again, and its entry list judges what it now says.
+func move(w World, wr write) ([]piece, []Change, *refusal) {
+	to, fields, r := destination(w, wr)
+	if r != nil {
+		return nil, nil, r
+	}
+	eff, err := evaluate.Effective(w.Schema(), wr.subject.In)
+	if err != nil {
+		return nil, nil, refuse("configuration", "%v", err)
+	}
+	col, ok := eff.Columns.Resolve(to)
+	if !ok {
+		return nil, nil, refuse("value", "%s is not a column this item can be in; the columns are %s", to, strings.Join(eff.Columns.Names(), ", "))
+	}
+	facts := wr.subject.Facts
+	live := facts.Live(fold.Status)
+	from := evaluate.ColumnIn(eff, facts)
+	stays := from.Name == col.Name() && len(fields) == 0
+	if stays && len(live) <= 1 {
+		return nil, nil, nil
+	}
+	t := events.Transition{From: events.MustName(from.Name), To: events.MustName(col.Name()), Over: live, Fields: fields}
+	if stays {
+		return []piece{fact{t}}, []Change{Wrote{Who: wr.subject.At, Path: wr.path, Before: []string{from.Name}, After: from.Name, Source: wr.source}}, nil
+	}
+	return []piece{fact{t}}, []Change{Moved{Who: wr.subject.At, Path: wr.path, From: from, To: col.Name(), Fields: fields, Source: wr.source}}, nil
+}
+
+// destination reads a status's value: a column, or an object naming its
+// column and the fields the move carries, each a transition field of the
+// subject's place below the status, read by its kind, in name order.
+func destination(w World, wr write) (string, []events.TransitionField, *refusal) {
+	spelled := fmt.Sprintf("%s is a column, or {column: <column>, <field>: <value>…}", wr.path)
+	column := func(text string) (string, *refusal) {
+		canon, err := wr.decl.Kind.Parse(text)
+		if err != nil {
+			return "", refuse("value", "%s: %v", wr.path, err)
+		}
+		return canon, nil
+	}
+	var pairs []field.Pair
+	switch v := wr.value.(type) {
+	case field.Scalar:
+		to, r := column(v.Text)
+		return to, nil, r
+	case field.List:
+		return "", nil, refuse("value", "%s", spelled)
+	case field.Object:
+		pairs = v.Pairs
+	}
+	var to string
+	var fields []events.TransitionField
+	for _, p := range pairs {
+		s, ok := p.Value.(field.Scalar)
+		if !ok {
+			return "", nil, refuse("value", "%s: %s is one value", spelled, p.Key)
+		}
+		if p.Key == field.MoveColumn {
+			var r *refusal
+			if to, r = column(s.Text); r != nil {
+				return "", nil, r
+			}
+			continue
+		}
+		path := wr.path.Under(p.Key)
+		row, err := w.Schema().Table().Find(wr.subject.Place, path)
+		if err != nil {
+			return "", nil, refuse("unknown_field", "%s: %v", spelled, err)
+		}
+		d, no := fieldOf(row, path)
+		if no != nil {
+			return "", nil, no
+		}
+		if d.Writability != field.OnTransition {
+			return "", nil, refuse("value", "%s is no field a move carries", path)
+		}
+		canon, err := d.Kind.Parse(s.Text)
+		if err != nil {
+			return "", nil, refuse("value", "%s: %v", path, err)
+		}
+		var val events.Value = events.Plain{Canonical: canon}
+		if _, prose := d.Kind.(field.Text); prose {
+			val = events.Prose{Body: events.SealPlain(canon)}
+		}
+		fields = append(fields, events.TransitionField{Field: events.MustName(p.Key), Value: val})
+	}
+	if to == "" {
+		return "", nil, refuse("value", "%s: it names no column", spelled)
+	}
+	slices.SortFunc(fields, func(a, b events.TransitionField) int { return strings.Compare(a.Field.String(), b.Field.String()) })
+	return to, fields, nil
 }
 
 // add adds each member a value names: one, or a list. Each is read by the

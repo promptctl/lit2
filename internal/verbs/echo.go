@@ -51,6 +51,10 @@ func Echo(w World, c Compiled, minted []events.Event) string {
 			} else {
 				fmt.Fprintf(&b, "%s/%s %s → %s\n", who(ch.Who), ch.Path, column(ch.From), ch.To)
 			}
+			for _, f := range ch.Fields {
+				_, prose := f.Value.(events.Prose)
+				fmt.Fprintf(&b, "  %s/%s = %s\n", who(ch.Who), ch.Path.Under(f.Field.String()), shown(valueText(f.Value), prose))
+			}
 			b.WriteString(ch.Judged.echo(who))
 		case Added:
 			if _, created := ch.Who.(Created); created {

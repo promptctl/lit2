@@ -60,16 +60,16 @@ terminal = true
 
 [columns.dup]
 terminal = true
-entry = [{ test = "of", severity = "error" }]
+entry = [{ test = "status/of", severity = "error" }]
 
 [columns.superseded]
 terminal = true
-entry = [{ test = "of", severity = "error" }]
+entry = [{ test = "status/of", severity = "error" }]
 
 [columns.obsolete]
 terminal = true
-entry = [{ test = "reason", severity = "error" }]
+entry = [{ test = "status/reason", severity = "error" }]
 
 [columns.wontfix]
 terminal = true
-entry = [{ test = "reason", severity = "error" }]
+entry = [{ test = "status/reason", severity = "error" }]

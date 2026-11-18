@@ -306,10 +306,21 @@ func (p *parser) checkHomes(levels []Level, nums []int) {
 }
 
 // fieldDecl reads one declared field: its kind and the parameters that kind
-// takes, and nothing else.
+// takes, and nothing else. A name below status, status/<word>, is a
+// transition field, which a move carries: one value, on the leaves, which
+// alone have a status.
 func (p *parser) fieldDecl(at KeyPath, name string, v any, on field.OnLevel) (field.FieldDecl, bool) {
-	if !isName(name) {
-		p.fail(at, ReasonBadFieldName, "%q is not a field name: a lowercase word", name)
+	word, onTransition := strings.CutPrefix(name, string(field.Status)+"/")
+	if !isName(word) {
+		p.fail(at, ReasonBadFieldName, "%q is not a field name: a lowercase word, or status/ and one for a field a move carries", name)
+		return field.FieldDecl{}, false
+	}
+	if _, node := on.Level.Below(); onTransition && node {
+		p.fail(at, ReasonBadFieldName, "%s is a field a move carries, and only level 1's items move", name)
+		return field.FieldDecl{}, false
+	}
+	if onTransition && word == field.MoveColumn {
+		p.fail(at, ReasonBadFieldName, "%s is not a field name: a status's value names its column by the key %s", name, field.MoveColumn)
 		return field.FieldDecl{}, false
 	}
 	m, ok := v.(map[string]any)
@@ -384,7 +395,15 @@ func (p *parser) fieldDecl(at KeyPath, name string, v any, on field.OnLevel) (fi
 			multi = field.Set
 		}
 	}
-	return field.FieldDecl{Kind: kind, Multi: multi, Origin: field.Declared, Writability: field.Settable, At: on}, true
+	writability := field.Settable
+	if onTransition {
+		if multi != field.One {
+			p.fail(keyed(at, "many"), ReasonKindParameter, "%s is a field a move carries, which holds one value", name)
+			return field.FieldDecl{}, false
+		}
+		writability = field.OnTransition
+	}
+	return field.FieldDecl{Kind: kind, Multi: multi, Origin: field.Declared, Writability: writability, At: on}, true
 }
 
 // templates reads each level's template, once every field and check is a

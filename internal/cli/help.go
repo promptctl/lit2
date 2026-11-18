@@ -83,8 +83,8 @@ func fieldSections(b *strings.Builder, fields config.Table) {
 		}
 		for _, r := range rows {
 			writers := strings.Join(verbs.VerbsOf(r), ", ")
-			if writers == "" {
-				writers = "derived"
+			if no := verbs.Unwritten(r); no != nil {
+				writers = no.Reason()
 			}
 			fmt.Fprintf(b, "  %-*s %-*s %s\n", paths, r.Path(), kinds, kindOf(r), writers)
 		}

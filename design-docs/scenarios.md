@@ -130,7 +130,8 @@ where the process says so, and is handed the next ticket when it finishes.
 8. `set s4l/status merge` is refused on `merge/entry pr/verdict=pass`. The
    author pushes and `add s4l/pr/revisions <head>` appends revision 2; after
    `add s4l/pr/reviews '{of:2 … verdict:pass}'`, it lands.
-9. `set s4l/status done 's4l/reason' "Merged in #12"`. One write, two paths.
+9. `set s4l/status '{column:done reason:"Merged in #12"}'`. One write, one
+   move carrying its reason.
    Derivations: `⇒ s4l/claim this checkout → (none)`, `⇒
    m2q/lanes/history head is now 7ka`, `⇒ 7ka/claim = this checkout`. The
    `capture/finished` handler fires. `get /next` serves `7ka`.
@@ -328,13 +329,13 @@ and reorders, with every change visible before and after.
 
 1. `get '(status=backlog)/title' '(status=backlog)/lane'`: two lines per
    ticket, no epic bodies reprinted.
-2. `set '(parent=5k5 status=backlog)/status' obsolete '(parent=5k5
-   status=backlog)/reason' "iTerm2 restore dropped" --dry-run` prints the
+2. `set '(parent=5k5 status=backlog)/status' '{column:obsolete
+   reason:"iTerm2 restore dropped"}' --dry-run` prints the
    expansion and the diff; without the flag it is one write.
 3. One path of three is refused (a ticket in `impl` cannot enter `done`);
    nothing is written for any of them; the refusal lists the two that would
    have landed.
-4. `set lq3.9od/body - 2d80.d66/status dup 2d80.d66/of lq3.9od < merged.md`:
+4. `set lq3.9od/body - 2d80.d66/status '{column:dup of:lq3.9od}' < merged.md`:
    the canonical body and the duplicate's close in one write.
 5. Eleven different grooming notes on eleven tickets.
 6. `get /integrity` ends the pass. It lists what the fold could not settle

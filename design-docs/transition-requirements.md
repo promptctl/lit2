@@ -29,7 +29,7 @@ what that one evaluation would say and enforces nothing.
 Mechanically one side could carry everything, and each side fails a real case.
 Entry alone cannot say "a ticket may not leave the backlog" once the backlog
 has two forward destinations without writing the list twice, and the copies
-drift `[LAW:one-source-of-truth]`. Exit alone cannot say "`dup` needs `of`" at
+drift `[LAW:one-source-of-truth]`. Exit alone cannot say "`dup` needs `status/of`" at
 all: a terminal column is reachable from every column, so the requirement
 would be copied onto every column's exit, and an exit list does not know which
 destination the write is heading for. So a column has both, and the author
@@ -87,7 +87,7 @@ them reading a path the ticket already exposes: a field present or matching is
 `points` or `target_release~'^\d+\.\d+$'`; a label present is `labels=ready`;
 a passing review of the latest plan revision is `plan/verdict=pass`, because
 `plan/verdict` is the derived field architecture.md §4 defines as the verdict of
-the last review naming the latest revision, or nothing; a relation present is `of`; a
+the last review naming the latest revision, or nothing; the original a duplicate's move names is `status/of`; a
 dependency closed is `!blockers`, where `blockers` is a derived list, the
 members of `blocked_by` (the lane predecessor, and every ticket whose `blocks`
 names this one) that are not in a terminal column.
@@ -173,19 +173,19 @@ terminal = true
 
 [columns.dup]
 terminal = true
-entry = [{ test = "of", severity = "error" }]
+entry = [{ test = "status/of", severity = "error" }]
 
 [columns.superseded]
 terminal = true
-entry = [{ test = "of", severity = "error" }]
+entry = [{ test = "status/of", severity = "error" }]
 
 [columns.obsolete]
 terminal = true
-entry = [{ test = "reason", severity = "error" }]
+entry = [{ test = "status/reason", severity = "error" }]
 
 [columns.wontfix]
 terminal = true
-entry = [{ test = "reason", severity = "error" }]
+entry = [{ test = "status/reason", severity = "error" }]
 ```
 
 `merge`'s entry requirement reads `pr/verdict`, the verdict of the last review

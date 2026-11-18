@@ -39,7 +39,11 @@ func (s Stamp) equal(o Stamp) bool {
 func (f Facts) equal(o Facts) bool {
 	return slices.EqualFunc(f.registers(), o.registers(), func(a, b register) bool {
 		return a.name == b.name && slices.Equal(sortedIDs(a.retired), sortedIDs(b.retired)) &&
-			slices.EqualFunc(a.liveWrites(), b.liveWrites(), func(x, y candidate) bool { return x.stamp.equal(y.stamp) && valueEqual(x.value, y.value) })
+			slices.EqualFunc(a.liveWrites(), b.liveWrites(), func(x, y candidate) bool {
+				return x.stamp.equal(y.stamp) && valueEqual(x.value, y.value) && slices.EqualFunc(x.fields, y.fields, func(a, b events.TransitionField) bool {
+					return a.Field == b.Field && valueEqual(a.Value, b.Value)
+				})
+			})
 	}) && slices.EqualFunc(f.setsByName(), o.setsByName(), func(a, b set) bool {
 		return a.name == b.name && slices.EqualFunc(a.members.sorted(byKey[string, tally]), b.members.sorted(byKey[string, tally]), func(x, y tally) bool {
 			return x.name == y.name && slices.Equal(sortedIDs(x.removed), sortedIDs(y.removed)) && slices.EqualFunc(x.liveAdds(), y.liveAdds(), Stamp.equal)

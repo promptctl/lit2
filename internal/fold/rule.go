@@ -213,6 +213,17 @@ type Write struct {
 	Over  []events.EventID
 }
 
+// Move writes column To to At's status with the Fields its transition
+// carries, replacing the writes Over: the one write of a status, so its
+// fields are the status write's and the next move replaces them
+// `[LAW:one-source-of-truth]`.
+type Move struct {
+	At     Node
+	To     events.Name
+	Fields []events.TransitionField
+	Over   []events.EventID
+}
+
 // Add adds Member to set Set of At.
 type Add struct {
 	At     Node
@@ -258,6 +269,7 @@ type RequestMembership struct{}
 func (CreateItem) change()    {}
 func (CreateElement) change() {}
 func (Write) change()         {}
+func (Move) change()          {}
 func (Add) change()           {}
 func (Remove) change()        {}
 func (Apply) change()         {}

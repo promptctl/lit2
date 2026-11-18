@@ -52,8 +52,8 @@ func TestAMoveUnderTheDefaultProfile(t *testing.T) {
 	if got := b.refusal(verbs.Set, op(s+"/status", "wontfix")); !strings.Contains(got, s+"/status plan → wontfix refused by wontfix/entry") {
 		t.Errorf("closing with no reason is refused as %q", got)
 	}
-	if echo := b.do(verbs.Set, op(s+"/status", "wontfix"), op(s+"/reason", "not needed")); !strings.Contains(echo, s+"/status plan → wontfix\n  requirements: 1 evaluated · 1 met") {
-		t.Errorf("closing with a reason in the same command echoes %q", echo)
+	if echo := b.do(verbs.Set, op(s+"/status", `{column: wontfix, reason: "not needed"}`)); !strings.Contains(echo, s+"/status plan → wontfix\n  "+s+"/status/reason = \"not needed\"\n  requirements: 1 evaluated · 1 met") {
+		t.Errorf("closing with a reason in the move echoes %q", echo)
 	}
 	if got := b.get(s + "/stage"); got != "terminal\n" {
 		t.Errorf("a closed story's stage reads %q", got)
@@ -63,9 +63,9 @@ func TestAMoveUnderTheDefaultProfile(t *testing.T) {
 // TestAnUnmetWarningPrintsAndTheMoveLands: a warning on the destination's
 // entry rides on the echo and refuses nothing.
 func TestAnUnmetWarningPrintsAndTheMoveLands(t *testing.T) {
-	b := newBook(t, strings.Replace(profile(""), "[columns.plan]\n", "[columns.plan]\nentry = [{ test = \"reason\", severity = \"warning\" }]\n", 1))
+	b := newBook(t, strings.Replace(profile(""), "[columns.plan]\n", "[columns.plan]\nentry = [{ test = \"status/reason\", severity = \"warning\" }]\n", 1))
 	_, s := story(t, b)
-	want := s + "/status backlog → plan\n  warning  plan/entry  reason  found (none)\n  requirements: 1 evaluated · 0 met · 1 unmet (warning) · 0 unmet (error)\n"
+	want := s + "/status backlog → plan\n  warning  plan/entry  status/reason  found (none)\n  requirements: 1 evaluated · 0 met · 1 unmet (warning) · 0 unmet (error)\n"
 	if echo := b.do(verbs.Set, op(s+"/status", "plan")); echo != want {
 		t.Errorf("a move past a warning echoes %q; want %q", echo, want)
 	}

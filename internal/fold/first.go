@@ -64,7 +64,7 @@ func FirstFacts() []Kind {
 			return PathWrite{Verb: events.Rm, At: OfItem{ID: f.At.(OnItem).ID}, Field: []string{f.Payload.Field.String(), f.Payload.Member.String()}}
 		}, events.ReadMemberRm),
 		On(Items, func(f Fact[events.Transition]) Applies {
-			return Changes{List: []Change{Write{At: f.At.(Node), Field: Status, Value: events.Plain{Canonical: f.Payload.To.String()}, Over: f.Payload.Over}}}
+			return Changes{List: []Change{Move{At: f.At.(Node), To: f.Payload.To, Fields: f.Payload.Fields, Over: f.Payload.Over}}}
 		}, func(f Fact[events.Transition]) Intent {
 			return PathWrite{Verb: events.Set, At: OfItem{ID: f.At.(OnItem).ID}, Field: []string{Status.String()}}
 		}, events.ReadTransition),

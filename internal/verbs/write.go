@@ -525,13 +525,24 @@ func shapeOf(verb Verb, d field.FieldDecl) (shape, bool) {
 	return 0, false
 }
 
-// VerbsOf is the verbs that write a row, as help and a refusal list them.
-// A derived row and a check have none.
-func VerbsOf(r config.Row) []string {
+// Unwritten is why no verb writes r on its own, and nil when one does: a
+// check is derived, as a field the engine computes is, and a transition
+// field is its move's.
+func Unwritten(r config.Row) field.Unwritable {
 	f, ok := r.(config.FieldRow)
-	if !ok || field.Writable(f.Decl) != nil {
+	if !ok {
+		return field.DerivedField{}
+	}
+	return field.Writable(f.Decl)
+}
+
+// VerbsOf is the verbs that write a row, as help and a refusal list them.
+// A row Unwritten names has none.
+func VerbsOf(r config.Row) []string {
+	if Unwritten(r) != nil {
 		return nil
 	}
+	f := r.(config.FieldRow)
 	var out []string
 	for _, v := range []Verb{Set, Add} {
 		if _, ok := shapeOf(v, f.Decl); ok {
@@ -556,10 +567,10 @@ func wrongVerb(verb Verb, path field.Path, r config.Row) *refusal {
 	if r == nil {
 		return refuse("wrong_verb", "%s writes a field, not a whole node or a member; rm removes an item, a comment or a member", verb)
 	}
-	verbs := VerbsOf(r)
-	if len(verbs) == 0 {
-		return refuse("derived", "%s: the engine computes it", path)
+	if no := Unwritten(r); no != nil {
+		return refuse(no.Reason(), "%s: %v", path, no)
 	}
+	verbs := VerbsOf(r)
 	return refuse("wrong_verb", "%s does not write %s; its verbs are %s", verb, path, strings.Join(verbs, ", "))
 }
 

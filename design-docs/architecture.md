@@ -536,7 +536,11 @@ contributor, editor and owner, spelled as path globs: contributor is
 `add */comments`, `rm own/*/*`, `rm own/*` at level 1, the leaf. A
 column is no capability's condition: only the writer's file declares
 columns, so no verifier could judge one, and the workflow gate holds where
-a status may move. The capability verdict is the fold's (§3.20): a command folds
+a status may move. Closing is moving: a move carries the fields its
+column's entry needs, `set x/status '{column:obsolete reason:"…"}'`, in
+its one transition, whose path is `x/status`, so whoever may move a ticket
+may close it, and a terminal column that needs a new field (declared as
+`status/<name>`) needs no role to name it. The capability verdict is the fold's (§3.20): a command folds
 the events it would mint onto the writer's current fold, and if the fold
 would carry any of them, it writes none, naming each capability of the
 verb with what the write missed. Membership is paths too:
@@ -606,7 +610,7 @@ row is that no primitive learned a new case.
 | move work through a process | transitions along `next`; requirements on the edges; stage gives start and done |
 | review a plan before code | `plan` is a **reviewable**: two append-only lists, `revisions`, each carrying its content, and `reviews`, each naming the revision it judged and carrying how it was run, one line, the reviewer's result, the agent's response, and its verdict. `add x/plan/reviews '{of:3 how:"…" result:"…" response:"…" verdict:pass}'`, `of` required. `plan/verdict` is the verdict of the last review naming the latest revision; `impl/entry` requires `plan/verdict=pass` |
 | send work back from review | `pr` is the same reviewable, a revision being a head commit; `add x/pr/reviews '{of:2 … verdict:fail}'`; the ticket stays in `review`; round derives from the count of fails; `merge/entry` requires `pr/verdict=pass` |
-| close without finishing, with a reason | terminal columns `dup`, `superseded`, `obsolete`, `wontfix`, each with an `entry` requirement for `of` or `reason` |
+| close without finishing, with a reason | terminal columns `dup`, `superseded`, `obsolete`, `wontfix`, each with an `entry` requirement for `status/of` or `status/reason`, fields the move itself carries: `set x/status '{column:wontfix reason:"…"}'` is one transition, and the next move replaces its fields |
 | park, reopen | a transition into `initial`, reachable from everywhere; the claim ends |
 | finish a container | derived: a node's stage is terminal when every child's is |
 | tell an agent what to do now | the handler bound `in <column>` prints after the ticket on `get x` and on `/next` |

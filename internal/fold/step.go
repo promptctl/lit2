@@ -215,7 +215,11 @@ func (s State) apply(st Stamp, c Change) State {
 			})
 		})
 	case Write:
-		return s.facts(c.At, func(f Facts) Facts { return f.write(st, c.Field, c.Value, c.Over) })
+		return s.facts(c.At, func(f Facts) Facts { return f.write(c.Field, candidate{stamp: st, value: c.Value}, c.Over) })
+	case Move:
+		return s.facts(c.At, func(f Facts) Facts {
+			return f.write(Status, candidate{stamp: st, value: events.Plain{Canonical: c.To.String()}, fields: c.Fields}, c.Over)
+		})
 	case Add:
 		return s.facts(c.At, func(f Facts) Facts { return f.add(st, c.Set, c.Member) })
 	case Remove:

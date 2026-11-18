@@ -175,7 +175,7 @@ A: lit2 admin sync; lit2 add /members '{principal: <B>, role: contributor}'
 A: lit2 admin sync
 B: lit2 admin sync; lit2 get /next           → the same ticket, in plan
 B: lit2 set <id>/status impl                 → refused: impl/entry plan/verdict=pass, no review yet
-B: lit2 set <id>/status obsolete <id>/reason "…"; lit2 admin sync
+B: lit2 set <id>/status '{column:obsolete reason:"…"}'; lit2 admin sync
 B: lit2 rm <epic>                           → refused: a node; contributor has rm own/* at level 1
 A: lit2 admin sync; lit2 get <id>/stage      → terminal; A and B fold equal
 ```

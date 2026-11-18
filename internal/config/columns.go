@@ -99,13 +99,15 @@ type ColumnGraph struct {
 }
 
 // Edge is how a move arrives: along a next the source lists, which the
-// source's exit list guards, or into a column no next names, which every
-// column reaches. Both carry the destination's entry list.
+// source's exit list guards; into a column no next names, which every
+// column reaches; or into the column it is in, giving its fields again,
+// which leaves nothing. Each carries the destination's entry list.
 type Edge uint8
 
 const (
 	Forward Edge = iota + 1
 	Universal
+	Stay
 )
 
 // Reach is the edge from the column recorded as from to the declared
@@ -114,6 +116,9 @@ const (
 // (columns-and-phases.md). A from the graph does not declare lists no next,
 // so the universal edges are its way out `[LAW:types-are-the-program]`.
 func (g ColumnGraph) Reach(from, to string) (Edge, bool) {
+	if from == to {
+		return Stay, true
+	}
 	if c, ok := g.byName[from]; ok && slices.Contains(c.Next(), to) {
 		return Forward, true
 	}

@@ -96,10 +96,10 @@ them:
 /columns/review      next:[merge]   guidance:"…"
 /columns/merge       next:[done]    entry:[pr/verdict=pass]    guidance:"…"
 /columns/done        terminal:true
-/columns/dup         terminal:true  entry:[of]
-/columns/superseded  terminal:true  entry:[of]
-/columns/obsolete    terminal:true  entry:[reason]
-/columns/wontfix     terminal:true  entry:[reason]
+/columns/dup         terminal:true  entry:[status/of]
+/columns/superseded  terminal:true  entry:[status/of]
+/columns/obsolete    terminal:true  entry:[status/reason]
+/columns/wontfix     terminal:true  entry:[status/reason]
 ```
 
 `entry` and `exit` are lists of requirements, the one shape
@@ -107,7 +107,7 @@ them:
 default declaration it holds. `in_progress` is `stage=active`; `closed` is
 `stage=terminal`; v1's `open` is the default profile's initial column, named
 `backlog`. The four names inside `in_progress` are columns, resolutions are
-terminal columns, and the entry requirement `of` on `dup` is what makes the
+terminal columns, and the entry requirement `status/of` on `dup` is what makes the
 canonical id mandatory. A lane listing prints the column, `dee  impl  this
 checkout`, because `in_progress` is not a value `status` can hold, and
 `review`'s forward edges are `[merge]`, for the reason in the rework section.
@@ -145,7 +145,7 @@ edges; they give stage and nothing else.
 without knowing what any column means. `exit` requirements are checked on every
 forward transition out of the column, never on the universal edges, so closing
 as `wontfix` from `plan` needs no plan verdict; `entry` requirements are checked
-on every arrival, which is how `dup` demands `of`
+on every arrival, which is how `dup` demands `status/of`
 ([transition-requirements.md](transition-requirements.md)). `guidance` is
 printed after the ticket when the ticket is in the column, and is derived from
 the handlers bound to that column ([workflows.md](workflows.md)). A handler's

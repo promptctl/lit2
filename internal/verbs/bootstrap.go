@@ -15,7 +15,9 @@ var Owner = events.MustName("owner")
 // contributor files work, moves any ticket, comments, and edits and
 // removes what it created, removing only a leaf of its items; editor writes and removes every path of every item. A
 // column condition the fold cannot judge from its own facts is no
-// capability's, so contributor's status moves are bound all.
+// capability's, so contributor's status moves are bound all, and a move
+// carries the fields its column's entry needs, so moving any ticket
+// covers closing it.
 func DefaultRoles() map[events.Name][]events.Capability {
 	contributor := capabilities("add */children", "add own/*", "set own/*", "set */status", "add */comments",
 		"rm own/*/*", "rm own/* (level=1)")

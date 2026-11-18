@@ -183,10 +183,12 @@ type register struct {
 	retired idSet    // every write some write named in Over
 }
 
-// candidate is one write of a field.
+// candidate is one write of a field, and for a status, the fields its
+// transition carries.
 type candidate struct {
-	stamp Stamp
-	value events.Value
+	stamp  Stamp
+	value  events.Value
+	fields []events.TransitionField
 }
 
 // set is one observed-remove set.
@@ -220,14 +222,14 @@ func (r addRec) made() Stamp { return r.stamp }
 
 func (r addRec) key() events.EventID { return r.stamp.Event }
 
-// write is f with field written, by the write st of v replacing over. Over
-// retires the writes it names in either form, so one write settles a
-// field whose kind changed.
-func (f Facts) write(st Stamp, field events.Name, v events.Value, over []events.EventID) Facts {
+// write is f with field written by c, replacing over. Over retires the
+// writes it names in either form, so one write settles a field whose kind
+// changed.
+func (f Facts) write(field events.Name, c candidate, over []events.EventID) Facts {
 	r := f.register(field)
 	r.retired = withIDs(r.retired, over)
-	if !hasID(r.retired, st.Event) {
-		r.live = r.live.set(candidate{stamp: st, value: v})
+	if !hasID(r.retired, c.stamp.Event) {
+		r.live = r.live.set(c)
 	}
 	next := f
 	next.fields = f.fields.set(r)
@@ -304,6 +306,17 @@ func (r register) liveWrites() []candidate { return liveOf(r.live, r.retired) }
 
 // settled is the register as a structural value, as Plain reads it.
 func (r register) settled() PlainField {
+	last, held := r.lastPlain()
+	if !held {
+		return Unset{}
+	}
+	settled := last.value.(events.Plain).Canonical
+	return Settled{Value: settled, By: last.stamp, Overruled: r.plain(settled)}
+}
+
+// lastPlain is the register's last live plain write in total order: the
+// write its settled value is, and false when it holds none.
+func (r register) lastPlain() (candidate, bool) {
 	var last candidate
 	held := false
 	for _, c := range r.liveWrites() {
@@ -311,11 +324,22 @@ func (r register) settled() PlainField {
 			last, held = c, true
 		}
 	}
-	if !held {
-		return Unset{}
+	return last, held
+}
+
+// TransitionField is field n of the move the status settles on: the
+// value that move carried, and false when it carried none, or nothing
+// has moved the item. It reads the write Plain(Status) settles on, so a
+// status and its fields always come from one move
+// `[LAW:one-source-of-truth]`.
+func (f Facts) TransitionField(n events.Name) (events.Value, bool) {
+	last, _ := f.register(Status).lastPlain()
+	for _, tf := range last.fields {
+		if tf.Field == n {
+			return tf.Value, true
+		}
 	}
-	settled := last.value.(events.Plain).Canonical
-	return Settled{Value: settled, By: last.stamp, Overruled: r.plain(settled)}
+	return nil, false
 }
 
 // Members is set's members with a live add, by name.

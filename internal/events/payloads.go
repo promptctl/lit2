@@ -225,11 +225,23 @@ type MemberRm struct {
 // Transition is transition: About is the item, which moves from column
 // From to column To. Over is the writes of its status the writer read, as
 // a field.set's Over is; From is the column the writer saw it in, kept as
-// history (§3.2).
+// history (§3.2). Fields is what the move says about its arrival, such as
+// the reason a ticket is closed: part of the one write the move is, so
+// whoever may move the item may give them, and the next move replaces
+// them.
 type Transition struct {
 	From    Name
 	To      Name
 	Over    []EventID
+	Fields  []TransitionField
+	unknown wire.Unknown
+}
+
+// TransitionField is one field a transition carries: its name, under the
+// item's status, and its value.
+type TransitionField struct {
+	Field   Name
+	Value   Value
 	unknown wire.Unknown
 }
 
@@ -433,23 +445,78 @@ func ReadMemberRm(r *wire.Reader) (Versioned, error) {
 	return p, nil
 }
 
-// transition = 1:from 2:to 3:over (an event id, repeated) · unknown….
+// transition = 1:from 2:to 3:over (an event id, repeated) 4:field
+// (repeated) · unknown…. A transition with no fields is the bytes it was
+// before transitions carried any.
 func (p Transition) AppendTo(w *wire.Writer) {
 	w.Bytes(1, nameWire(p.From))
 	w.Bytes(2, nameWire(p.To))
 	WriteIDs(w, 3, p.Over)
+	for _, f := range p.Fields {
+		w.Bytes(4, f.wire())
+	}
 	w.Keep(p.unknown)
 }
 
-// ReadTransition reads transition at version 1.
+// ReadTransition reads transition at version 1. A field named twice is
+// refused, since one move says one thing about each.
 func ReadTransition(r *wire.Reader) (Versioned, error) {
 	var p Transition
-	err := readNamed(r, map[uint32]named{1: {&p.From, "from"}, 2: {&p.To, "to"}}, map[uint32]*[]EventID{3: &p.Over}, nil)
+	err := readNamed(r, map[uint32]named{1: {&p.From, "from"}, 2: {&p.To, "to"}}, map[uint32]*[]EventID{3: &p.Over},
+		func(tag uint32, r *wire.Reader) error {
+			if tag != 4 {
+				return nil
+			}
+			f, err := readTransitionField(r.Bytes())
+			if err != nil {
+				return err
+			}
+			if slices.ContainsFunc(p.Fields, func(g TransitionField) bool { return g.Field == f.Field }) {
+				return fmt.Errorf("it gives its field %s twice", f.Field)
+			}
+			p.Fields = append(p.Fields, f)
+			return nil
+		})
 	p.unknown = r.Rest()
 	if err != nil {
 		return nil, fmt.Errorf("a transition: %w", err)
 	}
 	return p, nil
+}
+
+// transition field = 1:field 2:value · unknown….
+func (f TransitionField) wire() []byte {
+	var w wire.Writer
+	w.Bytes(1, nameWire(f.Field))
+	w.Bytes(2, f.Value.wire())
+	w.Keep(f.unknown)
+	return w.Encoded()
+}
+
+// readTransitionField reads one field a transition carries: a name and
+// exactly one value.
+func readTransitionField(b []byte) (TransitionField, error) {
+	var f TransitionField
+	r := wire.NewReader(b)
+	err := readNamed(r, map[uint32]named{1: {&f.Field, "field"}}, nil, func(tag uint32, r *wire.Reader) error {
+		if tag != 2 {
+			return nil
+		}
+		if f.Value != nil {
+			return errors.New("it gives its value twice")
+		}
+		var err error
+		f.Value, err = readValue(r.Bytes())
+		return err
+	})
+	f.unknown = r.Rest()
+	if err == nil && f.Value == nil {
+		err = errors.New("it has no value")
+	}
+	if err != nil {
+		return TransitionField{}, fmt.Errorf("a field: %w", err)
+	}
+	return f, nil
 }
 
 // named is one name field of a payload: where it is read into, and what

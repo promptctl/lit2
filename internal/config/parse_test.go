@@ -120,11 +120,11 @@ func TestDefaultProfileParsesToTheDocumentedModel(t *testing.T) {
 	if merge, _ := g.Resolve("merge"); merge.Entry()[0].Test.Atom.String() != "pr/verdict=pass" {
 		t.Errorf("merge's entry = %s", merge.Entry()[0].Test.Atom)
 	}
-	if dup, _ := g.Resolve("dup"); dup.Entry()[0].Test.Atom.String() != "of" {
-		t.Errorf("dup's entry = %s, want of", dup.Entry()[0].Test.Atom)
+	if dup, _ := g.Resolve("dup"); dup.Entry()[0].Test.Atom.String() != "status/of" {
+		t.Errorf("dup's entry = %s, want status/of", dup.Entry()[0].Test.Atom)
 	}
-	if obs, _ := g.Resolve("obsolete"); obs.Entry()[0].Test.Atom.String() != "reason" {
-		t.Errorf("obsolete's entry = %s, want reason", obs.Entry()[0].Test.Atom)
+	if obs, _ := g.Resolve("obsolete"); obs.Entry()[0].Test.Atom.String() != "status/reason" {
+		t.Errorf("obsolete's entry = %s, want status/reason", obs.Entry()[0].Test.Atom)
 	}
 	if links := sc.Links(); links["blocks"].Kind != Dependency || len(links["blocks"].Between) != 3 {
 		t.Errorf("blocks = %+v", links["blocks"])
@@ -178,6 +178,10 @@ func TestRefusalsNameTheirReasonAndKey(t *testing.T) {
 		{"duplicate-home", replace("[columns.backlog]", "[levels.3]\nname = \"epic\"\nhome = \"unfiled\"\n\n[columns.backlog]"), ReasonDuplicateHome},
 		{"home-collides", replace(`home = "unfiled"`, `home = "story"`), ReasonHomeCollides},
 		{"bad-field-name", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.Bad]\nkind = \"text\""), ReasonBadFieldName},
+		{"transition-field-on-a-node", replace(`home = "unfiled"`, "home = \"unfiled\"\n[levels.2.fields.\"status/why\"]\nkind = \"text\""), ReasonBadFieldName},
+		{"transition-field-named-column", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.\"status/column\"]\nkind = \"text\""), ReasonBadFieldName},
+		{"transition-field-two-deep", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.\"status/a/b\"]\nkind = \"text\""), ReasonBadFieldName},
+		{"transition-field-many", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.\"status/why\"]\nkind = \"enum\"\nvalues = [\"a\"]\nmany = true"), ReasonKindParameter},
 		{"unknown-kind", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"color\""), ReasonUnknownKind},
 		{"kind-parameter", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.pts]\nkind = \"text\"\nvalues = [\"a\"]"), ReasonKindParameter},
 		{"builtin-redeclared", replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.description]\nkind = \"text\""), ReasonBuiltinRedeclared},
@@ -476,6 +480,24 @@ func TestTheSameNameOnTwoLevelsIsTwoFields(t *testing.T) {
 	refusals := refusalsOf(t, replace("points=3", "points=2")(held))
 	if len(refusals) != 1 || refusals[0].Reason != ReasonAtomValue {
 		t.Errorf("points=2 fits level 1's number and not level 2's enum: refusals = %v, want atom-value", refusals)
+	}
+}
+
+// TestALeafFieldBelowStatusIsOneAMoveCarries: a field declared below
+// status is a transition field, and a column's entry may test it.
+func TestALeafFieldBelowStatusIsOneAMoveCarries(t *testing.T) {
+	text := replace(`name = "story"`, "name = \"story\"\n[levels.1.fields.\"status/resolution\"]\nkind = \"enum\"\nvalues = [\"declined\"]")(minimal)
+	text = replace("[columns.done]\nterminal = true", "[columns.done]\nterminal = true\nentry = [{ test = \"status/resolution=declined\", severity = \"error\" }]")(text)
+	s, err := parseText(t, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.Table().Find(field.Leaf{}, "status/resolution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := r.(FieldRow).Decl; d.Writability != field.OnTransition || d.Multi != field.One {
+		t.Errorf("status/resolution = %+v, want one value a move carries", d)
 	}
 }
 

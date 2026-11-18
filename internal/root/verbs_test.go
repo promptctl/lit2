@@ -222,7 +222,7 @@ func TestACommandWritesEachTargetOnce(t *testing.T) {
 	s.refused("twice", "set", id+"/title", "b", id+"/title", "c")
 	s.refused("twice", "add", id+"/labels", "[ready, ready]")
 	s.refused("twice", "add", id+"/labels", "ready", id+"/labels", "[external, ready]")
-	r := s.piped("x\n", "set", id+"/description", "-", id+"/reason", "-")
+	r := s.piped("x\n", "set", id+"/description", "-", id+"/title", "-")
 	if r.status != 1 || reasonOf(r.event) != "twice" {
 		t.Errorf("two reads of stdin: status %d, stderr %q", r.status, r.err)
 	}
@@ -419,7 +419,7 @@ func TestTheBoardIsTheTreeTheLanesAndNext(t *testing.T) {
 	if got := s.ok("get", "/"); got != want {
 		t.Errorf("get / prints\n%s\nwant\n%s", got, want)
 	}
-	s.ok("set", first+"/status", "obsolete", first+"/reason", "superseded by the board")
+	s.ok("set", first+"/status", `{column: obsolete, reason: "superseded by the board"}`)
 	want = "/next\t" + second + " · backlog · lanes\n/next\tlanes considered: 2\n"
 	if got := s.ok("get", "/next"); got != want {
 		t.Errorf("once the first is closed get /next prints\n%s\nwant\n%s", got, want)

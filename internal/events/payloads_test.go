@@ -52,7 +52,18 @@ func TestTheFirstFactsReadBackAsMinted(t *testing.T) {
 		{Act{About: Item{ID: id}, Payload: Transition{From: MustName("backlog"), To: MustName("plan"), Over: over}},
 			func(p Payload) bool {
 				m := p.(Transition)
-				return m.From == MustName("backlog") && m.To == MustName("plan") && slices.Equal(m.Over, over)
+				return m.From == MustName("backlog") && m.To == MustName("plan") && slices.Equal(m.Over, over) && len(m.Fields) == 0
+			}},
+		{Act{About: Item{ID: id}, Payload: Transition{From: MustName("plan"), To: MustName("dup"), Fields: []TransitionField{
+			{Field: MustName("of"), Value: Plain{Canonical: "lit-abc"}},
+			{Field: MustName("reason"), Value: Prose{Body: text("same work")}},
+		}}},
+			func(p Payload) bool {
+				f := p.(Transition).Fields
+				of, plain := f[0].Value.(Plain)
+				why, prose := f[1].Value.(Prose)
+				return len(f) == 2 && f[0].Field == MustName("of") && plain && of.Canonical == "lit-abc" &&
+					f[1].Field == MustName("reason") && prose && why.Body.Commitment() == text("same work").Commitment()
 			}},
 		{Act{About: Item{ID: id}, Payload: FieldSet{Field: MustName("title"), Value: Prose{Body: text("a title")}, Over: over}},
 			func(p Payload) bool {
@@ -158,6 +169,14 @@ func TestNestedMessagesKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 	if back := PlacementWire(p); !bytes.Equal(back, placement) {
 		t.Errorf("a placement writes back %x; want %x", back, placement)
 	}
+	carried := append(TransitionField{Field: MustName("reason"), Value: Plain{Canonical: "x"}}.wire(), future...)
+	f, err := readTransitionField(carried)
+	if err != nil {
+		t.Fatalf("a transition's field with a newer field: %v", err)
+	}
+	if back := f.wire(); !bytes.Equal(back, carried) {
+		t.Errorf("a transition's field writes back %x; want %x", back, carried)
+	}
 	for _, stored := range [][]byte{
 		append(Plain{Canonical: "high"}.wire(), future...),
 		append(Prose{Body: text("a title")}.wire(), future...),
@@ -254,6 +273,17 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		w.Bytes(1, b)
 		return w.Encoded()
 	}
+	// a move says one thing about each field it carries, and says it
+	reason := TransitionField{Field: MustName("reason"), Value: Plain{Canonical: "x"}}.wire()
+	var twiceCarried, noCarriedValue, carriedNoValue wire.Writer
+	for _, w := range []*wire.Writer{&twiceCarried, &noCarriedValue} {
+		w.Bytes(1, []byte("plan"))
+		w.Bytes(2, []byte("obsolete"))
+	}
+	twiceCarried.Bytes(4, reason)
+	twiceCarried.Bytes(4, reason)
+	carriedNoValue.Bytes(1, []byte("reason"))
+	noCarriedValue.Bytes(4, carriedNoValue.Encoded())
 	// an apply's blob is git's id for the bytes it carries, or it is refused
 	var otherBlob, noBlob, noVersion wire.Writer
 	otherBlob.Bytes(1, aVersion)
@@ -281,6 +311,8 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded())},
 		{"a member.add of no member", ReadMemberAdd, place([]byte("labels"))},
 		{"a transition with two tos", ReadTransition, twoTos.Encoded()},
+		{"a transition carrying one field twice", ReadTransition, twiceCarried.Encoded()},
+		{"a transition carrying a field with no value", ReadTransition, noCarriedValue.Encoded()},
 		{"a field.set with two fields", ReadFieldSet, twoFields.Encoded()},
 		{"a comment.add with no body", ReadCommentAdd, nil},
 		{"a workspace.apply whose blob names other bytes", ReadWorkspaceApply, otherBlob.Encoded()},

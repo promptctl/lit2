@@ -152,7 +152,7 @@ Variability is in the path and the value, never in which verb exists for the cas
 set dee/status plan                     start
 set dee/status impl                     phase --to impl
 set dee/status done                     done
-set dee/status dup dee/of 4ou           close --resolution duplicate --of
+set dee/status '{column:dup of:4ou}'    close --resolution duplicate --of
 set dee/status backlog                  open
 set dee/deleted false                   restore
 add /lanes/datetime/claim               start --take
@@ -213,10 +213,10 @@ in force once `lit config commit` applies it:
 /columns/review      next:[merge]
 /columns/merge       next:[done]      entry:[pr/verdict=pass]
 /columns/done        terminal:true
-/columns/dup         terminal:true    entry:[of]
-/columns/superseded  terminal:true    entry:[of]
-/columns/obsolete    terminal:true    entry:[reason]
-/columns/wontfix     terminal:true    entry:[reason]
+/columns/dup         terminal:true    entry:[status/of]
+/columns/superseded  terminal:true    entry:[status/of]
+/columns/obsolete    terminal:true    entry:[status/reason]
+/columns/wontfix     terminal:true    entry:[status/reason]
 ```
 
 "Start" and "done" are not columns. They are edges: start is any transition out of
@@ -253,7 +253,7 @@ What follows from `set x/status <s>`, validated against the resolved column grap
 - **guidance** is a handler bound `in <column>`. `get dee` prints the ticket and then
   the handler's text, after the data. `[LAW:one-source-of-truth]`: it cannot describe
   a column that does not exist, because it is bound to the column.
-- **resolutions** are the terminal columns. `entry:[of]` on `dup` is what makes the
+- **resolutions** are the terminal columns. `entry:[status/of]` on `dup` is what makes the
   canonical id mandatory; there is no `--of` flag to forget.
 
 ### Hierarchy: nearest ancestor wins
@@ -433,7 +433,7 @@ sub-sub-commands. This design has four verbs, one path grammar, selectors, globs
 | `doctor`, `doctor --fix` | `get /integrity`; each advisory names the write that clears it |
 | `workflows edit` | `set /columns/…` edits `.lit/workspace.toml`; `lit config commit` applies it |
 | `delete`, `restore` | `rm x`, a reversible tombstone; `set x/deleted false` |
-| `archive` | a terminal column: `set x/status obsolete x/reason "…"` |
+| `archive` | a terminal column: `set x/status '{column:obsolete reason:"…"}'` |
 | `purge` | `rm x --purge` |
 | `update --lane` | lane membership; `x/lane` is derived |
 | `init`, `init --prefix` | `lit admin init`; the prefix is a line in `.lit/workspace.toml` |

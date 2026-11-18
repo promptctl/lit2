@@ -2,6 +2,7 @@ package field
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/promptctl/lit2/internal/events"
 )
@@ -10,6 +11,12 @@ import (
 // `plan/verdict`. It is the name a test's atom reads and a template's key
 // names.
 type Path string
+
+// Under is the field named name below p, as status/reason is below status.
+func (p Path) Under(name string) Path { return p + "/" + Path(name) }
+
+// Last is p's last step: reason, of status/reason.
+func (p Path) Last() string { return string(p[strings.LastIndexByte(string(p), '/')+1:]) }
 
 // Origin is who declared a field: the binary, or the workspace file.
 type Origin uint8
@@ -23,13 +30,17 @@ const (
 // independent of Origin: a built-in field can be settable, and a declared
 // one derived `[LAW:types-are-the-program]`. A governed field is written
 // through the policy, as a proposal of its next version, and is never a
-// fact of a node.
+// fact of a node. A transition field, under status, is what a move says
+// about its arrival, such as why a ticket closed: it is written only as
+// part of the status's value, so it is the move's, and whoever may move
+// the item may give it.
 type Writability uint8
 
 const (
 	Settable Writability = iota + 1
 	Derived
 	Governed
+	OnTransition
 )
 
 // Multiplicity is how a field holds its values: one value; a set of
@@ -186,10 +197,28 @@ func (o OnLevel) Holds(p Place) bool {
 	panic(fmt.Sprintf("field: %T is not a Place", p))
 }
 
+// Unwritable is why no write of a field's own may name it: the reason a
+// refusal records and help prints, and the line that says how it is
+// written instead.
+type Unwritable interface {
+	error
+	Reason() string
+}
+
 // DerivedField is a write of a field the engine computes.
 type DerivedField struct{}
 
-func (DerivedField) Error() string { return "it is derived: the engine computes it" }
+func (DerivedField) Error() string  { return "it is derived: the engine computes it" }
+func (DerivedField) Reason() string { return "derived" }
+
+// TransitionWritten is a write of a transition field on its own, which
+// only a move writes.
+type TransitionWritten struct{}
+
+func (TransitionWritten) Error() string {
+	return "a move writes it: give it in the status's value, as x/status '{column: <column>, <field>: <value>}'"
+}
+func (TransitionWritten) Reason() string { return "on_transition" }
 
 // NotKeyable is a template default or a child object's key naming a field
 // that holds neither one value nor a set.
@@ -202,9 +231,13 @@ func (n NotKeyable) Error() string {
 // Writable is whether a person may write d: the one rule a write, a
 // template default and help all ask `[LAW:single-enforcer]`. Where d
 // exists is the table's to say.
-func Writable(d FieldDecl) error {
-	if d.Writability == Derived {
+func Writable(d FieldDecl) Unwritable {
+	switch d.Writability {
+	case Derived:
 		return DerivedField{}
+	case OnTransition:
+		return TransitionWritten{}
+	case Settable, Governed:
 	}
 	return nil
 }
@@ -232,11 +265,18 @@ var (
 )
 
 // The built-in fields the verbs name: the title every new item carries,
-// and the flag rm sets on any node it removes.
+// the flag rm sets on any node it removes, and the status a move writes,
+// below which its transition fields are named.
 const (
 	Title   Path = "title"
 	Deleted Path = "deleted"
+	Status  Path = "status"
 )
+
+// MoveColumn is the key of a status's object value that names the column
+// the move enters, beside the fields it carries: {column: obsolete,
+// reason: "…"}.
+const MoveColumn = "column"
 
 // Builtins is the built-in field table. Its one input is the workspace's
 // declared labels as an enum, so `labels` reads the declared value set and
@@ -254,20 +294,24 @@ func Builtins(labels Enum) map[Path]FieldDecl {
 	governed := func(k Kind, m Multiplicity, at Places) FieldDecl {
 		return FieldDecl{Kind: k, Multi: m, Origin: Builtin, Writability: Governed, At: at}
 	}
+	// a move carries one value of each, and only a leaf has a status
+	onTransition := func(k Kind) FieldDecl {
+		return FieldDecl{Kind: k, Multi: One, Origin: Builtin, Writability: OnTransition, At: leaves}
+	}
 	return map[Path]FieldDecl{
 		Title:              stored(Text{}, One, items),
 		"description":      stored(Text{}, One, items),
-		"reason":           stored(Text{}, One, items),
 		"labels":           stored(labels, Set, items),
 		Deleted:            stored(deleted, One, removable),
-		"status":           stored(Column{}, One, leaves),
+		Status:             stored(Column{}, One, leaves),
+		"status/reason":    onTransition(Text{}),
+		"status/of":        onTransition(ItemRef{}),
 		"comments":         stored(Text{}, Elements, items),
 		"body":             stored(Text{}, One, comments),
 		"children":         stored(ItemRef{}, Children, containers),
 		"by":               derived(Text{}, One, comments),
 		"level":            derived(Level{}, One, items),
 		"parent":           derived(ItemRef{}, One, items),
-		"of":               derived(Text{}, Set, items),
 		"blockers":         derived(Text{}, Set, items),
 		"stage":            derived(stage, One, items),
 		"rollup":           derived(Text{}, One, nodes),

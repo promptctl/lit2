@@ -157,8 +157,8 @@ func TestHelpsFieldsAreTheTablesRows(t *testing.T) {
 	for _, p := range table.Places() {
 		for _, r := range table.Rows(p) {
 			writers := strings.Join(verbs.VerbsOf(r), ", ")
-			if writers == "" {
-				writers = "derived"
+			if no := verbs.Unwritten(r); no != nil {
+				writers = no.Reason()
 			}
 			want[config.PlaceName(p)+"|"+string(r.Path())+"|"+kindOf(r)+"|"+writers] = true
 		}

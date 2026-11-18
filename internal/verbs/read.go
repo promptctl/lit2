@@ -90,6 +90,14 @@ func (w World) held(n address.Node) (Existing, config.Ancestry, fold.Facts) {
 // prints `[LAW:one-source-of-truth]`; a status both read through
 // evaluate.StatusIn, get marking a name the graph no longer declares.
 func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path field.Path, d field.FieldDecl) ([]string, error) {
+	if d.Writability == field.OnTransition {
+		// the field of the move the status settles on, as the status is
+		v, ok := facts.TransitionField(events.MustName(path.Last()))
+		if !ok {
+			return nil, nil
+		}
+		return []string{valueText(v)}, nil
+	}
 	n := events.MustName(string(path))
 	switch d.Multi {
 	case field.Set:
@@ -119,6 +127,18 @@ func stored(schema config.Schema, facts fold.Facts, in config.Ancestry, path fie
 		return []string{f.Value}, nil
 	}
 	panic(fmt.Sprintf("verbs: %T is not a PlainField", facts.Plain(n)))
+}
+
+// valueText is one value as its text: prose opened, a plain value's
+// canonical text.
+func valueText(v events.Value) string {
+	switch v := v.(type) {
+	case events.Prose:
+		return open(v.Body)
+	case events.Plain:
+		return v.Canonical
+	}
+	panic(fmt.Sprintf("verbs: %T is not a Value", v))
 }
 
 // texts is a prose field's live texts, opened.
@@ -339,7 +359,7 @@ func why(y evaluate.Why) string {
 }
 
 // derivations is every derived built-in's reading. A link or a review is
-// not folded at this slice, so of and blockers are truthfully empty and
+// not folded at this slice, so blockers is truthfully empty and
 // the verdicts truthfully unset; a test holds every Derived row to having
 // one here. Stage, rollup and next are evaluate's, read through the view,
 // and lanes the fold's; a graph the configuration refuses is their
@@ -356,7 +376,6 @@ var derivations = map[field.Path]func(World, address.Node) ([]string, error){
 		return nil
 	}),
 	"parent":       ofItem(func(w World, it fold.Item) []string { return []string{w.container(w.State().Container(it.ID))} }),
-	"of":           ofItem(func(World, fold.Item) []string { return nil }),
 	"blockers":     ofItem(func(World, fold.Item) []string { return nil }),
 	"pr/verdict":   ofItem(func(World, fold.Item) []string { return nil }),
 	"plan/verdict": ofItem(func(World, fold.Item) []string { return nil }),
