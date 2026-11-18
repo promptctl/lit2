@@ -50,9 +50,9 @@ func TestOneOwnerOfThreeCannotStripTheOtherTwoAtOnce(t *testing.T) {
 
 func TestAProposalOfAVersionNotInForceIsCarried(t *testing.T) {
 	w := soloWorld(t)
-	ahead := events.Propose{Base: 3, Members: map[events.PrincipalID]events.Name{keyA.Principal(): owner, keyB.Principal(): owner}, Threshold: events.Majority{}}
+	ahead := events.Propose{Base: events.Digest{3}, Members: map[events.PrincipalID]events.Name{keyA.Principal(): owner, keyB.Principal(): owner}, Threshold: events.Majority{}}
 	e := w.mint(a, w.base, root(ahead))[0]
-	wantCarried(t, w.state(), e, fold.Inadmissible{Why: "it changes version 3; version 2 is in force"})
+	wantCarried(t, w.state(), e, fold.Inadmissible{Why: "it changes a policy other than version 2, the one in force"})
 	if ps := w.state().Proposals(); len(ps) != 0 {
 		t.Errorf("a proposal of a version not in force is pending: %#v", ps)
 	}

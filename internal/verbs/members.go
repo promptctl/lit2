@@ -108,7 +108,7 @@ func policyRow(w World, _ address.Node) ([]string, error) {
 func proposalsRow(w World, _ address.Node) ([]string, error) {
 	var out []string
 	for _, pr := range w.State().Proposals() {
-		out = append(out, fmt.Sprintf("%s · %s · %s", shortDigest(pr.Digest), writes(w, fold.Diff(w.inForce(), pr.Next)), lacks(pr)))
+		out = append(out, fmt.Sprintf("%s · %s · %s", shortDigest(pr.Digest), writes(w, fold.Diff(pr.Base, pr.Next)), lacks(pr)))
 	}
 	return out, nil
 }
@@ -146,24 +146,17 @@ func writes(w World, ws []fold.PathWrite) string {
 // approvals its requirement still needs.
 func lacks(pr fold.Proposal) string {
 	if pr.Stale {
-		return fmt.Sprintf("stale: version %d is no longer in force", pr.Base)
+		return fmt.Sprintf("stale: version %d is no longer in force", pr.Base.Version())
 	}
 	switch need := pr.Need.(type) {
 	case fold.OwnerQuorum:
-		var missing []string
-		for _, in := range need.Incoming {
-			if !slices.Contains(pr.Approvals, in) {
-				missing = append(missing, in.String())
-			}
-		}
-		have := 0
-		for _, e := range need.Eligible {
-			if slices.Contains(pr.Approvals, e) {
-				have++
-			}
-		}
+		have, incoming := need.Tally(pr.Approvals)
 		text := fmt.Sprintf("waits on %d of the owners, has %d", need.Need, have)
-		if len(missing) > 0 {
+		if len(incoming) > 0 {
+			missing := make([]string, len(incoming))
+			for i, in := range incoming {
+				missing[i] = in.String()
+			}
 			text += ", and on each incoming owner: " + strings.Join(missing, ", ")
 		}
 		return text
@@ -309,7 +302,7 @@ func approve(w World, wr write) ([]piece, []Change, []claim, *refusal) {
 		return nil, nil, nil, refuse("value", "%s: %v", wr.path, err)
 	}
 	pr := proposals[slices.Index(ds, d)]
-	return []piece{fact{events.Approve{Proposal: d}}}, []Change{Approved{Digest: d, Base: pr.Base}},
+	return []piece{fact{events.Approve{Proposal: d}}}, []Change{Approved{Digest: d, Base: pr.Base.Version()}},
 		[]claim{{who: events.Root{}, path: approvalsPath, member: d.String()}}, nil
 }
 

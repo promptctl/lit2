@@ -105,7 +105,7 @@ func capabilities(texts ...string) []events.Capability {
 func newWorld(t testing.TB) *world {
 	wd := unfounded(t)
 	wd.mint(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))
-	both := events.Propose{Base: 1, Members: map[events.PrincipalID]events.Name{keyA.Principal(): owner, keyB.Principal(): owner}, Threshold: events.Majority{}}
+	both := events.Propose{Base: wd.state().Policy().(fold.Enrolled).Policy.Digest(), Members: map[events.PrincipalID]events.Name{keyA.Principal(): owner, keyB.Principal(): owner}, Threshold: events.Majority{}}
 	wd.mint(founder, wd.state(), root(both), root(events.Approve{Proposal: both.Digest()}))
 	wd.mint(founderB, wd.state(), root(events.Approve{Proposal: both.Digest()}))
 	wd.base = wd.state()

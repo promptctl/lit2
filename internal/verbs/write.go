@@ -465,7 +465,11 @@ func (x *expanded) rm(w World) *refusal {
 		x.writes = []write{{subject: existing(w, x.addr), path: field.Deleted, decl: r.(config.FieldRow).Decl, value: field.Scalar{Text: "true"}, source: FromOperand{}, shape: setOne}}
 		return nil
 	case address.Member:
-		x.writes = []write{{subject: existing(w, x.addr), path: t.Path, decl: t.Decl, value: field.Scalar{Text: t.Name.String()}, source: FromOperand{}, shape: rmMember}}
+		sh, ok := shapeOf(Rm, t.Decl)
+		if !ok {
+			return refuse("not_removable", "%s is the policy's: a member of it stands until a proposal changes it", t.Path)
+		}
+		x.writes = []write{{subject: existing(w, x.addr), path: t.Path, decl: t.Decl, value: field.Scalar{Text: t.Name.String()}, source: FromOperand{}, shape: sh}}
 		return nil
 	case address.Field:
 		return refuse("not_removable", "rm removes an item, a comment or a member, and %s is a field", x.addr)
@@ -511,6 +515,8 @@ func shapeOf(verb Verb, d field.FieldDecl) (shape, bool) {
 		return setMembers, true
 	case verb == Add && d.Multi == field.Set:
 		return addMember, true
+	case verb == Rm && d.Multi == field.Set:
+		return rmMember, true
 	case verb == Add && d.Multi == field.Elements:
 		return addComment, true
 	case verb == Add && d.Multi == field.Children:
@@ -534,8 +540,7 @@ func VerbsOf(r config.Row) []string {
 	}
 	switch f.Decl.Multi {
 	case field.Set:
-		// a governed set's members are the policy's: an approval stands
-		if f.Decl.Writability != field.Governed {
+		if _, ok := shapeOf(Rm, f.Decl); ok {
 			out = append(out, "rm "+string(f.At)+"/<member>")
 		}
 	case field.Elements:

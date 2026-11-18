@@ -121,15 +121,15 @@ func TestThePolicyPayloadsReadBackAsWritten(t *testing.T) {
 		t.Errorf("the enrollment's policy is %+v, want version 1 with %s its one owner", p, a)
 	}
 
-	prop := Propose{Base: 3, Members: map[PrincipalID]Name{b: contributor, a: owner}, Threshold: Fixed{N: 1}}
+	prop := Propose{Base: Digest{3}, Members: map[PrincipalID]Name{b: contributor, a: owner}, Threshold: Fixed{N: 1}}
 	back := readBack(t, prop, ReadPropose)
-	if back.Base != 3 || back.Members[b] != contributor || back.Threshold != (Fixed{N: 1}) {
+	if back.Base != (Digest{3}) || back.Members[b] != contributor || back.Threshold != (Fixed{N: 1}) {
 		t.Errorf("the proposal reads back as %+v", back)
 	}
 	if back.Digest() != prop.Digest() {
 		t.Error("a proposal's digest changes across its wire")
 	}
-	if (Propose{Base: 4, Members: prop.Members, Threshold: prop.Threshold}).Digest() == prop.Digest() {
+	if (Propose{Base: Digest{4}, Members: prop.Members, Threshold: prop.Threshold}).Digest() == prop.Digest() {
 		t.Error("two proposals over different bases share a digest")
 	}
 
@@ -148,8 +148,8 @@ func TestAnEnrollmentListingTheOwnerRoleIsRefused(t *testing.T) {
 }
 
 func TestAnApprovalNamesItsProposalByAUniquePrefix(t *testing.T) {
-	one := Propose{Base: 1, Members: map[PrincipalID]Name{}, Threshold: Majority{}}.Digest()
-	two := Propose{Base: 2, Members: map[PrincipalID]Name{}, Threshold: Majority{}}.Digest()
+	one := Propose{Base: Digest{1}, Members: map[PrincipalID]Name{}, Threshold: Majority{}}.Digest()
+	two := Propose{Base: Digest{2}, Members: map[PrincipalID]Name{}, Threshold: Majority{}}.Digest()
 	if d, err := ParseDigestPrefix(one.String()[:12], []Digest{one, two}); err != nil || d != one {
 		t.Errorf("%s, %v, want %s", d, err, one)
 	}

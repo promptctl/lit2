@@ -68,8 +68,8 @@ func TestAFoundingEnrollmentThisReleaseCannotReadStillFoundsTheStore(t *testing.
 	second := w.mint(b, w.state(), root(events.Enroll{Owner: owner, Roles: roles}))[0]
 	s := w.state()
 	wantCarried(t, s, second, fold.EnrollmentYielded{To: first.ID()})
-	if _, ok := s.Policy().(fold.Unenrolled); !ok {
-		t.Errorf("a later enrollment founded the store over one this release cannot read: %#v", s.Policy())
+	if got, ok := s.Policy().(fold.FoundedUnread); !ok || got.Enrollment != first.ID() {
+		t.Errorf("the policy is %#v; want the store founded by the enrollment this release cannot read", s.Policy())
 	}
 }
 

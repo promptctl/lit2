@@ -44,10 +44,11 @@ func FirstFacts() []Kind {
 			}
 			return Changes{List: []Change{Write{At: f.At.(Node), Field: f.Payload.Field, Value: f.Payload.Value, Over: f.Payload.Over}}}
 		}, func(f Fact[events.FieldSet]) Intent {
-			// rm x is the write of its deleted flag, so the flag set is
-			// judged as the rm it compiled from
+			// rm x is the write of its deleted flag, so any write of the
+			// flag is judged as the rm it is: restoring a node is removing
+			// it undone, which only who may remove it may do
 			at := subjectOf(f.At.(Node))
-			if p, ok := f.Payload.Value.(events.Plain); ok && f.Payload.Field == Deleted && p.Canonical == "true" {
+			if f.Payload.Field == Deleted {
 				return PathWrite{Verb: events.Rm, At: at}
 			}
 			return PathWrite{Verb: events.Set, At: at, Field: []string{f.Payload.Field.String()}}

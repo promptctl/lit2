@@ -31,7 +31,7 @@ func soloWorld(t *testing.T) *world {
 
 // propose is a proposal over the version in force at s.
 func propose(s fold.State, members map[events.PrincipalID]events.Name, th events.Threshold) events.Propose {
-	return events.Propose{Base: s.Cites(), Members: members, Threshold: th}
+	return events.Propose{Base: s.Policy().(fold.Enrolled).Policy.Digest(), Members: members, Threshold: th}
 }
 
 func version(t *testing.T, s fold.State) events.PolicyVersion {

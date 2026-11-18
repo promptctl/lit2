@@ -224,23 +224,28 @@ func (r body) init() cli.Outcome {
 	}
 	me := minted.Key.Principal()
 	var drafts []events.Draft
-	said, member := "", true
+	// an owner applies version one: set /workspace is the owner role's
+	said, owns := "", false
 	switch s := verbs.Bootstrap(o.folded.State, me).(type) {
 	case verbs.Found:
 		r.rec.Policy.Bootstrap = "enroll"
-		drafts, said = append(drafts, events.Act{About: events.Root{}, Payload: s.Enroll}), fmt.Sprintf("enrolled: policy v1, owner %s\n", me)
+		drafts, said, owns = append(drafts, events.Act{About: events.Root{}, Payload: s.Enroll}), fmt.Sprintf("enrolled: policy v1, owner %s\n", me), true
 	case verbs.Listed:
 		r.rec.Policy.Bootstrap = "already_member"
+		owns = s.Role == verbs.Owner
 	case verbs.Ask:
 		r.rec.Policy.Bootstrap = "request"
-		drafts, member = append(drafts, events.Act{About: events.Root{}, Payload: events.Request{}}), false
+		drafts = append(drafts, events.Act{About: events.Root{}, Payload: events.Request{}})
 		said = fmt.Sprintf("membership requested: an owner admits you with lit2 add /members '{principal: %q, role: contributor}'\n", me.String())
+	case verbs.FoundedUnread:
+		r.rec.Policy.Bootstrap = "founded_unread"
+		return cli.Failed{Failure: foundedUnread(s)}
 	case verbs.Asked:
 		r.rec.Policy.Bootstrap = "already_requested"
 		return written(fmt.Fprintf(r.p.Out, "membership requested: no owner has admitted %s yet\n", me))
 	}
 	// the version the frame is written under: the one in force; with none,
-	// the work tree's, which a member applies as version one in the same
+	// the work tree's, which an owner applies as version one in the same
 	// frame, and for a requester, which applies nothing and so writes no
 	// file, the default profile's
 	_, inForce := o.folded.State.Workspace().(fold.InForce)
@@ -254,7 +259,7 @@ func (r body) init() cli.Outcome {
 			return failed(err)
 		}
 		ref = v.ref
-	case member:
+	case owns:
 		b, err := versionOne(r.p.WorkTree(in.Checkout))
 		if err != nil {
 			return cli.Failed{Failure: workspaceFailure{err: err}}
@@ -265,6 +270,8 @@ func (r body) init() cli.Outcome {
 			return failed(err)
 		}
 		drafts, said = append(drafts, act), said+fmt.Sprintf("workspace %s applied as version one\n", ref)
+	case len(drafts) == 0:
+		return written(io.WriteString(r.p.Out, "no workspace version is in force: an owner applies one with lit2 config commit\n"))
 	default:
 		ref = git.HashBlob(so.Format, assets.DefaultWorkspace.Bytes())
 	}

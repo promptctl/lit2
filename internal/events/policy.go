@@ -422,7 +422,18 @@ func (p Policy) Next(members map[PrincipalID]Name, t Threshold) (Policy, error) 
 // Proposal is what a proposal over p would carry for next, p's members
 // and threshold replaced.
 func (p Policy) Proposal(next Policy) Propose {
-	return Propose{Base: p.version, Members: maps.Clone(next.members), Threshold: next.threshold}
+	return Propose{Base: p.Digest(), Members: maps.Clone(next.members), Threshold: next.threshold}
+}
+
+// Digest is the policy's SHA-256 over its version, its members in
+// principal order and its threshold: what a proposal names as its base, so
+// two versions of one number that differ, each activated on a replica
+// before they met, never stand for each other.
+func (p Policy) Digest() Digest {
+	var w wire.Writer
+	w.Uvarint(1, uint64(p.version))
+	writeChange(&w, p.members, p.threshold)
+	return sha256.Sum256(append([]byte("lit2 policy v1\x00"), w.Encoded()...))
 }
 
 // MemberMap is the members as a map, a copy, for a proposal to change.
@@ -457,19 +468,20 @@ func (p Enroll) Policy(founder PrincipalID) Policy {
 	return pol
 }
 
-// Propose is policy.propose: the policy after Base with its members and
-// threshold replaced. The roles stay the enrollment's, so no proposal can
-// edit a role.
+// Propose is policy.propose: the policy whose digest is Base with its
+// members and threshold replaced. The roles stay the enrollment's, so no
+// proposal can edit a role.
 type Propose struct {
-	Base      PolicyVersion
+	Base      Digest
 	Members   map[PrincipalID]Name
 	Threshold Threshold
 	unknown   wire.Unknown
 }
 
-// Digest is what an approval cites: a proposal's SHA-256 over its base,
-// its members in principal order and its threshold, so it binds the base
-// version and two equal proposals are one target (D10).
+// Digest is a SHA-256: a policy's, which a proposal names as its base, or
+// a proposal's, which an approval cites, over its base, its members in
+// principal order and its threshold, so it binds the base policy and two
+// equal proposals are one target (D10).
 type Digest [32]byte
 
 func (d Digest) String() string { return fmt.Sprintf("%x", d[:]) }
@@ -595,21 +607,27 @@ const (
 )
 
 func (p Propose) canonical(w *wire.Writer) {
-	w.Uvarint(1, uint64(p.Base))
-	for _, k := range slices.SortedFunc(maps.Keys(p.Members), ComparePrincipals) {
+	w.Bytes(1, p.Base[:])
+	writeChange(w, p.Members, p.Threshold)
+}
+
+// writeChange is members in principal order, then the threshold: what a
+// proposal sets and a policy holds, written alike for both digests.
+func writeChange(w *wire.Writer, members map[PrincipalID]Name, threshold Threshold) {
+	for _, k := range slices.SortedFunc(maps.Keys(members), ComparePrincipals) {
 		var m wire.Writer
 		m.Bytes(1, k.wire())
-		m.Bytes(2, nameWire(p.Members[k]))
+		m.Bytes(2, nameWire(members[k]))
 		w.Bytes(2, m.Encoded())
 	}
 	var t wire.Writer
-	switch th := p.Threshold.(type) {
+	switch th := threshold.(type) {
 	case Majority:
 		t.Bytes(thresholdMajority, nil)
 	case Fixed:
 		t.Uvarint(thresholdFixed, uint64(th.N))
 	default:
-		panic(fmt.Sprintf("events: %T is not a Threshold", p.Threshold))
+		panic(fmt.Sprintf("events: %T is not a Threshold", threshold))
 	}
 	w.Bytes(3, t.Encoded())
 }
@@ -622,7 +640,12 @@ func ReadPropose(r *wire.Reader) (Versioned, error) {
 		var err error
 		switch tag {
 		case 1:
-			p.Base, hasBase = PolicyVersion(r.Uvarint()), true
+			b := r.Bytes()
+			if hasBase || len(b) != len(p.Base) {
+				return errors.New("it names one base policy's 32-byte digest")
+			}
+			copy(p.Base[:], b)
+			hasBase = true
 		case 2:
 			var who PrincipalID
 			var role Name
@@ -643,8 +666,8 @@ func ReadPropose(r *wire.Reader) (Versioned, error) {
 	p.unknown = r.Rest()
 	switch {
 	case err != nil:
-	case !hasBase || p.Base == 0:
-		err = errors.New("it names no base version")
+	case !hasBase:
+		err = errors.New("it names no base policy")
 	case p.Threshold == nil:
 		err = errors.New("it gives no threshold")
 	}

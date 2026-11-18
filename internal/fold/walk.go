@@ -291,7 +291,7 @@ func countsOf(s State) StateCounts {
 		c.Versions, c.Contending = len(w.Applied), len(w.Contending)
 	}
 	switch p := s.Policy().(type) {
-	case Unenrolled:
+	case Unenrolled, FoundedUnread:
 	case Enrolled:
 		c.Policy = PolicyCounts{Enrolled: true, Version: p.Policy.Version(), Members: len(p.Policy.Members())}
 	}

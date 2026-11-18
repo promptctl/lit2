@@ -9,7 +9,8 @@ import (
 )
 
 // PolicyInForce is the policy the fold reached: none before the
-// enrollment, and after it the version whose approvals arrived last.
+// enrollment, none this release can read after one it cannot, and after
+// one it reads the version whose approvals arrived last.
 //
 //sumtype:decl
 type PolicyInForce interface{ policyInForce() }
@@ -17,14 +18,20 @@ type PolicyInForce interface{ policyInForce() }
 // Unenrolled is a store with no enrollment folded.
 type Unenrolled struct{}
 
+// FoundedUnread is a store founded by Enrollment, which this release
+// cannot read, so no policy it can judge by is in force; a release that
+// reads it does.
+type FoundedUnread struct{ Enrollment events.EventID }
+
 // Enrolled is the policy in force, Since the event that activated it.
 type Enrolled struct {
 	Policy events.Policy
 	Since  Stamp
 }
 
-func (Unenrolled) policyInForce() {}
-func (Enrolled) policyInForce()   {}
+func (Unenrolled) policyInForce()    {}
+func (FoundedUnread) policyInForce() {}
+func (Enrolled) policyInForce()      {}
 
 // policyState is the policy folded so far: the enrollment that founded
 // the store, the version in force, every proposal with its approvals,
@@ -47,6 +54,7 @@ type policyState struct {
 type pendingRec struct {
 	digest    events.Digest
 	propose   events.Propose
+	base      events.Policy
 	next      events.Policy
 	need      Requirement
 	approvals []events.PrincipalID
@@ -133,8 +141,8 @@ func (s State) judge(st Stamp, act PolicyAct) Reason {
 		}
 		return nil
 	case ProposePolicy:
-		if ch.Propose.Base != p.Policy.Version() {
-			return Inadmissible{Why: fmt.Sprintf("it changes version %d; version %d is in force", ch.Propose.Base, p.Policy.Version())}
+		if ch.Propose.Base != p.Policy.Digest() {
+			return Inadmissible{Why: fmt.Sprintf("it changes a policy other than version %d, the one in force", p.Policy.Version())}
 		}
 		next, err := p.Policy.Next(ch.Propose.Members, ch.Propose.Threshold)
 		if err != nil {
@@ -158,8 +166,8 @@ func (s State) judge(st Stamp, act PolicyAct) Reason {
 		if !ok {
 			return UnknownProposal(ch)
 		}
-		if rec.propose.Base != p.Policy.Version() {
-			return Inadmissible{Why: fmt.Sprintf("it approves a change to version %d; version %d is in force", rec.propose.Base, p.Policy.Version())}
+		if rec.propose.Base != p.Policy.Digest() {
+			return Inadmissible{Why: fmt.Sprintf("it approves a change to version %d; version %d is in force", rec.base.Version(), p.Policy.Version())}
 		}
 		if !s.approves(p.Policy, rec.need, who) {
 			return NotAnApprover(ch)
@@ -208,7 +216,7 @@ func (s State) applyPolicy(st Stamp, act PolicyAct) State {
 		}
 		// judge accepted it, so it is a policy
 		next, _ := p.active.Policy.Next(ch.Propose.Members, ch.Propose.Threshold)
-		p.pending = p.pending.set(pendingRec{digest: d, propose: ch.Propose, next: next, need: Require(p.active.Policy, next), by: st})
+		p.pending = p.pending.set(pendingRec{digest: d, propose: ch.Propose, base: p.active.Policy, next: next, need: Require(p.active.Policy, next), by: st})
 	case ApprovePolicy:
 		rec, _ := p.pending.get(ch.Proposal)
 		if !slices.Contains(rec.approvals, st.By.Principal) {
@@ -254,6 +262,24 @@ type OwnerQuorum struct {
 // OneHolder is one approver granted every path of Targets: any other
 // change.
 type OneHolder struct{ Targets []PathWrite }
+
+// Tally is approvers counted toward q: how many eligible owners are among
+// them, and each incoming owner who is not.
+func (q OwnerQuorum) Tally(approvers []events.PrincipalID) (int, []events.PrincipalID) {
+	have := 0
+	for _, o := range q.Eligible {
+		if slices.Contains(approvers, o) {
+			have++
+		}
+	}
+	var missing []events.PrincipalID
+	for _, o := range q.Incoming {
+		if !slices.Contains(approvers, o) {
+			missing = append(missing, o)
+		}
+	}
+	return have, missing
+}
 
 func (OwnerQuorum) requirement() {}
 func (OneHolder) requirement()   {}
@@ -329,18 +355,8 @@ func Require(prev, next events.Policy) Requirement {
 func (s State) satisfied(prev events.Policy, r Requirement, approvers []events.PrincipalID) bool {
 	switch r := r.(type) {
 	case OwnerQuorum:
-		n := 0
-		for _, o := range r.Eligible {
-			if slices.Contains(approvers, o) {
-				n++
-			}
-		}
-		for _, o := range r.Incoming {
-			if !slices.Contains(approvers, o) {
-				return false
-			}
-		}
-		return n >= r.Need
+		have, missing := r.Tally(approvers)
+		return have >= r.Need && len(missing) == 0
 	case OneHolder:
 		for _, a := range approvers {
 			if s.holdsEvery(prev, a, r.Targets) {
@@ -362,8 +378,11 @@ func (s State) Approves(next events.Policy, who events.PrincipalID) bool {
 
 // Policy is the policy in force.
 func (s State) Policy() PolicyInForce {
-	if s.policy.active == nil {
+	switch p := s.policy; {
+	case p.founding == nil:
 		return Unenrolled{}
+	case p.active == nil:
+		return FoundedUnread{Enrollment: *p.founding}
 	}
 	return *s.policy.active
 }
@@ -372,11 +391,12 @@ func (s State) Policy() PolicyInForce {
 // before the enrollment, the enrollment's own.
 func (s State) Cites() events.PolicyVersion { return s.policy.version() }
 
-// Proposal is one proposal folded: what it proposes, what it still needs,
-// who approved it, and whether its base is no longer in force.
+// Proposal is one proposal folded: the policy it changes and what it
+// proposes, what it still needs, who approved it, and whether its base is
+// no longer in force.
 type Proposal struct {
 	Digest    events.Digest
-	Base      events.PolicyVersion
+	Base      events.Policy
 	Next      events.Policy
 	Need      Requirement
 	Approvals []events.PrincipalID
@@ -390,8 +410,8 @@ func (s State) Proposals() []Proposal {
 	var out []Proposal
 	for _, r := range s.policy.pending.sorted(func(a, b pendingRec) int { return events.Compare(a.by.Order, b.by.Order) }) {
 		if !r.activated {
-			out = append(out, Proposal{Digest: r.digest, Base: r.propose.Base, Next: r.next, Need: r.need,
-				Approvals: slices.Clone(r.approvals), By: r.by, Stale: r.propose.Base != s.policy.version()})
+			out = append(out, Proposal{Digest: r.digest, Base: r.base, Next: r.next, Need: r.need,
+				Approvals: slices.Clone(r.approvals), By: r.by, Stale: r.propose.Base != s.policy.active.Policy.Digest()})
 		}
 	}
 	return out

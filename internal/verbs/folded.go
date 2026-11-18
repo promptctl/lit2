@@ -116,8 +116,9 @@ func (w World) carried(why fold.Reason) error {
 	return errors.New(strings.Join(lines, "\n"))
 }
 
-// pathOf is a write's path as its operand was typed: an item by its id, a
-// comment by its item and its segment, a home by its name, the root as /.
+// pathOf is a write's path as its operand was typed: an item by its id,
+// one the command creates as (new), a comment by its item and its segment,
+// a home by its name, the root as /.
 func (w World) pathOf(p fold.PathWrite) string {
 	var at string
 	switch s := p.At.(type) {
@@ -128,6 +129,9 @@ func (w World) pathOf(p fold.PathWrite) string {
 		at = l.Home
 	case fold.OfItem:
 		at = w.render(s.ID)
+		if _, made := w.State().Item(s.ID).(fold.NotFound); made {
+			at = "(new)" // created by the command the write is of, as the echo names it
+		}
 	case fold.OfElement:
 		at = w.render(s.Of) + "/comments/" + w.segmentOf(s)
 	}
