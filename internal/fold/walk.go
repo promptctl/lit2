@@ -47,9 +47,9 @@ type Folded struct {
 // Replay folds scans, every stream from 0, from the zero State: the one
 // walk, which decodes every record, keeps one of each event, sorts by the
 // total order, checks every signature, and steps each in order onto s.
-func Replay(e Env, scans []Scanned) Folded {
+func Replay(e Env, f Founding, scans []Scanned) Folded {
 	facts := newFacts()
-	s := State{}
+	s := Seed(f)
 	kinds := e.registry.Kinds()
 	var located []events.Event
 	seen := map[events.EventID]int{}
@@ -164,7 +164,7 @@ type PolicyCounts struct {
 
 func newFacts() FoldFacts {
 	f := FoldFacts{Decoded: DecodeCounts{Unread: map[string]int{}}, Carried: map[string]int{}, Unapplied: map[string]int{}}
-	for _, r := range []Reason{BadSignature{}, UnknownSuite{}, NoPolicyInForce{}, EnrollmentYielded{}, CitesFutureVersion{},
+	for _, r := range []Reason{BadSignature{}, UnknownSuite{}, NoPolicyInForce{}, NotTheFounding{}, CitesFutureVersion{},
 		VersionRegressed{}, Unauthorized{}, NotAnApprover{}, UnknownProposal{}, Inadmissible{}, NotAMemberWrote{}} {
 		f.Carried[ReasonName(r)] = 0
 	}
@@ -218,8 +218,8 @@ func ReasonName(r Reason) string {
 		return "unknown_suite"
 	case NoPolicyInForce:
 		return "no_policy_in_force"
-	case EnrollmentYielded:
-		return "enrollment_yielded"
+	case NotTheFounding:
+		return "not_the_founding"
 	case CitesFutureVersion:
 		return "cites_future_version"
 	case VersionRegressed:
@@ -291,7 +291,7 @@ func countsOf(s State) StateCounts {
 		c.Versions, c.Contending = len(w.Applied), len(w.Contending)
 	}
 	switch p := s.Policy().(type) {
-	case Unenrolled, FoundedUnread:
+	case Unenrolled, FoundingAbsent, FoundedUnread:
 	case Enrolled:
 		c.Policy = PolicyCounts{Enrolled: true, Version: p.Policy.Version(), Members: len(p.Policy.Members())}
 	}

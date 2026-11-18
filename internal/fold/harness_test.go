@@ -63,14 +63,16 @@ var (
 func (w writer) ref() store.Ref { return store.WriterRef{Checkout: w.checkout} }
 
 // world is the streams of one store as a fold reads them: each ref's
-// batches, in append order, under one log. base is the state its founding
-// leaves, which a test mints from as a writer that read only it.
+// batches, in append order, under one log; the founding its folds are
+// seeded with; and base, the state its founding leaves, which a test mints
+// from as a writer that read only it.
 type world struct {
-	t       testing.TB
-	entropy *rand.ChaCha8
-	order   []store.Ref
-	streams map[store.Ref]*stream
-	base    fold.State
+	t        testing.TB
+	entropy  *rand.ChaCha8
+	order    []store.Ref
+	streams  map[store.Ref]*stream
+	founding fold.Founding
+	base     fold.State
 }
 
 type stream struct {
@@ -104,7 +106,7 @@ func capabilities(texts ...string) []events.Capability {
 // B as an owner and approves, and B approves, so version 2 is in force.
 func newWorld(t testing.TB) *world {
 	wd := unfounded(t)
-	wd.mint(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))
+	wd.found(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))
 	both := events.Propose{Base: wd.state().Policy().(fold.Enrolled).Policy.Digest(), Members: map[events.PrincipalID]events.Name{keyA.Principal(): owner, keyB.Principal(): owner}, Threshold: events.Majority{}}
 	wd.mint(founder, wd.state(), root(both), root(events.Approve{Proposal: both.Digest()}))
 	wd.mint(founderB, wd.state(), root(events.Approve{Proposal: both.Digest()}))
@@ -115,9 +117,17 @@ func newWorld(t testing.TB) *world {
 	return wd
 }
 
-// unfounded is a store with no enrollment.
+// unfounded is a store with no enrollment, folded with no founding.
 func unfounded(t testing.TB) *world {
-	return &world{t: t, entropy: rand.NewChaCha8([32]byte{'f', 'o', 'l', 'd'}), streams: map[store.Ref]*stream{}}
+	return &world{t: t, entropy: rand.NewChaCha8([32]byte{'f', 'o', 'l', 'd'}), streams: map[store.Ref]*stream{}, founding: fold.NoFounding{}}
+}
+
+// found mints d, an enrollment, as w, and names it the world's founding.
+func (wd *world) found(w writer, seen fold.State, d events.Draft) events.Event {
+	wd.t.Helper()
+	e := wd.mint(w, seen, d)[0]
+	wd.founding = fold.FoundedBy{Enrollment: e.ID()}
+	return e
 }
 
 func root(p events.Payload) events.Draft { return events.Act{About: events.Root{}, Payload: p} }
@@ -181,7 +191,7 @@ func (wd *world) scans() []fold.Scanned {
 
 // replay folds every stream from 0.
 func (wd *world) replay() fold.Folded {
-	return fold.Replay(env, wd.scans())
+	return fold.Replay(env, wd.founding, wd.scans())
 }
 
 // view is the fold of each stream's first upto[ref] batches, and every
@@ -196,7 +206,7 @@ func (wd *world) view(upto map[store.Ref]int) fold.State {
 		}
 		scans = append(scans, wd.span(ref, 0, n))
 	}
-	return fold.Replay(env, scans).State
+	return fold.Replay(env, wd.founding, scans).State
 }
 
 // state is the replay's state.

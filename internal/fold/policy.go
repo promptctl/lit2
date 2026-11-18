@@ -8,15 +8,36 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// PolicyInForce is the policy the fold reached: none before the
-// enrollment, none this release can read after one it cannot, and after
-// one it reads the version whose approvals arrived last.
+// Founding is the enrollment a fold is seeded with, the one that founds
+// its store: the checkout names it, never the events, since any writer
+// can mint an enrollment that sorts first in total order (§3.17).
+//
+//sumtype:decl
+type Founding interface{ founding() }
+
+// NoFounding is a fold whose checkout has founded and adopted no store.
+type NoFounding struct{}
+
+// FoundedBy is a fold of the store Enrollment founded.
+type FoundedBy struct{ Enrollment events.EventID }
+
+func (NoFounding) founding() {}
+func (FoundedBy) founding()  {}
+
+// PolicyInForce is the policy the fold reached: none with no founding
+// named; none while the founding is not in the store, or is there and
+// this release cannot read it; and after a founding it reads, the
+// version whose approvals arrived last.
 //
 //sumtype:decl
 type PolicyInForce interface{ policyInForce() }
 
-// Unenrolled is a store with no enrollment folded.
+// Unenrolled is a fold seeded with NoFounding.
 type Unenrolled struct{}
+
+// FoundingAbsent is a store founded by Enrollment, which the store does
+// not hold yet.
+type FoundingAbsent struct{ Enrollment events.EventID }
 
 // FoundedUnread is a store founded by Enrollment, which this release
 // cannot read, so no policy it can judge by is in force; a release that
@@ -29,21 +50,21 @@ type Enrolled struct {
 	Since  Stamp
 }
 
-func (Unenrolled) policyInForce()    {}
-func (FoundedUnread) policyInForce() {}
-func (Enrolled) policyInForce()      {}
+func (Unenrolled) policyInForce()     {}
+func (FoundingAbsent) policyInForce() {}
+func (FoundedUnread) policyInForce()  {}
+func (Enrolled) policyInForce()       {}
 
-// policyState is the policy folded so far: the enrollment that founded
-// the store, the version in force, every proposal with its approvals,
+// policyState is the policy folded so far: the founding it was seeded
+// with, the version in force, every proposal with its approvals,
 // every membership request, and the version each writer last cited. The
 // fold walks the total order, so the version in force when an event is
 // judged is the one folded before it (§3.20).
 type policyState struct {
-	// founding is the first enrollment in total order, which every later
-	// one yields to, read or not: a replica that cannot read it founds on
-	// no other; nil before it.
+	// founding is the enrollment the fold was seeded with, nil for
+	// NoFounding, so the zero state is a fold of no store
 	founding *events.EventID
-	// active is the version in force; nil before the enrollment, and on a
+	// active is the version in force; nil before the founding, and on a
 	// replica that cannot read it.
 	active   *Enrolled
 	pending  table[events.Digest, pendingRec, byDigest]
@@ -92,15 +113,16 @@ func (p policyState) version() events.PolicyVersion {
 	return p.active.Policy.Version()
 }
 
-// admits is why an event with header h cannot be judged, from its header
-// alone, or nil: verification seeds at the first enrollment and never
-// walks before it, a later enrollment yields to it, and a writer cites
-// neither a version not yet in force nor one older than it last cited.
-func (p policyState) admits(h events.Header) Reason {
+// admits is why the event id with header h cannot be judged, from its
+// header alone, or nil: an enrollment is judged only when it is the
+// founding, verification seeds there and never walks before it, and a
+// writer cites neither a version not yet in force nor one older than it
+// last cited.
+func (p policyState) admits(id events.EventID, h events.Header) Reason {
 	enrolling := h.Kind() == enrollKind
 	switch {
-	case enrolling && p.founding != nil:
-		return EnrollmentYielded{To: *p.founding}
+	case enrolling && (p.founding == nil || *p.founding != id):
+		return NotTheFounding{}
 	case !enrolling && p.active == nil:
 		return NoPolicyInForce{}
 	case h.Policy() > p.version():
@@ -208,7 +230,7 @@ func (s State) applyPolicy(st Stamp, act PolicyAct) State {
 	p := s.policy
 	switch ch := act.(type) {
 	case EnrollPolicy:
-		p.founding, p.active = &st.Event, &Enrolled{Policy: ch.Enroll.Policy(st.By.Principal), Since: st}
+		p.active = &Enrolled{Policy: ch.Enroll.Policy(st.By.Principal), Since: st}
 	case ProposePolicy:
 		d := ch.Propose.Digest()
 		if _, ok := p.pending.get(d); ok {
@@ -376,15 +398,31 @@ func (s State) Approves(next events.Policy, who events.PrincipalID) bool {
 	return s.approves(in, Require(in, next), who)
 }
 
-// Policy is the policy in force.
+// Policy is the policy in force. A founding folded and left unapplied is
+// one this release cannot read.
 func (s State) Policy() PolicyInForce {
 	switch p := s.policy; {
 	case p.founding == nil:
 		return Unenrolled{}
-	case p.active == nil:
-		return FoundedUnread{Enrollment: *p.founding}
+	case p.active != nil:
+		return *p.active
 	}
-	return *s.policy.active
+	f := *s.policy.founding
+	if _, unread := s.integrity.unapplied.get(f); unread {
+		return FoundedUnread{Enrollment: f}
+	}
+	return FoundingAbsent{Enrollment: f}
+}
+
+// Seed is the state of a fold of no events, founded by f.
+func Seed(f Founding) State {
+	switch f := f.(type) {
+	case NoFounding:
+		return State{}
+	case FoundedBy:
+		return State{policy: policyState{founding: &f.Enrollment}}
+	}
+	panic(fmt.Sprintf("fold: %T is not a Founding", f))
 }
 
 // Cites is the policy version a writer cites: the version in force, and 1

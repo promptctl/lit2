@@ -79,7 +79,7 @@ func TestAContributorsRefusalNamesEveryCapabilityOfTheVerbAndWhatItMissed(t *tes
 func TestAnAssigneeBindingMatchesNoItem(t *testing.T) {
 	w := unfounded(t)
 	helper := name("helper")
-	w.mint(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: map[events.Name][]events.Capability{helper: capabilities("set assignee/*", "set own-or-assignee/*")}}))
+	w.found(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: map[events.Name][]events.Capability{helper: capabilities("set assignee/*", "set own-or-assignee/*")}}))
 	admit := propose(w.state(), map[events.PrincipalID]events.Name{keyA.Principal(): owner, keyB.Principal(): helper}, events.Majority{})
 	w.mint(founder, w.state(), root(admit), root(events.Approve{Proposal: admit.Digest()}))
 	theirs := idOf(w.mint(a, w.state(), create(events.AtLevel{Level: level(1)}))[0])

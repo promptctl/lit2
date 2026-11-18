@@ -54,23 +54,30 @@ type Ask struct{}
 // Asked is a principal that requested membership and is not yet a member.
 type Asked struct{}
 
+// FoundingAbsent is a store founded by an enrollment it does not hold yet:
+// init can judge no request against it.
+type FoundingAbsent struct{ Enrollment events.EventID }
+
 // FoundedUnread is a store founded by an enrollment this release cannot read:
 // init can neither adopt it nor found another.
 type FoundedUnread struct{ Enrollment events.EventID }
 
-func (Found) initStep()         {}
-func (Listed) initStep()        {}
-func (Ask) initStep()           {}
-func (Asked) initStep()         {}
-func (FoundedUnread) initStep() {}
+func (Found) initStep()          {}
+func (Listed) initStep()         {}
+func (Ask) initStep()            {}
+func (Asked) initStep()          {}
+func (FoundingAbsent) initStep() {}
+func (FoundedUnread) initStep()  {}
 
 // Bootstrap is admin init's step for me over st, the local fold: a store
-// adopts the enrollment it holds, and only a store that holds none is
-// founded.
+// whose checkout names its founding joins it, and only one that names none
+// is founded.
 func Bootstrap(st fold.State, me events.PrincipalID) InitStep {
 	switch p := st.Policy().(type) {
 	case fold.Unenrolled:
 		return Found{Enroll: events.Enroll{Owner: Owner, Roles: DefaultRoles()}}
+	case fold.FoundingAbsent:
+		return FoundingAbsent(p)
 	case fold.FoundedUnread:
 		return FoundedUnread(p)
 	case fold.Enrolled:

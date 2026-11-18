@@ -484,11 +484,12 @@ modified client cannot forge any of it; no server.
 
 1. `lit2 admin init` on a fresh repository mints the checkout's principal,
    prints one recovery phrase, and writes the enrollment: the first policy,
-   one owner, one tier, encrypted, as the first signed event. Every event
-   after it is signed and cites the policy version in force.
-2. A second person clones, runs `lit2 admin init`, and the checkout finds
-   the enrollment on the remote, adopts it, and pushes a signed membership
-   request. The owner runs `add /members '{principal: <id>, role:
+   one owner, one tier, encrypted, as the first signed event, named in
+   `.lit/founding` for the owner to commit. Every event after it is signed
+   and cites the policy version in force.
+2. A second person clones, runs `lit2 admin init`, and the checkout adopts
+   the enrollment the committed `.lit/founding` names and pushes a signed
+   membership request. The owner runs `add /members '{principal: <id>, role:
    contributor}'`; the proposal and its approval are one command because
    one owner is the threshold. The joiner's next sync wraps the tier's
    epochs to them and their backlog reads in full.

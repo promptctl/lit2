@@ -111,7 +111,7 @@ func TestAReplayIsStepsOverTheSortedEvents(t *testing.T) {
 		}
 	}
 	slices.SortFunc(located, func(x, y events.Event) int { return events.Compare(x.Order(), y.Order()) })
-	if s := fold.Extend(env, fold.State{}, located).State; !s.Equal(w.state()) {
+	if s := fold.Extend(env, fold.Seed(w.founding), located).State; !s.Equal(w.state()) {
 		t.Errorf("stepping the sorted events disagrees with the replay")
 	}
 }

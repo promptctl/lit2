@@ -19,7 +19,7 @@ var (
 func soloWorld(t *testing.T) *world {
 	t.Helper()
 	w := unfounded(t)
-	w.mint(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))
+	w.found(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))
 	admit := propose(w.state(), map[events.PrincipalID]events.Name{keyA.Principal(): owner, keyB.Principal(): contributor}, events.Majority{})
 	w.mint(founder, w.state(), root(admit), root(events.Approve{Proposal: admit.Digest()}))
 	w.base = w.state()
@@ -71,7 +71,7 @@ func wantApplied(t *testing.T, s fold.State, e events.Event) {
 func TestAnEventBeforeTheEnrollmentIsCarriedAndOneAfterItApplies(t *testing.T) {
 	w := unfounded(t)
 	early := w.mint(a, fold.State{}, create(events.AtLevel{Level: level(1)}))[0]
-	w.mint(founder, w.state(), root(events.Enroll{Owner: owner, Roles: roles}))
+	w.found(founder, w.state(), root(events.Enroll{Owner: owner, Roles: roles}))
 	after := w.mint(a2, w.state(), create(events.AtLevel{Level: level(1)}))[0]
 	s := w.state()
 	wantCarried(t, s, early, fold.NoPolicyInForce{})
@@ -84,13 +84,13 @@ func TestAnEventBeforeTheEnrollmentIsCarriedAndOneAfterItApplies(t *testing.T) {
 	}
 }
 
-func TestALaterEnrollmentYieldsAndItsFounderIsNoMember(t *testing.T) {
+func TestAnEnrollmentNotTheFoundingFoundsNothingAndItsWriterIsNoMember(t *testing.T) {
 	w := unfounded(t)
-	first := w.mint(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))[0]
+	w.found(founder, fold.State{}, root(events.Enroll{Owner: owner, Roles: roles}))
 	second := w.mint(b, w.state(), root(events.Enroll{Owner: owner, Roles: roles}))[0]
 	filed := w.mint(b, w.state(), create(events.AtLevel{Level: level(1)}))[0]
 	s := w.state()
-	wantCarried(t, s, second, fold.EnrollmentYielded{To: first.ID()})
+	wantCarried(t, s, second, fold.NotTheFounding{})
 	wantCarried(t, s, filed, fold.Unauthorized{Intent: fold.PathWrite{Verb: events.Add, At: fold.OfHome{Holds: level(1)}, Field: []string{"children"}},
 		Refused: fold.Refused{As: fold.NotAMember{}}})
 	if owners := s.Policy().(fold.Enrolled).Policy.Owners(); len(owners) != 1 || owners[0] != keyA.Principal() {
@@ -271,7 +271,7 @@ func TestOneEventSetFoldsEqualInAnyStreamOrder(t *testing.T) {
 			}
 		}
 		in = append(in, scans[0]) // a copy of the founder's stream, read twice
-		got := fold.Replay(env, in).State
+		got := fold.Replay(env, w.founding, in).State
 		if !got.Equal(want) {
 			t.Errorf("the streams in order %v fold to another state", order)
 		}

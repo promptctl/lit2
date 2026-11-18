@@ -143,24 +143,63 @@ func (o opened) apply(version []byte, blob, ref git.ObjectID, said string) cli.O
 }
 
 // judged mints drafts as one frame under ref and, unless the fold carries
-// any of its events, appends it and says said: a frame every replica would
-// carry is never written `[LAW:single-enforcer]`. Its drafts write the
-// root, which names no item or home, so a refusal reads no schema.
+// any of its events, appends it and says said.
 func (o opened) judged(drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
 	m, err := o.mint(drafts, ref)
 	if err != nil {
 		return failed(err)
 	}
-	seen := verbs.World{View: evaluate.Of(o.folded.State, config.Schema{}, o.now)}
-	outcomes := fold.Extend(o.p.Fold, o.folded.State, m.Events).Outcomes
-	o.rec.Policy.Verdicts = command.Verdicts(m.Events, outcomes)
-	if no, carried := verbs.Carried(seen, outcomes); carried {
-		return cli.Failed{Failure: refusal{no}}
+	if out, refused := o.refused(o.folded.State, m); refused {
+		return out
 	}
 	if err := o.append(m); err != nil {
 		return failed(err)
 	}
 	return written(io.WriteString(o.p.Out, said))
+}
+
+// found mints drafts, the founding enrollment first, as one frame under
+// ref, judged on a fold that enrollment founds, and, unless the fold
+// carries any of its events, appends it, pins the enrollment as the
+// clone's founding and names it in FoundingFile, then says said.
+func (o opened) found(shared, tree store.Files, drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
+	m, err := o.mint(drafts, ref)
+	if err != nil {
+		return failed(err)
+	}
+	founding := fold.FoundedBy{Enrollment: m.Events[0].ID()}
+	if out, refused := o.refused(fold.Seed(founding), m); refused {
+		return out
+	}
+	if err := o.append(m); err != nil {
+		return failed(err)
+	}
+	won, err := pin(shared, founding.Enrollment)
+	if err != nil {
+		return failed(err)
+	}
+	o.rec.Policy.Founding = won
+	if won != founding {
+		return failed(foundingRaced{won: won})
+	}
+	if err := writeFoundingFile(tree, founding); err != nil {
+		return failed(err)
+	}
+	return written(fmt.Fprintf(o.p.Out, "%sfounding %s named in %s: commit it, and every clone adopts this store\n", said, founding.Enrollment, FoundingFile))
+}
+
+// refused is the failure of the frame m, extended onto s, when the fold
+// carries any of its events: a frame every replica would carry is never
+// written `[LAW:single-enforcer]`. Its drafts write the root, which names
+// no item or home, so a refusal reads no schema.
+func (o opened) refused(onto fold.State, m events.Minted) (cli.Outcome, bool) {
+	seen := verbs.World{View: evaluate.Of(o.folded.State, config.Schema{}, o.now)}
+	outcomes := fold.Extend(o.p.Fold, onto, m.Events).Outcomes
+	o.rec.Policy.Verdicts = command.Verdicts(m.Events, outcomes)
+	if no, carried := verbs.Carried(seen, outcomes); carried {
+		return cli.Failed{Failure: refusal{no}}, true
+	}
+	return nil, false
 }
 
 // status is config status: the board's workspace line, and whether the
@@ -190,9 +229,11 @@ func (o opened) status() cli.Outcome {
 
 // init is admin init: the checkout's id and the principal's key, each
 // minted once, and the principal printed, with the recovery phrase when
-// this run made the key; then, in a store no version is in force in, the
-// workspace's version one: the file in the work tree, or the default
-// profile written there when there is none.
+// this run made the key; then the store's founding: a clone that names
+// none adopts the one FoundingFile names, or with no file founds the
+// store; then, in a store no version is in force in, the workspace's
+// version one: the file in the work tree, or the default profile written
+// there when there is none.
 func (r body) init() cli.Outcome {
 	in, ok := r.p.Place.(command.InCheckout)
 	if !ok {
@@ -222,14 +263,35 @@ func (r body) init() cli.Outcome {
 	if err != nil {
 		return failed(err)
 	}
+	tree := r.p.WorkTree(in.Checkout)
+	if _, none := o.founding.(fold.NoFounding); none {
+		named, err := foundingFileIn(tree)
+		if err != nil {
+			return failed(err)
+		}
+		if n, adopts := named.(fold.FoundedBy); adopts {
+			if _, err := pin(shared, n.Enrollment); err != nil {
+				return failed(err)
+			}
+			if o, err = r.openAs(so, in.Checkout, minted); err != nil {
+				return failed(err)
+			}
+		}
+	}
+	// the file names the clone's founding, for the next clone to adopt
+	if f, founded := o.founding.(fold.FoundedBy); founded {
+		if err := writeFoundingFile(tree, f); err != nil {
+			return failed(err)
+		}
+	}
 	me := minted.Key.Principal()
 	var drafts []events.Draft
 	// an owner applies version one: set /workspace is the owner role's
-	said, owns := "", false
+	said, owns, founds := "", false, false
 	switch s := verbs.Bootstrap(o.folded.State, me).(type) {
 	case verbs.Found:
 		r.rec.Policy.Bootstrap = "enroll"
-		drafts, said, owns = append(drafts, events.Act{About: events.Root{}, Payload: s.Enroll}), fmt.Sprintf("enrolled: policy v1, owner %s\n", me), true
+		drafts, said, owns, founds = append(drafts, events.Act{About: events.Root{}, Payload: s.Enroll}), fmt.Sprintf("enrolled: policy v1, owner %s\n", me), true, true
 	case verbs.Listed:
 		r.rec.Policy.Bootstrap = "already_member"
 		owns = s.Role == verbs.Owner
@@ -237,6 +299,9 @@ func (r body) init() cli.Outcome {
 		r.rec.Policy.Bootstrap = "request"
 		drafts = append(drafts, events.Act{About: events.Root{}, Payload: events.Request{}})
 		said = fmt.Sprintf("membership requested: an owner admits you with lit2 add /members '{principal: %q, role: contributor}'\n", me.String())
+	case verbs.FoundingAbsent:
+		r.rec.Policy.Bootstrap = "founding_absent"
+		return cli.Failed{Failure: foundingAbsent(s)}
 	case verbs.FoundedUnread:
 		r.rec.Policy.Bootstrap = "founded_unread"
 		return cli.Failed{Failure: foundedUnread(s)}
@@ -260,7 +325,7 @@ func (r body) init() cli.Outcome {
 		}
 		ref = v.ref
 	case owns:
-		b, err := versionOne(r.p.WorkTree(in.Checkout))
+		b, err := versionOne(tree)
 		if err != nil {
 			return cli.Failed{Failure: workspaceFailure{err: err}}
 		}
@@ -274,6 +339,9 @@ func (r body) init() cli.Outcome {
 		return written(io.WriteString(r.p.Out, "no workspace version is in force: an owner applies one with lit2 config commit\n"))
 	default:
 		ref = git.HashBlob(so.Format, assets.DefaultWorkspace.Bytes())
+	}
+	if founds {
+		return o.found(shared, tree, drafts, ref, said)
 	}
 	return o.judged(drafts, ref, said)
 }

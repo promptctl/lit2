@@ -6,10 +6,13 @@ import (
 )
 
 // PolicyFacts is the policy a run's store was folded under and what the
-// fold ruled on each event the run minted `[LAW:nothing-unseen]`: Under is
-// nil until a store is folded, Bootstrap is admin init's step and empty on
-// every other run, and Verdicts is empty on a run that minted nothing.
+// fold ruled on each event the run minted `[LAW:nothing-unseen]`: Founding
+// is the founding the run's clone named when it ended, and Under is nil
+// until a store is folded, both nil then; Bootstrap is admin init's step
+// and empty on every other run; and Verdicts is empty on a run that minted
+// nothing.
 type PolicyFacts struct {
+	Founding  fold.Founding
 	Under     fold.PolicyInForce
 	Bootstrap string
 	Verdicts  []Verdict
@@ -33,6 +36,7 @@ func Verdicts(minted []events.Event, outcomes []fold.Outcome) []Verdict {
 
 type (
 	policyLine struct {
+		Founding  string        `json:"founding"`
 		Under     underLine     `json:"under"`
 		Bootstrap string        `json:"bootstrap,omitempty"`
 		Verdicts  []verdictLine `json:"verdicts"`
@@ -62,10 +66,15 @@ func policyBlock(p PolicyFacts) *policyLine {
 	if p.Under == nil {
 		return nil
 	}
-	l := &policyLine{Bootstrap: p.Bootstrap, Verdicts: []verdictLine{}}
+	l := &policyLine{Founding: "none", Bootstrap: p.Bootstrap, Verdicts: []verdictLine{}}
+	if f, founded := p.Founding.(fold.FoundedBy); founded {
+		l.Founding = f.Enrollment.String()
+	}
 	switch u := p.Under.(type) {
 	case fold.Unenrolled:
 		l.Under = underLine{State: "unenrolled"}
+	case fold.FoundingAbsent:
+		l.Under = underLine{State: "founding_absent"}
 	case fold.FoundedUnread:
 		l.Under = underLine{State: "founded_unread"}
 	case fold.Enrolled:

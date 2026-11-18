@@ -29,6 +29,7 @@ func foldEnv(workers int) fold.Env {
 type opened struct {
 	body
 	store    command.Opened
+	founding fold.Founding
 	checkout git.Checkout
 	id       command.Minted
 	folded   fold.Folded
@@ -48,6 +49,8 @@ func (r body) open() (opened, error) {
 		switch p := op.folded.State.Policy().(type) {
 		case fold.Unenrolled:
 			return opened{}, unenrolled{}
+		case fold.FoundingAbsent:
+			return opened{}, foundingAbsent(p)
 		case fold.FoundedUnread:
 			return opened{}, foundedUnread(p)
 		case fold.Enrolled:
@@ -59,14 +62,20 @@ func (r body) open() (opened, error) {
 	panic(fmt.Sprintf("root: %T is not an Opening", r.p.Store))
 }
 
-// openAs folds o, the store of c minted as id.
+// openAs folds o, the store of c minted as id, seeded with the founding
+// its clone pinned.
 func (r body) openAs(o command.Opened, c git.Checkout, id command.Minted) (opened, error) {
-	folded, err := replay(r.p.Fold, o.Store, r.rec.Stored)
+	shared, _ := r.p.IdentityFiles(c)
+	founding, err := pinned(shared)
+	if err != nil {
+		return opened{}, err
+	}
+	folded, err := replay(r.p.Fold, founding, o.Store, r.rec.Stored)
 	if err != nil {
 		return opened{}, storeFailure{err: err}
 	}
-	r.rec.Policy.Under = folded.State.Policy()
-	return opened{body: r, store: o, checkout: c, id: id, folded: folded}, nil
+	r.rec.Policy.Founding, r.rec.Policy.Under = founding, folded.State.Policy()
+	return opened{body: r, store: o, founding: founding, checkout: c, id: id, folded: folded}, nil
 }
 
 // stored runs do on the run's store, opened and folded.
@@ -81,7 +90,7 @@ func (r body) stored(do func(opened) cli.Outcome) cli.Outcome {
 // replay reads every head and every stream from 0, and folds what it read;
 // each step's result lands on stored as it returns, so a failing step
 // leaves the steps before it on the event.
-func replay(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Folded, error) {
+func replay(env fold.Env, founding fold.Founding, s *store.Store, stored *command.StoreFacts) (fold.Folded, error) {
 	heads, err := s.Heads()
 	if err != nil {
 		return fold.Folded{}, err
@@ -97,7 +106,7 @@ func replay(env fold.Env, s *store.Store, stored *command.StoreFacts) (fold.Fold
 		stored.Reads = append(stored.Reads, command.Read{Range: r, Scan: scan})
 		scans = append(scans, fold.Scanned{Range: r, Scan: scan})
 	}
-	folded := fold.Replay(env, scans)
+	folded := fold.Replay(env, founding, scans)
 	stored.Folds = append(stored.Folds, folded.Facts)
 	return folded, nil
 }
@@ -132,15 +141,25 @@ func (f storeFailure) Error() string     { return "the store: " + f.err.Error() 
 func (storeFailure) Class() reason.Class { return reason.ClassEnvironment }
 func (storeFailure) Reason() string      { return "store" }
 
-// unenrolled is a store no enrollment founded: no verb reads it until
-// admin init founds it, the environment's step to take.
+// unenrolled is a store whose clone names no founding: no verb reads it
+// until admin init founds or adopts one, the environment's step to take.
 type unenrolled struct{}
 
 func (unenrolled) Error() string {
-	return "this store has no enrollment, so no policy says who may write: lit2 admin init founds it"
+	return "this clone names no founding enrollment, so no policy says who may write: lit2 admin init founds the store, or adopts the one " + string(FoundingFile) + " names"
 }
 func (unenrolled) Class() reason.Class { return reason.ClassEnvironment }
 func (unenrolled) Reason() string      { return "policy" }
+
+// foundingAbsent is a store founded by an enrollment it does not hold:
+// no event of it is judged until the founding arrives.
+type foundingAbsent fold.FoundingAbsent
+
+func (f foundingAbsent) Error() string {
+	return fmt.Sprintf("this store was founded by enrollment %s, which it does not hold yet: it arrives when this clone syncs", f.Enrollment)
+}
+func (foundingAbsent) Class() reason.Class { return reason.ClassEnvironment }
+func (foundingAbsent) Reason() string      { return "policy" }
 
 // foundedUnread is a store founded by an enrollment this release cannot
 // read: only a release that reads it can judge any event of the store.

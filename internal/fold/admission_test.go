@@ -64,10 +64,10 @@ func TestARemovedMembersOldRequestStaysAdmittedAndANewOneIsListed(t *testing.T) 
 
 func TestAFoundingEnrollmentThisReleaseCannotReadStillFoundsTheStore(t *testing.T) {
 	w := unfounded(t)
-	first := w.mint(founder, fold.State{}, root(unreadEnroll{}))[0]
+	first := w.found(founder, fold.State{}, root(unreadEnroll{}))
 	second := w.mint(b, w.state(), root(events.Enroll{Owner: owner, Roles: roles}))[0]
 	s := w.state()
-	wantCarried(t, s, second, fold.EnrollmentYielded{To: first.ID()})
+	wantCarried(t, s, second, fold.NotTheFounding{})
 	if got, ok := s.Policy().(fold.FoundedUnread); !ok || got.Enrollment != first.ID() {
 		t.Errorf("the policy is %#v; want the store founded by the enrollment this release cannot read", s.Policy())
 	}

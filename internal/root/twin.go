@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/verbs"
@@ -97,9 +98,20 @@ func NewFreshTwin() Twin {
 
 // NewTwinBeside is a second checkout over t's store, another principal's,
 // minted and before its admin init: a second person's clone, every event
-// either writes read by both.
+// either writes read by both, its work tree holding the FoundingFile t's
+// holds, as a clone of the repository t committed it to does.
 func NewTwinBeside(t Twin) Twin {
-	return twinOver(t.ports, besideCheckout, besideID, besideKey(), [32]byte{'b', 'e', 's', 'i', 'd', 'e', ' ', 't', 'w', 'i', 'n'})
+	beside := twinOver(t.ports, besideCheckout, besideID, besideKey(), [32]byte{'b', 'e', 's', 'i', 'd', 'e', ' ', 't', 'w', 'i', 'n'})
+	named, err := foundingFileIn(t.Tree)
+	if err != nil {
+		panic(err)
+	}
+	if f, founded := named.(fold.FoundedBy); founded {
+		if err := writeFoundingFile(beside.Tree, f); err != nil {
+			panic(err)
+		}
+	}
+	return beside
 }
 
 // twinOver is a minted checkout c, id and key, over the store ports hold,

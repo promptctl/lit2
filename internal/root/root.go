@@ -39,7 +39,7 @@ type Process struct {
 	// admin init opens the store of the checkout it has just minted.
 	Open func(git.Checkout, command.Minted) command.Opening
 	// WorkTree is a checkout's work tree, read for .lit/workspace.toml and
-	// written only by init, creating it.
+	// .lit/founding and written only by init, creating them.
 	WorkTree func(git.Checkout) store.Files
 	// Code is a checkout's code repository in its object format, read
 	// for the blob HEAD holds at a path and its history.
@@ -48,7 +48,7 @@ type Process struct {
 	Reader   config.ReaderVersion
 	Commands command.Sink
 	// IdentityFiles is a checkout's two identity directories, which admin
-	// init mints into.
+	// init mints into: the clone's shared one also holds its founding pin.
 	IdentityFiles func(git.Checkout) (shared, private store.Files)
 	In            io.Reader
 	Out, Err      io.Writer

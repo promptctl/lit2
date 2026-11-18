@@ -512,11 +512,16 @@ more, with the owner being removed excluded from the quorum that removes
 them; every other change needs one `member.admin` or `policy.admin`
 signature. The verifier decides which case applies by diffing the granted
 surface, never by the change's framing. The first policy is the
-**enrollment**, the first event of a workspace, signed by its founding
-owner; verification seeds there and never walks before it. A checkout that
-joins a remote already holding an enrollment adopts it and pushes a signed
-membership request; two enrollments meeting on one remote is a
-contradiction the fold reports, and the later one in total order yields.
+**enrollment**, signed by its founding owner; verification seeds there and
+never walks before it. Which enrollment founds a store is the clone's to
+say, never the events': any writer can mint one that sorts first. The init
+that founds a store names its enrollment in the committed `.lit/founding`
+and pins it beside the clone's key; a clone that names none adopts the one
+`.lit/founding` names, pins it once, and pushes a signed membership
+request. Every fold is seeded with the pin, and any other enrollment is
+carried. A clone with neither founds a store of its own, and a
+`.lit/founding` naming another founding than the pin is refused: the pin
+stands.
 
 ### 3.18 Capability
 

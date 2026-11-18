@@ -70,6 +70,27 @@ type EventID [32]byte
 
 func (id EventID) String() string { return hex.EncodeToString(id[:]) }
 
+// FileText is the id in a founding file's form, which ReadEventIDFile
+// reads: its 64 lowercase hex digits and one newline.
+func (id EventID) FileText() []byte { return []byte(id.String() + "\n") }
+
+// ReadEventIDFile reads a founding file's form, exactly; it is FileText's
+// inverse, and no error carries the file's bytes.
+func ReadEventIDFile(b []byte) (EventID, error) {
+	if form := 2*len(EventID{}) + 1; len(b) != form {
+		return EventID{}, fmt.Errorf("an event id file holds %d bytes; its form is %d", len(b), form)
+	}
+	text, ok := bytes.CutSuffix(b, []byte("\n"))
+	if !ok {
+		return EventID{}, errors.New("an event id file does not end in a newline")
+	}
+	var id EventID
+	if n, err := hex.Decode(id[:], text); err != nil || n != len(id) || hex.EncodeToString(id[:]) != string(text) {
+		return EventID{}, errors.New("an event id file holds no event id, 64 lowercase hex digits")
+	}
+	return id, nil
+}
+
 // ReadEventID reads an id's stored form.
 func ReadEventID(b []byte) (EventID, error) {
 	if len(b) != len(EventID{}) {

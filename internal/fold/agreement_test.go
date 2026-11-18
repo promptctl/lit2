@@ -169,7 +169,7 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 					scans = append(scans, w.span(ref, 0, at), w.span(ref, at, w.head(ref)))
 				}
 				r.Shuffle(len(scans), func(i, j int) { scans[i], scans[j] = scans[j], scans[i] })
-				if got := fold.Replay(env, scans).State; !got.Equal(want.State) {
+				if got := fold.Replay(env, w.founding, scans).State; !got.Equal(want.State) {
 					t.Errorf("a replay in another arrival order disagrees")
 				}
 			}

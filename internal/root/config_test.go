@@ -22,14 +22,24 @@ func freshSession(t *testing.T) session {
 	return session{t: t, twin: &twin}
 }
 
-// enrolledOnly is a session whose store holds the twin's enrollment and
-// no version: a store founded by a release that applied none.
+// enrolledOnly is a session whose store holds the twin's enrollment, its
+// founding, and no version: a store founded by a release that applied none.
 func enrolledOnly(t *testing.T) session {
 	s := freshSession(t)
 	m := must(events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: blob(noPlan), Policy: 1, Now: s.twin.Process.Clock.Now()},
 		events.NewDrafts(events.Act{About: events.Root{}, Payload: events.Enroll{Owner: verbs.Owner, Roles: verbs.DefaultRoles()}}), twinKey().Signer(), rand.NewChaCha8([32]byte{9})))
 	must(s.twin.Process.Store.(command.Opened).Store.Append(m.Batch))
+	s.pins(m.Events[0].ID())
 	return s
+}
+
+// pins names e the founding of the session's clone.
+func (s session) pins(e events.EventID) {
+	s.t.Helper()
+	shared, _ := s.twin.Process.IdentityFiles(git.Checkout{})
+	if _, err := pin(shared, e); err != nil {
+		s.t.Fatal(err)
+	}
 }
 
 // file makes b the work tree's .lit/workspace.toml, or no file when b is
@@ -237,6 +247,7 @@ func TestASecondReplicaRunsTheModelFromTheEventsAlone(t *testing.T) {
 	other := NewFreshTwin()
 	other.Process.Store = s.twin.Process.Store
 	replica := session{t: t, twin: &other}
+	replica.pins(must(foundingFileIn(s.twin.Process.WorkTree(git.Checkout{}))).(fold.FoundedBy).Enrollment)
 	if got, want := replica.ok("get", feature), s.ok("get", feature); got != want {
 		t.Errorf("the replica reads %s as\n%s\nwant\n%s", feature, got, want)
 	}

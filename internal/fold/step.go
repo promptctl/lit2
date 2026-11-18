@@ -99,20 +99,18 @@ func (r Registry) step(s State, c checked) (State, Outcome) {
 	default:
 		panic(fmt.Sprintf("fold: %s is not a verdict Check gives", c.verdict))
 	}
-	if why := s.policy.admits(h); why != nil {
+	if why := s.policy.admits(e.ID(), h); why != nil {
 		return s.carry(e, why), CarriedFor{Why: why}
 	}
 	st := stampOf(e)
 	changes, intent, why := r.changes(st, h, e.Body())
 	if why != nil {
-		// only an enrollment is judged with no policy in force, and its
-		// writer founds the store, whether or not this release reads it
+		// with no policy in force only the founding is judged, and its
+		// writer is the founder
 		if p := s.policy.active; p != nil {
 			if _, listed := p.Policy.Role(st.By.Principal); !listed {
 				return s.carry(e, NotAMemberWrote{}), CarriedFor{Why: NotAMemberWrote{}}
 			}
-		} else {
-			s.policy.founding = &st.Event
 		}
 		s.frontier = s.frontier.Observe(h)
 		s.policy = s.policy.cites(h)

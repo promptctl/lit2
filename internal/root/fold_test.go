@@ -27,7 +27,12 @@ func three(t *testing.T, twin Twin, seed byte) {
 		t.Fatal(err)
 	}
 	create := events.CreateItem{Payload: events.ItemCreate{Place: events.AtLevel{Level: level}}}
-	held, err := replay(twin.Process.Fold, twin.Process.Store.(command.Opened).Store, &command.StoreFacts{})
+	shared, _ := twin.Process.IdentityFiles(git.Checkout{})
+	founding, err := pinned(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := replay(twin.Process.Fold, founding, twin.Process.Store.(command.Opened).Store, &command.StoreFacts{})
 	if err != nil {
 		t.Fatal(err)
 	}

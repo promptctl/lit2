@@ -198,14 +198,16 @@ loosened: a witness is split-view *detection*, never enforcement, and never
 required — enforcement is client-side everywhere, always, and no lit feature
 may depend on a witness existing.
 
-**Enrollment — verification seeds at the first event.** The first policy is
-the **enrollment**, the first event of a workspace, signed by its founding
-owner at `lit2 admin init`; verification seeds there and never walks before
-it, and a fresh workspace has no history before it. A checkout that joins a
-remote already holding an enrollment adopts it and pushes a signed
-membership request. Two enrollments meeting on one remote — two unsynced
-clones each initializing — is a contradiction the fold reports; the later one
-in total order yields, and its principal re-requests membership.
+**Enrollment — verification seeds at the founding.** The first policy is
+the **enrollment**, signed by its founding owner at `lit2 admin init`;
+verification seeds there and never walks before it. The clone names which
+enrollment founds its store, never the events, since any writer can mint
+one that sorts first: the founding init names its enrollment in the
+committed `.lit/founding` and pins it beside the clone's key, and a clone
+that joins adopts the one `.lit/founding` names, pins it once, and pushes a
+signed membership request. Every fold is seeded with the pin; any other
+enrollment, such as one of two unsynced clones each initializing, is
+carried, and its principal requests membership of the store the file names.
 
 A revoked principal that stays offline from its revocation can mint events
 whose positions sort before it; the fold applies them, as it applies any

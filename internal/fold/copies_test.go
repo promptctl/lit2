@@ -73,9 +73,9 @@ func TestTheCopiesOfOneEventFoldAlikeInEitherArrivalOrder(t *testing.T) {
 		w.append(a.ref(), must(store.NewBatch(copies[c.first])))
 		w.append(b.ref(), must(store.NewBatch(copies[c.second])))
 		scans := w.scans()
-		one := fold.Replay(env, scans)
+		one := fold.Replay(env, w.founding, scans)
 		slices.Reverse(scans)
-		other := fold.Replay(env, scans)
+		other := fold.Replay(env, w.founding, scans)
 		if !one.State.Equal(other.State) {
 			t.Errorf("%s then %s folds otherwise than the reverse", c.first, c.second)
 		}
@@ -140,7 +140,7 @@ func TestTheIntegrityRecordGrowsLinearly(t *testing.T) {
 	w.append(b.ref(), must(store.NewBatch(junk...)))
 	// A signs, so its unknown kinds are unapplied; B's suite is unknown, so
 	// its are carried
-	got := fold.Replay(env, w.scans())
+	got := fold.Replay(env, w.founding, w.scans())
 	in := got.State.Integrity()
 	if len(in.Unapplied) != n || len(in.Carried) != n || len(in.Malformed) != n {
 		t.Fatalf("the fold holds %d unapplied, %d carried, %d malformed; want %d each", len(in.Unapplied), len(in.Carried), len(in.Malformed), n)

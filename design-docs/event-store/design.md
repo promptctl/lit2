@@ -423,10 +423,10 @@ so in one advisory line on read and write.
 would fold them, so a workspace-founding adopter sees remotely-filed bugs
 with no established-clone prerequisite — verify every writer's segments from
 the enrollment forward (§security-and-config), fold. The adopting checkout
-adopts the enrollment it finds and pushes a signed membership request. Two
-workspaces independently initialized against one remote are two enrollments
-meeting: a contradiction the fold reports, and the later one in total order
-yields. Identity cannot collide (§events: ids are random bits), so what the
+adopts the enrollment its committed `.lit/founding` names and pushes a
+signed membership request. Two workspaces independently initialized
+against one remote are two foundings: each clone folds the one it pinned
+and carries the other's enrollment. Identity cannot collide (§events: ids are random bits), so what the
 union of two writers' events surfaces is *semantic* duplication — two issues
 describing one bug — held as a fold advisory for an agent to settle by closing
 one. Adoption verifies the full history: every receiver runs the

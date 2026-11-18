@@ -39,7 +39,7 @@ func Founded(env fold.Env, signer events.Signer, e events.Enroll) fold.State {
 	if err != nil {
 		panic(err)
 	}
-	out := fold.Extend(env, fold.State{}, m.Events)
+	out := fold.Extend(env, fold.Seed(fold.FoundedBy{Enrollment: m.Events[0].ID()}), m.Events)
 	if _, ok := out.Outcomes[0].(fold.Applied); !ok {
 		panic(fmt.Sprintf("foldtest: the enrollment is %#v; want it applied", out.Outcomes[0]))
 	}

@@ -28,7 +28,7 @@ func leafIn(t *testing.T, s fold.State, n byte, fields ...[2]string) (fold.State
 }
 
 func TestAnEmptyBacklogServesNothingAndConsideredNone(t *testing.T) {
-	got, err := Of(fold.Replay(env, nil).State, schema, now).Next()
+	got, err := Of(fold.Replay(env, fold.NoFounding{}, nil).State, schema, now).Next()
 	if err != nil || got.Head != (NoHead{}) || got.Considered != 0 || len(got.Passed) != 0 {
 		t.Errorf("an empty backlog's next is %+v, %v; want no head, 0 considered, none passed", got, err)
 	}

@@ -297,12 +297,14 @@ type BadSignature struct{}
 // newer binary that has it verifies it when it replays.
 type UnknownSuite struct{}
 
-// NoPolicyInForce is an event sorting before the enrollment: verification
-// seeds there and never walks before it (§3.17).
+// NoPolicyInForce is an event sorting before the founding, or in a store
+// whose founding is not folded: verification seeds there and never walks
+// before it (§3.17).
 type NoPolicyInForce struct{}
 
-// EnrollmentYielded is an enrollment after the first, which To is.
-type EnrollmentYielded struct{ To events.EventID }
+// NotTheFounding is an enrollment other than the one the fold's Founding
+// names.
+type NotTheFounding struct{}
 
 // CitesFutureVersion is an event citing a policy version not yet in force
 // at its position.
@@ -336,7 +338,7 @@ type NotAMemberWrote struct{}
 func (BadSignature) reason()       {}
 func (UnknownSuite) reason()       {}
 func (NoPolicyInForce) reason()    {}
-func (EnrollmentYielded) reason()  {}
+func (NotTheFounding) reason()     {}
 func (CitesFutureVersion) reason() {}
 func (VersionRegressed) reason()   {}
 func (Unauthorized) reason()       {}
