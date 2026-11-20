@@ -553,7 +553,8 @@ and, where the writer's own signature suffices, its approval.
 Every prose field is an **envelope** `{suite, tier, epoch, nonce,
 ciphertext, commitment}` from its first event, and no layer below the verbs ever sees
 prose (`INV:opaque-envelope`). A **tier** is a named visibility group with
-an epoch key wrapped to each member's public key in the policy. A workspace
+an epoch key wrapped to each member's encryption key in the policy, a key
+separate from the principal's signing key (access-control design §1). A workspace
 starts with one tier, encrypted, every member entitled; a project that
 wants its backlog world-readable sets the default tier to plaintext, the
 documented public mode. Each item and each comment carries `tier`, a
@@ -702,10 +703,11 @@ same test fails when the two disagree.
 
 Beside the stack, passed through by every layer: the command event, and the
 composition root, the one place a store is opened and the clock, the writer
-identity, the principal's key with its wrapped tier keys, and the agent
-label are read. The checkout id lives in the checkout's private git dir,
-`<git-dir>/lit/checkout/id`; key material lives once per clone at
-`<git-common-dir>/lit/principal`, beside the store's root
+identity, the principal's signing key, its encryption key with the wrapped
+tier keys, and the agent label are read. The checkout id lives in the
+checkout's private git dir, `<git-dir>/lit/checkout/id`; key material lives
+once per clone under `<git-common-dir>/lit/`, the signing key and the
+encryption key in separate files, beside the store's root
 `<git-common-dir>/lit/store/` and outside it, never in the store and never
 behind a prompt. Tests build the same stack over an
 in-memory object store, a fixed clock and a fixed identity.
@@ -737,7 +739,8 @@ decided in the body.
   column, one that should not exist is deleted (tombstone) or purged
   (rewrite).
 - **E. Crypto suite.** Go's standard library and its extended crypto
-  packages: Ed25519 for signatures, X25519 for key wrapping,
+  packages: Ed25519 for signatures, X25519 for key wrapping, each its own
+  key and never one converted into the other,
   ChaCha20-Poly1305 for envelopes, HKDF for the commitment subkey, with the
   age file format as the reference design. The suite is replaceable, and
   §3.19 and §8 make that structural: every signature and envelope names its

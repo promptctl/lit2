@@ -21,7 +21,7 @@ Radicle proves viable over a git substrate (R II) and TUF supplies the role
 machinery for (R IV). The **read layer** assigns each item and each comment a
 named visibility tier; every prose field is an envelope encrypted under a
 content key wrapped to the tier's current epoch key, and epoch keys are
-wrapped to each member's public key in the policy — the SOPS recipient
+wrapped to each member's encryption key in the policy — the SOPS recipient
 pattern for grants (R IV), the Megolm/Sender-Keys epoch pattern for
 revocation (R IV), key destruction for erasure (R III). The layers compose but
 neither needs the other: the write layer alone meets the charter's RBAC bar;
@@ -66,7 +66,7 @@ consents); when the old key is claimed lost, the record requires the
 key is gone, reassign it to this new key" is precisely the single-signer
 takeover the threshold exists to stop. A succession for an *owner's* key
 always requires the threshold. The record itself moves no key material —
-epoch keys are wrapped per member public key (§2), so someone holding the
+epoch keys are wrapped per member encryption key (§2), so someone holding the
 plaintext must actively re-wrap to the new key. Who does is split the same
 way: in the consenting case the old key's holder re-wraps every epoch they
 hold in the same write; in the lost-key case the threshold-signed record
@@ -76,6 +76,36 @@ need not hold the keys themselves — with the new principal's access to a
 tier pending until some member of it performs the re-wrap. A key lost with
 no succession issued leaves the old principal's own-scoped rights stranded
 until an owner reassigns them (a documented limit, §3).
+
+**A principal signs; it never decrypts.** Each member entry also carries
+an **encryption key**: a separate X25519 key, signed by the principal, and
+the only key tier keys are ever wrapped to (§2). This is the OpenPGP
+encryption-subkey and Signal signed-prekey split. The two secrets are held
+in separate files, so a process can hold a member's read without its
+signing authority. The signing key can sit behind a keychain or token while
+reads go on. The encryption key rotates with a new signed entry, and the
+principal's identity does not change. The recovery phrase restores both,
+each derived from the phrase's seed under its own domain-separation label.
+
+**Delegated keys.** A principal can delegate a signing key. The delegation
+is a signed record that names the delegate's public key, a capability set,
+and an expiry. The capability set is a subset of the delegator's own
+(verb, glob, binding) triples. The record is an ordinary write by the
+delegator under `/members/<its id>/delegations`, and it grants nothing the
+delegator lacks, so it needs no approval. An event signed by a delegate
+cites its delegation. The fold applies the event only if it falls inside
+both the delegation's scope and the delegator's capabilities at the event's
+position. Attribution is the delegator, with the delegate key recorded
+beside it, so `own` follows the delegator. The delegation ends at its
+expiry, or earlier when the delegator or a `member.admin` removes it.
+Neither rotates anything, because a delegate holds no tier keys by default.
+A delegate that must read gets its own encryption key and an ordinary read
+grant to it. Like every read grant, that one is forward-only: expiry ends
+the delegate's writes, and only rotation ends its reads of new content.
+Uses: a checkout signing with a key scoped below its clone's owner key, and
+a contributor given a key scoped to one ticket's subtree. Precedent: OpenSSH
+certificates (short-lived keys signed by a holder, with principals and
+expiry) and TUF delegated roles (R IV).
 
 Precedent: Radicle's did:key node identities (R II); the keyring-carries-
 metadata pattern from SOPS (R IV).
@@ -282,16 +312,18 @@ to sync — which is what makes the sync story below hold.
 ### Keys, grants, revocation, erasure
 
 Per tier, a symmetric **epoch key**. Every epoch's key — current and
-historical — is wrapped to each entitled member's public key in the policy
-(SOPS recipient pattern, R IV). Granting read wraps **all of the tier's
-epoch keys** to the new principal, so a joiner reads the tier's whole
+historical — is wrapped to each entitled member's encryption key (§1) in the
+policy (SOPS recipient pattern, R IV). Granting read wraps **all of the tier's
+epoch keys** to the new member's encryption key, so a joiner reads the tier's whole
 existing backlog, which is what the onboarding flow (§5) promises;
 revocation is asymmetric by nature — leavers keep old epochs, joiners get
 them — and only the *future* is partitioned by rotation. This is the Monero
 view-key separation: read capability granted without any write capability.
-The converse also holds here — a CI principal can hold write verbs and zero
-tier keys — though that half is this design's own key-type independence,
-not a Monero precedent (Monero's spend side needs the view key in practice).
+The converse also holds: a CI principal can hold write verbs and zero tier
+keys. That half has no Monero precedent, since Monero's spend side needs the
+view key in practice. Both halves hold within one principal as well as
+between principals, because its signing key and its encryption key are
+separate secrets (§1).
 Removing a member rotates the tier to a new epoch wrapped to survivors only
 (Megolm / Sender-Keys, R IV); old epochs are not re-encrypted, and the
 removed member's continued ability to read what they could already read is
