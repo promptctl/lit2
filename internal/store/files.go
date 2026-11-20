@@ -63,7 +63,7 @@ type OSFiles struct {
 }
 
 // FilesAt is the store's files under root, which need not exist yet. Every
-// file it makes is 0644, as go-git makes lit's objects, so whoever can read
+// file it makes is 0644, as git makes lit's objects, so whoever can read
 // a clone's objects can read its logs too.
 func FilesAt(root string) OSFiles { return FilesAtMode(root, 0o644) }
 

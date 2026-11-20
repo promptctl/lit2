@@ -43,7 +43,10 @@ type Process struct {
 	WorkTree func(git.Checkout) store.Files
 	// Code is a checkout's code repository in its object format, read
 	// for the blob HEAD holds at a path and its history.
-	Code     func(git.Checkout, git.ObjectFormat) git.Code
+	Code func(git.Checkout, git.ObjectFormat) git.Code
+	// Git is the record of each git process the invocation ran, for the
+	// command's event.
+	Git      func() []git.Spawn
 	Fold     fold.Env
 	Reader   config.ReaderVersion
 	Commands command.Sink
@@ -76,6 +79,7 @@ func Run(p Process, args []string) int {
 		rec.Asked(cli.Summarize(cmd))
 		return dispatch(body{p: p, now: now, rec: rec}, table, groups, cmd)
 	})
+	event.Git = p.Git()
 	// [LAW:no-silent-failure] exception: stderr is where failures are said;
 	// when writing to it fails there is no channel left but the exit status,
 	// which still carries the outcome.

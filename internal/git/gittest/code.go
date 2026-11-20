@@ -89,11 +89,12 @@ func NewRepo(t *testing.T) Repo {
 	t.Helper()
 	dir := Physical(t)
 	Git(t, dir, "init", "-q", "-b", "main")
-	c, err := git.Locate(dir)
+	g := Runner(t)
+	c, err := g.Locate(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Repo{Code: git.CodeAt(c, git.SHA1), Dir: dir}
+	return Repo{Code: g.CodeAt(c, git.SHA1), Dir: dir}
 }
 
 // Commit writes files as the work tree's whole content and commits it.

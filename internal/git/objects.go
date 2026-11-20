@@ -3,7 +3,7 @@ package git
 import (
 	"encoding/hex"
 	"fmt"
-	"path"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -53,18 +53,14 @@ type ObjectID struct {
 // ParseObjectID reads an object id written as git writes one: the format's
 // length in lowercase hex digits.
 func ParseObjectID(f ObjectFormat, s string) (ObjectID, error) {
-	switch f {
-	case SHA1, SHA256:
-	default:
-		return ObjectID{}, fmt.Errorf("%q cannot be read as an id of %s", s, f)
-	}
 	b, err := hex.DecodeString(s)
-	if err != nil || len(b) != f.size() || hex.EncodeToString(b) != s {
-		return ObjectID{}, fmt.Errorf("%q is not a %s object id", s, f)
+	if err == nil && hex.EncodeToString(b) == s {
+		var id ObjectID
+		if id, err = ObjectIDFrom(f, b); err == nil {
+			return id, nil
+		}
 	}
-	id := ObjectID{format: f}
-	copy(id.sum[:], b)
-	return id, nil
+	return ObjectID{}, fmt.Errorf("%q is not a %s object id", s, f)
 }
 
 // ObjectIDFrom reads an object id held as its format and its sum, the
@@ -133,13 +129,6 @@ type RefHead struct {
 	Target ObjectID
 }
 
-// BadRef is a ref whose file does not hold an object id: torn by a crash,
-// symbolic, or written by something other than lit.
-type BadRef struct {
-	Name RefName
-	Why  error
-}
-
 // Objects stores and reads blobs, trees and commits by object id in lit's
 // own object database, which is SHA-1 (the store's decision 11). An id of
 // another format is ForeignFormat; an id it does not hold is MissingObject.
@@ -159,35 +148,47 @@ type Objects interface {
 // Refs lists and replaces refs in lit's own object database. A ref is
 // replaced, never advanced: only its writer updates it.
 type Refs interface {
-	// List is every ref whose name starts with prefix, sorted by name,
-	// and every such ref that does not hold an object id.
-	List(prefix RefName) ([]RefHead, []BadRef, error)
+	// List is every ref under prefix, sorted by name: the ref the prefix
+	// names and every ref below it, as git for-each-ref matches a prefix.
+	List(prefix RefName) ([]RefHead, error)
+	// Replace points name at to, an object the repository holds.
 	Replace(name RefName, to ObjectID) error
 }
 
-// checkRefName is the one check both of lit's repositories make of a
-// name they write, so the one on disk and its twin take the same names
-// `[LAW:single-enforcer]`: a clean path under refs/, no component
-// starting with . or ending in .lock, which refnames forbid and which
-// mark a replace's temporary file and a git command's lock.
-func checkRefName(n RefName) error {
-	s := string(n)
-	bad := checkPrefix(n) != nil || path.Clean(s) != s
-	for _, c := range strings.Split(s, "/") {
-		bad = bad || strings.HasPrefix(c, ".") || strings.HasSuffix(c, ".lock")
+// name is the one grammar of a tree entry's name and of a refname's
+// component in lit's repository: a letter or digit, then letters, digits,
+// _ and -. It admits every name lit makes, hex ids and words, and nothing
+// git refuses anywhere: no dot, so no ., .., .git or .lock, and none of
+// the characters git check-ref-format or fsck forbid
+// `[LAW:single-enforcer]`. gittest holds it to git itself.
+var name = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// parseRefName refuses a name that is not refs/ and one or more names.
+func parseRefName(n RefName) error {
+	parts := strings.Split(string(n), "/")
+	ok := len(parts) >= 2 && parts[0] == "refs"
+	for _, p := range parts[1:] {
+		ok = ok && name.MatchString(p)
 	}
-	if bad {
-		return fmt.Errorf("%q is not a refname under refs/", n)
+	if !ok {
+		return fmt.Errorf("%q is not a refname lit writes: refs/ and names of letters, digits, _ and -", n)
 	}
 	return nil
 }
 
-// checkPrefix refuses a list prefix outside refs/.
-func checkPrefix(p RefName) error {
-	if !strings.HasPrefix(string(p), "refs/") {
-		return fmt.Errorf("%q is not a prefix under refs/", p)
+// parsePrefix refuses a prefix that is not refs/, a refname, or a refname
+// and a slash.
+func parsePrefix(p RefName) error {
+	if p == "refs/" {
+		return nil
 	}
-	return nil
+	return parseRefName(RefName(strings.TrimSuffix(string(p), "/")))
+}
+
+// under says whether n is named by prefix p, as git for-each-ref matches
+// one: n is p, or p's next component begins it.
+func under(n, p RefName) bool {
+	return n == p || strings.HasPrefix(string(n), strings.TrimSuffix(string(p), "/")+"/")
 }
 
 // MissingObject is an id the object database does not hold.

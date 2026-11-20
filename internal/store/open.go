@@ -22,11 +22,12 @@ type Ports struct {
 }
 
 // DiskPorts is the store of at's clone on disk, rooted at
-// <git-common-dir>/lit/store/ (D11), lit's repository at repo/ beneath it.
-// It reads nothing; every worktree of a clone builds the same ports.
-func DiskPorts(at git.Checkout, entropy io.Reader) Ports {
+// <git-common-dir>/lit/store/ (D11), lit's repository at repo/ beneath it,
+// kept by g. It reads nothing; every worktree of a clone builds the same
+// ports.
+func DiskPorts(g git.Git, at git.Checkout, entropy io.Reader) Ports {
 	root := filepath.Join(at.SharedDir(), "store")
-	repo := git.RepositoryAt(filepath.Join(root, repoDir))
+	repo := g.RepositoryAt(filepath.Join(root, repoDir))
 	return Ports{Files: FilesAt(root), Objects: repo, Refs: repo, Entropy: entropy}
 }
 
@@ -131,8 +132,7 @@ func (logFile) source()   {}
 func (published) source() {}
 
 // Unreadable is a ref or a log that is not a stream: a ref name ParseRef
-// refuses, a ref naming objects that are missing or not lit's, a torn ref,
-// or a log whose header does not read. Name is the ref name or the log's
+// refuses, a ref naming objects that are missing or not lit's, or a log whose header does not read. Name is the ref name or the log's
 // path.
 type Unreadable struct {
 	Name string
@@ -155,7 +155,7 @@ type Heads struct {
 // writes visible whether or not its sync has run
 // `[LAW:no-ambient-temporal-coupling]`.
 func (s *Store) Heads() (Heads, error) {
-	refs, bad, err := s.ports.Refs.List(litRefs)
+	refs, err := s.ports.Refs.List(litRefs)
 	if err != nil {
 		return Heads{}, err
 	}
@@ -163,7 +163,7 @@ func (s *Store) Heads() (Heads, error) {
 	if err != nil {
 		return Heads{}, err
 	}
-	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs) + len(bad), LogsRead: len(logs)}
+	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs), LogsRead: len(logs)}
 	unreadable := func(name string, why error) { h.Unreadable = append(h.Unreadable, Unreadable{Name: name, Why: why}) }
 	local := map[Ref]bool{}
 	for _, p := range logs {
@@ -190,12 +190,6 @@ func (s *Store) Heads() (Heads, error) {
 			continue
 		}
 		h.Streams = append(h.Streams, Stream{Ref: ref, Until: Position{Log: log, At: pub.end}, src: pub})
-	}
-	for _, b := range bad {
-		if ref, err := ParseRef(b.Name); err == nil && local[ref] {
-			continue // read from its log; the publish that follows replaces the torn ref
-		}
-		unreadable(string(b.Name), b.Why)
 	}
 	slices.SortFunc(h.Streams, func(a, b Stream) int { return cmp.Compare(a.Ref.Name(), b.Ref.Name()) })
 	slices.SortFunc(h.Unreadable, func(a, b Unreadable) int { return cmp.Compare(a.Name, b.Name) })
@@ -382,8 +376,6 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, error) {
 	switch h := h.(type) {
 	case unnamed:
 		return nil, 0, NoPrior{}, nil
-	case tornRef:
-		return nil, 0, Resealed{Why: h.why}, nil
 	case named:
 		pub, log, err := s.publication(h.commit)
 		switch {
@@ -400,8 +392,7 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, error) {
 	panic(fmt.Sprintf("store: %T is not a refHead", h))
 }
 
-// refHead is what a ref holds: a commit, nothing, or a file that holds no
-// object id.
+// refHead is what a ref holds: an object, or nothing.
 //
 //sumtype:decl
 type refHead interface{ refHead() }
@@ -409,26 +400,19 @@ type refHead interface{ refHead() }
 type (
 	named   struct{ commit git.ObjectID }
 	unnamed struct{}
-	tornRef struct{ why error }
 )
 
 func (named) refHead()   {}
 func (unnamed) refHead() {}
-func (tornRef) refHead() {}
 
 func (s *Store) head(ref Ref) (refHead, error) {
-	heads, bad, err := s.ports.Refs.List(ref.Name())
+	heads, err := s.ports.Refs.List(ref.Name())
 	if err != nil {
 		return nil, err
 	}
 	for _, h := range heads {
 		if h.Name == ref.Name() {
 			return named{commit: h.Target}, nil
-		}
-	}
-	for _, b := range bad {
-		if b.Name == ref.Name() {
-			return tornRef{why: b.Why}, nil
 		}
 	}
 	return unnamed{}, nil
@@ -442,7 +426,7 @@ type RefMove interface{ move() }
 // RefUnchanged is a ref that already named the commit: nothing to send.
 type RefUnchanged struct{}
 
-// RefCreated is a ref that named no commit before: absent, or torn.
+// RefCreated is a ref that named nothing before.
 type RefCreated struct{}
 
 // RefReplaced is a ref replaced from Previous, never advanced: the commit
@@ -514,7 +498,7 @@ func moved(h refHead, to git.ObjectID) RefMove {
 			return RefUnchanged{}
 		}
 		return RefReplaced{Previous: h.commit}
-	case unnamed, tornRef:
+	case unnamed:
 		return RefCreated{}
 	}
 	panic(fmt.Sprintf("store: %T is not a refHead", h))

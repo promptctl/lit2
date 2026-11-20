@@ -3,6 +3,7 @@ package root
 import (
 	"crypto/rand"
 	"errors"
+	"github.com/promptctl/lit2/internal/git/gittest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -53,9 +54,9 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		opened, ok := opening(place(dir), diskStore(rand.Reader)).(command.Opened)
+		opened, ok := opening(place(gittest.Runner(t), dir), diskStore(gittest.Runner(t), rand.Reader)).(command.Opened)
 		if !ok || opened.Format != want {
-			t.Fatalf("a minted checkout opens %#v; want its store, format %s", opening(place(dir), diskStore(rand.Reader)), want)
+			t.Fatalf("a minted checkout opens %#v; want its store, format %s", opening(place(gittest.Runner(t), dir), diskStore(gittest.Runner(t), rand.Reader)), want)
 		}
 		if got := appendOne(t, opened.Store, twinID); !slices.Equal(got, []string{"an event"}) {
 			t.Errorf("the opened store reads back %v", got)
@@ -69,9 +70,9 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
 	unminted := checkout(t, nil)
 	for name, p := range map[string]command.Place{
-		"outside a checkout": place(t.TempDir()),
-		"an unminted one":    place(unminted),
-		"a config that does not parse": place(func() string {
+		"outside a checkout": place(gittest.Runner(t), t.TempDir()),
+		"an unminted one":    place(gittest.Runner(t), unminted),
+		"a config that does not parse": place(gittest.Runner(t), func() string {
 			d := checkout(t, minted)
 			if err := os.WriteFile(filepath.Join(d, ".git", "config"), []byte("[core\n"), 0o600); err != nil {
 				t.Fatal(err)
@@ -79,8 +80,8 @@ func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
 			return d
 		}()),
 	} {
-		if got, ok := opening(p, diskStore(rand.Reader)).(command.Unopened); !ok || got.Why == nil {
-			t.Errorf("%s opens %#v; want no store, and why", name, opening(p, diskStore(rand.Reader)))
+		if got, ok := opening(p, diskStore(gittest.Runner(t), rand.Reader)).(command.Unopened); !ok || got.Why == nil {
+			t.Errorf("%s opens %#v; want no store, and why", name, opening(p, diskStore(gittest.Runner(t), rand.Reader)))
 		}
 	}
 }

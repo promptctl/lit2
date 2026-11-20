@@ -1,63 +1,83 @@
 package git
 
 import (
+	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"sync"
-
-	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/storage/memory"
 )
 
-// Memory is lit's repository in process: Objects over go-git's in-memory
-// storer, so ids are git's, and refs in a map. It is the twin of
-// Repository, held to the same contract suites, and safe for concurrent
-// use as the repository on disk is.
-type Memory struct {
-	objectDB
-	mu   sync.Mutex
-	refs map[RefName]ObjectID
+// Memory is lit's repository in process: every object under the id lit's
+// encoding computes, which gittest holds to the id git computes, and refs
+// in a map under git's rules. It is the twin of Repository, held to the
+// same contract suites, and safe for concurrent use as the repository on
+// disk is.
+type Memory struct{ repo }
+
+// NewMemory is an empty repository in process. It holds the empty tree,
+// as every git repository does without storing it.
+func NewMemory() Memory {
+	empty := tree(nil)
+	return Memory{repo{b: &memory{objects: map[ObjectID]stored{idOf(empty): {kind: treeKind}}, refs: map[RefName]ObjectID{}}}}
 }
 
-// NewMemory is an empty repository in process.
-func NewMemory() *Memory {
-	m := &Memory{refs: map[RefName]ObjectID{}}
-	objects := memory.NewStorage()
-	m.objectDB = objectDB{reach: func(bool) (storer.EncodedObjectStorer, func(), error) {
-		m.mu.Lock()
-		return objects, m.mu.Unlock, nil
-	}}
-	return m
+type stored struct {
+	kind  kind
+	bytes []byte
 }
 
-// List is every ref under prefix, sorted by name. A ref in memory always
-// holds an object id, so none is bad.
-func (m *Memory) List(prefix RefName) ([]RefHead, []BadRef, error) {
-	if err := checkPrefix(prefix); err != nil {
-		return nil, nil, err
+type memory struct {
+	mu      sync.Mutex
+	objects map[ObjectID]stored
+	refs    map[RefName]ObjectID
+}
+
+func (m *memory) look(id ObjectID) (kind, uint64, error) {
+	k, b, err := m.read(id)
+	return k, uint64(len(b)), err
+}
+
+func (m *memory) read(id ObjectID) (kind, []byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	o, ok := m.objects[id]
+	if !ok {
+		return "", nil, MissingObject{ID: id}
 	}
+	return o.kind, slices.Clone(o.bytes), nil
+}
+
+func (m *memory) write(o object) (ObjectID, error) {
+	k, b := o.encode()
+	id := hashObject(SHA1, k, b)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.objects[id] = stored{kind: k, bytes: slices.Clone(b)}
+	return id, nil
+}
+
+func (m *memory) list(prefix RefName) ([]RefHead, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	heads := []RefHead{}
-	for _, name := range slices.Sorted(maps.Keys(m.refs)) {
-		if strings.HasPrefix(string(name), string(prefix)) {
-			heads = append(heads, RefHead{Name: name, Target: m.refs[name]})
+	for _, n := range slices.Sorted(maps.Keys(m.refs)) {
+		if under(n, prefix) {
+			heads = append(heads, RefHead{Name: n, Target: m.refs[n]})
 		}
 	}
-	return heads, []BadRef{}, nil
+	return heads, nil
 }
 
-// Replace points name at to.
-func (m *Memory) Replace(name RefName, to ObjectID) error {
-	if err := checkRefName(name); err != nil {
-		return err
-	}
-	if _, err := to.hash(); err != nil {
-		return err
-	}
+// replace refuses a name that is a directory of another ref, or has one
+// as its directory, as git's refs, which are paths, cannot hold both.
+func (m *memory) replace(name RefName, to ObjectID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for n := range m.refs {
+		if n != name && (under(n, name) || under(name, n)) {
+			return fmt.Errorf("%s cannot be a ref beside %s", name, n)
+		}
+	}
 	m.refs[name] = to
 	return nil
 }

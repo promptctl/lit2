@@ -39,7 +39,8 @@ func Main(args []string) int {
 		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
 		return 2
 	}
-	place, open := here(), diskStore(rand.Reader)
+	g := git.Find(os.Environ())
+	place, open := here(g), diskStore(g, rand.Reader)
 	return Run(Process{
 		Clock:         systemClock{},
 		Entropy:       rand.Reader,
@@ -48,7 +49,8 @@ func Main(args []string) int {
 		Store:         opening(place, open),
 		Open:          open,
 		WorkTree:      func(c git.Checkout) store.Files { return store.FilesAt(c.WorkTree) },
-		Code:          git.CodeAt,
+		Code:          g.CodeAt,
+		Git:           g.Spawns,
 		Fold:          foldEnv(runtime.GOMAXPROCS(0)),
 		Reader:        reader,
 		Commands:      commandLog(),
@@ -64,23 +66,17 @@ type systemClock struct{}
 func (systemClock) Now() time.Time { return time.Now() }
 
 // here is the place of the working directory.
-func here() command.Place {
+func here(g git.Git) command.Place {
 	dir, err := os.Getwd()
 	if err != nil {
 		return command.Unlocatable{Err: fmt.Errorf("reading the working directory: %w", err)}
 	}
-	return place(dir)
+	return place(g, dir)
 }
 
-// place locates the checkout at dir and reads its writer. It walks up from
-// the physical directory, as git does: Getwd gives the logical $PWD, from
-// which a cwd reached through a symlink misses its checkout.
-func place(dir string) command.Place {
-	physical, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return command.Unlocatable{Dir: dir, Err: fmt.Errorf("resolving the working directory: %w", err)}
-	}
-	c, err := git.Locate(physical)
+// place is the checkout git locates at dir, and its writer.
+func place(g git.Git, dir string) command.Place {
+	c, err := g.Locate(dir)
 	var none git.NotFound
 	if errors.As(err, &none) {
 		return command.NoCheckout{Dir: dir}
@@ -115,13 +111,9 @@ func opening(p command.Place, open func(git.Checkout, command.Minted) command.Op
 
 // diskStore opens a minted checkout's store over its clone's common dir on
 // disk, beside the code repository's object format, read once.
-func diskStore(entropy io.Reader) func(git.Checkout, command.Minted) command.Opening {
+func diskStore(g git.Git, entropy io.Reader) func(git.Checkout, command.Minted) command.Opening {
 	return func(c git.Checkout, id command.Minted) command.Opening {
-		format, err := git.ReadObjectFormat(c.CommonDir)
-		if err != nil {
-			return command.Unopened{Why: fmt.Errorf("reading the object format: %w", err)}
-		}
-		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(c, entropy), store.DefaultSegmentBound), Format: format}
+		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(g, c, entropy), store.DefaultSegmentBound), Format: c.Format}
 	}
 }
 

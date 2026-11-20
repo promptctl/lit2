@@ -30,31 +30,53 @@ func TestALinkedWorktreeReadsItsOwnHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	gittest.Git(t, linked, "commit", "-q", "-am", "side")
-	c, err := git.Locate(linked)
+	g := gittest.Runner(t)
+	c, err := g.Locate(linked)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := git.CodeAt(c, git.SHA1).AtHead("f")
+	got, err := g.CodeAt(c, git.SHA1).AtHead("f")
 	if want := (git.Tracked{Blob: git.HashBlob(git.SHA1, []byte("side\n"))}); err != nil || got != want {
 		t.Errorf("the linked worktree's f = %#v, %v; want its own commit's %#v", got, err, want)
 	}
 }
 
-// TestASHA256CodeRepositoryIsRefusedByName: go-git v5 reads no SHA-256
-// repository, so one is refused, saying so, never misread.
-func TestASHA256CodeRepositoryIsRefusedByName(t *testing.T) {
+// TestASHA256CodeRepositoryIsRead: git reads either format, so a SHA-256
+// code repository's blobs are its own SHA-256 ids.
+func TestASHA256CodeRepositoryIsRead(t *testing.T) {
 	dir := gittest.Physical(t)
 	gittest.Git(t, dir, "init", "-q", "--object-format=sha256")
-	c, err := git.Locate(dir)
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Git(t, dir, "add", "f")
+	gittest.Git(t, dir, "commit", "-q", "-m", "f")
+	g := gittest.Runner(t)
+	c, err := g.Locate(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	code := git.CodeAt(c, git.SHA256)
-	if _, err := code.AtHead("f"); err == nil || !strings.Contains(err.Error(), "sha256") {
-		t.Errorf("AtHead on a sha256 repository = %v; want a refusal naming sha256", err)
+	code, id := g.CodeAt(c, git.SHA256), git.HashBlob(git.SHA256, []byte("x\n"))
+	if got, err := code.AtHead("f"); err != nil || got != (git.Tracked{Blob: id}) {
+		t.Errorf("AtHead in a sha256 repository = %#v, %v; want %v", got, err, id)
 	}
-	if _, err := code.EverAt("f", git.HashBlob(git.SHA256, nil)); err == nil || !strings.Contains(err.Error(), "sha256") {
-		t.Errorf("EverAt on a sha256 repository = %v; want a refusal naming sha256", err)
+	if ever, err := code.EverAt("f", id); err != nil || !ever {
+		t.Errorf("EverAt in a sha256 repository = %v, %v; want true", ever, err)
+	}
+}
+
+// TestABlobOnlyOnAMergedBranchWasEverAtThePath: the walk covers every
+// commit HEAD reaches, a side branch whose change the merge did not keep
+// included.
+func TestABlobOnlyOnAMergedBranchWasEverAtThePath(t *testing.T) {
+	repo := gittest.NewRepo(t)
+	repo.Commit(t, map[string][]byte{"f": []byte("main\n")})
+	gittest.Git(t, repo.Dir, "checkout", "-q", "-b", "side")
+	repo.Commit(t, map[string][]byte{"f": []byte("side\n")})
+	gittest.Git(t, repo.Dir, "checkout", "-q", "main")
+	gittest.Git(t, repo.Dir, "merge", "-q", "-s", "ours", "-m", "merge", "side")
+	if ever, err := repo.EverAt("f", git.HashBlob(git.SHA1, []byte("side\n"))); err != nil || !ever {
+		t.Errorf("EverAt(the side branch's blob) = %v, %v; want true", ever, err)
 	}
 }
 
@@ -84,11 +106,12 @@ func TestAShallowCloneSaysWhatItCannotKnow(t *testing.T) {
 	repo.Commit(t, map[string][]byte{path: two})
 	shallow := filepath.Join(gittest.Physical(t), "shallow")
 	gittest.Git(t, repo.Dir, "clone", "-q", "--depth", "1", "file://"+repo.Dir, shallow)
-	c, err := git.Locate(shallow)
+	g := gittest.Runner(t)
+	c, err := g.Locate(shallow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	code := git.CodeAt(c, git.SHA1)
+	code := g.CodeAt(c, git.SHA1)
 	if ever, err := code.EverAt(path, git.HashBlob(git.SHA1, two)); err != nil || !ever {
 		t.Errorf("EverAt(HEAD's blob) in a shallow clone = %v, %v; want true", ever, err)
 	}

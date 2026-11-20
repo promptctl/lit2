@@ -5,15 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
-	"github.com/go-git/go-billy/v5/osfs"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/cache"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/storage/filesystem"
-	"github.com/go-git/go-git/v5/storage/filesystem/dotgit"
 )
 
 // Code is the code repository as lit2 reads it, never writes it: the blob
@@ -38,119 +29,94 @@ type Untracked struct{}
 func (Tracked) headBlob()   {}
 func (Untracked) headBlob() {}
 
-// CodeAt is the code repository of the checkout c, in format f, read in
-// process through go-git's storage: HEAD from the checkout's own git dir,
-// so a linked worktree reads its own branch, and refs and objects from the
-// common dir. No go-git repository is opened, so no transport is linked.
-func CodeAt(c Checkout, f ObjectFormat) Code { return codeRepo{c: c, f: f} }
+// CodeAt is the code repository of the checkout c, in format f, read by
+// git: HEAD through the checkout's own git dir, so a linked worktree reads
+// its own branch, under the process's environment, as git reads it for
+// the user. Every path is literal, from the work tree's root.
+func (g Git) CodeAt(c Checkout, f ObjectFormat) Code { return codeRepo{g: g, c: c, f: f} }
 
 type codeRepo struct {
+	g Git
 	c Checkout
 	f ObjectFormat
 }
 
-// storage is the repository's objects and refs. go-git v5 reads SHA-1
-// objects only, so a SHA-256 repository is refused, naming why.
-func (r codeRepo) storage() (*filesystem.Storage, error) {
-	if r.f != SHA1 {
-		return nil, fmt.Errorf("the code repository at %s is %s, and this build reads only sha1 code repositories", r.c.WorkTree, r.f)
-	}
-	return filesystem.NewStorage(dotgit.NewRepositoryFilesystem(osfs.New(r.c.GitDir), osfs.New(r.c.CommonDir)), cache.NewObjectLRUDefault()), nil
+func (r codeRepo) git(stdin []byte, args ...string) (string, error) {
+	out, err := r.g.run("", r.g.userEnv(), stdin, append([]string{"--git-dir=" + r.c.GitDir, "--literal-pathspecs"}, args...)...)
+	return string(out), err
 }
 
-// headCommit is HEAD's commit, or none when HEAD names a branch with no commit.
-func headCommit(s *filesystem.Storage) (*object.Commit, error) {
-	ref, err := storer.ResolveReference(s, plumbing.HEAD)
-	if errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return nil, nil
+// head is HEAD's commit, or false when HEAD names a branch with no commit,
+// which git rev-parse --verify answers with exit 1 and nothing said.
+func (r codeRepo) head() (string, bool, error) {
+	out, err := r.git(nil, "rev-parse", "-q", "--verify", "HEAD^{commit}")
+	var refused Refused
+	if errors.As(err, &refused) && refused.Spawn.Exit == 1 {
+		return "", false, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("reading HEAD: %w", err)
-	}
-	c, err := object.GetCommit(s, ref.Hash())
-	if err != nil {
-		return nil, fmt.Errorf("reading HEAD's commit %s: %w", ref.Hash(), err)
-	}
-	return c, nil
+	return strings.TrimSuffix(out, "\n"), err == nil, err
 }
 
-// blobAt is the blob c's tree holds at path, if a file is there. A
-// directory on the way that is none, a file or a submodule, holds nothing,
-// and a symlink's blob is its target's name, never the file's bytes.
-func blobAt(c *object.Commit, path string) (HeadBlob, error) {
-	tree, err := c.Tree()
-	if err != nil {
-		return nil, fmt.Errorf("reading commit %s's tree: %w", c.Hash, err)
-	}
-	parts := strings.Split(path, "/")
-	for _, dir := range parts[:len(parts)-1] {
-		e, err := tree.FindEntry(dir)
-		if errors.Is(err, object.ErrEntryNotFound) {
-			return Untracked{}, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("finding %s in commit %s: %w", path, c.Hash, err)
-		}
-		if e.Mode != filemode.Dir {
-			return Untracked{}, nil
-		}
-		if tree, err = tree.Tree(dir); err != nil {
-			return nil, fmt.Errorf("reading %s in commit %s: %w", dir, c.Hash, err)
-		}
-	}
-	e, err := tree.FindEntry(parts[len(parts)-1])
-	if errors.Is(err, object.ErrEntryNotFound) {
-		return Untracked{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("finding %s in commit %s: %w", path, c.Hash, err)
-	}
-	if !e.Mode.IsFile() || e.Mode == filemode.Symlink {
-		return Untracked{}, nil
-	}
-	return Tracked{Blob: sha1ID(e.Hash)}, nil
-}
-
+// AtHead reads HEAD's entry at path. A file is a blob of a regular mode;
+// a directory, a symlink, whose blob is its target's name, or a submodule
+// holds no file there.
 func (r codeRepo) AtHead(path string) (HeadBlob, error) {
-	s, err := r.storage()
+	commit, ok, err := r.head()
+	if err != nil || !ok {
+		return Untracked{}, err
+	}
+	out, err := r.git(nil, "ls-tree", "-z", "--full-tree", commit, "--", path)
 	if err != nil {
 		return nil, err
 	}
-	c, err := headCommit(s)
-	if err != nil || c == nil {
-		return Untracked{}, err
+	for _, e := range strings.Split(out, "\x00") {
+		meta, p, _ := strings.Cut(e, "\t")
+		f := strings.Fields(meta)
+		if p == path && len(f) == 3 && regular(f[0]) {
+			id, err := ParseObjectID(r.f, f[2])
+			return Tracked{Blob: id}, err
+		}
 	}
-	return blobAt(c, path)
+	return Untracked{}, nil
 }
 
-// EverAt walks HEAD's history. A commit the walk reaches that the clone
-// does not hold, past a shallow clone's boundary, makes the answer unknown,
-// refused as such, never answered no.
+func regular(mode string) bool { return mode == "100644" || mode == "100755" }
+
+// EverAt asks whether any commit in HEAD's history holds id at path. Every
+// blob ever at a path is one some commit's diff against a parent, or a
+// root's against nothing, puts there, so the diffs of every commit that
+// touches it, merges against each parent, answer it whole. A blob not
+// found in a shallow clone may be past its boundary, so the answer is
+// unknown, refused as such, never answered no.
 func (r codeRepo) EverAt(path string, id ObjectID) (bool, error) {
-	s, err := r.storage()
+	commit, ok, err := r.head()
+	if err != nil || !ok {
+		return false, err
+	}
+	commits, err := r.git(nil, "rev-list", "--full-history", commit, "--", path)
 	if err != nil {
 		return false, err
 	}
-	c, err := headCommit(s)
-	if err != nil || c == nil {
+	out, err := r.git([]byte(commits), "diff-tree", "--stdin", "--no-commit-id", "-m", "-r", "--root", "--no-renames", "-z", "--", path)
+	if err != nil {
 		return false, err
 	}
-	found := false
-	err = object.NewCommitPreorderIter(c, nil, nil).ForEach(func(c *object.Commit) error {
-		at, err := blobAt(c, path)
-		if err != nil {
-			return err
+	// each change is ":<mode> <mode> <id> <id> <status>", a NUL, its path, a NUL
+	fields := strings.Split(out, "\x00")
+	for i := 0; i+1 < len(fields); i += 2 {
+		f := strings.Fields(strings.TrimPrefix(fields[i], ":"))
+		if len(f) == 5 && fields[i+1] == path && regular(f[1]) && f[3] == id.String() {
+			return true, nil
 		}
-		if at == (Tracked{Blob: id}) {
-			found = true
-			return storer.ErrStop
-		}
-		return nil
-	})
-	if errors.Is(err, plumbing.ErrObjectNotFound) {
-		return false, fmt.Errorf("HEAD's history is not all in this clone, as in a shallow one, so whether %s was ever %s is unknown: %w", id, path, err)
 	}
-	return found, err
+	shallow, err := r.git(nil, "rev-parse", "--is-shallow-repository")
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(shallow) == "true" {
+		return false, fmt.Errorf("HEAD's history is not all in this clone, as in a shallow one, so whether %s was ever %s is unknown", id, path)
+	}
+	return false, nil
 }
 
 // CodeMemory is the code repository in process, SHA-1, its history a list
