@@ -317,8 +317,8 @@ func Store(t *testing.T, fresh Fresh) {
 		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
 			t.Errorf("sealing a log with no whole frame made %#v, %v; want %#v", sealed, err, want)
 		}
-		if refs, bad, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs)+len(bad) != 0 {
-			t.Errorf("with nothing to publish the refs are %v, %v, %v; want none", refs, bad, err)
+		if refs, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs) != 0 {
+			t.Errorf("with nothing to publish the refs are %v, %v; want none", refs, err)
 		}
 	})
 
@@ -329,29 +329,23 @@ func Store(t *testing.T, fresh Fresh) {
 		bs := Numbered(t, 10, "event")
 		AppendAll(t, s, bs...)
 		ref := store.WriterRef{Checkout: a}
-		blob, _, err := p.Objects.PutBlob([]byte("not a commit"))
+		held, _, err := p.Objects.PutBlob([]byte("not a commit"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		lost, err := git.ParseObjectID(git.SHA1, "ce013625030ba8dba906f756967f9e9ca394464a")
-		if err != nil {
+		if err := p.Refs.Replace(ref.Name(), held); err != nil {
 			t.Fatal(err)
 		}
-		for _, held := range []git.ObjectID{lost, blob} {
-			if err := p.Refs.Replace(ref.Name(), held); err != nil {
-				t.Fatal(err)
-			}
-			out := PublishOwn(t, s)
-			resealed, ok := out.Prior.(store.Resealed)
-			if !ok || resealed.Why == nil || out.Kept != 0 || out.Move != (store.RefReplaced{Previous: held}) {
-				t.Errorf("over a ref holding %s the publish was %+v; want it resealed from 0 with a reason, the ref replaced", held, out)
-			}
-			// a clone that fetched lit's repository and holds no log of a
-			other := fresh(t)
-			other.Objects, other.Refs = p.Objects, p.Refs
-			if got := Read(Whole(t, store.Open(b, other, 64), ref)); !slices.Equal(got, All(bs)) {
-				t.Errorf("the resealed publication reads %v; want the log's %v", got, All(bs))
-			}
+		out := PublishOwn(t, s)
+		resealed, ok := out.Prior.(store.Resealed)
+		if !ok || resealed.Why == nil || out.Kept != 0 || out.Move != (store.RefReplaced{Previous: held}) {
+			t.Errorf("over a ref holding %s the publish was %+v; want it resealed from 0 with a reason, the ref replaced", held, out)
+		}
+		// a clone that fetched lit's repository and holds no log of a
+		other := fresh(t)
+		other.Objects, other.Refs = p.Objects, p.Refs
+		if got := Read(Whole(t, store.Open(b, other, 64), ref)); !slices.Equal(got, All(bs)) {
+			t.Errorf("the resealed publication reads %v; want the log's %v", got, All(bs))
 		}
 	})
 
@@ -427,7 +421,7 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 		PublishOwn(t, sa)
 		PublishOwn(t, sb)
-		refs, _, err := p.Refs.List("refs/lit/")
+		refs, err := p.Refs.List("refs/lit/")
 		if err != nil || len(refs) != 2 || refs[0].Name != (store.WriterRef{Checkout: a}).Name() || refs[1].Name != (store.WriterRef{Checkout: b}).Name() {
 			t.Errorf("after both publish the refs are %v, %v; want one per checkout", refs, err)
 		}

@@ -447,9 +447,8 @@ unresolved is refused with the `aliases` line that says where its tickets go.
 An apply's own `config-ref` is the version in force when it was written;
 version one's is its own blob. The board compares git's id for the working
 file's bytes with the active blob, and never parses the file. lit2 reads the
-code repository's HEAD and history in process, through go-git, which reads
-only SHA-1 repositories; in a SHA-256 repository `config commit` and the
-history half of `config status` are refused, naming the format. A history
+code repository's HEAD and history through the user's git, in either object
+format. A history
 walk that reaches a commit the clone does not hold, past a shallow clone's
 boundary, is refused as unknown, never answered no.
 
@@ -696,8 +695,10 @@ same test fails when the two disagree.
  store      the append-only log; sealing into segments; one commit and one
             ref per writer, inbox refs; rewrites; snapshot; the background
             sync process
- git        go-git, in process, for objects and refs; the user's git binary
-            for push and fetch, run only by the background sync process
+ git        go-git, in process, reading lit's objects and refs; the user's
+            git binary writing them and reading the code repository; the
+            user's git binary for push and fetch, run only by the background
+            sync process
 ```
 
 Beside the stack, passed through by every layer: the command event, and the
@@ -722,11 +723,16 @@ decided in the body.
   [path-addressed-cli.md](path-addressed-cli.md) §Lanes as written, with the
   v1 hierarchy epic's three-level cap dropped: that cap existed to keep
   scheduling frames from nesting, and nothing in the tree schedules.
-- **B. Language and git library.** Go, with go-git (Apache-2.0) in process
-  for objects and refs (§6), and for reading the code repository's HEAD and
-  history, never writing it; go-git v5 reads no SHA-256 repository, so that
-  read is refused there until it does. The first budget run measures
-  go-git's object walk on the depth corpus.
+- **B. Language and git.** Go. The user's own `git` binary is the one
+  writer of lit's repository and the one reader of the code repository's
+  HEAD and history, never writing it, run as plain plumbing the way Dolt's
+  git blobstore runs it, so git owns the formats, locks and fsync, and the
+  code repository is read in either object format. go-git (Apache-2.0)
+  reads lit's repository in process (§6), so a command's reads cost no
+  process and no pipe round trip per object; git creates that repository
+  in the one format go-git reads whole: SHA-1, refs as files, no automatic
+  gc. The first budget run measures go-git's object walk on the depth
+  corpus.
 - **C. `topic`.** A built-in settable field, one short word that groups
   items across the tree and renders in the id, kept from v1 because a
   reader cannot tell `1f9.zc7` from `2ae.k3f` without it: the create

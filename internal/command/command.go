@@ -55,8 +55,9 @@ type ConfigFacts struct {
 
 // Event is the command event: the invocation, what was asked, when it
 // started, how long it took, what its store steps did, the version it ran
-// under, and how it ended. Config is nil when the run read no version,
-// which the event records as an absent config block.
+// under, every git process it ran, and how it ended. Config is nil when
+// the run read no version, which the event records as an absent config
+// block; Git is empty when no git ran.
 type Event struct {
 	Invocation
 	Command  cli.Summary
@@ -66,6 +67,7 @@ type Event struct {
 	Config   *ConfigFacts
 	Verbs    *VerbsFacts
 	Policy   PolicyFacts
+	Git      []git.Spawn
 	Outcome  cli.Outcome
 }
 
@@ -148,7 +150,7 @@ func Record(c Clock, inv Invocation, work func(now time.Time, r Recorder) cli.Ou
 			Policy:     &policy,
 		})
 	})
-	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Config: config, Verbs: did, Policy: policy, Outcome: outcome}
+	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Config: config, Verbs: did, Policy: policy, Git: []git.Spawn{}, Outcome: outcome}
 }
 
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {

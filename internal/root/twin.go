@@ -33,13 +33,13 @@ type Twin struct {
 
 // The twin's checkout and the id it is minted with.
 var (
-	twinCheckout = git.Checkout{WorkTree: "/twin", GitDir: "/twin/.git", CommonDir: "/twin/.git"}
+	twinCheckout = git.Checkout{WorkTree: "/twin", GitDir: "/twin/.git", CommonDir: "/twin/.git", Format: git.SHA1}
 	twinID       = store.CheckoutID{0x7a, 0x1e, 0x0f, 0x7b, 0x11, 0x2d, 0x4c, 0x88, 0x9e, 0x01, 0x5a, 0x6b, 0x3c, 0x2f, 0x40, 0x99}
 )
 
 // The second twin's checkout, beside the first over one store, and its id.
 var (
-	besideCheckout = git.Checkout{WorkTree: "/beside", GitDir: "/beside/.git", CommonDir: "/beside/.git"}
+	besideCheckout = git.Checkout{WorkTree: "/beside", GitDir: "/beside/.git", CommonDir: "/beside/.git", Format: git.SHA1}
 	besideID       = store.CheckoutID{0xbe, 0x51, 0xde}
 )
 
@@ -140,6 +140,7 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 			Open:          func(git.Checkout, command.Minted) command.Opening { return opened },
 			WorkTree:      func(git.Checkout) store.Files { return tree },
 			Code:          func(git.Checkout, git.ObjectFormat) git.Code { return code },
+			Git:           func() []git.Spawn { return []git.Spawn{} },
 			Fold:          foldEnv(2),
 			Reader:        twinReader(),
 			Commands:      commands,

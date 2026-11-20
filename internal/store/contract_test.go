@@ -18,7 +18,7 @@ func memory(*testing.T) store.Ports {
 // gitdir is a fresh clone's common dir on disk, made by git init, and its
 // store's ports as the composition root builds them.
 func gitdir(t *testing.T) store.Ports {
-	return store.DiskPorts(gittest.Clone(t), storetest.Entropy(2))
+	return store.DiskPorts(gittest.Runner(t), gittest.Clone(t), storetest.Entropy(2))
 }
 
 func TestStoreContract(t *testing.T) {

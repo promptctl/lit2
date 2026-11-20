@@ -120,8 +120,25 @@ type line struct {
 	Fold       []foldLine   `json:"fold,omitempty"`
 	Verbs      *verbsLine   `json:"verbs,omitempty"`
 	Policy     *policyLine  `json:"policy,omitempty"`
+	Git        []spawnLine  `json:"git"`
 	Place      any          `json:"place"`
 	Agent      string       `json:"agent,omitempty"`
+}
+
+// spawnLine is one git process the invocation ran; the block is empty,
+// never absent, when none ran.
+type spawnLine struct {
+	Args   []string `json:"args"`
+	Exit   int      `json:"exit"`
+	Stderr string   `json:"stderr,omitempty"`
+}
+
+func gitBlock(spawns []git.Spawn) []spawnLine {
+	l := make([]spawnLine, len(spawns))
+	for i, s := range spawns {
+		l[i] = spawnLine(s)
+	}
+	return l
 }
 
 type commandFacts struct {
@@ -183,6 +200,7 @@ func encode(e Event) ([]byte, error) {
 		Fold:       foldBlock(e.Store.Folds),
 		Verbs:      verbsBlock(e.Verbs, len(e.Store.Appends) > 0),
 		Policy:     policyBlock(e.Policy),
+		Git:        gitBlock(e.Git),
 		Place:      placeLine(e.Place),
 	}
 	switch o := e.Outcome.(type) {

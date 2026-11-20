@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/git/gittest"
 )
 
 // minted is the twin's identity, as its two files hold it.
@@ -23,12 +24,7 @@ func checkout(t *testing.T, files map[command.File]string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	gittest.Git(t, dir, "init", "-q")
 	c := git.Checkout{WorkTree: dir, GitDir: filepath.Join(dir, ".git"), CommonDir: filepath.Join(dir, ".git")}
 	for f, text := range files {
 		path := command.PathOf(f, c)
@@ -44,9 +40,9 @@ func checkout(t *testing.T, files map[command.File]string) string {
 
 func identityAt(t *testing.T, dir string) command.Identity {
 	t.Helper()
-	in, ok := place(dir).(command.InCheckout)
+	in, ok := place(gittest.Runner(t), dir).(command.InCheckout)
 	if !ok {
-		t.Fatalf("%s is not in a checkout: %#v", dir, place(dir))
+		t.Fatalf("%s is not in a checkout: %#v", dir, place(gittest.Runner(t), dir))
 	}
 	return in.Identity
 }
@@ -92,14 +88,14 @@ func TestACwdReachedThroughASymlinkFindsItsCheckout(t *testing.T) {
 	if err := os.Symlink(sub, link); err != nil {
 		t.Fatal(err)
 	}
-	if in, ok := place(link).(command.InCheckout); !ok || in.Checkout.WorkTree != dir {
-		t.Errorf("place(%s), a link to %s, = %#v; want the checkout at %s", link, sub, place(link), dir)
+	if in, ok := place(gittest.Runner(t), link).(command.InCheckout); !ok || in.Checkout.WorkTree != dir {
+		t.Errorf("place(%s), a link to %s, = %#v; want the checkout at %s", link, sub, place(gittest.Runner(t), link), dir)
 	}
 }
 
 func TestOutsideACheckoutIsNoCheckout(t *testing.T) {
 	dir := t.TempDir()
-	if got := place(dir); got != (command.NoCheckout{Dir: dir}) {
+	if got := place(gittest.Runner(t), dir); got != (command.NoCheckout{Dir: dir}) {
 		t.Errorf("place(%s) = %#v; want NoCheckout", dir, got)
 	}
 }
