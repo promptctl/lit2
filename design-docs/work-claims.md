@@ -126,10 +126,8 @@ hold:
    `claim_ttl` no longer holds. Expiry is evaluate's: computed on every read
    against `now`, never stored.
 4. **S is live, as far as this machine can tell.** See the liveness prune
-   below; machines that cannot check assume liveness and rely on freshness.
-   The prune answers with what it found, not merely whether to void, and a
-   worktree the holder has locked carries its claim past `claim_ttl` — leg 3
-   defers to leg 4 in that one case, and in no other.
+   below. Liveness can only end a claim early; nothing keeps a claim past
+   `claim_ttl`.
 
 Derived annotations accompany the predicate:
 
@@ -185,29 +183,18 @@ honest: deletion is a local fact, and only its owner can observe it instantly.
 A different clone on the same machine has its own store and is never pruned by
 this one.
 
-The enumeration answers with more than a yes or no. The finding is one of
-four: *gone* (this machine enumerated and the worktree is absent — the void
-above), *present*, *locked* (`git worktree lock`), or *unprovable* (another
-clone, which names no worktree here to look for). Two of
-the four decide anything. *Gone* voids. *Locked* is the one finding that
-outranks the clock: it carries the claim past `claim_ttl`, so the lane is **held** —
-routed around and gated exactly as a fresh one is, with no separate word for
-it. Every other signal here says a worktree EXISTS, which a dead session leaves
-behind just as readily; a lock is the holder speaking, and nobody sets it by
-walking away. Mere presence deliberately does not sustain a claim — a worktree
-outliving its session is ordinary, and letting that hold a lane would strand
-every uncleaned tree's work with the age-out that exists to release it never
-firing. A lock never outranks proven absence in the other direction either:
-git withholds `prunable` from a locked record, so a stream missing from the
-listing is gone whatever it once claimed about itself, and reading it the
-other way would make a lock an unkillable claim.
+**Session providers** are plugins, external commands in the git
+credential-helper style, so lit works with any agent tool and with none:
 
-*Present* and *unprovable* change nothing: past `claim_ttl`, with no lock, the claim has
-expired and the lane is unclaimed whatever this machine can see of the
-worktree. The enumeration once decided what an expired claim was called —
-"stale, worktree present" against "orphaned" — which presupposed that an
-expired claim was something to describe (links-claims-2wk2). It is not, so
-the finding is read for the two decisions above and nothing else.
+- `identify` names the session a lit process runs in; its answer is the
+  event's agent label. `LIT_AGENT` is the built-in provider.
+- `live` names the checkouts with a live session on this machine. When the
+  provider that wrote a checkout's newest event reports no live session
+  there, its claim ends at once; otherwise `claim_ttl` decides.
+- Every session in a checkout is the same claimant, a new one after `/clear`
+  included.
+- A lane's sessions are the agent labels on its members' events. None is
+  singled out, and claims never read them.
 
 ### Granularity: why the lane
 
