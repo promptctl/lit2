@@ -351,7 +351,7 @@ A **moment** is one of six things the engine observes: `enter <column>`,
 <column>`, `wrote <glob>`, `read <glob>`. A **handler** binds `on` a list of
 moments, `where` a selector, and holds a `body` of prose; a **workflow** is a
 named set of handlers a project adopts or declines as one thing. A handler
-prints text after the data it belongs to and produces nothing else. Handlers
+prints text after the data it belongs to. Handlers
 resolve per field from the ticket's node up through its ancestors, then the
 user layer, then the shipped layer, so the smallest override is one field.
 Bare `lit2` is `get /`, and the shipped `orientation` handler on `read /` is

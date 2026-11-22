@@ -28,7 +28,7 @@ unit a project adopts, declines and reads about as one thing, and its name is
 the name of a discipline: `plan-review`, `capture`.
 
 A **handler** is one binding and one body, `/workflows/<name>/handlers/<id>`.
-It binds to a moment lit observes and prints guidance at that moment. It is the
+It binds to a moment lit observes and runs its body at that moment. It is the
 unit that is overridden.
 
 There is no third thing. The graph of columns that
@@ -84,15 +84,6 @@ belongs to and never interleaved with data (the Output rules in
 is a `guidance` array of `{handler, text}` on the object. Several handlers at
 one moment print in address order, `<workflow>/<handler>` ascending.
 
-A handler produces nothing else: no transition, no write, no subprocess, no
-exit code. Enforcement is the column's requirements
-([transition-requirements.md](transition-requirements.md)); a handler speaks, a
-requirement refuses `[LAW:decomposition]`. The cut is what makes the owner's
-override ruling hold: a project that rewrites every body cannot weaken a
-requirement, because no body ever enforced one.
-[guidance.md](guidance.md) reaches the same line from the other side: what can
-be mechanical enforcement is, and guidance is what remains.
-
 ### What it reads
 
 The body is prose with two substitutions: `{$}` is the subject's id and
@@ -100,8 +91,7 @@ The body is prose with two substitutions: `{$}` is the subject's id and
 `{$/plan/verdict}`, `{$/status}`. A field not in the field table is refused when
 the body is written, so no body references a field that does not exist
 `[LAW:parse-dont-validate]`. A body that needs a fact about the ticket names
-the field, never copies the value, so it cannot go stale. There is no other
-input: no environment, no clock, no files.
+the field, never copies the value, so it cannot go stale.
 
 ## A workflow
 
