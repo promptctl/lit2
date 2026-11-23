@@ -108,14 +108,14 @@ The first policy is the **enrollment**, signed by its founding owner at
 default profile as version one, because every event must be signed by an
 enrolled principal.
 
-The clone, never the events, names which enrollment founds its store,
-since any writer can mint one that sorts first. The founding init names its
-enrollment in the committed `.lit/founding` and pins it beside the clone's
-key. A joining clone adopts the enrollment `.lit/founding` names, pins it
-once, and pushes a signed membership request; init tells the joiner to ask
-the owner to approve. Every fold is seeded with the pin. Any other
-enrollment, such as one of two unsynced clones each initializing, is
-carried, and its principal requests membership of the store the file names.
+The clone, never the events, names which enrollment founds its store. The
+founding init names its enrollment in the committed `.lit/founding` and pins
+it beside the clone's key. A joining clone adopts the enrollment
+`.lit/founding` names, pins it once, and pushes a signed membership request;
+init tells the joiner to ask the owner to approve. Every fold is seeded with
+the pin. Any other enrollment, such as one of two unsynced clones each
+initializing, is carried, and its principal requests membership of the store
+the file names.
 
 The owner admits with `add /members '{principal, role}'`. With one owner the
 threshold is one, so the proposal and its approval are one command. Once the
@@ -181,9 +181,7 @@ A capability is a triple **(verb, path glob, binding)**:
   `specifications/lanes-and-claims.md`), `own-or-assignee`, or `all`.
 
 How a `get` denial differs from the tier keys is
-`strategy/authority-and-visibility.md`, "Actions". Policy is additive grants:
-read grants cannot be taken back for content already covered, so there is no
-cryptographic deny.
+`strategy/authority-and-visibility.md`, "Actions".
 
 Every mutation needs a capability:
 
@@ -203,13 +201,12 @@ requirement gate's (`specifications/columns-and-requirements.md`). Closing
 is a move that carries the fields its column's entry needs, so whoever may
 move a ticket may close it.
 
-**The capability rule at the write.** The capability rule is the fold's
-(see Verification). A command folds the events it would mint onto the
-writer's current fold; if the fold would carry any of them, the command
-writes none and names each capability of the verb with what the write
-missed. Bulk forms fan out to the per-path check, so a selector or a
-`--json` list grants nothing the single write does not, and refusal of any
-path refuses the whole.
+**The capability rule at the write.** The capability rule is the fold's. A
+command folds the events it would mint onto the writer's current fold; if the
+fold would carry any of them, the command writes none and names each
+capability of the verb with what the write missed. Bulk forms fan out to the
+per-path check, so a selector or a `--json` list grants nothing the single
+write does not, and refusal of any path refuses the whole.
 
 **Default roles.** Roles are named bundles of capabilities, spelled as path
 globs in the default profile. A workspace may change any of them.
@@ -224,20 +221,14 @@ globs in the default profile. A workspace may change any of them.
 A contributor's `set */status` is bound `all` because pulling the top of the
 shared queue regardless of creator is the agent workflow. A contributor
 cannot delete another's ticket (`own` on `rm`) or an epic, even its own (the
-level-1 glob). "Can't delete epics" is a path restriction, not an ownership
-one.
-
-Irreversible loss is the rewrite `rm x --purge`, and `rm x --destroy` also
-shreds the content keys; both are owner-only by default.
+level-1 glob).
 
 Per-subtree delegation is a glob rooted at a node, TUF's delegated-paths
 primitive. The default profile ships none.
 
 ## Verification
 
-Validity is enforced by every verifier and by no trusted party, the model
-Radicle runs over a git substrate. The rule,
-for each event in total order:
+The rule, for each event in total order:
 
 1. Check the signature against its principal's key (or its delegation, as
    above).
@@ -253,9 +244,8 @@ the local copies stay. A modified client that appends a refused event
 anyway publishes a segment every receiver refuses; `/integrity` names the
 writer and the event.
 
-The local fold is the rollback defense: a remote serving a writer's history
-older than, or diverging from, the one already verified is refused, not
-adopted.
+A remote serving a writer's history older than, or diverging from, the one
+already verified is refused, not adopted.
 
 **Removal and offline work.** After `rm /members/<id>`, the removed
 principal's events after the removal's causal position fail verification. A
@@ -328,10 +318,7 @@ and historical, is wrapped to each entitled member's encryption key in the
 policy, the SOPS recipient pattern.
 
 **Grant.** Granting read wraps all of the tier's epoch keys to the new
-member, so a joiner reads the tier's whole existing backlog. Read is granted
-without any write capability, and the converse holds too: a CI principal can
-hold write verbs and no tier keys. Both halves hold within one principal,
-since its signing and encryption keys are separate.
+member, so a joiner reads the tier's whole existing backlog.
 
 **Removal** rotates every tier the member held to a new epoch wrapped to the
 survivors only, the Megolm and Signal sender-keys pattern. Old epochs are not
@@ -345,9 +332,7 @@ it destroys nothing. Each encrypted item and each of its comments carries its
 own content key, because comments tier independently of their item; destroying
 an item shreds its key and all of its comments' keys, whatever their tiers.
 Destroy is a rewrite that drops the wrapped copies on every replica that
-syncs, and no holder of any epoch key can reconstruct them. This answers GDPR
-Article 17 erasure and ITAR §120.54, under which end-to-end encrypted data
-whose keys no third party holds is not an export.
+syncs, and no holder of any epoch key can reconstruct them.
 
 **Default tier.** Every workspace has a default tier that all members hold.
 A new workspace starts with one tier, encrypted, all members entitled. A
@@ -367,42 +352,11 @@ different; others see the skeleton.
   old tier, because re-wrapping the old key would expose the history too.
   The widening write is performed by a principal holding both tiers.
 
-Undecided: what a checkout holding only one of the two tiers sees when asked
-to widen.
-
-## Fixed and configurable
-
-Present in every workspace, solo plaintext ones included:
-
-- a unique cryptographic principal per person (HIPAA 164.312(a) unique user
-  identification);
-- signed events and receive-time verification (NIST 800-53 AC-3: enforcement
-  is technical, not procedural);
-- history that changes only through signed rewrite events, so the signed log
-  is the protected audit log (NIST 800-53 AU-9);
-- policy-version monotonicity per writer, and refusal of a remote serving a
-  writer's history older than, or diverging from, the one already verified;
-- tombstone before destroy: no verb erases content a lower verb could not
-  recover, except `rm x --destroy`, which is owner-gated and logged.
-
-Configurable: encryption itself (a plaintext default tier), the role set and
-every capability binding, and the owner threshold.
-
 ## Documented limits
 
-- **Revocation is forward-only.** A removed member keeps what they could
-  already read.
-- **Metadata is visible** to every repo reader under full encryption:
-  existence, structure, timing, principal ids, and equality of two same-epoch
-  encrypted values.
-- **Narrowing** a tier leaves every member of the old, broader tier holding
-  the keys to the pre-narrowing history; **widening** shows the destination
-  tier only current values.
 - **Destroy removes recovery, not confirmation of a guess.** The commitment
   outlives the shred and its key is an epoch subkey members still hold, so a
   tier member can test a guessed plaintext against a destroyed field.
-- **Erasure reaches only replicas that sync**
-  (`specifications/events-and-store.md`, "Rewrite").
 - **A lost signing key without a succession** leaves own-scoped rights on the
   old principal until an owner reassigns them.
 - **Key loss is data loss.** Every tier key is held by all its members, so

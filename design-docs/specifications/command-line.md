@@ -32,13 +32,6 @@ dee/stage               scalar, derived from the column
 /integrity              a computed field on the root
 ```
 
-A path parses once into a typed address (node kind, level, field, scalar or
-list, settable or derived), and every verb takes the address, not the string
-`[LAW:parse-dont-validate]`. What a path names at a place is the field
-table's answer (`specifications/work-items.md`). An address to a derived
-field is not a valid target for `set`, so `set dee/claim x` fails at parse,
-not inside `set`.
-
 ### The root
 
 Bare `lit2` is `get /`. The root prints its children, `lanes`, `columns`,
@@ -92,8 +85,7 @@ rm    path...         delete a node: a ticket, a comment, a label, a dependency.
 What each write mints is the verb-to-intent table in
 `specifications/events-and-store.md`.
 
-- `set` on a list replaces the list. `set` echoes every element it removed,
-  so a replacing typo is visible in the echo and reversible from it.
+- `set` on a list replaces the list. `set` echoes every element it removed.
 - `add` appends; a list value appends each element. `add` never takes an id
   for the element it creates: for comments and children the system mints
   the id and echoes `+ $/comments/43s`.
@@ -107,11 +99,6 @@ What each write mints is the verb-to-intent table in
 
 Flags:
 
-- `--dry-run`, on every write: prints what the write would echo. It changes
-  no ticket and appends nothing to the synced log; the local command log
-  records it with `dry_run: true`. A write computes a description of its
-  change and hands it to the edge; dry-run is the edge declining to perform
-  it.
 - `--reason "…"`, on every write: carried on every event the write mints, as
   an enveloped prose field, and printed in `get x/history` beside the
   change.
@@ -178,11 +165,8 @@ A write with many paths is one write. It takes three escalating forms:
    `set 'unfiled.*/parent' @id`.
 3. **Selectors.** `set '(status=backlog labels=bug)/priority' urgent`.
 
-A selector or glob expands once, before anything is written, and if any path
-is refused nothing is written. The refusal names the path and the reason,
-says so, and lists the paths that would have landed:
-`error (reason=gate): … ; nothing written`. Bulk filing is a list value on
-one `add`, each item's fields as keys.
+A refusal of a bulk write lists the paths that would have landed. Bulk
+filing is a list value on one `add`, each item's fields as keys.
 
 ## Output
 
@@ -222,12 +206,8 @@ Output is a contract `[LAW:nothing-unseen]`.
 
 ## The table is the schema
 
-The verb table is the source the parser, the help text, the completions and
-the quickstart's command section are generated from. `lit2 --help` lists the
-verbs and every field from the field table: its type, whether it is
-settable or derived, and what `set` validates. Nothing is reachable only by
-a flag the table does not show. What is left for prose is workflow advice,
-and that lives in handlers (`specifications/workflows.md`).
+`lit2 --help` lists the verbs and every field from the field table: its
+type, whether it is settable or derived, and what `set` validates.
 
 Considered and rejected, because each makes the things around it expensive
 to replace: a hand-written help text and a `status` subcommand; a `new`

@@ -25,15 +25,13 @@ stored, and everything else about it is derived. The engine reads only a
 column's flags, its forward edges and its requirement lists. Invariants are
 requirements, checked loudly at the transition write; heuristics are
 handlers, which speak quietly at the moments they apply. Strength matches
-certainty (project-intent.md, "What this looks like in practice
-(illustrative, not binding)").
+certainty.
 
 ## Actions
 
-**The engine ships no content.** No column, level or label name is in code;
-the default profile is data a workspace may rewrite. What the engine reads
-from a column is its stage (initial, active, terminal) and its edges, so
-start, done and the queue work under any names.
+**The engine ships no content.** No column, level or label name is in code.
+What the engine reads from a column is its stage (initial, active, terminal)
+and its edges, so start, done and the queue work under any names.
 Serves: Operations; project-intent.md, "Flexibility is structural, not
 anticipatory".
 Spec: `specifications/columns-and-requirements.md`.
@@ -50,16 +48,13 @@ Spec: `specifications/columns-and-requirements.md`.
 pure function, and the transition write is the only caller that acts on it.
 A ticket whose requirements stop holding afterwards stays where it is, and
 the facts are in its history and its derived fields. `held` and `/next`
-report what the gate would say and enforce nothing. This gate is one of lit's
-two checks; the other is the capability rule
-(`strategy/authority-and-visibility.md`).
+report what the gate would say and enforce nothing.
 Serves: Data, Operations.
 Spec: `specifications/columns-and-requirements.md`.
 
 **Each requirement sits on the side that owns its reason.** Exit says this
 column's work is complete, whatever comes next; entry says the destination
-needs this, whatever it came from. Closing and parking abandon a column's
-work rather than complete it, so they carry only the destination's entry.
+needs this, whatever it came from.
 Serves: Operations.
 Spec: `specifications/columns-and-requirements.md`.
 
@@ -73,8 +68,7 @@ Spec: `specifications/columns-and-requirements.md`.
 **Review is a record, not a move.** A plan and a pull request are reviewables:
 revisions, and reviews that each name the revision they judged. A failed
 review leaves the ticket where it is and the review is the rework record, so
-rework needs no column and no record of its own. A review names its revision
-because a review is a judgment of one revision.
+rework needs no column and no record of its own.
 Serves: Operations.
 Spec: `specifications/columns-and-requirements.md`.
 
@@ -92,8 +86,7 @@ Spec: `specifications/columns-and-requirements.md`, `specifications/workflows.md
 
 **Running work survives a process change.** A ticket left in a column no
 version declares keeps its transition; it is reported as undeclared, passed
-over by `/next`, listed on `/integrity`, and the universal edges, into the
-columns no forward edge names, offer a way out.
+over by `/next` and listed on `/integrity`.
 Serves: Data.
 Spec: `specifications/columns-and-requirements.md`.
 
@@ -101,8 +94,8 @@ Spec: `specifications/columns-and-requirements.md`.
 of handlers a project adopts or declines as one thing; a handler binds moments
 the engine observes, filtered by the CLI's own selector, to a body it runs at
 those moments. A column's guidance, the orientation on a bare `lit`, and help
-topics are all handlers. Which moments exist and what happens at each is
-data.
+topics are all handlers. lit defines the moment kinds; what happens at each
+moment is data.
 Serves: Operations, Complexity.
 Spec: `specifications/workflows.md`.
 
@@ -117,14 +110,6 @@ Spec: `specifications/workflows.md`.
 
 **Labels are declared, then applied or computed.** A label is workspace data,
 applied by a write or computed from a selector; kinds of work such as bug and
-chore are labels. No label is reserved in code.
+chore are labels.
 Serves: Operations.
 Spec: `specifications/work-items.md`.
-
-**What the process did is on the record.** Every transition prints its
-requirement counts, zero included, so a transition with nothing declared and
-one whose requirements went unevaluated do not look alike; the command record
-holds every requirement evaluated and every handler fired or suppressed, with
-the reason.
-Serves: Operations.
-Spec: `specifications/columns-and-requirements.md`, `specifications/workflows.md`.

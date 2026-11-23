@@ -27,45 +27,22 @@ The file declares:
 | `claim_ttl` | the claim freshness window | `specifications/lanes-and-claims.md` |
 | `nodes."<id>"` | a per-node section keyed by a node's id, carrying `columns`, `workflows` or `claim_ttl` for that node and its descendants | the spec of each key it carries |
 
-In a tracker administrator's vocabulary:
-
-| Jira / Azure DevOps term | in lit |
-|---|---|
-| issue type, work item type | a hierarchy level: roles fixed in code, names in configuration |
-| issue type hierarchy | the levels and exact containment |
-| field, field configuration | a field declared per level with a kind |
-| required field | an entry or exit requirement on a column that names the field |
-| status, status category | a column and its stage |
-| workflow (statuses and transitions), conditions and validators | columns with entry and exit requirements |
-| issue link type (Blocks, Relates) | a link type with a kind and the level pairs it may join |
-| work item template (Azure DevOps), description template (GitLab) | a creation template per level |
-| the schemes assigned to a project | the default profile |
-| automation rule | a workflow: a named unit of handlers |
-
 Every key is also a node under the root, read and written with the four
 verbs (`specifications/work-items.md`, "Levels and the tree").
 
 ## Applying a version
 
 `lit2 config commit` applies a committed blob of the file as the next active
-version. It refuses a dirty or untracked file. A squash merge changes no blob
-id, so how the file reached its branch is immaterial.
+version. It refuses a dirty or untracked file.
 
 An apply is an event that carries the version's bytes and its git blob id
 and names, by event id, the applies it replaces, as any register write names
-its parents. The log is therefore self-sufficient, and the file is never
-read to learn what is in force. Every event's `config-ref` names the active
-version its writer ran under, and the write is judged under that version
+its parents. Every event's `config-ref` names the active version its writer
+ran under, and the write is judged under that version
 (`specifications/fold.md`). An apply's own `config-ref` is the version in
 force when it was written; version one's is its own blob.
 
-A write through the verbs to a node of the schema goes through the path
-parser and edits the working-tree draft of the file, saying so in the echo;
-committing the file is the person's act, as with any other file. A draft in
-the working tree is not in force until it is applied, so a draft that does
-not parse stops no command. Every verb refuses a store with no version in
-force, naming `lit2 config commit`, so every event a verb writes is written
-under one.
+The refusal of a store with no version in force names `lit2 config commit`.
 
 **Init.** `lit2 admin init` writes the default profile to
 `.lit/workspace.toml` when no file exists and applies the same bytes as
@@ -95,10 +72,8 @@ can read the model in force.
 ## Validation
 
 **One parse of the whole document, at apply.** `lit2 config commit` parses
-the version it applies into one typed value, so a cross-reference is caught
-whichever key the edit touched: a link pair naming level 4, a template key
-naming a field the level does not declare. A refusal names every fault with
-its key path and applies nothing, and nothing overrides it:
+the version it applies into one typed value. A refusal names every fault
+with its key path and applies nothing, and nothing overrides it:
 
 ```
 error (reason=schema): /links/blocks/between [1,4] names no level; nothing applied
@@ -118,7 +93,7 @@ protected too.
 
 **The configuration check.** `config status` reports, beside drift and
 contention, the warnings a valid version can still carry, such as a handler
-bound to a column the workspace lacks (`specifications/workflows.md`).
+bound to a column the workspace lacks.
 
 ## The default profile
 

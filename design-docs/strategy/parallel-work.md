@@ -25,7 +25,7 @@ checkout needs it, so it travels through the one channel all checkouts share:
 the store. What stays local is identity, so a checkout recognizes its own
 commitments, and physical addresses, on the machine that owns them. Rank
 stays the shared agenda, what a zero-context checkout should do, and ranking
-a lane to the top is once more a statement of project priority, because
+a lane to the top is a statement of project priority, because
 "I'm working this" no longer needs it.
 
 ## Actions
@@ -49,8 +49,7 @@ inside a checkout and the checkout persists, so claims key on the checkout: a
 new session inherits its checkout's claims with no re-briefing, and many
 sessions in one checkout are one claimant. Claims keyed to sessions would
 leave every new session unclaimed.
-Serves: Operations; project-intent.md, "What \"effective\" looks like
-concretely".
+Serves: Operations.
 Spec: `specifications/lanes-and-claims.md`.
 
 **Claims are explicit events.** Starting a ticket writes a claim on its lane,
@@ -84,9 +83,8 @@ Spec: `specifications/lanes-and-claims.md`.
 **`/next` works an epic to completion.** It serves the checkout's own held
 lanes first, and every lane of the epic the checkout is already in before any
 lane of another epic, so no more epics are in progress than there are
-worktrees. Lanes another checkout holds are routed around and named, not hidden;
-an urgent head interrupts only among lanes this checkout may take, so urgency
-never crosses another checkout's hold.
+worktrees. Lanes another checkout holds are routed around and named, not
+hidden.
 Serves: Operations.
 Spec: `specifications/lanes-and-claims.md`.
 
@@ -97,9 +95,8 @@ does not.
 Serves: Operations.
 Spec: `specifications/lanes-and-claims.md`.
 
-**No second shared medium.** Claims ride the existing sync as ordinary events;
-there are no claim tables, registries, lockfiles or sidecar maps between
-worktrees, and no claim-specific merge logic.
+**No second shared medium.** Claims ride the existing sync as ordinary events,
+with no claim-specific merge logic.
 Serves: Complexity.
 Spec: `specifications/lanes-and-claims.md`.
 
@@ -113,6 +110,5 @@ Spec: `specifications/lanes-and-claims.md`.
 **Session providers are plugins.** Naming a session and reporting which
 checkouts have a live one are external commands in the git credential-helper
 style, so lit works with any agent tool and with none.
-Serves: Operations; project-intent.md, "What \"effective\" looks like
-concretely".
+Serves: Operations.
 Spec: `specifications/lanes-and-claims.md`.

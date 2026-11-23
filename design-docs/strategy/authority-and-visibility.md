@@ -10,12 +10,10 @@ and every other clone. Yet a contributor must be unable to delete an epic or
 another person's ticket, and a ticket must be private from people who can
 read the repository. Every guarantee therefore has to be one each client can
 check for itself. Two limits follow from that. No client-side scheme can stop
-a holder of push access from deleting history; it can only stop that act from
-becoming accepted history. And a key once given cannot be taken back for
-content it already covered, so a read grant is forward-only. Encryption also
-collides with convergence: two fresh encryptions of the same text differ, so a
-fold comparing bytes would see a conflict that is not there. And none of it
-may ask the user to know any cryptography.
+a holder of push access from deleting history. And a key once given cannot be
+taken back for content it already covered, so a read grant is forward-only.
+Encryption also collides with convergence: two fresh encryptions of the same
+text differ, so a fold comparing bytes would see a conflict that is not there.
 
 ## Guiding policy
 
@@ -28,8 +26,7 @@ encryption and decryption happen only at the verb boundary. Prefer
 established patterns, for the crypto and for the role vocabulary. Where
 access control would need an overly complicated implementation or data model,
 prefer redesigning lit's data model over weakening the access-control
-architecture. Key handling, signing and verification happen without the user
-studying them.
+architecture.
 
 ## Actions
 
@@ -89,11 +86,11 @@ write without reading.
 Serves: Operations.
 Spec: `specifications/access.md`.
 
-**A tier hides content, not existence.** Structural fields stay plaintext
-for every member, so rank, lanes, claims and stage keep working across
-tiers, and nothing a replica computes depends on being able to read. Shared structure never depends on
-another tier's plaintext. Adding a structural field adds metadata every
-repository reader can see, and the change that adds it names that trade.
+**A tier hides content, not existence.** Structural fields stay plaintext for
+every member, so rank, lanes, claims and stage keep working across tiers, and
+nothing a replica computes depends on being able to read. Adding a structural
+field adds metadata every repository reader can see, and the change that adds
+it names that trade.
 Serves: Operations, Data.
 Spec: `specifications/access.md`.
 
@@ -109,17 +106,6 @@ epoch for the survivors; there is no cryptographic deny, and the policy
 language is additive grants plus rotation.
 Serves: Operations, Data.
 Spec: `specifications/access.md`.
-
-**lit's model yields where security would not.** Ids are opaque, attribution
-is the principal and never a username or session id, a store is opened
-through the principal its clone signs for, and `assignee` is the lane's claim
-holder.
-Serves: Complexity.
-Spec: `specifications/access.md`, `specifications/lanes-and-claims.md`.
-
-**Integrations are principals.** A bridge to another tracker is a principal
-with a role and tier grants, needing no mechanism of its own.
-Serves: project-intent.md, "Direction (not yet committed work)".
 
 ## What the user carries
 

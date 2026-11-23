@@ -4,10 +4,8 @@ What lit says to an agent, when, and in what register.
 
 ## Diagnosis
 
-An agent forms a picture of the task and acts on it, and a wrong picture is
-usually discovered late and expensively, by a human at review
-(project-intent.md, "Feedback over control"). The moments when the next loop
-could be made cheaper, when a ticket is created, finished or abandoned, pass
+The moments when the next loop could be made cheaper (project-intent.md,
+"Feedback over control"), when a ticket is created, finished or abandoned, pass
 unremarked unless something speaks at them. But text that speaks too often or
 too loudly is noise: nudges to be careful, restated principles, imperatives
 in capitals. An agent learns to discount them, and they crowd out the line
@@ -60,13 +58,6 @@ is Y. Shipped handlers avoid nudges to verify, plan, focus or think
 carefully; prompts that ask the agent to halt and reason about adjacent
 state; restatements of principles the agent's own instructions already carry;
 and text whose value is a hypothesis nobody measured.
-Serves: project-intent.md, "Nudge, don't shove — and never break the system's
-own behavior".
-
-**Facts, not commands.** Guidance says what is true and what follows: "this
-write is idempotent and safe to repeat", not "do NOT ask the user"; "a purge
-reaches every store lit syncs with and cannot be undone", not "NEVER purge
-without permission".
 Serves: project-intent.md, "Nudge, don't shove — and never break the system's
 own behavior".
 

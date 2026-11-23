@@ -24,16 +24,13 @@ vocabulary of the design, not the shape of the code.
 ## Actions
 
 **Units downhill.** The import order is declared once, and no unit imports
-one above it, including by an edge that closes no cycle. A concern table
-places every primitive and every pipeline step in the unit that owns it.
+one above it, including by an edge that closes no cycle.
 Serves: Complexity.
 Spec: `specifications/code-layout.md`.
 
 **One composition root.** The store is opened, and the clock, the writer
 identity, the keys and the agent label are read, in one place, and handed down
-as values; the clock is read once per command and handed down as `now`. Tests
-build the same stack over an in-memory object store, a fixed clock and a
-fixed identity.
+as values; the clock is read once per command and handed down as `now`.
 Serves: Data, Complexity.
 Spec: `specifications/code-layout.md`.
 
@@ -45,8 +42,7 @@ Spec: `specifications/code-layout.md`.
 
 **How lit grows.** A new ticket fact that no event kind records is an event
 kind plus a fold rule and, if it needs the clock, an
-evaluate rule. A new piece of the workspace's model is a key in the workspace
-file. What a new verb or a new prose field owes access control is in
+evaluate rule. What a new verb or a new prose field owes access control is in
 `strategy/authority-and-visibility.md`.
 Serves: Complexity; project-intent.md, "Flexibility is structural, not
 anticipatory".
@@ -70,15 +66,3 @@ end-to-end smoke per release runs a real repository, a real remote, two
 clones and the background sync.
 Serves: Complexity, Data.
 Spec: `specifications/code-layout.md`, "Testing".
-
-**Build the riskiest foundations first.** The leverage is in the event record
-and the fold, then the path grammar and the field table: once those are the
-right shape, most later capabilities are a fold rule, an evaluate rule, a
-capability or a key in the workspace file. So a walking skeleton comes first,
-settling the design's three risks at full depth: that one event set folds to
-one state on every machine that holds it, that one commit per writer on a
-plain remote carries it there without the remote growing with commands, and
-that every event is signed and verified with no server. Everything else
-follows at working depth and is deepened slice by slice.
-Serves: Complexity.
-Spec: `specifications/code-layout.md`, "Build order".

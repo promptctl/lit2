@@ -2,28 +2,6 @@
 
 Carries out `strategy/storage-and-sync.md`.
 
-Every lit mutation is an immutable, signed, content-addressed **event**
-appended to the writing checkout's own log in lit's own git object database
-under the git common dir. State is a deterministic fold over the union of
-all writers' events (`specifications/fold.md`). Sync is `git fetch` and
-`git push` of per-writer refs against the code repository's ordinary remote.
-
-## The invariant registry
-
-Code and documents cite these as `[INV:token]`. Each is defined in the
-section named.
-
-| Token | One line |
-|---|---|
-| `INV:rewrite-is-an-event` | an event changes after it is written only by a rewrite event naming the change; a receiver accepts a published tree that lacks events it held only when rewrite events account for every one ("Rewrite") |
-| `INV:deterministic-fold` | same event set ⇒ equal derived state on every machine, in any arrival order, from genesis or a snapshot; only a fold-version bump may change it (`specifications/fold.md`) |
-| `INV:single-writer-ref` | each ref has exactly one writing checkout; all cross-writer coordination is read-side ("Log, segments and refs") |
-| `INV:preserve-unknown` | an event a reader cannot interpret is carried and surfaced, never discarded ("Unknown events") |
-| `INV:disposable-cache` | derived local state may always be deleted and refolded; nothing behaves as if the cache were truth ("Cache") |
-| `INV:opaque-envelope` | layers below the verb layer treat prose payloads as opaque bytes ("Event model") |
-| `INV:config-versioned` | every event names the active workspace version its writer ran under (`config-ref`) and the policy version in force ("Event model") |
-| `INV:wall-time-is-data` | every event carries a wall-clock time; durations read it, order never does ("Wall time") |
-
 ## Event model
 
 An event is `(type, schema-version, subject, payload, attribution,
@@ -36,10 +14,7 @@ config-ref, policy-version, causal-position, recorded-at, signature-slot)`.
   made which change where, and a verifier reports the payload as rewritten,
   pointing at the rewrite event and its own signature. The salt travels with
   the payload and is erased with it, so a low-entropy value cannot be
-  recovered by guessing its hash. Every event is signed, from the first event
-  of every store, by its principal's key or a key the principal delegated to
-  the clone (`specifications/access.md`, "Principals and keys"). The
-  signature slot names its crypto suite.
+  recovered by guessing its hash. The signature slot names its crypto suite.
 - **Attribution** is `(checkout, principal, agent)`
   (`specifications/access.md`, "Identity").
 - **`config-ref`** is the git blob id, in the code repository's object
@@ -61,44 +36,23 @@ config-ref, policy-version, causal-position, recorded-at, signature-slot)`.
   identically on every machine and needing no wall clock. The event id is
   needed because two commands of one checkout can fold one frontier and so
   mint one `(writer, position)`.
-- **Envelopes.** Prose payload fields are opaque byte strings end to end
-  (`INV:opaque-envelope`). The fold, cache, codec and sync never inspect
-  prose, so tiers change what the verb layer does, not what the store does
-  (`specifications/access.md`, "Tiers and envelopes").
 
 ## Wall time
 
 `recorded-at` is the writer's clock reading when it minted the event, stored
 as read. It is data, not order (`INV:wall-time-is-data`). Durations read it:
 how long a ticket has been in progress, how long since it was last touched,
-whether a claim has outlived `claim_ttl`. Supersession is the total order's
-question and *when* is `recorded-at`'s (`specifications/fold.md`, "Order"): a
-writer that worked offline through many events can rank a three-day-old
-touch after one made today.
+whether a claim has outlived `claim_ttl`.
 
 A writer's `recorded-at` is its own clock reading, never a time it folded
 from another writer carried forward. Otherwise one fast clock would hand its
 future to every writer that folded its events, and every claim they
 refreshed would read as fresh until real time caught up.
 
-Skew still reaches every duration and can make one negative. A writer whose
-clock runs slow by more than `claim_ttl` publishes events a reader already
-counts as expired, so a live lane looks free; a writer whose clock runs fast
-keeps a dead lane held for as long as its clock is ahead. How a reader
-surfaces skew is `specifications/fold.md`.
-
 ## Intent
 
-Events carry **intent, not derived state**. The fold owns derivation, and an
-event that embeds a derived value forks truth into two homes:
-
-- WRONG: `{"type":"rank.set","issue":"x1","position":4}`: position 4 of
-  what list? Two concurrent events like it cannot both be true.
-- RIGHT: `{"type":"rank.place","issue":"x1","above":"y2"}`: an intent that
-  stays meaningful whatever else happened concurrently.
-
-The verb layer compiles every write into intent events. The verbs are the
-interface and the events are the memory, and the two are not the same shape:
+Events carry **intent, not derived state**. The verb layer compiles every
+write into intent events:
 
 | on the command line | events minted |
 |---|---|
@@ -107,14 +61,14 @@ interface and the events are the memory, and the two are not the same shape:
 | `add x/labels ready` / `rm x/labels/ready` | `member.add {item, field, member}` / `member.rm {item, field, member, observed}`, `observed` the adds the writer saw |
 | `set x/labels '[a, b]'` | one `member.rm` per element removed, one `member.add` per element added |
 | `add x/comments "…"` | `comment.add {item, id, body}` |
-| `rm x/comments/<id>`, which is `set x/comments/<id>/deleted true` | `field.set {element, deleted, true}` about the comment, a node with fields as an item is; `get x/comments` still lists it, marked |
+| `rm x/comments/<id>`, which is `set x/comments/<id>/deleted true` | `field.set {element, deleted, true}` about the comment, a node with fields as an item is |
 | `add <node>/lanes/datetime '[dee, b64]'` | `lane.create`, then `lane.place {lane, item, after}` per member |
 | `set <node>/lanes/datetime '[b64, dee, fw9]'` | one `lane.place` per member whose predecessor changed |
 | `add x/checklist '["…", "…"]'` / `set x/checklist/<id>/state done` | `checklist.add {item, id, text}` / `checklist.set {item, id, state, reason}` |
 | `set <lane>/rank '{above: y}'`, `'{below: y}'`, `top`, `bottom` | `rank.place {lane, above \| below \| top \| bottom}` |
 | `set /columns/impl/entry '[…]'` | no event: an edit to `.lit/workspace.toml` in the working tree, echoed as such |
 | `lit2 config commit` | an apply carrying the version's bytes (`specifications/workspace-file.md`, "Applying a version") |
-| `rm x`, which is `set x/deleted true` | `field.set {item, deleted, true}`, a reversible tombstone; `set x/deleted false` restores |
+| `rm x`, which is `set x/deleted true` | `field.set {item, deleted, true}` |
 | `add <lane>/claim` / `rm <lane>/claim` | `claim.take {lane}` / `claim.release {lane}` |
 | any write with `--reason "…"` | the reason on every event the write mints, an enveloped prose field |
 | `rm x --purge` | a rewrite naming the item ("Purge") |
@@ -154,9 +108,7 @@ store.
 
 Every shipped event shape stays readable while any store may hold its
 version. Readers hold a chain of pure upcasters (v1→v2→…) applied at fold
-time; a schema bump changes no bytes on disk. An upcaster stays while any
-store may hold its version, because deleting it deletes that store's ability
-to read its own history.
+time; a schema bump changes no bytes on disk.
 
 A binary built from a working tree mints no event at a schema version no
 published release carries, so a remote never holds events only a dev build
@@ -169,31 +121,14 @@ binaries too old to read it.
 A reader meeting an event type or version it cannot interpret
 (`INV:preserve-unknown`) carries it byte for byte and surfaces one warning
 naming the version gap. It never drops, never guesses, and never treats
-failure to read as absence:
-
-- WRONG: skip the unknown event and fold the rest. The fold now silently
-  disagrees with every up-to-date machine, and the divergence has no bad
-  data anywhere to find.
-- RIGHT: fold what is readable, report `3 events from a newer lit2 (min
-  reader vX) not applied`, and refuse mutations that would race the unread
-  events' subjects.
+failure to read as absence.
 
 `/next` lists any lane with a member carrying unread events as unreadable
 and skips it. `set` on such an item is refused naming the version. Reads of
 other items proceed. Once the workspace's `min-reader-version` exceeds the
 binary's own, every command refuses, naming the version and the remedy.
 
-## Codec
-
-The codec is invisible above the `events` unit, and its framing lets the
-fold meet the full-refold budget (`specifications/budgets.md`).
-
 ## Log, segments and refs
-
-On disk, per clone, the store's root is `<git-common-dir>/lit/store/`: lit's
-own git object database, never the code repository's, so all worktrees of a
-clone see one store. Key material sits beside it and outside it
-(`specifications/access.md`, "Identity").
 
 **Checkout id.** Each checkout's id is a full-entropy 128-bit token minted
 once into `<git-dir>/lit/checkout/id`, 32 lowercase hex digits and a
@@ -254,11 +189,6 @@ them, because a replica could not tell it from corruption and the survivors'
 signatures would prove nothing about what went; and a `gc` that edits
 history in place. Snapshots accelerate; they never replace events.
 
-**Erasure reaches every replica that syncs.** Copies that never sync again
-(a stale clone, a host that has not collected garbage, a backup) keep what
-they had, destroyed content keys included (`specifications/access.md`,
-"Keys, grants, rotation and erasure").
-
 ### Purge
 
 Purge, `rm x --purge`, removes one ticket the way a git history rewrite
@@ -299,9 +229,7 @@ The sweeping checkout appends a sweep event to its own log and anchors the
 dead writer's one tree from its own published commit, so the dead writer's
 segments stay reachable from a live ref. The dead ref is then deleted,
 locally and on the remote by a ref-deletion push, with a compare-and-swap
-against the anchored commit. "Write" in the invariant's sense means
-publishing to a ref; deleting a proven-dead, already-anchored ref is
-namespace maintenance, not authorship.
+against the anchored commit.
 
 The anchor tells stale from alive. A reappearing ref that carries no event
 the anchored tree lacks is the old corpse and is deleted again; a ref that
@@ -309,12 +237,9 @@ carries events past the anchor proves its writer lives, and the receive
 keeps it and folds the new events. A checkout whose own ref is absent, swept
 locally under a shared common dir or deleted on the remote, keeps its log,
 so its next sync publishes a tree holding everything the anchor holds and
-more, which passes the liveness test. A false-positive death therefore costs
-nothing durable: an idle falsely swept checkout stays swept, its events
-anchored, until its next write, whose sync restores the ref. Two survivors
-racing to sweep one corpse is harmless: sweep events are idempotent facts
-the fold deduplicates, and each compare-and-swap delete has at most one
-winner.
+more, which passes the liveness test. Two survivors racing to sweep one
+corpse is harmless: sweep events are idempotent facts the fold deduplicates,
+and each compare-and-swap delete has at most one winner.
 
 ## Inbox refs
 
@@ -353,10 +278,7 @@ does no network I/O.
 ordinary receive folds them, so a workspace-founding adopter sees remotely
 filed bugs with no established-clone prerequisite. Adoption verifies every
 writer's segments from the enrollment forward (`specifications/access.md`,
-"Enrollment and joining") and folds. Ids are random bits, so what the union
-of two writers' events surfaces is semantic duplication, two issues
-describing one bug, held as a fold advisory for an agent to settle by
-closing one. The first-adopt verification budget is
+"Enrollment and joining") and folds. The first-adopt verification budget is
 `specifications/budgets.md`.
 
 Rejected: a compare-and-swap retry loop on one shared spine (a single data
@@ -368,21 +290,9 @@ the remote's availability into the write path.
 
 Rank is on lanes, and rank events are relative intents: place lane X above
 or below lane Y, or at the top or bottom ("Intent"). The fold applies them
-in the total order, and supersession is scoped to what the order can
-promise:
-
-- **Causally ordered intents.** When the writer had folded the earlier
-  intent when it minted the later one, the later strictly supersedes,
-  guaranteed by the Lamport advance rule ("Event model"). This covers every
-  intent made in view of the state it changes.
-- **Concurrent intents** on one subject have no "later": the total order
-  settles them as deterministic arbitration, which promises convergence, not
-  recency.
-- Concurrent intents commute only when their subject-and-anchor sets are
-  disjoint; overlapping ones resolve by the total order, which is why the
-  fold is never partitioned by subject (`specifications/fold.md`, "Order").
-- An intent whose anchor no longer exists when it arrives places the subject
-  at the bottom of the order, and `/integrity` names the intent.
+in the total order. An intent whose anchor no longer exists when it arrives
+places the subject at the bottom of the order, and `/integrity` names the
+intent.
 
 The snapshot holds the folded lane order, so a new `rank.place` applies to a
 known order.
@@ -392,11 +302,9 @@ known order.
 Reads come from a local materialized state under the common dir, keyed by
 `(fold-version, ref heads, log lengths)` and rebuilt incrementally by
 folding only events newer than its snapshot: the snapshot remembers, per
-writer, the segment and offset it has consumed. It is scaffolding, never
-structure (`INV:disposable-cache`): any process may delete it at any moment,
-and the only cost is one refold. Correctness never depends on it. Every
-command's staleness check reads the writer ref heads, which is cheap and
-local, and folds the delta.
+writer, the segment and offset it has consumed. Every command's staleness
+check reads the writer ref heads, which is cheap and local, and folds the
+delta.
 
 The cache needs no lock. A command rewrites the snapshot by atomic rename;
 when two worktree processes race on it, a loser's work is discarded, and a
@@ -405,8 +313,6 @@ corrupt or torn snapshot fails its checksum and is deleted and refolded.
 The fold version (`specifications/fold.md`) is part of the key, so a release
 that bumps it misses every store's snapshot once. The first command in each
 store refolds from genesis inside the cold budget and rewrites the snapshot.
-Nothing runs at install time; the cost is paid per store, on first use,
-once.
 
 ## Export and import
 

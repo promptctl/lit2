@@ -16,19 +16,15 @@ the hottest fold path.
 ## Guiding policy
 
 Make the cost of a command track what changed since it last ran: read from a
-disposable snapshot and fold only the newer events, keep history bounded by
-rewrites that compact it, and measure every promise against stores shaped
-like real ones at ten times their scale, under the background load of a full
-fleet.
+disposable snapshot and fold only the newer events, and keep history bounded
+by rewrites that compact it.
 
 ## Actions
 
 **A disposable snapshot.** Reads come from a local materialized state that
 remembers how far into each writer's events it has folded, so a command folds
 only the delta. It is scaffolding, never structure: any process may delete it
-at any moment and the only cost is one refold, a torn or corrupt one is
-deleted and refolded, and two processes racing on it need no lock because the
-loser's work is discarded. Correctness never depends on it.
+at any moment and the only cost is one refold. Correctness never depends on it.
 Serves: Performance, Data.
 Spec: `specifications/events-and-store.md`, "Cache".
 
@@ -48,8 +44,7 @@ Spec: `specifications/events-and-store.md`, "Rewrite".
 
 **Reads are walks of folded state.** The snapshot holds the folded lane
 order, so a new rank intent applies to a known order, and `/next` is one walk
-of the lane order. The codec is invisible above the event layer and its
-framing is chosen to meet the refold budget.
+of the lane order.
 Serves: Performance.
 Spec: `specifications/fold.md`, `specifications/events-and-store.md`.
 

@@ -5,10 +5,11 @@ Carries out `strategy/process.md`.
 ## Column and status
 
 A **column** is a named node in the column graph, `/columns/<name>`. A
-ticket's `status` holds the name of the column it is in. A phase, a state or
-a workflow state is a column. The default profile's columns and their
-requirements are data in `internal/assets/workspace/default.toml`, and a workspace may rename, add or
-remove any column subject to "Validity of a column graph".
+ticket's `status` holds the name of the column it is in. A phase, a state or a
+workflow state is a column. The default profile's columns and their
+requirements are data in `internal/assets/workspace/default.toml`, and a
+workspace may rename, add or remove any column subject to "Validity of a
+column graph".
 
 **The column is stored.** `set x/status review` stores one transition event:
 this ticket moved from `impl` to `review`, by this writer, at this time. The
@@ -40,10 +41,8 @@ the requirement lists `entry` and `exit`.
 
 **Edges.** A column some `next` names is entered only along those edges. A
 column no `next` names is entered from every other column. A **forward edge**
-is one a `next` list names. In the default profile this makes `done`
-reachable only through `merge`, and `backlog` and the terminal columns other
-than `done` reachable from anywhere: parking, reopening, and closing without
-finishing. The flags are not consulted for edges; they give stage.
+is one a `next` list names. The flags are not consulted for edges; they give
+stage.
 
 **Stage.** `x/stage` is derived from the flags on the ticket's column in its
 resolved graph: `initial`, `active` (neither flag), or `terminal`. Start is
@@ -113,25 +112,20 @@ missing or not one of the two, a `scope` not one of the two, and an `exit`
 list on a terminal column, which has no forward edge and so could never be
 evaluated.
 
-**An undeclared column.** Two concurrent writers can still leave a ticket in
-a column the applied version no longer declares for it. The transition
-stands; evaluate reports `status: audit (undeclared)` with stage `active`;
-`/next` passes the lane over naming the reason; `/integrity` lists it; and
-the way out is a transition to a column that exists, which the edges into
-columns no `next` names always offer.
+**An undeclared column.** Evaluate reports a ticket in a column the applied
+version no longer declares for it as `status: audit (undeclared)` with stage
+`active`.
 
 ## Requirements
 
 A column declares two lists of requirements: `exit`, what a ticket needs
 before it may leave along a forward edge, and `entry`, what it needs before it
-may arrive by any edge. On a straight board the two are one check on one move, and a declaration uses
-whichever states the reason.
+may arrive by any edge. On a straight board the two are one check on one move,
+and a declaration uses whichever states the reason.
 
 An edge no `next` lists, closing into a terminal column or parking into the
 initial one, carries the destination's entry requirements and never the
-source's exit requirements: a workspace that could not close a backlog
-ticket as `wontfix` until it had a description would refuse the one write
-that makes the description unnecessary. Creation carries the initial
+source's exit requirements. Creation carries the initial
 column's entry requirements like any other arrival.
 
 A requirement has three values:
@@ -140,10 +134,7 @@ A requirement has three values:
   `check`, naming a group of tests declared under `[checks]`.
 - **`scope`**: `self`, the default, reads the path on the ticket. `ancestors`
   reads it across the ticket and its ancestors: a list path is the union of
-  the lists up the chain, a scalar path is the nearest value going up. That is
-  what lets a label on the epic satisfy a requirement on its ticket, lets
-  `needs-design` on the epic hold every ticket under it, and lets a field
-  declared on level 2 be required before any of its tickets move.
+  the lists up the chain, a scalar path is the nearest value going up.
 - **`severity`**: `error` or `warning`, with no default.
 
 A path declared on some level but not on this ticket's level reads as
@@ -184,20 +175,6 @@ a requirement's `test` are parsed by one grammar. The atoms are:
 <name>)`: a test that reads a prose field by content cannot be evaluated by
 a reader without the tier's key, and reads as unknown, never as met or
 unmet. `held` reports such a requirement that way.
-
-### What a requirement reads
-
-Someone writes a fact (a field, a label, a verdict, a comment) and a
-requirement reads it, or the engine exposes a derived field in the field
-table, which is engine code in one listed place, and a requirement reads
-that. Examples:
-
-- a field present or matching: `points`, `target_release~'^\d+\.\d+$'`
-- a label: `labels=ready`
-- a passing review of the latest plan revision: `plan/verdict=pass`
-- the original a duplicate's move names: `status/of`
-- no open dependency: `!blockers`
-- no pending checklist item: `checklist/pending=0`
 
 ### Derived fields a requirement reads
 
@@ -257,13 +234,6 @@ dee/status impl → review
   requirements: 1 evaluated · 0 met · 1 unmet (warning) · 0 unmet (error)
 ```
 
-A ticket whose column's requirements stop holding afterwards, a description
-deleted or a verdict emptied by a new plan revision, stays where it is; the
-facts are in the history, in any selector that asks, and in derived fields
-such as `held`. A transition judged under the writer's active version stands
-after a later version adds a requirement it would have failed
-(`specifications/fold.md`, "Writes are judged at the write").
-
 ## held
 
 **`x/held`** is the unmet `error` requirements on each forward edge out of the
@@ -272,23 +242,6 @@ open, and empty on a terminal column. It is the dry run of the forward
 transition exposed as a path, so `get '(held)'` lists the tickets whose
 requirements hold them and `get dee/held` says why one is held. How `/next`
 treats a held head is `specifications/lanes-and-claims.md`, "Routing".
-
-## Ready to pull
-
-In the default profile, readiness to pull is the initial column's exit list,
-the `ready` check: a description, the `ready` label on the ticket or an
-ancestor, no `needs-design` or `external` on the ticket or an ancestor, no
-open blocker. It is declared on exit rather than on the first active column's
-entry because its reason is the ticket's fitness to leave, whatever it goes to
-next, so an epic that adds an `audit` column before `plan` does not copy the
-list.
-
-Grooming an epic ends with `add <epic>/labels ready`. Because the
-requirement's scope is `ancestors`, every ticket under the epic passes it in
-one write, and a follow-up filed into the groomed epic later passes it at
-birth. Removing the label from the epic holds every ticket under it that does
-not carry its own. The label is data, and a workspace that wants `groomed`
-edits the string. What grooming means is the initial column's guidance.
 
 ## Review and rework
 
@@ -321,16 +274,7 @@ is the record, and the author's answer is the `response` on it, a push
 recorded as the next revision, and the next review. `get x` on a second trip
 prints `review   round 2 · pr/verdict fail` and the handlers bound
 `in review` whose `where` matches, such as `(pr/verdict=fail)`. A selector
-finds rework in flight with `(status=review pr/verdict=fail)`, and a report
-counts time in rounds above 1 from the review timestamps on the trail.
-
-In the default profile, `merge`'s entry requires `pr/verdict=pass`, `impl`'s
-entry requires `plan/verdict=pass`, and `review`'s entry carries
-`plan/verdict=pass` as a warning, so a ticket arriving at review with its
-plan revised since the review gets one line, and an agent that revised the
-plan for a reason it can defend proceeds. A workspace that wants a re-review
-sets that requirement's severity to `error`. A plan `fail` keeps the ticket
-in `plan`, and the round counts the same way.
+finds rework in flight with `(status=review pr/verdict=fail)`.
 
 ## Observability
 
@@ -342,10 +286,6 @@ requirements were not evaluated must not look alike `[LAW:nothing-unseen]`:
 dee/status backlog → plan   ⇒ dee/claim = this checkout
   requirements: 5 evaluated · 5 met · 0 unmet (warning) · 0 unmet (error)
 ```
-
-Above the summary is one line per unmet requirement, advisory or blocking,
-with its severity, the column and side that declared it, its test and the
-value found. The refusal is the same lines under the `error` header.
 
 The command event for a transition records, per requirement evaluated: the
 column and side, the test, the scope, the severity, the node it resolved

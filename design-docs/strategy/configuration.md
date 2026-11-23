@@ -20,7 +20,7 @@ machine syncs or a person's own workflows, are nobody else's business.
 The model is one committed file: the intent, edited in an editor, versioned
 and merged by git, reviewed however the team reviews any change. What is in
 force is a version of that file applied into the store as an event that
-carries its bytes, so the log alone says what was in force for every write.
+carries its bytes.
 What belongs in the file is decided by one test: a value is the workspace's
 when two machines that disagree about it cannot both be right about the
 backlog, and a person's own when they can.

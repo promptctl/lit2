@@ -72,9 +72,7 @@ The layers, farthest to nearest:
 
 Shipped workflows are on by default. Declining one is one write,
 `set /workflows/plan-review/enabled false`. Authoring one is
-`set /workflows/<name> '{…}'` and one `set` per handler. To run your own
-version of a shipped discipline, turn the shipped one off and author yours
-under another name.
+`set /workflows/<name> '{…}'` and one `set` per handler.
 
 ### Resolution
 
@@ -84,10 +82,6 @@ layer, then the shipped layer, supplies the whole handler, and nothing is
 merged across records. A project that rewrites the `body` of
 `phases/handlers/impl` holds a record of the whole handler, so a release that
 changes the shipped handler does not reach it, and the override reads stale.
-
-A handler whose `on` names a column absent from the node it resolves in is
-legal, since the user layer spans repositories whose columns differ. It does
-not fire, and `config status` reports it as a warning.
 
 ### The layers view
 
@@ -123,57 +117,7 @@ no guidance of its own.
 
 ## Shipped workflows
 
-Undecided: the shipped list and names. The current proposal is four, each a
-discipline a project declines with one write.
-
-- **`orientation`**: how to work here.
-  - `arrive`, `read /`: what lit2 is, the four verbs, `get /next` to pick
-    work, where the verb table is, that every node prints its guidance after
-    itself, and that selectors and globs are single-quoted.
-  - `integrity`, `read /integrity`: resolve what you can yourself before
-    paging the owner.
-- **`phases`**: which write records the next move.
-  - `impl`, `enter impl` and `in impl`: when the PR opens,
-    `add {$}/pr/revisions <head>` and `set {$}/status review`.
-  - `review`, `enter review` and `in review`: when review is done and the
-    merge is under way, `set {$}/status merge`.
-  - `findings`, `in review` where `(pr/verdict=fail)`: address every finding
-    or say on the thread why not.
-  - `merge`, `enter merge` and `in merge`: once merged, `set {$}/status done`.
-- **`plan-review`**: a plan is written, proven and reviewed before code.
-  - `plan`, `enter plan` and `in plan`: core first, prove each fact against
-    the real system, record with `add {$}/plan/revisions -`, hand it to a
-    reviewer with a fresh context.
-  - `brief`, `read */plan`: the reviewer's brief: load the laws, judge the
-    whole mechanism at this revision, record one review with
-    `add {$}/plan/reviews`, naming the revision in `of`.
-  - `unreviewed`, `refused impl`: the plan has no passing review of its
-    latest revision; have it reviewed, or revise it and have the new revision
-    reviewed.
-- **`capture`**: prepare the next loop.
-  - `created`, `wrote */children`: the description says what and why and
-    survives a refactor; done-when is checkable.
-  - `finished`, `enter *` where `(stage=terminal)`: update the related
-    tickets with what this work taught.
-
-## Writing one
-
-A project workflow `review` with two handlers, then one shipped handler
-turned off without touching its neighbours:
-
-```
-set /workflows/review '{summary:"what a review is in this repository"}'
-set /workflows/review/handlers/entered '{on:[enter review, in review] body:-}' <<'EOT'
-{$} is in review. Run the review cycle on its PR and push the fixes; move it
-with `set {$}/status merge` only when the final pass is clean.
-EOT
-set /workflows/review/handlers/not-yet '{on:[refused done] body:"{$} does not finish from {$/status}: it leaves through review. `set {$}/status review` first."}'
-
-set /workflows/phases/handlers/review/enabled false
-```
-
-Each `set` echoes the record it wrote; the last echoes
-`enabled true → false (shadows shipped)`.
+Undecided: the shipped list and names.
 
 ## Inspection
 
@@ -208,27 +152,13 @@ address.
 ## The guidance surfaces
 
 **The managed block.** `lit2 admin init` writes a block into `AGENTS.md` and
-`CLAUDE.md`, files lit2 does not own. Its content is one pointer carrying no
-policy: work here is tracked by lit2, run `lit2` first and follow what it
-prints. `lit2 admin` installs the block and the pre-push hook.
+`CLAUDE.md`, files lit2 does not own. `lit2 admin` installs the block and the
+pre-push hook.
 
 **The quickstart is a workflow.** Bare `lit2` in a workspace is `get /`: the
 root prints its children, `lanes`, `columns`, `integrity`, `next`, and the
 `workspace` line naming the version in force and whether the file matches it.
-The handler bound `read /` prints after it. Help topics are handlers too,
-bound `wrote */children`, `enter *` with `(stage=terminal)`,
-`read /integrity` and `read */plan`.
-
-The discovery path from the managed block is a walk through the tree:
-
-1. Bare `lit2` runs `get /`, and its `read /` handler orients the agent.
-2. `get /next` prints the one ticket this checkout should work and the
-   guidance of that ticket's column, which says what the first move is.
-3. `get /columns` prints every column, its forward edges, its requirements
-   and its guidance.
-4. `lit2 --help` is the verb table and the field table, generated from the
-   source the parser is (`specifications/command-line.md`,
-   "The table is the schema").
+The handler bound `read /` prints after it.
 
 ## Observability
 

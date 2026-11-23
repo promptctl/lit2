@@ -5,16 +5,14 @@ Carries out `strategy/process.md` and `strategy/configuration.md`.
 ## Levels and the tree
 
 A **work item** is a node of the tree at a **level**. The workspace file
-declares the levels, numbered from 1 at the bottom, each with a name. Code
-knows level numbers and roles, not names. An item at level 1 is a **leaf**; an
+declares the levels, numbered from 1 at the bottom, each with a name. An
+item at level 1 is a **leaf**; an
 item above level 1 is a **node**, whose `stage` and `rollup` derive from its
 children (`specifications/columns-and-requirements.md`, "The graph and
 stage").
 
-A level is addressed by its number and its name is display:
-`set /levels/2/name theme` renames it with no migration, and `(level=2)`
-selects the same items under any name. Levels are numbered 1 to n, each
-with a non-empty name, the names distinct.
+A level is addressed by its number and its name is display. Levels are
+numbered 1 to n, each with a non-empty name, the names distinct.
 
 The workspace file's schema is read and written with the four verbs as root
 nodes:
@@ -38,13 +36,6 @@ rm /links/tests
 get /levels /links --json                     the schema as one object keyed by path
 ```
 
-A workspace administrator can rename a level, add or remove a field or a
-link type, change the level pairs a link type joins, and change a level's
-template with `set`, `add` and `rm` on these nodes, with no code change. A
-write to one of these nodes edits the working-tree draft of
-`.lit/workspace.toml`, and it is in force once applied
-(`specifications/workspace-file.md`, "Applying a version").
-
 **Containment is exact.** A parent is exactly one level up. Every level
 above 1 names a synthetic **home**, and an item created without a parent
 lands in its level's home: `add /children '{level: 2, title:"…"}'` echoes
@@ -52,13 +43,7 @@ lands in its level's home: `add /children '{level: 2, title:"…"}'` echoes
 under the root.
 
 **Filing.** `add <parent>/children '{…}'`, or a list of objects, creates
-items at the level below the parent; a value may nest `children`. The tree
-groups, scopes and rolls up; it orders nothing. Order is the lane's
-(`specifications/lanes-and-claims.md`). Kinds of work, such as bug and chore,
-are labels.
-
-There is no `archived` field. A ticket out of the flow is in a terminal
-column; one that should not exist is deleted or purged.
+items at the level below the parent; a value may nest `children`.
 
 Deletion is `rm x`, a reversible tombstone, and `rm x --purge`, a rewrite
 (`specifications/command-line.md`, "Verbs").
@@ -87,8 +72,9 @@ exit; a skeleton reads as filled and defeats that signal.
 ## Fields
 
 A ticket's fields are the rows of the field table
-(`specifications/command-line.md`, "The table is the schema"): the built-in fields
-the engine exposes and the fields the workspace file declares per level.
+(`specifications/command-line.md`, "The table is the schema"): the built-in
+fields the engine exposes and the fields the workspace file declares per
+level.
 
 A declared field has a name, a kind and the kind's parameters:
 
@@ -127,16 +113,15 @@ bare, so the round trip into `set` works for custom names as for built-in
 ones; a selector reads a custom field like any other, `(points=8)`; bulk
 filing takes the fields as keys of each item.
 
-Removing a field leaves its values in the fold, and `get x` prints them
-marked undeclared. Changing a kind leaves existing values as they are; a
+Changing a kind leaves existing values as they are; a
 value that no longer parses under the new kind is listed on `/integrity` with
 the item, the field and the value.
 
 **`topic`** is a built-in settable field: one short word that groups items
 across the tree. The create supplies it, or lit2 derives one from the title
-and echoes the derivation. A child's default is its parent's topic. `(topic=cli)`
-selects on it, and it renders in the id (`specifications/events-and-store.md`,
-"Ids").
+and echoes the derivation. A child's default is its parent's topic.
+`(topic=cli)` selects on it, and it renders in the id
+(`specifications/events-and-store.md`, "Ids").
 
 **`priority`** is a field a ticket carries; `priority: urgent` is the urgent
 interrupt `/next` serves (`specifications/lanes-and-claims.md`, "Routing").
@@ -148,12 +133,12 @@ A **link** is a typed edge between items. A link type is a named node under
 may join. The engine knows two kinds: `dependency`, directed and acyclic, read
 by `/next` and by the derived `blocked_by`; and `relates`, a reference with no
 scheduling meaning. A link type's `between` is non-empty and names declared
-levels, and link type names are unique. A workspace adds a link type of either kind under a new
-name, `set /links/tests '{kind:relates between:[[1,1]]}'`; a kind is a
-behavior and a link type is an instance of one. The default profile's link
-types are in `internal/assets/workspace/default.toml`; its `blocks` joins
-only same-level items, and a workspace that wants cross-level dependencies
-writes the pair into `between`.
+levels, and link type names are unique. A workspace adds a link type of either
+kind under a new name, `set /links/tests '{kind:relates between:[[1,1]]}'`; a
+kind is a behavior and a link type is an instance of one. The default
+profile's link types are in `internal/assets/workspace/default.toml`; its
+`blocks` joins only same-level items, and a workspace that wants cross-level
+dependencies writes the pair into `between`.
 
 `add dee/blocks 4ou` says `dee` blocks `4ou`. Legality is per level pair and
 explicit: `add x/blocks y` is refused when `[level(x), level(y)]` is not in
@@ -162,16 +147,11 @@ explicit: `add x/blocks y` is refused when `[level(x), level(y)]` is not in
 on the write, and a cycle that sync forms from two offline adds is detected
 again after sync.
 
-A node's stage is derived, so a dependency on a node is a dependency on its
-leaves. A dependency connects prerequisites across lanes; between leaves it
-says what a lane cannot. `blocked_by` and `blockers` derive from links and
-lane position together (`specifications/columns-and-requirements.md`,
-"Derived fields a requirement reads").
+`blocked_by` and `blockers` derive from links and lane position together
+(`specifications/columns-and-requirements.md`, "Derived fields a requirement
+reads").
 
-Removing a link type keeps its links: `rm /links/<name>` refuses new links of
-that name; existing ones stay, `get` prints them under the name marked
-undeclared, and `/integrity` counts them. An edge to a deleted ticket is
-listed on `/integrity`.
+An edge to a deleted ticket is listed on `/integrity`.
 
 ## Labels
 
@@ -181,8 +161,7 @@ It is applied to an item, `add x/labels ready`, removed with
 `rm x/labels/<name>`, or computed from a `where` selector, which evaluate
 computes as it computes any derived field. It reads as `labels=<name>` in a
 selector or a requirement. A test naming an undeclared label is refused at
-parse; a stored label that a later version stops declaring stays stored and
-`/integrity` reports it. The engine reserves no label.
+parse. The engine reserves no label.
 
 ## Checklists
 
@@ -197,8 +176,7 @@ and why.
 - `set x/checklist/<id>/state done` moves one.
 - `set x/checklist '[…]'` replaces the list and the verb layer diffs it:
   items whose text it knows keep their id and state, new text is added, and
-  vanished text is abandoned. A harness hook can push an agent's whole TODO
-  list on every change with no agent effort.
+  vanished text is abandoned.
 
 The fold merges per item, and a final state wins over `pending`. No event per
 check enters history beyond the item events themselves; the leaf's

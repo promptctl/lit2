@@ -3,7 +3,7 @@
 Carries out `strategy/performance.md`.
 
 The figures here are targets. A target may become a gate for v1.0; none is a
-gate for every release. A change to a figure is made here.
+gate for every release.
 
 ## Reference fleet
 
@@ -54,8 +54,7 @@ inclusive of all components.
 
 ## Storage and repository-impact budgets
 
-At 10x. These are ceilings on rate and footprint. Rewrites such as
-compaction can shrink a store, but no target here depends on one running.
+At 10x. These are ceilings on rate and footprint.
 
 | quantity | target | notes |
 |---|---|---|
@@ -66,8 +65,8 @@ compaction can shrink a store, but no target here depends on one running.
 
 ## The harness
 
-- The reference fleet's figures are input, not targets. A row meets its
-  target or it does not; the harness reports every row.
+- The reference fleet's figures are input, not targets. The harness reports
+  every row.
 - The first run also measures go-git's object walk on the depth corpus.
 - The command budgets run in CI as regression checks, reported against
   their targets.

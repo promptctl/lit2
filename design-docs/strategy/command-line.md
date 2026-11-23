@@ -31,17 +31,9 @@ Spec: `specifications/command-line.md`.
 
 **Tracker operations are paths, not commands.** Starting, closing, ranking,
 taking a claim, linking and filing are writes to paths; `/next`, the backlog
-and `/integrity` are derived nodes read with `get`. Maintenance sits under
-`admin`, and activating configuration under `config`.
+and `/integrity` are derived nodes read with `get`.
 Serves: Operations, Complexity.
 Spec: `specifications/command-line.md`.
-
-**The verbs are the interface; the events are the memory.** One table
-compiles each write into the intents it mints, so the surface can be shaped
-for the reader while the events stay shaped for convergence
-(`strategy/derivation.md`).
-Serves: Data.
-Spec: `specifications/events-and-store.md`, "Intent".
 
 **One grammar for selecting.** A selector is the same atom set a requirement's
 test uses, so a reader learns it once and a query, a bulk write and a column's
@@ -59,15 +51,14 @@ Spec: `specifications/command-line.md`.
 path, and every derivation it triggered, so a replacing typo is visible and
 reversible from its own echo. A refusal names the path, the reason and
 everything unmet at once, and says nothing was written, so an agent fixes it
-in one pass. `--reason` travels with every event a write mints.
+in one pass.
 Serves: Operations; project-intent.md, "Feedback over control".
 Spec: `specifications/command-line.md`.
 
-**Text first, deterministic, round-trippable.** The default output is
-human-readable text, because that is what a language model reads; it is
-deterministic, a bare scalar pipes, and many paths print one per line in a
-form `set` accepts back. Machine-readable output is secondary and keyed by
-path.
+**Text first, deterministic, round-trippable.** The default output is human-
+readable text; it is deterministic, a bare scalar pipes, and many paths print
+one per line in a form `set` accepts back. Machine-readable output is
+secondary and keyed by path.
 Serves: Operations.
 Spec: `specifications/command-line.md`.
 
@@ -78,9 +69,8 @@ it follows the rename.
 Serves: Operations, Data.
 Spec: `specifications/events-and-store.md`, "Ids".
 
-**Nothing hides behind a flag.** Help lists every verb and every field with
-its type, whether it is settable or derived, and what `set` accepts, so
-nothing is reachable only by a flag the table does not show.
+**Nothing hides behind a flag.** Nothing is reachable only by a flag the
+table does not show.
 Serves: Operations.
 Spec: `specifications/command-line.md`, "The table is the schema".
 

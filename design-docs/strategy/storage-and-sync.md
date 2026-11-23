@@ -81,11 +81,6 @@ destroy are all rewrites, and a rewrite reaches every replica that syncs.
 Serves: Data, Impact on git.
 Spec: `specifications/events-and-store.md`, "Rewrite".
 
-**A fresh store.** lit2 does not read or migrate a lit v1 store. Moving a
-backlog between stores is whole-store export and import.
-Serves: Complexity.
-Spec: `specifications/events-and-store.md`, "Export and import".
-
 ## Headroom in the primitives
 
 The primitive layer carries 120% of what its identified consumers need and
@@ -96,12 +91,12 @@ layer covers the main body of uses and leaves the tail unbuilt. Future
 features are not predicted; the constraints this design imposes on them are
 written down, so evolution is burdened knowingly or not at all.
 
-YAGNI will be raised against every slot: *nothing verifies signatures yet,
-so ship without the slot.* YAGNI is right about features: unused surface is
+YAGNI will be raised against every slot: *nothing reads this slot yet, so
+ship without it.* YAGNI is right about features: unused surface is
 carrying cost, and the 80% feature line exists for exactly that reason. The
 slots are not features; they are the primitive layer's headroom, and their
 absence is not a smaller system but a fleet-wide schema migration standing
-between the system and its own roadmap. The slots ship inert; the features
-wait their turn.
+between the system and its own roadmap. A slot whose capability is not built
+yet sits unused; the feature waits its turn.
 
 Serves: Complexity.
