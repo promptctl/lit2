@@ -79,14 +79,11 @@ Spec: `specifications/events-and-store.md`; the gate is in
 
 **Writes are judged at the write.** The requirement gate and the capability
 rule judge a write against the writer's own current fold and the workspace
-version it ran under, and the event names that version. The fold applies
-every verified event as written, so nothing a writer did legally is undone by
-a rule that arrived later.
+version it ran under, and the event names that version.
 Serves: Data.
 Spec: `specifications/columns-and-requirements.md`, `specifications/access.md`.
 
-**Determinism has no exceptions.** Nothing but the events enters the fold,
-and a change to any fold rule is a new fold version, so no machine mixes two
-folds' outputs.
+**Determinism has no exceptions.** A change to any fold rule is a new fold
+version, so no machine mixes two folds' outputs.
 Serves: Data.
 Spec: `specifications/fold.md`.

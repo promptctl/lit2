@@ -82,7 +82,7 @@ The active workspace version defines what a valid write is: levels, fields,
 columns and their requirements. The requirement gate in the verbs judges a
 write against the writer's own current fold and the version it ran under,
 and refuses there; the event records that version as `config-ref`
-(`INV:config-versioned`). The fold applies every verified event as written.
+(`INV:config-versioned`).
 Verification and the capability rule are a step of the fold
 (`specifications/access.md`, "Verification").
 

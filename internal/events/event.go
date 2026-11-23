@@ -165,7 +165,7 @@ func (h Header) Subject() Subject { return subjectOf(h.about) }
 func (h Header) Attribution() Attribution { return h.by }
 
 // ConfigRef is the code repository's blob of .lit/workspace.toml the writer
-// read: provenance, never read by the fold.
+// ran under.
 func (h Header) ConfigRef() git.ObjectID { return h.configRef }
 
 // Policy is the policy version the event cites.

@@ -44,7 +44,7 @@ Serves: Complexity.
 Spec: `specifications/code-layout.md`.
 
 **How lit grows.** A new ticket fact that no event kind records is an event
-kind plus a fold rule and, if it needs the clock or the configuration, an
+kind plus a fold rule and, if it needs the clock, an
 evaluate rule. A new piece of the workspace's model is a key in the workspace
 file. What a new verb or a new prose field owes access control is in
 `strategy/authority-and-visibility.md`.

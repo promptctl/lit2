@@ -38,7 +38,7 @@ func (v versions) with(st Stamp, c Apply) versions {
 }
 
 // Version is one applied version: the apply that carried it, git's id
-// for its bytes, and the bytes. The fold reads none of them.
+// for its bytes, and the bytes.
 type Version struct {
 	Stamp Stamp
 	Blob  git.ObjectID
