@@ -13,7 +13,7 @@ import (
 
 // Column is where a leaf's status puts it under its graph: the column the
 // graph declares, or a recorded name the graph no longer reads, which has
-// neither flag and so is active (scenarios.md S-6).
+// neither flag and so is active.
 type Column struct {
 	Name     string
 	Stage    config.Stage
@@ -39,7 +39,8 @@ func Removed(f fold.Facts) bool {
 // Stage is an item's stage, derived on every read and never stored: a
 // leaf's is its column's; a node's is terminal when every child's is,
 // initial when every child's is or it has none, and active otherwise
-// (architecture.md §3.4). A removed child is no work, so it counts for
+// (specifications/columns-and-requirements.md, "The graph and stage"). A
+// removed child is no work, so it counts for
 // nothing. A graph the configuration refuses is the refusal a status read
 // gets.
 func (v View) Stage(id events.ItemID) (config.Stage, error) {

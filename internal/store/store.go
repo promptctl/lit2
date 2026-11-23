@@ -1,14 +1,17 @@
 // Package store is lit's bytes under the common dir: the log, segments and
 // refs.
 //
-// Its layer in architecture.md §6: the append-only log; sealing into
-// segments; one commit and one ref per writer, inbox refs; rewrites;
-// the background sync process (§3.13, §3.16, §5 steps 1, 6 and 9).
-// Its root is <git-common-dir>/lit/store/ (D11). One Store type runs over
+// Its layer: the append-only log; sealing into segments; one commit and one
+// ref per writer, inbox refs; rewrites; the background sync process
+// (specifications/events-and-store.md, "Log, segments and refs" and
+// "Rewrite"; the Open, Perform and Sync steps of
+// specifications/code-layout.md, "One command, start to finish").
+// Its root is <git-common-dir>/lit/store/ (specifications/code-layout.md,
+// "On disk"). One Store type runs over
 // three ports, each with an adapter on disk and a twin in memory: Files
 // for the log, and lit's repository's Objects and Refs.
 // It also holds the checkout id, the 128-bit token writer refs and claims
-// key on (§3.14).
+// key on (specifications/events-and-store.md, "Log, segments and refs").
 package store
 
 import (
@@ -36,7 +39,8 @@ func ParseCheckoutID(s string) (CheckoutID, error) {
 // String writes the id as 32 lowercase hex digits.
 func (id CheckoutID) String() string { return hex.EncodeToString(id[:]) }
 
-// ReadCheckoutIDFile reads the id file's form (D11), exactly: the id's 32
+// ReadCheckoutIDFile reads the id file's form (specifications/code-layout.md,
+// "On disk"), exactly: the id's 32
 // lowercase hex digits and one newline. It is FileText's inverse. It
 // refuses by length first, and no error carries the file's bytes.
 func ReadCheckoutIDFile(b []byte) (CheckoutID, error) {

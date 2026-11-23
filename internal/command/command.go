@@ -1,7 +1,8 @@
 // Package command is the command event, the one record each invocation
 // leaves in this machine's command log.
 //
-// It sits beside the stack (architecture.md §6) and is §5 step 8, Record:
+// It sits beside the stack (specifications/code-layout.md, "Units, downhill")
+// and is the Record step (specifications/code-layout.md, "One command, start to finish"):
 // one wide event per invocation, local, never synced `[LAW:nothing-unseen]`.
 // Record wraps every invocation's work, so an invocation with no event is
 // unrepresentable; each later step adds its facts to the event as it lands.

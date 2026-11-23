@@ -8,8 +8,8 @@ import (
 )
 
 // Schema is one workspace version as this binary reads it: the one typed value
-// the enforcer, evaluate and the field table judge state under (architecture.md
-// §3.15). Only Parse builds one, so every field is unexported and a
+// the enforcer, evaluate and the field table judge state under
+// (specifications/workspace-file.md, "Validation"). Only Parse builds one, so every field is unexported and a
 // consumer receives a Loaded, never a Schema it made itself
 // `[LAW:types-are-the-program]` (an exception: Go admits a zero Schema; a
 // zero Schema holds no levels and no root columns, and no caller reads one).

@@ -880,7 +880,8 @@ func (p *parser) sections(raw map[string]any, levels []Level) map[NodeKey]Sectio
 // nodeKey reads a section key: a declared home, or else an item's full id,
 // bare, its one spelling. A committed file outlives every sync, and a
 // segment two offline writers fixed for two items names neither, so a key
-// is the item's identity, never its short form (§3.2).
+// is the item's identity, never its short form (specifications/events-and-store.md,
+// "Ids").
 func nodeKey(key string, homes map[string]bool) (NodeKey, bool) {
 	if homes[key] {
 		return HomeNode(key), true

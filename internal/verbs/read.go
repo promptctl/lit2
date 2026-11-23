@@ -14,7 +14,8 @@ import (
 )
 
 // World is what a verb reads: the view of the folded state under the
-// schema in force at now, so every read is evaluate's (architecture.md §3.3),
+// schema in force at now, so every read is evaluate's (specifications/fold.md,
+// "Two functions"),
 // and the workspace file as the root read it, which only the root's
 // workspace line reads.
 type World struct {
@@ -217,7 +218,8 @@ type element struct {
 }
 
 // line is the element as a list prints it: a removed one is still listed,
-// marked, since filtering is a selector's (architecture.md).
+// marked, since filtering is a selector's (specifications/command-line.md,
+// "Verbs").
 func (e element) line() string {
 	if e.deleted {
 		return fmt.Sprintf("(deleted) [%s] %s", e.by, e.text)
@@ -262,7 +264,7 @@ func children(w World, n address.Node) []string {
 }
 
 // below is the nodes placed at n, deleted items included: filtering is a
-// selector's (architecture.md). The root holds the declared homes and the
+// selector's (specifications/command-line.md, "Verbs"). The root holds the declared homes and the
 // parentless items of every level that declares none; a home its level's
 // parentless items; an item the items below it.
 func below(w World, n address.Node) []address.Node {
@@ -482,7 +484,7 @@ func rollup(w World, n address.Node) ([]string, error) {
 }
 
 // column is a column as a reader is shown it: a name the graph no longer
-// declares marked so (scenarios.md S-6).
+// declares marked so.
 func column(c evaluate.Column) string {
 	if c.Declared {
 		return c.Name

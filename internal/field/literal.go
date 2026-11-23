@@ -6,7 +6,7 @@ import (
 )
 
 // Literal is a value as a command gives it, before any field's kind reads
-// it: a scalar, a list, or an object (path-addressed-cli.md "Values").
+// it: a scalar, a list, or an object (specifications/command-line.md, "Values").
 // What a field accepts of these is its kind's and its row's to say.
 //
 //sumtype:decl

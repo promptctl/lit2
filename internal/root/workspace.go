@@ -19,7 +19,8 @@ import (
 )
 
 // inForce is an opened run under the version in force, loaded, beside the
-// workspace file as this run read it: what every verb reads (§3.15).
+// workspace file as this run read it: what every verb reads
+// (specifications/workspace-file.md, "Applying a version").
 type inForce struct {
 	opened
 	schema config.Schema

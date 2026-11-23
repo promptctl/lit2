@@ -33,7 +33,7 @@ func Main(args []string) int {
 	// [LAW:no-silent-failure] a build with no version cannot say which
 	// workspace versions it reads, so it does not run. Nothing is recorded,
 	// since an invocation records the version it ran as, so it exits with
-	// status 2, outside every recorded class, which D9 reads as unrecorded.
+	// status 2, outside every recorded class, which reads as unrecorded.
 	reader, err := config.ReadReaderVersion(buildStamp())
 	if err != nil {
 		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
@@ -126,7 +126,8 @@ func diskStore(entropy io.Reader) func(git.Checkout, command.Minted) command.Ope
 }
 
 // commandLog is this machine's command log, $XDG_STATE_HOME/lit/commands,
-// ~/.local/state when XDG_STATE_HOME is unset (D12). The XDG spec makes a
+// ~/.local/state when XDG_STATE_HOME is unset (specifications/code-layout.md,
+// "On disk"). The XDG spec makes a
 // relative value invalid, to be ignored, so one counts as unset.
 func commandLog() command.Sink {
 	state := os.Getenv("XDG_STATE_HOME")

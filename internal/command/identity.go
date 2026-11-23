@@ -9,7 +9,8 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// File is one of a checkout's two identity files (D11).
+// File is one of a checkout's two identity files (specifications/code-layout.md,
+// "On disk").
 //
 //sumtype:decl
 type File interface{ file() }

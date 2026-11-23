@@ -1,8 +1,9 @@
 // Package events is the event record and what travels in it.
 //
-// Its layer in architecture.md §6: record, codec, upcasters, ids,
-// signature, envelope (§3.2, §3.14, §3.17, §3.19); every signature and
-// envelope names its crypto suite, one value behind one interface here (§8).
+// Its layer: record, codec, upcasters, ids, signature, envelope
+// (specifications/events-and-store.md, "Event model"); every signature and
+// envelope names its crypto suite, one value behind one interface here
+// (specifications/access.md, "Crypto suite").
 // Decode turns one record of the log into an Event, keeping every field it
 // does not know (INV:preserve-unknown); Mint signs a command's drafts as
 // events at the next causal positions and names what they create; Compare
@@ -19,7 +20,7 @@ package events
 type Agent interface{ agent() }
 
 // Labeled is an agent label: an opaque string, shown beside comments and
-// history, never interpreted (§3.14).
+// history, never interpreted (specifications/access.md, "Identity").
 type Labeled struct{ label string }
 
 // Unlabeled is an invocation whose harness supplied no label.
@@ -31,7 +32,8 @@ func (Unlabeled) agent() {}
 // String is the label as the harness supplied it.
 func (l Labeled) String() string { return l.label }
 
-// AgentFrom reads the label from LIT_AGENT's value (D7): empty is Unlabeled
+// AgentFrom reads the label from LIT_AGENT's value
+// (specifications/code-layout.md, "The composition root"): empty is Unlabeled
 // and anything else is the label, kept opaque, so the read cannot fail.
 func AgentFrom(env string) Agent {
 	if env == "" {

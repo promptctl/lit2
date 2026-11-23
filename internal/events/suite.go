@@ -15,11 +15,12 @@ import (
 )
 
 // SuiteID names a crypto suite. Every signature and principal carries one,
-// so a second suite verifies beside the first (architecture.md §8).
+// so a second suite verifies beside the first (specifications/access.md,
+// "Crypto suite").
 type SuiteID uint8
 
 // SuiteEd25519 is Ed25519 (RFC 8032) as Go's crypto/ed25519 implements it,
-// the one suite at this slice (decision E).
+// the one suite at this slice (specifications/access.md, "Crypto suite").
 const SuiteEd25519 SuiteID = 1
 
 // Suite judges a signature of one suite.
@@ -125,7 +126,7 @@ type Signature struct {
 }
 
 // PrincipalID is a principal's public key and its suite: the only identity
-// form that enters the store (§3.17). It is comparable, so it keys a map.
+// form that enters the store (specifications/access.md, "Identity"). It is comparable, so it keys a map.
 type PrincipalID struct {
 	suite SuiteID
 	key   string
@@ -165,7 +166,8 @@ func ParsePrincipalID(s string) (PrincipalID, error) {
 	return PrincipalID{suite: SuiteEd25519, key: key}, nil
 }
 
-// Signer signs as one principal; perform is its one caller (§5 step 6).
+// Signer signs as one principal; perform is its one caller (the Perform
+// step of specifications/code-layout.md, "One command, start to finish").
 type Signer interface {
 	Principal() PrincipalID
 	Sign(message []byte) Signature

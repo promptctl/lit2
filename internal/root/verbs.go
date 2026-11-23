@@ -22,7 +22,8 @@ func (v inForce) get(ps []cli.PathText) cli.Outcome {
 	return written(io.WriteString(v.p.Out, got.Out))
 }
 
-// write is a write verb's body, §5 steps 5 and 6: compile every operand,
+// write is a write verb's body, the Evaluate and Perform steps
+// (specifications/code-layout.md, "One command, start to finish"): compile every operand,
 // mint the drafts and judge them against the state they fold onto, and
 // unless one is refused, there is nothing to write or the run is dry,
 // append them as one frame; then echo each change from that state, so a

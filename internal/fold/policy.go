@@ -10,7 +10,8 @@ import (
 
 // Founding is the enrollment a fold is seeded with, the one that founds
 // its store: the checkout names it, never the events, since any writer
-// can mint an enrollment that sorts first in total order (§3.17).
+// can mint an enrollment that sorts first in total order
+// (specifications/access.md, "Enrollment and joining").
 //
 //sumtype:decl
 type Founding interface{ founding() }
@@ -68,7 +69,8 @@ func (Enrolled) policyInForce()        {}
 // with, the version in force, every proposal with its approvals,
 // every membership request, and the version each writer last cited. The
 // fold walks the total order, so the version in force when an event is
-// judged is the one folded before it (§3.20).
+// judged is the one folded before it (specifications/access.md, "The
+// policy").
 type policyState struct {
 	// founding is the enrollment the fold was seeded with, nil for
 	// NoFounding, so the zero state is a fold of no store
@@ -318,7 +320,7 @@ func (OneHolder) requirement()   {}
 // Diff is every path the change from prev to next writes, in principal
 // order: a member added, removed or moved to another role, and the
 // threshold. It is read from the two policies, never from the command that
-// proposed the change (§3.17).
+// proposed the change (specifications/access.md, "The policy").
 func Diff(prev, next events.Policy) []PathWrite {
 	var out []PathWrite
 	was, is := prev.MemberMap(), next.MemberMap()
@@ -349,7 +351,7 @@ func Diff(prev, next events.Policy) []PathWrite {
 // policies; one holder of every path the diff writes otherwise. The quorum
 // is prev's threshold of prev's owners, counted one fewer when the change
 // removes or demotes any: the owner being removed is not in the quorum
-// that removes them (§3.17), and stripping several at once lowers the
+// that removes them (specifications/access.md, "The policy"), and stripping several at once lowers the
 // count by that one alone. The owners the change keeps approve, or prev's
 // when it keeps none, so a sole owner hands over by signing.
 func Require(prev, next events.Policy) Requirement {

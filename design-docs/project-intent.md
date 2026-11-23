@@ -44,6 +44,71 @@ answer to it.
   same tickets, viewed from each side. The point is to bridge the gap, not to
   replace either world.
 
+## What lit must achieve
+
+lit is an issue tracker that lives in the code repository and is worked
+mostly by agents.
+
+### Operations
+
+The operations of an issue tracker: file and groom, pick and claim, move
+work through a configurable process with requirements and guidance, review
+and send back, close with a reason, order and sequence, link and block,
+comment and label, search and edit in bulk, undo, delete and purge,
+configure the process, export the whole store and import one.
+
+Role-based access control is real: a contributor can file tickets but
+cannot delete an epic or a ticket it did not create, and a ticket can be
+kept private from people who can read the repository.
+
+Work in the backlog is groomed before an agent pulls it, and what groomed
+means is part of the configurable process. A project or a person can
+override any part of a shipped workflow without breaking the features built
+on it.
+
+Work is grouped in containers so that a process can be scoped, and
+sequenced so that an order can be set. Configuration is per project.
+
+All of it works from several worktrees of one clone and from several
+machines, offline, with ticket data in the code's own repository, synced
+through the code's own remote, and no server.
+
+Agents are the primary user. Output is deterministic. Its default form is
+human-readable text, because that is what a language model reads;
+machine-readable forms are secondary.
+
+### Data
+
+The same backlog on every machine that holds the same data. Nothing lost
+silently under concurrent writes; a contradiction is shown, not resolved by
+luck. Deleting and purging are possible and reach every replica that syncs.
+History is readable. An old binary never corrupts a newer store.
+
+### Performance
+
+Performance is a priority. Every command is fast enough to call in a loop,
+sub-second as the reflex; cost tracks active work, not all history ever
+written; background work has negligible to low impact on the machine.
+
+### Impact on git
+
+Clone, fetch, push, status, log and gc are unaffected or affected
+negligibly. The repository grows minimally because of lit, and never
+without bound. Nothing lit keeps appears in normal git tooling.
+
+### Complexity
+
+Fewer mechanisms than v1, not a different set of the same size. Decidable
+reconciliation is automatic; undecidable cases are shown. Every mechanism
+is justified by an operation above. Anything intricate is a cost to be
+removed, not a feature.
+
+### Operational
+
+One static binary, working against GitHub, GitLab and a plain ssh remote,
+with the git credentials the user already has. lit and every dependency are
+permissively licensed. Using lit needs no knowledge of cryptography.
+
 ---
 
 ## Design philosophy: the agent process is a system

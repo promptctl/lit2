@@ -24,7 +24,8 @@ type Asset struct{ path string }
 // that holds declared and embedded equal fails until both exist.
 var (
 	// DefaultWorkspace is the default profile: the file admin init writes
-	// when there is none, and applies as version one (architecture.md §3.15).
+	// when there is none, and applies as version one
+	// (specifications/workspace-file.md, "Applying a version").
 	DefaultWorkspace = Asset{"workspace/default.toml"}
 	// BIP39English is BIP-39's English word list, one word per line.
 	BIP39English = Asset{"bip39/english.txt"}

@@ -117,7 +117,7 @@ func TestAVerbWithNoStoreFailsAsTheEnvironments(t *testing.T) {
 
 // The twin's entropy is seeded, so a twin mints the same ids on every run
 // and a scenario that names an id it minted reads the same id each time
-// (D6). Nothing in the binary mints yet; this is the reader the minting
+// (specifications/code-layout.md, "The composition root"). Nothing in the binary mints yet; this is the reader the minting
 // verbs will draw from.
 func TestEveryTwinMintsTheSameIDs(t *testing.T) {
 	config, err := git.ParseObjectID(git.SHA1, "2e65efe2a145dda7ee51d1741299f848e5bf752e")

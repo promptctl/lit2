@@ -1,10 +1,11 @@
 // Package git is the repository lit2 runs in.
 //
-// Its layer in architecture.md §6: go-git, in process, for objects and refs;
-// the user's git binary for push and fetch, run only by the background sync
-// process (decisions B and G). Here it holds checkout discovery: the work
+// Its layer: go-git, in process, for objects and refs; the user's git binary
+// for push and fetch, run only by the background sync process
+// (specifications/code-layout.md, "Module and tooling";
+// specifications/events-and-store.md, "Sync"). Here it holds checkout discovery: the work
 // tree, the checkout's private git dir and the common dir every worktree of
-// a clone shares, read in process from git's own layout (D10), with no git
+// a clone shares, read in process from git's own layout, with no git
 // binary and no GIT_DIR; the code repository's object format, read from its
 // config; the code repository's HEAD and history, read and never written;
 // and lit's own repository's Objects and Refs, a bare repository on disk
@@ -27,12 +28,14 @@ import (
 type Checkout struct{ WorkTree, GitDir, CommonDir string }
 
 // PrivateDir is the root of what lit2 keeps for this checkout alone,
-// <git-dir>/lit/checkout, which git deletes with the worktree (D11).
+// <git-dir>/lit/checkout, which git deletes with the worktree
+// (specifications/code-layout.md, "On disk").
 func (c Checkout) PrivateDir() string { return filepath.Join(c.GitDir, "lit", "checkout") }
 
 // SharedDir is the root of what lit2 keeps once per clone,
 // <git-common-dir>/lit, holding store/, principal and founding, the pin
-// naming the enrollment that founded the store (D11, §3.17).
+// naming the enrollment that founded the store (specifications/code-layout.md,
+// "On disk"; specifications/access.md, "Enrollment and joining").
 func (c Checkout) SharedDir() string { return filepath.Join(c.CommonDir, "lit") }
 
 // NotFound is the walk reaching the filesystem root with no .git on the way.

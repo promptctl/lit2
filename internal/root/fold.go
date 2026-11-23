@@ -24,7 +24,8 @@ func foldEnv(workers int) fold.Env {
 	return env
 }
 
-// opened is a run whose store opened and folded, §5 steps 1 and 3: the
+// opened is a run whose store opened and folded, the Open and Fold steps
+// (specifications/code-layout.md, "One command, start to finish"): the
 // store, the checkout it is minted for, and the state.
 type opened struct {
 	body

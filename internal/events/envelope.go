@@ -53,7 +53,8 @@ func (plain) form()       {}
 func (sealed) form()      {}
 func (unknownForm) form() {}
 
-// Tier names a visibility group (§3.19).
+// Tier names a visibility group (specifications/access.md, "Tiers and
+// envelopes").
 type Tier string
 
 // Epoch is a tier key's generation; removing a member starts a new one.

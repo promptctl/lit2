@@ -11,7 +11,7 @@ import (
 var Owner = events.MustName("owner")
 
 // DefaultRoles is the default profile's roles below owner, spelled as path
-// globs (access-control/design.md, Roles): observer writes nothing;
+// globs (specifications/access.md, "Capabilities and roles"): observer writes nothing;
 // contributor files work, moves any ticket, comments, and edits and
 // removes what it created, removing only a leaf of its items; editor writes and removes every path of every item. A
 // column condition the fold cannot judge from its own facts is no

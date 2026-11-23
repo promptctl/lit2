@@ -23,8 +23,8 @@ type Failed struct{ Failure reason.Failure }
 func (Done) outcome()   {}
 func (Failed) outcome() {}
 
-// ExitCode is the one map from an outcome to the process's exit status
-// (D9); the process exits with it and the command event records it.
+// ExitCode is the one map from an outcome to the process's exit status;
+// the process exits with it and the command event records it.
 func ExitCode(o Outcome) int {
 	switch o := o.(type) {
 	case Done:

@@ -16,7 +16,8 @@ import (
 // Admit judges applying version, in the code repository's object format f,
 // to st: it parses under running, then passes CheckApply against every
 // live version, and is the apply's draft, naming every live apply in Over,
-// so it resolves any conflict standing (§3.15). It is the one judge of an
+// so it resolves any conflict standing (specifications/workspace-file.md,
+// "Applying a version"). It is the one judge of an
 // apply, whether init applies version one, `config commit` the committed
 // file, or a later promote a sandbox's last draft. Every fault comes in one
 // refusal, none overridable.
@@ -73,7 +74,8 @@ func (Unreadable) Reason() string      { return "workspace" }
 
 // File is `.lit/workspace.toml` as the root read it this run: git's id for
 // its bytes, none, or why it could not be read. It is never parsed, so a
-// draft that does not parse stops nothing (§3.15).
+// draft that does not parse stops nothing (specifications/workspace-file.md,
+// "Applying a version").
 //
 //sumtype:decl
 type File interface{ file() }

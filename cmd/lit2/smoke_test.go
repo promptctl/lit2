@@ -94,7 +94,8 @@ func TestSmoke(t *testing.T) {
 		}
 	}
 	// No run read a version: only an applied one is in force, never the
-	// draft beside it, and nothing stands in for none (architecture.md §3.15).
+	// draft beside it, and nothing stands in for none (specifications/workspace-file.md, "Applying a
+	// version").
 	for i, c := range configs {
 		if c != nil {
 			t.Errorf("run %d records config %+v; want none, no version being applied", i, *c)

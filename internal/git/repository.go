@@ -22,7 +22,8 @@ import (
 
 // Repository is lit's own object database on disk: a bare git repository at
 // its directory, holding lit's objects and refs/lit/**, never the code
-// repository's (event-store charter #10). It is created by its first write,
+// repository's (specifications/events-and-store.md, "Log, segments and
+// refs"). It is created by its first write,
 // in a temporary directory renamed into place, so a read creates nothing
 // and a reader never sees half a repository.
 type Repository struct {

@@ -47,7 +47,8 @@ func MustName(s string) Name {
 	return n
 }
 
-// Level is a work item's level, 1 at the bottom (a leaf) to 5 (§3.4).
+// Level is a work item's level, 1 at the bottom (a leaf) to 5
+// (specifications/work-items.md, "Levels and the tree").
 type Level struct{ n uint8 }
 
 // The levels a workspace may declare.
@@ -88,7 +89,8 @@ func (l Level) Below() (Level, bool) {
 
 // Placement is where a created item sits in the tree: a top-level item
 // states its level, and a child its parent, whose level one down is its
-// own, so a child never states one (§3.4) `[LAW:one-source-of-truth]`.
+// own, so a child never states one (specifications/work-items.md, "Levels
+// and the tree") `[LAW:one-source-of-truth]`.
 //
 //sumtype:decl
 type Placement interface{ placement() }
@@ -101,7 +103,7 @@ type AtLevel struct {
 }
 
 // BelowParent is a child, under Parent: the link the child renders
-// under, never part of its id (§3.2).
+// under, never part of its id (specifications/events-and-store.md, "Ids").
 type BelowParent struct {
 	Parent  ItemID
 	unknown wire.Unknown
@@ -225,7 +227,7 @@ type MemberRm struct {
 // Transition is transition: About is the item, which moves from column
 // From to column To. Over is the writes of its status the writer read, as
 // a field.set's Over is; From is the column the writer saw it in, kept as
-// history (§3.2). Fields is what the move says about its arrival, such as
+// history (specifications/events-and-store.md, "Intent"). Fields is what the move says about its arrival, such as
 // the reason a ticket is closed: part of the one write the move is, so
 // whoever may move the item may give them, and the next move replaces
 // them.
@@ -253,7 +255,8 @@ type CommentAdd struct {
 
 // WorkspaceApply is workspace.apply: About is the root, and the version
 // it applies, the whole bytes of a `.lit/workspace.toml`, becomes the
-// model in force (§3.15). Over is the applies the writer saw in force,
+// model in force (specifications/workspace-file.md, "Applying a version").
+// Over is the applies the writer saw in force,
 // which it replaces, as a field.set's Over is; an apply naming every live
 // one resolves a conflict. The blob is git's id for the bytes, so the log
 // alone says what is in force; only NewWorkspaceApply and the reader make

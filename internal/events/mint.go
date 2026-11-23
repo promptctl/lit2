@@ -26,7 +26,7 @@ type Draft interface{ draft() }
 
 // Act is an event about something that exists. A create replayed from
 // another log is an Act about its NewItem or NewElement, so it keeps its
-// id and its segment (§3.2).
+// id and its segment (specifications/events-and-store.md, "Ids").
 type Act struct {
 	About   About
 	Payload Payload
@@ -84,9 +84,11 @@ type Minted struct {
 // Mint signs ds as events at the causal positions after c's frontier,
 // one each, in order: the one place a position, an id or a signature is
 // made `[LAW:single-enforcer]`. A create's id is 128 bits read from
-// entropy, the process's source (D6), and its segment is as wide as its
+// entropy, the process's source (specifications/code-layout.md, "The
+// composition root"), and its segment is as wide as its
 // namespace's fill needs and wider than any known id's shared digits, so it
-// is never a segment already fixed: a later mint goes wider (§3.2). The id
+// is never a segment already fixed: a later mint goes wider
+// (specifications/events-and-store.md, "Ids"). The id
 // and the width are signed header facts, never payload fields, so they
 // outlive the payload. Its error is entropy failing or repeating, or the
 // events being more than one frame of the log holds.

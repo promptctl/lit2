@@ -113,7 +113,7 @@ const (
 // Reach is the edge from the column recorded as from to the declared
 // column to, and false when there is none: a column some next names is
 // entered only along those edges, and one no next names from every column
-// (columns-and-phases.md). A from the graph does not declare lists no next,
+// (specifications/columns-and-requirements.md, "The graph and stage"). A from the graph does not declare lists no next,
 // so the universal edges are its way out `[LAW:types-are-the-program]`.
 func (g ColumnGraph) Reach(from, to string) (Edge, bool) {
 	if from == to {

@@ -22,7 +22,7 @@ type Ports struct {
 }
 
 // DiskPorts is the store of at's clone on disk, rooted at
-// <git-common-dir>/lit/store/ (D11), lit's repository at repo/ beneath it.
+// <git-common-dir>/lit/store/ (specifications/code-layout.md, "On disk"), lit's repository at repo/ beneath it.
 // It reads nothing; every worktree of a clone builds the same ports.
 func DiskPorts(at git.Checkout, entropy io.Reader) Ports {
 	root := filepath.Join(at.SharedDir(), "store")

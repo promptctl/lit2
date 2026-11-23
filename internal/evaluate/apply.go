@@ -10,13 +10,14 @@ import (
 	"github.com/promptctl/lit2/internal/fold"
 )
 
-// CheckApply is the check of §3.5 a version passes before it is applied:
+// CheckApply is the check (specifications/columns-and-requirements.md,
+// "Validity of a column graph") a version passes before it is applied:
 // every faulty column graph of next on an ancestry the state reaches, and
 // every column next drops that a ticket is in, under some version in force
 // now, with no alias saying where it goes. live is every live version, so a
 // resolution cannot strand a ticket moved into a column only the version it
 // replaces declared. Faults come keyed and in a stable order; none is
-// overridable (§3.15). It is pure: the state and the versions are values.
+// overridable (specifications/workspace-file.md, "Validation"). It is pure: the state and the versions are values.
 func CheckApply(st fold.State, live []config.Schema, next config.Schema) []config.Refusal {
 	return append(unresolved(st, next), stranded(st, live, next)...)
 }

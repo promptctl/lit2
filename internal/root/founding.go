@@ -13,7 +13,8 @@ import (
 )
 
 // A store's founding is named by the clone, never by the events, which any
-// writer can mint to sort first (§3.17): the pin, in the clone's shared dir
+// writer can mint to sort first (specifications/access.md, "Enrollment and
+// joining"): the pin, in the clone's shared dir
 // beside its key, seeds every fold of its store, and is written once, by
 // the init that founds the store or adopts the committed FoundingFile. No
 // command moves it: a clone joins another store only when a person removes

@@ -14,14 +14,15 @@ import (
 	"github.com/promptctl/lit2/internal/git"
 )
 
-// Sink is where command events go: the one export edge (D13).
+// Sink is where command events go: the one export edge.
 type Sink interface{ Write(Event) error }
 
-// retention is how long a day file of the command log is kept (D12).
+// retention is how long a day file of the command log is kept
+// (specifications/code-layout.md, "On disk").
 const retention = 30 * 24 * time.Hour
 
 // NewLog is the command log in dir: one file per UTC day, <date>.jsonl,
-// one line per event (D12).
+// one line per event (specifications/code-layout.md, "On disk").
 func NewLog(dir string) Sink { return commandLog{dir: dir} }
 
 type commandLog struct{ dir string }

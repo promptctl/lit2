@@ -139,7 +139,8 @@ func TestDefaultProfileParsesToTheDocumentedModel(t *testing.T) {
 
 // TestAVersionsPrefixReadsAlone: the prefix a version declared reads
 // without the rest of it, so a prefix every id once rendered under still
-// parses after the version is replaced (§3.2).
+// parses after the version is replaced (specifications/events-and-store.md,
+// "Ids").
 func TestAVersionsPrefixReadsAlone(t *testing.T) {
 	if p, ok := DeclaredPrefix([]byte("prefix = \"rin\"\n[columns.x]\nnot = \"read\"\n")); !ok || p.String() != "rin" {
 		t.Errorf("DeclaredPrefix = %v, %v; want rin", p, ok)

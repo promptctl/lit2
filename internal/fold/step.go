@@ -82,7 +82,7 @@ func (CarriedFor) outcome() {}
 func (LeftFor) outcome()    {}
 
 // step folds one checked event into s, in this order, the first failure
-// its outcome (§3.20): a signature that does not verify is carried; an
+// its outcome (specifications/access.md, "Verification"): a signature that does not verify is carried; an
 // event the policy cannot judge from its header is carried; a verified
 // event whose payload no rule applies is carried when no member wrote it,
 // and observed and left unapplied otherwise; its intent is judged under

@@ -24,7 +24,8 @@ func (b *book) apply(w store.CheckoutID, seen fold.State, version string) {
 
 // TestTwoAppliesOverOneParentContendUntilOneNamesBoth: the board names the
 // version contending with the one in force and its writer, and the next
-// apply names every live apply, which resolves them (§3.15).
+// apply names every live apply, which resolves them
+// (specifications/workspace-file.md, "Applying a version").
 func TestTwoAppliesOverOneParentContendUntilOneNamesBoth(t *testing.T) {
 	b := newBook(t, profile(""))
 	b.apply(one, b.st, profile(""))

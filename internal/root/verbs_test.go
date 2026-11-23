@@ -295,7 +295,7 @@ func TestPlacementIsTheNodesAddedTo(t *testing.T) {
 	}
 	s.refused("not_on_level", "add", s1+"/children", "{title: x}")
 	s.refused("not_on_level", "get", m2q+"/status")
-	// scenarios.md §2 step 5: a label on the feature grooms its stories
+	// a label on the feature grooms its stories
 	s.ok("add", m2q+"/labels", "ready")
 	if got := s.ok("get", s1+"/ready"); got != "unmet description (ready)\n" {
 		t.Errorf("a story under a ready feature reads %q; want only description unmet", got)
@@ -383,7 +383,7 @@ func TestAnItemReadsItsFieldsThenItsComments(t *testing.T) {
 
 // TestABareLit2IsTheBoardOfAnEmptyWorkspace: a fresh workspace reads its
 // homes, no lanes, and nothing next out of none considered, and bare lit2
-// is that read (scenarios.md 1).
+// is that read.
 func TestABareLit2IsTheBoardOfAnEmptyWorkspace(t *testing.T) {
 	s := newSession(t)
 	want := "$ = /\n$/children\tunassigned · home\n$/children\tunfiled · home\n" + integrityRow + membersRow + "$/next\tlanes considered: 0\n" + policyRows + workspaceRow
@@ -398,7 +398,7 @@ func TestABareLit2IsTheBoardOfAnEmptyWorkspace(t *testing.T) {
 // TestTheBoardIsTheTreeTheLanesAndNext: get / shows every node with its
 // stage, each at the children row of the node holding it, each leaf its own lane in the order it was filed, and next the
 // first lane's head; once that head is done, next serves the second
-// (scenarios.md 2 and 14, at slice 1's depth).
+// (at slice 1's depth).
 func TestTheBoardIsTheTreeTheLanesAndNext(t *testing.T) {
 	s := newSession(t)
 	feature := filed(t, s.ok("add", "unfiled/children", "{title: board}"))

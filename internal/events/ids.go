@@ -10,7 +10,7 @@ import (
 
 // Prefix is the project prefix ids render under: [a-z][a-z0-9]{2,}, the
 // workspace file's grammar. It is a label of the active version, never
-// part of an id (§3.2).
+// part of an id (specifications/events-and-store.md, "Ids").
 type Prefix struct{ s string }
 
 // ParsePrefix reads a project prefix.
@@ -37,7 +37,8 @@ const (
 
 // ItemID names one item: 128 random bits minted at its create and carried
 // in it, so where the create lands is no part of the item's identity
-// (§3.2). It is comparable, so it keys a map.
+// (specifications/events-and-store.md, "Ids"). It is comparable, so it keys
+// a map.
 type ItemID struct{ b [16]byte }
 
 // ElementID names one element of an item, such as a comment, the same way.
@@ -129,7 +130,8 @@ func sharedDigits(a, b [16]byte) int {
 }
 
 // Segment is an id's short form: its first digits, as many as its create
-// fixed at mint, which is how an id is rendered (§3.2).
+// fixed at mint, which is how an id is rendered
+// (specifications/events-and-store.md, "Ids").
 type Segment struct{ s string }
 
 // ParseSegment reads one segment. A segment of every digit is the whole id,
@@ -281,7 +283,8 @@ func (s Segments) String() string { return s.s }
 // Prefixes is every prefix an id of this project may be typed under: the
 // active version's, which ids render under, and each one a version in the
 // log has ever declared, so an id copied before a rename still reads
-// (§3.2). The zero Prefixes admits none, only a bare id.
+// (specifications/events-and-store.md, "Ids"). The zero Prefixes admits
+// none, only a bare id.
 type Prefixes struct {
 	active Prefix
 	former []Prefix
@@ -302,7 +305,8 @@ func (k Prefixes) admits(pre string) bool {
 // ParseShortID reads an item reference a person typed: bare, or under a
 // known prefix as `<prefix>-…`; a full id or segments, their digits read
 // as Crockford decodes them. Any other prefix is refused as another
-// project's, naming the active one (§3.2).
+// project's, naming the active one (specifications/events-and-store.md,
+// "Ids").
 func ParseShortID(s string, known Prefixes) (ShortID, error) {
 	body := s
 	if pre, rest, ok := strings.Cut(s, "-"); ok {

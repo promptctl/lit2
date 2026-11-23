@@ -16,7 +16,8 @@ import (
 type Intent interface{ intent() }
 
 // PathWrite is a write of Verb to the path At/Field: the operand the verbs
-// compiled it from, read back (§3.18).
+// compiled it from, read back (specifications/access.md, "Capabilities and
+// roles").
 type PathWrite struct {
 	Verb  events.Verb
 	At    Subject

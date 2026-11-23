@@ -8,14 +8,14 @@ import (
 // Load parses a version's bytes under the running reader: the active
 // version the log holds, or one a person proposes to apply. It reads
 // nothing but its arguments, so a draft in the working tree is never an
-// input (architecture.md §3.15).
+// input (specifications/workspace-file.md, "Applying a version").
 func Load(b []byte, running ReaderVersion) (Schema, error) {
 	return Parse(b, "the workspace version", running)
 }
 
 // DeclaredPrefix is the prefix a version's bytes declare, read alone: an
 // applied version, whose prefix every id once rendered under still parses
-// under (§3.2). A version parsed when it was applied, so its prefix reads;
+// under (specifications/events-and-store.md, "Ids"). A version parsed when it was applied, so its prefix reads;
 // false is bytes with none, which no apply carries.
 func DeclaredPrefix(b []byte) (events.Prefix, bool) {
 	var v struct {

@@ -26,7 +26,8 @@ type Syntax struct{ Text, Why string }
 type NotFound struct{ ID string }
 
 // Ambiguous is an id that names two or more nodes, each listed by its full
-// id: two writers offline can fix one segment for two nodes (§3.2).
+// id: two writers offline can fix one segment for two nodes
+// (specifications/events-and-store.md, "Ids").
 type Ambiguous struct {
 	ID         string
 	Candidates []string

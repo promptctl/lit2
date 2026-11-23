@@ -8,7 +8,8 @@ import (
 	"github.com/promptctl/lit2/internal/git"
 )
 
-// versions is the workspace's applied versions (§3.15): every apply
+// versions is the workspace's applied versions (specifications/workspace-file.md,
+// "Applying a version"): every apply
 // folded, kept whole for the prefixes a version once declared, and the
 // applies some apply named in Over. It is the register's rule over
 // versions: an apply retires what it names, and the rest stay live.
@@ -37,7 +38,7 @@ func (v versions) with(st Stamp, c Apply) versions {
 }
 
 // Version is one applied version: the apply that carried it, git's id
-// for its bytes, and the bytes. The fold reads none of them (decision H).
+// for its bytes, and the bytes. The fold reads none of them.
 type Version struct {
 	Stamp Stamp
 	Blob  git.ObjectID

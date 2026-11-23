@@ -1,7 +1,7 @@
 // Package storetest is the behavioral suite every substrate of the store
 // passes, and the contract suite of its Files port. Its assertions speak of
-// logs, segments, publications, and refs (architecture.md
-// §3.16), never of file layouts or bytes beyond git's object ids.
+// logs, segments, publications, and refs (specifications/events-and-store.md,
+// "Log, segments and refs"), never of file layouts or bytes beyond git's object ids.
 package storetest
 
 import (

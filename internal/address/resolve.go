@@ -21,7 +21,8 @@ type candidate[I comparable] struct {
 // it sits; segments name the nodes whose rendered path ends with them, so
 // the last is the node's own segment, unique among every id its writer had
 // folded, and any before it its ancestors', nearest last. Hierarchy
-// narrows a match and never makes one (§3.2). Two writers offline can fix
+// narrows a match and never makes one (specifications/events-and-store.md,
+// "Ids"). Two writers offline can fix
 // one segment for two nodes, and then it names neither, listing both.
 func resolve[I comparable](key events.ShortID, cands []candidate[I]) (I, error) {
 	var none I

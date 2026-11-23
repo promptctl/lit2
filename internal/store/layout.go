@@ -11,7 +11,8 @@ import (
 	"strings"
 )
 
-// The store's layout under its root, <git-common-dir>/lit/store/ (D11):
+// The store's layout under its root, <git-common-dir>/lit/store/
+// (specifications/code-layout.md, "On disk"):
 // log/<checkout-id> per writing checkout and repo/ for lit's repository.
 // The layout is the one builder of a Path.
 const (

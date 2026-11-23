@@ -110,7 +110,8 @@ type Item struct {
 type Origin interface{ origin() }
 
 // Created is a node's one create: where it put the node, and the segment
-// it fixed at mint, which the node renders by (§3.2).
+// it fixed at mint, which the node renders by (specifications/events-and-store.md,
+// "Ids").
 type Created struct {
 	Stamp   Stamp
 	In      Container
@@ -148,7 +149,8 @@ func (Under) container() {}
 func (Home) container()  {}
 
 // LevelOf is an item's level, derived from its parent chain: a child is
-// one level below its parent, so no child stores a level (§3.4).
+// one level below its parent, so no child stores a level
+// (specifications/work-items.md, "Levels and the tree").
 //
 //sumtype:decl
 type LevelOf interface{ levelOf() }
@@ -300,7 +302,7 @@ type UnknownSuite struct{}
 
 // NoPolicyInForce is an event sorting before the founding, or in a store
 // whose founding is not folded: verification seeds there and never walks
-// before it (§3.17).
+// before it (specifications/access.md, "Enrollment and joining").
 type NoPolicyInForce struct{}
 
 // NotTheFounding is an enrollment other than the one the fold's Founding
@@ -312,7 +314,7 @@ type NotTheFounding struct{}
 type CitesFutureVersion struct{ Cited, InForce events.PolicyVersion }
 
 // VersionRegressed is an event citing a version older than its writer last
-// cited (§3.20).
+// cited (specifications/access.md, "The policy").
 type VersionRegressed struct{ Cited, Previous events.PolicyVersion }
 
 // Unauthorized is an event whose Intent the policy in force at its position
@@ -432,7 +434,8 @@ func byCreate(a, b *item) int {
 // Lane is an ordered list of leaves, its members in sequence.
 type Lane struct{ Members []events.ItemID }
 
-// Lanes is every lane in rank order (architecture.md §3.7). No lane or
+// Lanes is every lane in rank order (specifications/lanes-and-claims.md,
+// "Lanes"). No lane or
 // rank intent is folded yet, so each placed leaf is its own one-member
 // lane, and a new lane ranks last: rank is the order of the leaves'
 // creates.
@@ -649,7 +652,8 @@ func (s State) placedIn(k creation, c Container) bool {
 	panic(fmt.Sprintf("fold: %T is not a Container", c))
 }
 
-// Path is the segments id renders by, the top-most first (§3.2): each
+// Path is the segments id renders by, the top-most first
+// (specifications/events-and-store.md, "Ids"): each
 // item's own, fixed by its first create, up the chain levelOf walks. A
 // chain broken above an item renders from the first item below the break,
 // and an item with no create has no segments and renders by its full id.

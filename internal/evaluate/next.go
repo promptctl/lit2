@@ -8,7 +8,7 @@ import (
 
 // Next is what /next serves: the head it settled on, every lane passed
 // over before it with why, and how many lanes the walk visited, so an
-// empty backlog and a passed-over one do not read alike (scenarios.md 1).
+// empty backlog and a passed-over one do not read alike.
 type Next struct {
 	Head       Head
 	Passed     []Passed
@@ -41,13 +41,13 @@ type Passed struct {
 type Why interface{ why() }
 
 // Undeclared is a head in a column its graph no longer declares
-// (architecture.md §3.5).
+// (specifications/columns-and-requirements.md, "Validity of a column graph").
 type Undeclared struct{ Column string }
 
 func (Undeclared) why() {}
 
 // Next walks the lanes in rank order and serves the first head it can
-// (architecture.md §3.7): a lane's head is its first member rm has not
+// (specifications/lanes-and-claims.md, "Lanes"): a lane's head is its first member rm has not
 // removed, itself or above it, and whose stage is not terminal, and a lane with none is
 // finished. Claims and held refine the walk in slice 4 without changing
 // its path. A graph the configuration refuses is its refusal.

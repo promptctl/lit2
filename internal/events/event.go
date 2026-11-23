@@ -127,7 +127,7 @@ func payloadHash(s Salt, payload []byte) PayloadHash {
 	return PayloadHash(h.Sum(nil))
 }
 
-// Attribution is who wrote an event (§3.14).
+// Attribution is who wrote an event (specifications/access.md, "Identity").
 type Attribution struct {
 	Checkout  store.CheckoutID
 	Principal PrincipalID
@@ -165,7 +165,7 @@ func (h Header) Subject() Subject { return subjectOf(h.about) }
 func (h Header) Attribution() Attribution { return h.by }
 
 // ConfigRef is the code repository's blob of .lit/workspace.toml the writer
-// read: provenance, never read by the fold (decision H).
+// read: provenance, never read by the fold.
 func (h Header) ConfigRef() git.ObjectID { return h.configRef }
 
 // Policy is the policy version the event cites.

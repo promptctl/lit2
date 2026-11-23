@@ -1,10 +1,12 @@
 // Package root is the composition root, the one place the outside world
 // enters lit2.
 //
-// It sits beside the stack (architecture.md §6): the one place a store is
+// It sits beside the stack (specifications/code-layout.md, "Units,
+// downhill"): the one place a store is
 // opened and the clock, entropy, the writer identity, the principal's key
 // and the agent label are read. Main reads the world into a Process once;
-// Run is the dispatcher every invocation passes through, in the order of §5.
+// Run is the dispatcher every invocation passes through, in the order of
+// (specifications/code-layout.md, "One command, start to finish").
 // Tests enter through NewTwin, the same Run over a fixed clock, seeded
 // entropy, a fixed writer and a store over the in-memory twins.
 package root
@@ -94,7 +96,8 @@ type body struct {
 	rec command.Recorder
 }
 
-// dispatch binds each command to its body. Every verb runs the steps of §5
+// dispatch binds each command to its body. Every verb runs the steps of
+// (specifications/code-layout.md, "One command, start to finish")
 // in order on every call: open and fold, the version in force loaded, then
 // its own body.
 func dispatch(r body, table cli.Table, groups []cli.Group, cmd cli.Command) cli.Outcome {
@@ -160,7 +163,8 @@ func logFailure(err error) string {
 	return fmt.Sprintf("lit2: command event not recorded: %v\n", err)
 }
 
-// notBuilt ends a row whose body is not in this binary yet (D14). Once the
+// notBuilt ends a row whose body is not in this binary yet
+// (specifications/code-layout.md, "The composition root"). Once the
 // last body is bound it is unused, and the lint forces its deletion.
 func notBuilt(verb string) cli.Outcome {
 	return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("lit2 %s is not built in this binary", verb)}}

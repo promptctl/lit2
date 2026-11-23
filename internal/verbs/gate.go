@@ -48,7 +48,7 @@ type arrival struct {
 // once. An unmet error refuses the command and it writes nothing; an unmet
 // warning rides on the echo, in the judgment the arriving change carries,
 // and every judgment's counts on the command event, a refused one's
-// included (transition-requirements.md).
+// included (specifications/columns-and-requirements.md, "Observability").
 func Gate(w World, c Compiled, minted []events.Event) Compiled {
 	filed := newItems(c, minted)
 	created := map[events.ItemID]int{}

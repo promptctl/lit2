@@ -413,7 +413,7 @@ func fieldOf(r config.Row, path field.Path) (field.FieldDecl, *refusal) {
 
 // value reads an operand's value. `-` is standard input, which the literal
 // grammar never reads: verbatim less one final newline, and for a set one
-// member per line, so a list of names pipes in (path-addressed-cli.md
+// member per line, so a list of names pipes in (specifications/command-line.md,
 // "Values"). Any other value is read by the literal grammar alone.
 func (x *expanded) value(op Operand, stdin func() (string, error), d field.FieldDecl) (field.Literal, *refusal) {
 	if op.Value != Stdin {

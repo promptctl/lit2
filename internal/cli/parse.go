@@ -1,11 +1,13 @@
 // Package cli is the command line both ways: argv in, text and exit status
 // out.
 //
-// Its layer in architecture.md §6: argv → typed command; rendering; exit
-// codes; --json (§5 step 7, path-addressed-cli.md). The tables, the verbs and
+// Its layer: argv → typed command; rendering; exit codes; --json (the Speak
+// step of specifications/code-layout.md, "One command, start to finish";
+// specifications/command-line.md, "Output"). The tables, the verbs and
 // each group's commands, are both the parser and --help, so help
 // cannot disagree with the parser `[LAW:one-source-of-truth]`. A flag is
-// --name anywhere on the line, -- ends the flags, and - is a value (D4).
+// --name anywhere on the line, -- ends the flags, and - is a value
+// (specifications/command-line.md, "Argv").
 package cli
 
 import (
@@ -128,7 +130,8 @@ func (ConfigCommit) command() {}
 func (ConfigStatus) command() {}
 
 // PathText is a path as typed. It is not yet an address: a short id
-// resolves against the fold, so address parses it at §5 step 4
+// resolves against the fold, so address parses it at the Address step
+// (specifications/code-layout.md, "One command, start to finish")
 // `[LAW:parse-dont-validate]`.
 type PathText string
 

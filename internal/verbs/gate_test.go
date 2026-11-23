@@ -129,7 +129,7 @@ func TestSettlingAConflictedStatusIsNoMove(t *testing.T) {
 
 // TestAnUndeclaredColumnStandsAndIsReported:a status a later version no
 // longer declares reads marked, its stage is active, and it leaves by a
-// universal edge and by no other (scenarios.md S-6).
+// universal edge and by no other.
 func TestAnUndeclaredColumnStandsAndIsReported(t *testing.T) {
 	b := newBook(t, profile(""))
 	_, s := story(t, b)

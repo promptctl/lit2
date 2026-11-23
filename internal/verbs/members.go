@@ -14,7 +14,8 @@ import (
 
 // The governed paths: the policy's members, a member's role, the owner
 // threshold and the approvals, each written as a proposal of the policy's
-// next version or an approval of one (architecture.md §3.18).
+// next version or an approval of one (specifications/access.md, "The
+// policy").
 const (
 	membersPath   field.Path = "members"
 	rolePath      field.Path = "role"

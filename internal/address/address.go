@@ -1,8 +1,9 @@
 // Package address is what can be named: the path grammar, and later
 // selectors and globs.
 //
-// Its layer in architecture.md §6: path grammar; selectors; globs (§3.1,
-// §5 step 4). A path parses once into a typed address and every verb
+// Its layer: path grammar; selectors; globs (specifications/command-line.md,
+// "Node and path"; the Address step of specifications/code-layout.md, "One
+// command, start to finish"). A path parses once into a typed address and every verb
 // takes the address `[LAW:parse-dont-validate]`. Which fields a node has
 // is the field table's, config's: a path reads it and never keeps its own.
 package address

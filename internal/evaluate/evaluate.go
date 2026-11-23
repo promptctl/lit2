@@ -19,9 +19,9 @@ type View struct {
 }
 
 // Of is the view of s under schema at now, a pure function: evaluate reads the
-// clock's value, never the clock (§8). Its prefixes are schema's and every
-// one a version s holds declared, the fold keeping the bytes and config
-// reading them (decision H).
+// clock's value, never the clock (specifications/fold.md, "Time enters at the
+// edges"). Its prefixes are schema's and every one a version s holds
+// declared, the fold keeping the bytes and config reading them.
 func Of(s fold.State, schema config.Schema, now time.Time) View {
 	var declared []events.Prefix
 	switch w := s.Workspace().(type) {
@@ -37,7 +37,8 @@ func Of(s fold.State, schema config.Schema, now time.Time) View {
 }
 
 // Prefixes is every prefix an id may be typed under: the active version's
-// and every one a version in the log declared (§3.2).
+// and every one a version in the log declared (specifications/events-and-store.md,
+// "Ids").
 func (v View) Prefixes() events.Prefixes { return v.prefixes }
 
 // State is the folded state the view derives from.

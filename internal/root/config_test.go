@@ -265,7 +265,8 @@ func TestASecondReplicaRunsTheModelFromTheEventsAlone(t *testing.T) {
 
 // TestAnIDUnderAFormerPrefixStillResolves: an id typed under a prefix any
 // applied version declared resolves after the prefix changes, and one no
-// version declared is another project's (§3.2).
+// version declared is another project's (specifications/events-and-store.md,
+// "Ids").
 func TestAnIDUnderAFormerPrefixStillResolves(t *testing.T) {
 	s := freshSession(t)
 	s.file(noPlan)

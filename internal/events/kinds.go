@@ -30,7 +30,8 @@ type Payload interface {
 
 // Past is a frozen version of a kind. Up is its one upcaster, to the next
 // version; a schema bump adds one decoder, one Past and one upcaster and
-// touches no frozen one (event-store design §events).
+// touches no frozen one (specifications/events-and-store.md, "Schema
+// versions").
 type Past interface {
 	Versioned
 	Up() Versioned

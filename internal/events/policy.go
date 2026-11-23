@@ -14,7 +14,8 @@ import (
 
 // Verb is a write verb: what a capability grants and an intent does. get
 // is no Verb, so a capability to read is unrepresentable: reads are the
-// tiers' (§3.19) `[LAW:types-are-the-program]`.
+// tiers' (specifications/access.md, "Tiers and envelopes")
+// `[LAW:types-are-the-program]`.
 type Verb uint8
 
 const (
@@ -36,7 +37,8 @@ func (v Verb) String() string {
 }
 
 // Binding is which items a capability's subject matches: every item, the
-// ones its holder created, the ones assigned to it, or either (§3.18).
+// ones its holder created, the ones assigned to it, or either
+// (specifications/access.md, "Capabilities and roles").
 type Binding uint8
 
 const (
@@ -78,8 +80,7 @@ func (AnyOne) globStep()  {}
 // FieldGlob matches the field steps of an intent path: Steps one segment
 // each, then, when Subtree, any number more. A glob's final `*` is its
 // Subtree, as MQTT's `#` is, so `own/*` covers the item and everything
-// beneath it, and `*/*/*` everything beneath an item but never the item
-// (D4).
+// beneath it, and `*/*/*` everything beneath an item but never the item.
 type FieldGlob struct {
 	Steps   []GlobStep
 	Subtree bool
@@ -109,7 +110,8 @@ const (
 // Condition is a fact a capability's subject must hold. Every condition is
 // judged from facts the fold holds, so every verifier reaches the writer's
 // verdict; a column stage, which only the writer's file knows, is never
-// one (D3) `[LAW:single-enforcer]`.
+// one (specifications/access.md, "Capabilities and roles")
+// `[LAW:single-enforcer]`.
 //
 //sumtype:decl
 type Condition interface{ condition() }
@@ -122,7 +124,8 @@ type LevelIs struct {
 
 func (LevelIs) condition() {}
 
-// Capability is `(verb, path glob, binding)` (§3.18), with the conditions
+// Capability is `(verb, path glob, binding)` (specifications/access.md,
+// "Capabilities and roles"), with the conditions
 // its subject must hold. Only ParseCapability makes one, and String is its
 // inverse, so the text a role is written in is the capability
 // `[LAW:one-source-of-truth]`.
@@ -265,7 +268,7 @@ func (c Capability) String() string {
 
 // Threshold is how many owners must approve a change to the owner set or
 // to the threshold itself: a majority of them, one while there is one
-// (§3.17), or a fixed number. Zero is no threshold, never "the default"
+// (specifications/access.md, "The policy"), or a fixed number. Zero is no threshold, never "the default"
 // `[LAW:types-are-the-program]`.
 //
 //sumtype:decl
@@ -314,7 +317,7 @@ func fixedOf(n uint64) (Threshold, error) {
 	return Fixed{N: uint8(n)}, nil
 }
 
-// Policy is the policy document (§3.17): who is a member and in which
+// Policy is the policy document (specifications/access.md, "The policy"): who is a member and in which
 // role, what each role may do, and how many owners approve a change to
 // the owners. The owner role is named, never listed: it grants every path,
 // by construction. Only NewPolicy makes one, and it refuses a policy that
@@ -450,7 +453,7 @@ func ComparePrincipals(a, b PrincipalID) int {
 // Enroll is policy.enroll, the first event of a workspace: the founding
 // owner, its signer, enrolls itself as the one owner of the version-one
 // policy, under the owner role Owner, with the other roles Roles and a
-// majority threshold (§3.17). The signer is the founder, so an enrollment
+// majority threshold (specifications/access.md, "The policy"). The signer is the founder, so an enrollment
 // naming another founder is unrepresentable.
 type Enroll struct {
 	Owner   Name
@@ -481,7 +484,7 @@ type Propose struct {
 // Digest is a SHA-256: a policy's, which a proposal names as its base, or
 // a proposal's, which an approval cites, over its base, its members in
 // principal order and its threshold, so it binds the base policy and two
-// equal proposals are one target (D10).
+// equal proposals are one target.
 type Digest [32]byte
 
 func (d Digest) String() string { return fmt.Sprintf("%x", d[:]) }
