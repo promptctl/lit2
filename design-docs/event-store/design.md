@@ -40,7 +40,6 @@ Tokens are stable; cite them from code comments, tickets, and reviews as
 | `INV:deterministic-fold` | same event set ⇒ equal derived state on every machine, in any arrival order, from genesis or a snapshot; only a fold-version bump may change it |
 | `INV:single-writer-ref` | each ref has exactly one writing checkout; all cross-writer coordination is read-side |
 | `INV:preserve-unknown` | an event a reader cannot interpret is carried and surfaced, never discarded |
-| `INV:no-foreground-network` | no lit command's foreground path waits on a network operation |
 | `INV:disposable-cache` | derived local state may always be deleted and refolded; nothing behaves as if the cache were truth |
 | `INV:opaque-envelope` | layers below the verb layer treat prose payloads as opaque bytes |
 | `INV:config-versioned` | every event names the active workspace version its writer ran under (`config-ref`) and the policy version in force; both are provenance, the fold reads neither |
@@ -391,18 +390,8 @@ descends directly from the charter's hard constraint 3, and a fold that only
 meets it warm is a fold that misses it on every fold-version bump. Snapshots
 are load-bearing from the first shipped version.
 
-## §sync — refs out, refs in, nothing in front
+## §sync — refs out, refs in
 status: destination
-
-**The foreground never waits on a wire** (`INV:no-foreground-network`). Push
-mirrors and receive fetches run in background processes; a command reads and
-writes local objects only. The temptation is always modest: *"one quick fetch
-inline here — it's fast and the data's fresher."* That exact reasoning, made
-policy, is how lit v1's `backlog` came to overshoot the per-command directive
-by an order of magnitude, and v1 had an excuse: its embedded store permitted
-one read-write engine, so a background sync would have broken foreground
-commands. Appends and folds cannot conflict with a background fetch, so
-nothing earns a seat on the foreground path.
 
 **Out:** a write schedules a detached `lit2 admin sync`, which seals this
 checkout's log into segments and publishes its one commit, replacing its ref.

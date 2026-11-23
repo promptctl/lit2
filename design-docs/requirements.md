@@ -40,18 +40,17 @@ readable. An old binary never corrupts a newer store.
 
 ## 3. Performance of lit
 
-This is the reason v2 exists. Every command is fast enough to call in a
-loop, sub-second as the reflex. Cost tracks active work, not all history
-ever written, or history is compacted so that it does. Background work is
-negligible to low in its impact on the machine.
+Performance is a priority, and the reason v2 exists. The aim is every
+command fast enough to call in a loop, sub-second as the reflex; cost that
+tracks active work, not all history ever written, or history compacted so
+that it does; and background work negligible to low in its impact on the
+machine.
 
 ## 4. Zero to negligible impact on the user's git
 
 Clone, fetch, push, status, log and gc are unaffected or affected
 negligibly. The repository grows minimally because of lit, and never
-without bound. Nothing lit keeps appears in normal git tooling. The working
-tree holds only configuration a person put there on purpose, never raw
-data.
+without bound. Nothing lit keeps appears in normal git tooling.
 
 ## 5. A complexity budget
 

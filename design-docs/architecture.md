@@ -763,7 +763,7 @@ decided in the body.
 
 - A new ticket fact is an event kind plus a fold rule and, if it needs the
   clock or the configuration, an evaluate rule. A new piece of the model is a
-  key in `.lit/workspace.toml`. Never a table, never a second store.
+  key in `.lit/workspace.toml`, never a second store.
 - Every mutating verb on a path has a capability `(verb, path glob,
   binding)`; what cannot be spelled as a path write cannot be authorized,
   and a path write with no capability does not ship.
@@ -779,8 +779,6 @@ decided in the body.
 - The fold reads no clock, and evaluate reads none either: it is handed `now`.
   A derivation that wants both events and `now` is two derivations, a fold
   rule and an evaluate rule.
-- No network on a foreground path; no lock on the cache.
-- A handler produces text and nothing else.
 
 ## 9. Testing
 

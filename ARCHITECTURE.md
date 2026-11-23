@@ -119,8 +119,6 @@ The decisions the layout needed and the design documents did not make.
   directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums
   make a missing case a lint failure.
-- **D3 Build** `CGO_ENABLED=0 go build ./cmd/lit2`, one command, a static
-  binary; no Makefile.
 - **D4 Argv** is the standard library and a scan over the tables, the verbs
   and each group's (`admin`, `config`): a flag is `--name` anywhere, `--`
   ends the flags, `-` is a value.
@@ -136,22 +134,14 @@ The decisions the layout needed and the design documents did not make.
 - **D8 `config` above `fold`, `field` below `config`.** The fold reads no
   configuration (decision H); config and address both stand on field's
   kinds and atoms, so neither imports the other for them.
-- **D9 Exit statuses**: 0 ok; 1 refused; 64 usage (`EX_USAGE`); 70 internal
-  (`EX_SOFTWARE`); 78 environment (`EX_CONFIG`). Any other status means lit2
-  died unrecorded. stdout carries only the answer asked for; stderr only the
-  error line and the unrecorded line.
-- **D10 Checkout discovery in process**: walk up to `.git`, a directory or a
-  `gitdir:` file, then `commondir`; no git binary, no go-git, no `GIT_DIR`.
 - **D11 On disk.** Per clone, `<git-common-dir>/lit/`: `store/`, the store's
   root, and `principal`, beside the store and outside it. Per checkout,
   `<git-dir>/lit/checkout/`: `id`, 32 lowercase hex digits and a newline,
   which git deletes with the worktree. Per work tree, `.lit/workspace.toml`,
-  committed with the code, which only init writes, and only when absent.
+  committed with the code.
 - **D12 Command log** `$XDG_STATE_HOME/lit/commands/<UTC date>.jsonl`
   (`~/.local/state` when unset): one line per invocation in one `O_APPEND`
   write, per machine; every write removes day files older than 30 days.
-- **D13 No OTLP**: no network on a foreground path, so the file is the one
-  export edge, and a failed write is said on stderr.
 - **D14 Rows with no body yet** parse, appear in help, and end internal (70)
   naming the ticket that builds them, from one unexported function in
   `root` that the lint forces out once the last body is bound. Bare `lit2`

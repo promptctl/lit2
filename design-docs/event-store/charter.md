@@ -4,9 +4,8 @@ This document records the owner's directive for the event-sourced store lit
 is built on, so the design can proceed across many sessions without drifting
 from what was asked. It is the question;
 [design.md](design.md) is the answer and [budgets.md](budgets.md) is the
-numbers. Precedence: **charter over design, design over tickets, budgets.md
-over any prose that repeats its figures.** When two disagree, the higher one
-wins — amend it deliberately, never by reinterpretation.
+numbers. Contradictions among them are surfaced and resolved as soon as
+possible, never silently ignored.
 
 ## Why this exists
 
@@ -45,25 +44,18 @@ These are settled. Do not reopen them in the design.
    to the same remote the code uses. The remote stays a dumb replicated store;
    all intelligence is client-side. (Inherits access-control charter constraints 1–2.)
 2. **Writes are appends; state is a fold.** Every mutation is a content-addressed
-   event, changed afterward only by a rewrite (#7). Current state is a deterministic pure function of
-   the event set — same events, same backlog, on every machine, every time. No
-   locks, no write engines, no merge/reconcile machinery. The only shared
-   mutable state permitted outside the event log is a cache that any process
-   may delete at any time.
+   event, changed afterward only by a rewrite (#7). Current state is a
+   deterministic pure function of the event set — same events, same backlog,
+   on every machine, every time. No locks, no write engines.
 3. **Every command under one second.** The perf target is <1s wall time for
    every lit command, met at 10x current fleet scale on both axes (10x history
    per store × 10x stores per machine), with the baselines and budgets recorded
    in [budgets.md](budgets.md). Network transfer is excluded only where
    physics demands (first-clone download); network never sits on a command's
    foreground path.
-4. **Permissive licensing only; the user's git for transport, in the
-   background.** No copyleft dependencies; linked libraries must be
-   permissive. lit reads and writes git objects and refs in-process through
-   such a library, which never touches the network. Push and fetch run the
-   user's own `git` binary, only from the background sync process, so the
-   credential helpers, `~/.ssh/config` and every host's dialect work as they
-   do for the code, and no foreground path waits on it. Where prior art is
-   non-permissive, rewrite from behavior, never from code.
+4. **Permissive licensing only.** No copyleft dependencies; linked
+   libraries must be permissive. Where prior art is non-permissive, rewrite
+   from behavior, never from code.
 5. **Local enforcement stays; cross-machine conflicts resolve at the fold.**
    A machine validates its own writes against its own current fold exactly as
    strictly as today. Contradictions that only concurrent offline machines can
@@ -71,16 +63,14 @@ These are settled. Do not reopen them in the design.
    the next agent — never by blocking, never by a lock. Concurrent free-text
    rewrites remain the one class delegated to agent judgment, held as
    coexisting events until resolved.
-6. **Birth requirements.** The event schema carries from its first shipped
-   version: a signature slot and principal reference on every event; prose
-   payloads as opaque envelopes; on every event, the blob id of the workspace
-   version its writer ran under and the policy version in force, as
-   provenance; a signed, versioned policy as events in the store; and the
-   workspace model as data a committed file declares and an event applies,
+6. **Schema primitives.** The event schema carries a signature slot and
+   principal reference on every event; prose payloads as opaque envelopes;
+   on every event, the blob id of the workspace version its writer ran under
+   and the policy version in force, as provenance; a signed, versioned policy
+   as events in the store; and the workspace model as data a committed file declares and an event applies,
    enforced by one generic engine at the write, not hand-coded rules. These
    are primitives for the access-control layers and the user-defined
-   hierarchy feature; retrofitting any of them is a fleet migration, so they
-   ship in the first release.
+   hierarchy feature.
 7. **Rewriting history is a first-class, common operation.** Any event may
    be dropped, have its content replaced, or be squashed with others into one,
    by a rewrite: itself an event, authorized like any write, that names what
@@ -88,15 +78,12 @@ These are settled. Do not reopen them in the design.
    tell it from corruption. Erasure, purge and compaction are rewrites, not
    separate mechanisms. An append-only audit trail is a guarantee layered on
    top for the stores that want it — a policy that refuses rewrites, and a
-   verifier that proves none happened — never a property of the substrate. A
-   strict guarantee can be added to a store that rewrites; rewriting cannot
-   be added to a store built to forbid it without fighting the whole design.
+   verifier that proves none happened. A strict guarantee can be added to a
+   store that rewrites; rewriting cannot be added to a store built to forbid
+   it without fighting the whole design.
    Rewriting reaches every replica that syncs; content in copies that never
    sync again is reached only by key destruction.
-8. **No heartbeats, no liveness probes.** The standing owner ban applies to
-   this store as to all of lit, mechanism-wide, storage and locking included
-   (design-docs/work-claims.md records the ban).
-9. **lit leaves the code repository's git alone.** Locally, lit keeps its
+8. **lit leaves the code repository's git alone.** Locally, lit keeps its
    data in its own storage under the git common dir and adds nothing to the
    code repo's refs or object database. On the remote, lit's data lives under
    its own refs and nowhere else. No git operation the developer runs changes
