@@ -1,44 +1,46 @@
 # lit2: the build map
 
 The map the backlog is a view of. `architecture.md` says what lit2 is;
-this says in what order it comes to exist. Every ticket in the tracker is
-one story on this map, and a ticket that fits nowhere on it is a sign the
-map is missing an activity.
+this says in what order it comes to exist. Every feature ticket is one
+story on this map, and a ticket that fits nowhere on it is a sign the map
+is missing an activity.
 
 ## Frame
 
 - **Who uses it:** an agent, or a person, working inside a git checkout;
-  and a second lit2 on another machine or worktree that must see the same
-  state.
-- **What it can do afterward:** everything in `architecture.md` §4, built
+  and a second lit2 on another machine or worktree that, holding the same
+  verified events, must see the same state.
+- **What it can do afterward:** everything in `architecture.md`'s
+  "Functionality, composed", built
   as verbs on paths that compile to signed intents, a pure fold that
   verifies, evaluate at read time, a policy in the store and a committed
-  workspace file; no second mechanism beside the substrate.
+  workspace file.
 - **What it composes with:** git as it already is (the common dir, refs,
   the object database, remotes, worktrees); the shell and `--json` for
   agents; a TOML file a person edits and reviews in a pull request.
 - **Where the leverage is:** the event record and the fold, then the
-  path grammar and the field table. Once those are the right shape, every
-  later capability is a fold rule, an evaluate rule, a capability in the
-  policy, or a key in the workspace file, and no verb learns a new case.
+  path grammar and the field table. Once those are the right shape, most
+  later capabilities are a fold rule, an evaluate rule, a capability in the
+  policy, or a key in the workspace file.
 
 ## Backbone
 
-What an agent does with lit2, in the order it happens:
+A representative journey through lit2:
 
 **arrive → file → look → pick → work → finish → share → admit → tend**
 
 Open the checkout and learn where things stand; file work and groom it;
-read any path; choose what to do now and commit to it; move the work
+read paths; choose what to do now and commit to it; move the work
 through the process and be told what the process wants; close it; let
-every other replica see it; admit people and decide what each may do and
+other replicas see it; admit people and decide what each may do and
 read; keep the store small, current and honest.
 
 ## Depth, by activity
 
 Under each activity, the ways it could be built, highest leverage at the
-top. The marked depth is the one we build. Nothing below the mark is built,
-ever, because each of those makes the things around it expensive to replace.
+top. The marked depth is the one we build. Options below the mark are
+rejected alternatives, because each of those makes the things around it
+expensive to replace.
 
 **arrive**
 - ▶ composition root reads the store, clock, identity and keys once;
@@ -64,16 +66,17 @@ ever, because each of those makes the things around it expensive to replace.
 
 **pick**
 - ▶ lanes on any node with members from anywhere; one rank order over
-  lanes with relative intents (`above`, `below`, `top`, `bottom`); the
-  claim derived from the start transition; `/next` as one walk of the lane
-  order
+  lanes with relative intents (`above`, `below`, `top`, `bottom`); claim
+  events written by the start transition and by an explicit take, the
+  holder folded from them; `/next` as one walk of the lane order
 - a rank on every item, resolved per container, with the container doubling
   as the lane
 - a stored `assignee` and a stored claim record, reconciled by hand
 
 **work**
-- ▶ columns in the workspace file; one enforcer on the write reading
-  requirement lists and the writer's capabilities; `stage`, `rollup`,
+- ▶ columns in the workspace file; the requirement gate in the verbs
+  reading requirement lists; the capability rule in the fold, which the
+  writer also runs before appending; `stage`, `rollup`,
   `held` in evaluate; labels declared in the workspace file, applied by people or
   computed by evaluate from a `where` selector; `plan` and `pr` as reviewables, their
   revisions and reviews as lists on paths; the checklist on the leaf, its
@@ -92,11 +95,11 @@ ever, because each of those makes the things around it expensive to replace.
   replaces; every receiver verifies a publication before folding it; a
   detached background process pushes and fetches; inbox refs for storeless
   writers; convergence is the fold's determinism, tested as agreement
-- one commit per command on a chained ref (grows with every mutation ever)
+- one commit per command on a chained ref (grows with every mutation)
 - a merged state file on one branch
 
 **admit**
-- ▶ a principal key per checkout; the policy as events in the store with a
+- ▶ a principal per person, each clone signing with a delegated key; the policy as events in the store with a
   monotone version and an owner threshold; capabilities as `(verb, path
   glob, binding)`; roles as bundles in the default profile; tiers with
   epoch keys wrapped to members; authorization as one fold rule; the
@@ -113,8 +116,8 @@ ever, because each of those makes the things around it expensive to replace.
 
 ## Scenarios as stories
 
-Each scenario in `scenarios.md` is a set of stories above, and the slice
-it needs.
+The table maps each scenario in `scenarios.md` to the stories above it
+composes and the slices it needs.
 
 | scenario | stories it composes | slice |
 |---|---|---|
@@ -124,39 +127,39 @@ it needs.
 | 4 plan changes after pass | the reviewable: a new revision empties the derived verdict until a review names it | 3 |
 | 5 two worktrees | one store under the common dir; per-checkout refs and claims | 1, 4 |
 | 6 two machines offline | share; conflicts as values; staleness; `/integrity` | 1, 6 |
-| 7 process changes under running work | `config-ref` as provenance; the enforcer at the write; undeclared-column rule | 1, 3 |
-| 8 epic with its own process | per-epic sections; nearest ancestor per column and handler field | 3, 5 |
+| 7 process changes under running work | the applied version each event names; the requirement gate at the write; undeclared-column rule | 1, 3 |
+| 8 epic with its own process | per-epic sections; nearest ancestor per column and per handler | 3, 5 |
 | 9 grooming at scale | selectors in full; `--dry-run` over an expansion | 8 |
 | 10 purge while others write | rewrites; the receiver's rule | 7 |
 | 11 dead worktree holding a lane | claim expiry in evaluate; `rm <lane>/claim` | 4 |
 | 12 old binary meets newer events | unknown events preserved; `min-reader-version` | 1 (codec), 7 |
 | 13 scale | snapshot; budgets harness; the depth corpus | 1, 7 |
 | 14 a human at the terminal | rendering; the field table as help | 1 |
-| 15 access control | admit at marked depth; verification in share; capabilities in work's enforcer; tiers in look and file | 1, 2 |
+| 15 access control | admit at marked depth; verification in share; work's capability rule; tiers in look and file | 1, 2 |
 | 16 fold-version bump | snapshot keyed by fold-version | 1, 7 |
 
 ## Slices
 
-Each slice is the whole backbone, thinner at the top and thicker toward
-the bottom. Within a slice the highest-leverage story is built to full
+Within a slice the highest-leverage story is built to full
 depth before anything that depends on it.
 
-**Slice 0, the frame of the house.** The layout of `architecture.md` §6,
+**Slice 0, the frame of the house.** The layout of `architecture.md`'s "The parts, downhill",
 the composition root, the command event, the harness, `lit2 --help` from
 the field table.
 
 **Slice 1, the walking skeleton.** Every activity at a depth the next slice
 can build on, and the three risks of the design settled: that one event set
-folds to one state on every machine, that one commit per writer on a plain
+folds to one state on every machine that holds it, that one commit per writer on a plain
 remote carries it there without the remote growing with commands, and that
-every event is signed and verified with no server. Built to full depth here
-because everything stands on them: the log and its sealing into segments,
+every event is signed and verified with no server. Built to full depth here,
+because later slices stand on them: the log and its sealing into segments,
 the event record and codec with its signature, the principal and the policy
 as events, authorization as a fold rule and at receive, the workspace
-file's mechanics (the active version read by parse, the shipped default profile
-applied as version one at init, `config-ref` as the blob id of that version), the fold and its total order, the path grammar and field table, the
+file's mechanics (the applied version, its bytes carried in the log, the shipped
+default profile applied as version one at init, each event naming the version
+its writer ran under), the fold and its total order, the path grammar and field table, the
 verb-to-intent table. Built at working minimum: the default roles with the
-enforcer judging capabilities, under the default profile's requirement lists, the default
+capability rule judging them, under the default profile's requirement lists, the default
 tier in plaintext mode with the envelope type in place, `stage` and
 `rollup` in evaluate, `/next` as the head of the top-ranked lane,
 `lit2 admin sync` run by hand. The slice is done when the walk below
@@ -181,7 +184,7 @@ A: lit2 admin sync; lit2 get <id>/stage      → terminal; A and B fold equal
 ```
 
 The walk runs under the default profile's lists, so it reaches `done` only
-once slice 2's reviewables give `plan/verdict` and `pr/verdict` a value; until
+once slice 3's reviewables give `plan/verdict` and `pr/verdict` a value; until
 then a ticket closes through a terminal column no `next` names.
 
 **Slice 2, visibility.** The default tier encrypted; content keys and
@@ -199,9 +202,9 @@ reviews, terminal columns with reasons; history and undo. Scenarios 2, 3,
 intents; claims, expiry and release; `/lanes`, `/next` in full, the urgent interrupt; blockers from
 links and lane position. Scenarios 3, 5, 11.
 
-**Slice 5, guidance.** Workflows, handlers and their triggers; the three
-layers; column guidance after the data; orientation on `read /`;
-`--dry-run` printing what would be said. Scenarios 1, 3, 8, 14.
+**Slice 5, guidance.** Workflows, handlers and their triggers; the handler
+layers; column guidance; orientation on `read /`; `--dry-run` showing what
+handlers would do. Scenarios 1, 3, 8, 14.
 
 **Slice 6, sharing.** The detached sync process and its debounce; inbox
 refs and filing without a clone; staleness and the last push outcome as
@@ -215,7 +218,7 @@ and the depth corpus. Scenarios 10, 12, 13, 16.
 **Slice 8, the surface in full.** Selectors with every atom and
 `parent/`; globs; list diffs on `set`; `--json` keyed by path. Scenario 9.
 
-End game, from stories that will already exist and nothing new: `orphaned`
+End game, mostly composed from stories that will already exist: `orphaned`
 as a label with a `where` selector in the default profile; a handler on
 `wrote */status` that files a follow-up; a CI principal with write verbs and
 no tier keys; `admin export` and `admin import` of the whole store as one
@@ -223,20 +226,21 @@ versioned document.
 
 ## The backlog
 
-The tracker holds this map at three sizes, and each one finishes as
-something that can be used.
+The tracker holds this map as features, tickets and chores, and features
+and tickets each finish as something that can be used.
 
 - **The product** is the features, in order.
-- **A feature** is an epic. Its title says what a person or an agent can
-  do once its tickets are closed. Features run one after another in slice
+- **A feature** is usually an epic. Its title says what a person or an
+  agent can do once its tickets are closed. Features are ranked in slice
   order, and a slice that holds several things a person would name
   separately is several features.
-- **A ticket** is one usable part of a feature. Its title says what works
+- **A ticket** is usually one usable part of a feature. Its title says what works
   when it closes. A part nothing can use alone, such as a path grammar
   with no verb that takes a path, is built in the ticket that first uses
   it.
-- **A chore** fills a gap between two tickets: a rename, a moved file. It
-  sits in the feature it serves, directly above the ticket that needs it.
+- **A chore** is maintenance or enabling work, such as a rename or a moved
+  file. It usually sits in the feature it serves, directly above the ticket
+  that needs it.
 
-A feature's tickets share one lane, so they run as a series in rank
-order.
+By default a feature's tickets share one lane, so they run as a series in
+rank order.

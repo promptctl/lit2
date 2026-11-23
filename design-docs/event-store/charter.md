@@ -1,93 +1,49 @@
 # Event store: the charter
 
-This document records the owner's directive for the event-sourced store lit
-is built on, so the design can proceed across many sessions without drifting
-from what was asked. It is the question;
-[design.md](design.md) is the answer and [budgets.md](budgets.md) is the
-numbers. Contradictions among them are surfaced and resolved as soon as
-possible, never silently ignored.
+This document records the directive for the event-sourced store lit is
+built on. It is the question; [design.md](design.md) is the answer and
+[budgets.md](budgets.md) is the numbers.
 
 ## Why this exists
 
-Three pressures point at the same architecture.
+Two pressures point at the same architecture.
 
-**Concurrency.** lit v1's unit of truth was mutable state (Dolt table rows),
-so every concurrent writer contended for the same thing, and the cost was the
-machinery around that contention: one read-write engine per path, the
-mirror-pending flock choreography, field-aware reconcile with linear-history
-replay, an inline receive that held the foreground because a background
-worker would break it. Each piece was correct; together they were the tax on
-choosing mutable shared state. The owner's direction: stop paying the tax —
-make writes immutable appends and derive state deterministically, so
-concurrency is opted out of by construction rather than managed by protocol.
+**Concurrency.** When the unit of truth is mutable shared state, every
+concurrent writer contends for the same thing, and the cost is the machinery
+around that contention: write engines, locks, field-aware reconcile. Making
+writes immutable appends and deriving state deterministically removes that
+contention by construction rather than managing it by protocol.
 
-**Access control.** The accepted access-control charter
+**Access control.** The access-control charter
 ([../access-control/charter.md](../access-control/charter.md)) demands signed
-mutations verified by every client over a dumb replicated remote. That is an
-event log wearing table clothes. Nearly every strain point in the
-access-control draft — re-signing replayed commits, ciphertext merge
-fingerprints, tier-scoped reconcile — is friction between RBAC and *reconcile*,
-and the event store removes reconcile. Building the write layer against Dolt
-first would build its hardest machinery twice.
-
-**Licensing and weight.** v1's Dolt dependency tree (including the vendored
-driver and its patch ledger) is not carried. What is must be permissively
-licensed; prior art with non-permissive licenses (git-bug,
-GPL-3.0) informs at the behavior level only and is never copied.
+mutations verified by every client over a dumb replicated remote. Most of the
+strain in access control — re-signing replayed commits, ciphertext merge
+fingerprints, tier-scoped reconcile — is friction between RBAC and
+*reconcile*, and the event store removes reconcile.
 
 ## Hard constraints
 
-These are settled. Do not reopen them in the design.
-
-1. **One repo, no server, git-native.** Ticket data lives in lit's own git
-   object database under the code repo's git common dir and syncs as git refs
-   to the same remote the code uses. The remote stays a dumb replicated store;
-   all intelligence is client-side. (Inherits access-control charter constraints 1–2.)
-2. **Writes are appends; state is a fold.** Every mutation is a content-addressed
-   event, changed afterward only by a rewrite (#7). Current state is a
-   deterministic pure function of the event set — same events, same backlog,
-   on every machine, every time. No locks, no write engines.
-3. **Every command under one second.** The perf target is <1s wall time for
-   every lit command, met at 10x current fleet scale on both axes (10x history
-   per store × 10x stores per machine), with the baselines and budgets recorded
-   in [budgets.md](budgets.md). Network transfer is excluded only where
-   physics demands (first-clone download); network never sits on a command's
-   foreground path.
-4. **Permissive licensing only.** No copyleft dependencies; linked
-   libraries must be permissive. Where prior art is non-permissive, rewrite
-   from behavior, never from code.
-5. **Local enforcement stays; cross-machine conflicts resolve at the fold.**
-   A machine validates its own writes against its own current fold exactly as
-   strictly as today. Contradictions that only concurrent offline machines can
-   produce are settled by deterministic fold rules plus a surfaced advisory to
-   the next agent — never by blocking, never by a lock. Concurrent free-text
-   rewrites remain the one class delegated to agent judgment, held as
-   coexisting events until resolved.
-6. **Schema primitives.** The event schema carries a signature slot and
+1. **One repo, no server, git-native.** The goal is stated in
+   [../requirements.md](../requirements.md). Ticket data lives in lit's own
+   git object database under the code repo's git common dir and syncs as git
+   refs to the same remote the code uses.
+2. **Every command under one second.** The goal is stated in
+   [../requirements.md](../requirements.md); the budgets, and the 10x scale
+   they are measured at, are in [budgets.md](budgets.md).
+3. **Schema primitives.** The event schema carries a signature slot and
    principal reference on every event; prose payloads as opaque envelopes;
    on every event, the blob id of the workspace version its writer ran under
-   and the policy version in force, as provenance; a signed, versioned policy
+   and the policy version in force; a signed, versioned policy
    as events in the store; and the workspace model as data a committed file declares and an event applies,
-   enforced by one generic engine at the write, not hand-coded rules. These
+   enforced by generic code at the write, not hand-coded rules. These
    are primitives for the access-control layers and the user-defined
    hierarchy feature.
-7. **Rewriting history is a first-class, common operation.** Any event may
-   be dropped, have its content replaced, or be squashed with others into one,
-   by a rewrite: itself an event, authorized like any write, that names what
-   it changes, so every replica converges on the rewritten history and can
-   tell it from corruption. Erasure, purge and compaction are rewrites, not
-   separate mechanisms. An append-only audit trail is a guarantee layered on
-   top for the stores that want it — a policy that refuses rewrites, and a
-   verifier that proves none happened. A strict guarantee can be added to a
-   store that rewrites; rewriting cannot be added to a store built to forbid
-   it without fighting the whole design.
-   Rewriting reaches every replica that syncs; content in copies that never
-   sync again is reached only by key destruction.
-8. **lit leaves the code repository's git alone.** Locally, lit keeps its
+4. **lit leaves the code repository's git alone.** Locally, lit keeps its
    data in its own storage under the git common dir and adds nothing to the
    code repo's refs or object database. On the remote, lit's data lives under
    its own refs and nowhere else. No git operation the developer runs changes
    in behavior, output, or speed.
+5. **Built fresh.** lit2 does not migrate lit v1's store.
 
 ## Calibration
 
@@ -98,34 +54,3 @@ identified consumer; the feature layer covers the main body of uses and leaves
 the tail unbuilt. For future lit features, do not predict them — document the
 constraints this design imposes on them, so evolution is burdened knowingly or
 not at all.
-
-## The process
-
-Decisions made while building land as dated `DECISION:` comments on the
-relevant lit ticket (campaign-wide rulings on the epic); the docs absorb the
-resolved position when the affected work closes. The docs themselves never
-carry work items or schedules — every sentence in design.md must stay true
-when any given ticket closes. Sections carry a status line, so the unbuilt
-frontier is greppable; the forms it may take are defined once at the top of
-[design.md](design.md) rather than restated here, since a second list of them
-is a second thing to keep true.
-
-## Status
-
-- 2026-08-25: charter written from the owner's directive, distilled from the
-  design conversation that produced it; design.md and budgets.md first drafts
-  alongside.
-- 2026-10-09: owner amendments: #1 and #10 keep lit's data out of the code
-  repo's refs and object database; #4 forbids running the `git` binary or any
-  subprocess; #7 admits purge.
-- 2026-11-03: owner amendment: #7 makes rewriting history first-class and
-  the append-only audit trail an opt-in guarantee; #2 follows.
-- 2026-11-05: amended by [architecture.md](../architecture.md) decisions G
-  and H: #4 admits the user's `git` binary for push and fetch from the
-  background sync process; #6 states the workspace model as a committed file
-  applied by an event, the policy as events, and both versions on every event
-  as provenance the fold does not read.
-- 2026-11-16: owner amendment: the strangler-fig migration constraint is
-  removed. lit2 is built fresh and never migrates lit v1's store, so the
-  oracle, the shadow states and their gates have nothing to govern. The
-  constraint on the code repository's git, formerly #10, is #9.

@@ -1,12 +1,8 @@
 # Event store: budgets and baselines
 
-Status: baselines measured 2026-08-25 on the lit v1 fleet; targets set by
-owner directive; scale projections await the harness. This file is the single
-home for every **measured baseline and derived budget figure** in the
-event-store design — prose in charter.md/design.md cites those rather than
-restating them. The governing directive is **charter.md hard constraint 3** —
-the figures live there, and this file only turns them into measurable rows. A
-budget change is an owner decision recorded here, not a drift.
+This file holds the event store's measured baselines and budget figures.
+The figures are targets, and a target may become a gate for v1.0. A budget
+change is recorded here.
 
 ## Measured baselines (the lit v1 fleet, 2026-08-25, the owner's machine)
 
@@ -21,11 +17,11 @@ The v1 fleet is the scale lit2 is sized against; "10x" means ten times these.
 | Total tickets / total mutations per store | **unmeasured** — harness's first job | — |
 | Events per week of agent churn | **unmeasured** — harness's first job | — |
 
-The 10x corpus has **two components**, defined here once (per-row notes may
-add detail but never substitute a different construction):
+The 10x corpus has **two components**, and every row runs against the
+corpus defined here:
 
-- **Depth corpus** — the real fleet's largest store replayed, then
-  synthesized to 10x its event count preserving its shape (event-type mix,
+- **Depth corpus** — a store shaped like the real fleet's largest, at 10x
+  its event count, preserving its shape (event-type mix,
   rank-intent density, prose sizes). Per-command benchmarks (the Command
   budgets table) run against this — **on a machine concurrently running the
   breadth fleet's background sync load**, so command latency is measured
@@ -44,11 +40,7 @@ add detail but never substitute a different construction):
 
 Every command row is a **total wall-time ceiling, inclusive of all
 components** — the staleness row profiles a component *inside* those
-ceilings, not an addition to them; there is no reading of this table under
-which per-component greens can sum past a command ceiling. "Compute" excludes
-network transfer only where physics demands it (first-clone download); per
-`[INV:no-foreground-network]` no other command touches the network in the
-foreground at all.
+ceilings, not an addition to them.
 
 | Operation | Budget | Notes |
 |---|---|---|
@@ -61,27 +53,23 @@ foreground at all.
 
 ## Storage and repo-impact budgets (at 10x)
 
-These are ceilings on rate and footprint. Rewrites (charter #7) can shrink a
+These are ceilings on rate and footprint. Rewrites can shrink a
 store — compaction is one — but no budget here depends on one running.
 
 | Quantity | Budget | Notes |
 |---|---|---|
-| Event store disk per store at 10x history | ≤ ~19 MB: one tenth of what v1's largest store spent at 1x | a hypothesis the harness verifies first; a miss is a design problem to solve, not a note |
+| Event store disk per store at 10x history | ≤ ~19 MB: one tenth of what v1's largest store spent at 1x | a hypothesis the harness verifies first |
 | Aggregate lit disk per machine at 10x both axes | ≤ the measured aggregate in the baselines table | checked against the breadth fleet |
-| Change to any git operation the developer runs in the code repo (`git status`, `git fetch`, `git gc`, `git log --all`, …): behavior, output, or latency | none: indistinguishable from a control clone without lit | charter #9 |
-| Dead-checkout writer refs remaining after maintenance | 0 (refs present = live checkouts + unswept inbox refs) | countable predicate; dead-ref growth is a hygiene bug the harness asserts away |
+| Change to any git operation the developer runs in the code repo (`git status`, `git fetch`, `git gc`, `git log --all`, …): behavior, output, or latency | none: indistinguishable from a control clone without lit | the charter's code-repository constraint |
+| Dead-checkout writer refs remaining after maintenance | 0 (refs present = live checkouts + unswept inbox refs) | countable predicate |
 
 ## Harness contract
 
-The load harness is the design's instrument, not an afterthought:
-
 - **Measures first.** Its first run produces the unmeasured baseline rows
   above from the real v1 fleet before any synthetic scaling.
-- **Replays reality.** Both corpus components are built from replays of real
-  v1 stores per the corpus definition above — never from uniform random
-  events.
-- **Gates releases.** "Budgets passing" means every row of the two budget
-  tables above green (the baselines table is descriptive input, not a gate).
-  A red row stops the release until the design meets it.
-- **Runs in CI.** The per-command budgets are regression checks in CI, so
-  the charter #3 directive is enforced by the build, not by memory.
+- **Shaped like real stores.** Both corpus components are shaped like real
+  stores per the corpus definition above, not uniform random events.
+- **Reports budgets.** "Budgets passing" means every row of the two budget
+  tables above green (the baselines table is descriptive input, not a
+  target).
+- **Runs in CI.** The per-command budgets are regression checks in CI.

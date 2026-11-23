@@ -64,19 +64,19 @@ row; the architecture test fails on one without.
 | §3.3 Fold and evaluate | `fold`, `evaluate` | fold(events) → state; evaluate(state, config, now) → view |
 | §3.4 Work item, level, tree | `config`, `fold`, `evaluate` | levels and homes declared in config; the tree folded; stage and rollup in evaluate |
 | §3.5 Column and stage | `config`, `evaluate` | the column graph and its check in config's parse; stage and the undeclared column in evaluate |
-| §3.6 Requirement | `verbs`, `field`, `config`, `evaluate` | evaluated by the one enforcer in verbs; the test is field's atom; checks expanded in config; `held` in evaluate |
+| §3.6 Requirement | `verbs`, `field`, `config`, `evaluate` | evaluated by the requirement gate in verbs; the test is field's atom; checks expanded in config; `held` in evaluate |
 | §3.7 Lane | `fold` | membership, order and the one rank order |
 | §3.8 Claim | `fold`, `evaluate` | the holder set folded; expiry in evaluate |
 | §3.9 Checklist | `fold`, `verbs` | items folded; the `set` list diff in verbs |
 | §3.10 Link | `fold`, `config` | links folded; link types declared in config |
 | §3.11 Label | `config`, `fold` | declared in config in the top-level `labels` list; applied as events and folded |
-| §3.12 Moment and handler | `guidance` | moments, handlers, workflows, their three layers |
+| §3.12 Moment and handler | `guidance` | moments, handlers, workflows and their layers |
 | §3.13 Rewrite | `fold`, `store` | applied by the fold; segments re-sealed by store |
 | §3.14 Identity | `root`, `events` | the checkout id, principal and agent label read in root; attribution carried in events |
 | §3.15 The workspace file | `config`, `fold`, `evaluate`, `verbs`, `root`, `assets` | the one schema parse of an applied version in config; the applies and which version is in force folded; the §3.5 check against every live version in evaluate; the one judge of an apply, `Admit`, and the board's `workspace` line in verbs; `config commit`, `config status` and init's version one in root; the default profile in assets |
 | §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs through git |
 | §3.17 Principal and policy | `events`, `fold` | the key, signature and suite in events; the policy as events folded |
-| §3.18 Capability | `verbs`, `fold` | the capability verdict in fold's step, the one enforcer, over roles from the folded policy; the default roles, membership paths compiled to proposals and a refusal's rendering in verbs |
+| §3.18 Capability | `verbs`, `fold` | the capability rule in fold's step, over roles from the folded policy; the default roles, membership paths compiled to proposals and a refusal's rendering in verbs |
 | §3.19 Tier and envelope | `events`, `verbs` | the envelope and suite in events; prose sealed in verbs, so no layer below sees it |
 | §3.20 Verification | `fold`, `store` | one fold rule, signature then policy, in fold's step via the suite in events; run by store at receive |
 | §5.1 Open | `store` | ref heads, every open log under the common dir and the snapshot read |
@@ -85,14 +85,14 @@ row; the architecture test fails on one without.
 | §5.4 Address | `address` | paths into typed addresses; selectors and globs expanded once |
 | §5.5 Evaluate | `verbs`, `evaluate` | the description of a write; the answer of a get |
 | §5.6 Perform | `verbs`, `store` | the intents signed in verbs' perform step; appended to the log by store |
-| §5.7 Speak | `cli`, `guidance` | the echo and its rendering; the handlers' bodies after the data |
+| §5.7 Speak | `cli`, `guidance` | the echo and its rendering; the handlers that fire |
 | §5.8 Record | `command` | the command event and the command log |
 | §5.9 Sync | `store`, `git` | the background sync process in store; push and fetch through the user's git |
 | the order of the §5 steps | `root` | the dispatcher every invocation passes through |
 | exit classes and statuses | `reason`, `cli` | the four classes in reason; each layer's failure names its own reasons; statuses in cli |
 | checkout discovery | `git` | the work tree, private git dir and common dir |
 | the code repository's HEAD and history | `git` | the blob HEAD holds at a path and whether one was ever there, read, never written |
-| the one enforcer and the in-use check | `verbs`, `fold` | requirements judged once by verbs' gate, at the write; capabilities by fold's step, which every replica runs and a write runs over its own events before appending |
+| the requirement gate, the capability rule and the in-use check | `verbs`, `fold` | requirements judged once by verbs' gate, at the write; capabilities by fold's step, which every replica runs and a write runs over its own events before appending |
 | the snapshot | `store`, `fold` | its bytes in store; its content and key in fold |
 | `/next`, `/lanes`, `/integrity`, `/me` | `fold`, `evaluate`, `address`, `cli` | computed by fold and evaluate, named by address, rendered by cli |
 | the managed block in AGENTS.md | `guidance`, `root` | its text in guidance; written by init in root |
@@ -118,7 +118,7 @@ The decisions the layout needed and the design documents did not make.
   the standard `testing` package. Lint is golangci-lint v2 as a `tool`
   directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums
-  make a missing case a lint failure.
+  make a missing case in a switch over them a lint failure.
 - **D4 Argv** is the standard library and a scan over the tables, the verbs
   and each group's (`admin`, `config`): a flag is `--name` anywhere, `--`
   ends the flags, `-` is a value.
@@ -131,11 +131,12 @@ The decisions the layout needed and the design documents did not make.
   seeded ChaCha8 in the twin.
 - **D7 Agent label** `LIT_AGENT`: empty is no label, anything else is the
   label, opaque.
-- **D8 `config` above `fold`, `field` below `config`.** The fold reads no
-  configuration (decision H); config and address both stand on field's
-  kinds and atoms, so neither imports the other for them.
+- **D8 `config` above `fold`, `field` below `config`.** Config and address
+  both stand on field's kinds and atoms, so neither imports the other for
+  them.
 - **D11 On disk.** Per clone, `<git-common-dir>/lit/`: `store/`, the store's
-  root, and `principal`, beside the store and outside it. Per checkout,
+  root, and `principal`, the clone's key material, beside the store and
+  outside it. Per checkout,
   `<git-dir>/lit/checkout/`: `id`, 32 lowercase hex digits and a newline,
   which git deletes with the worktree. Per work tree, `.lit/workspace.toml`,
   committed with the code.
@@ -144,7 +145,6 @@ The decisions the layout needed and the design documents did not make.
   write, per machine; every write removes day files older than 30 days.
 - **D14 Rows with no body yet** parse, appear in help, and end internal (70)
   naming the ticket that builds them, from one unexported function in
-  `root` that the lint forces out once the last body is bound. Bare `lit2`
-  is `get /`.
+  `root` that the lint forces out once the last body is bound.
 - **D15 This file** is the codemap at the root; its concern table places
   what the design leaves unnamed.

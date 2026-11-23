@@ -1,28 +1,23 @@
 # lit v2: scenarios
 
-Status: draft, 2026-11-05. Common situations walked through
+Common situations walked through
 [architecture.md](architecture.md) on paper. Each scenario names the need, the
 primitives that meet it, what the agent or person can rely on at the end, and
 any **strain**: a place where a primitive wanted a special case, or the design
-was silent. Every strain ends in a resolution written back into the
-architecture or a decision listed for Brandon. Outputs are illustrative;
-the contract is the behavior stated under "relies on", never the text.
+was silent.
 
 ## Strain index
 
 | id | scenario | strain | resolution |
 |---|---|---|---|
-| S-1 | 3 | a review with no `of` could pass a revision the reviewer never read | a review names the revision it judged, `of` required; a review of an older revision lands and derives nothing (architecture §4) |
-| S-2 | 3 | "the reviewer is not the author" compares two paths; no atom says it | not enforced by the engine; the `brief` handler says it; left as data |
-| S-3 | 3, 11 | a held lane whose head is held traps the checkout | `/next` reports the held head and falls through, labeled (architecture §4) |
+| S-1 | 3 | a review with no `of` could pass a revision the reviewer never read | a review names the revision it judged, `of` required; a review of an older revision lands and derives nothing (path-addressed-cli.md) |
+| S-3 | 3 | a held lane whose head is held | `/next` reports the held head and falls through, labeled (work-claims.md) |
 | S-4 | 2 | guidance at "an epic finishes" has no moment | a selector may read through `parent`; `(stage=terminal parent/stage=terminal)` on `enter *` |
 | S-5 | 6 | two offline clones create a lane of the same name on one node | a lane is identified by its name on its node; `lane.create` is idempotent; members union in total order |
 | S-6 | 7 | a column removed from the workspace file while a ticket, somewhere, holds it | the transition stands; evaluate reports the column undeclared; `/next` skips; `/integrity` lists it |
-| S-7 | 9 | `add` with different values on different paths is N calls | `add` takes `path value` pairs like `set` |
-| S-8 | 9 | N long bodies in one call need shell substitution | open; low frequency; a file form is a later addition if it bites |
 | S-9 | 10 | a comment written concurrently with a purge vanishes | the fold drops it and counts it on `/integrity` as "events after purge" |
 | S-10 | 13 | a rank intent whose anchor is gone when it arrives | the subject lands at the bottom of the rank order; `/integrity` names the intent |
-| S-11 | 15 | `held` read by a principal without the tier key cannot evaluate a prose test | `held` reports `unknown (tier)` for that requirement; the writer always holds the key |
+| S-11 | 15 | `held` read by a principal without the tier key cannot evaluate a prose test | `held` reports `unknown (tier)` for that requirement |
 
 ## 1. First contact in a fresh repository
 
@@ -31,18 +26,19 @@ work and knows what to do.
 
 **Walk.**
 
-1. `lit2 admin init` mints the checkout id and the checkout's principal key,
-   writes the managed block into `AGENTS.md` and `CLAUDE.md`, writes the
-   default profile to `.lit/workspace.toml`, and creates the store under the
-   common dir with one event: that profile applied as version one, the same
-   bytes and so the same blob id as the file. The workspace reads as the
-   default profile: three level names, ten columns,
-   two link types, four workflows, `claim_ttl`, and the two synthetic
-   containers, and the file is there to edit and review.
+1. `lit2 admin init` mints the checkout id, the person's principal and this
+   clone's delegated signing key, writes the managed block into `AGENTS.md`
+   and `CLAUDE.md`, writes the default profile to `.lit/workspace.toml`, and
+   creates the store under the common dir with the founding events
+   (event-store/design.md): the enrollment, then that profile applied as
+   version one, the same bytes and so the same blob id as the file. The
+   workspace reads as the default profile
+   (`internal/assets/workspace/default.toml`), and the file is there to edit
+   and review.
 2. A fresh agent reads the managed block: work is tracked by lit2, run
    `lit2`, follow what it prints.
 3. `lit2` is `get /`. The root prints its children (none), `lanes` (none),
-   `columns` (10), `integrity ok`, `next (none)`, and `workspace`: the
+   `columns`, `integrity ok`, `next (none)`, and `workspace`: the
    version in force and that the file matches it. The `orientation/arrive`
    handler, bound `read /`, prints after it: what lit2 is, the four verbs,
    `get /next` to pick work, and that every node prints its guidance after
@@ -51,10 +47,7 @@ work and knows what to do.
    empty backlog and a backlog of held lanes do not look alike.
 
 **Relies on.** From zero knowledge, two reads reach the loop. The default
-profile is data that `get /columns` prints whole. The only event is the
-applied version, so every later event can rely on one existing.
-
-**Strain.** None.
+profile is data that `get /columns` prints whole.
 
 ## 2. Filing, grooming, and the queue
 
@@ -84,18 +77,17 @@ someone grooms it, and then is served in the order the groomer set.
 7. A follow-up filed into `m2q` later, with a body, is pullable at birth; one
    filed without a body is held by `description` alone.
 
-**Relies on.** "Ready to pull" is the initial column's exit list and nothing
-else. A label on the node grooms the node. The queue is the rank order of
+**Relies on.** In the default profile, "ready to pull" is the initial
+column's exit list. A label on the node grooms the node. The queue is the rank order of
 lanes; the groomer orders it with `set m2q/lanes/history/rank top` if this
 work should jump the others.
 
-**Strain S-4.** guidance.md names "when an epic finishes" as a moment of
-capture, but moments are raised for tickets only. The epic's finish is the
-last child's `enter <terminal>`; a handler can see it if its `where` selector
+**Strain S-4.** A capture handler wants to fire when an epic finishes. The
+epic's finish is the last child's `enter <terminal>`; a handler can see it if its `where` selector
 may read through `parent`: `on: [enter *]`, `where: (stage=terminal
 parent/stage=terminal)`. Selectors already take paths relative to the ticket,
-and `scope = ancestors` already walks up for requirements, so letting a
-selector atom name `parent/<field>` adds no mechanism. Adopted.
+and `scope = ancestors` already walks up for requirements, so a selector
+reads through `parent` (path-addressed-cli.md "Bulk").
 
 ## 3. One ticket, start to done
 
@@ -132,35 +124,26 @@ where the process says so, and is handed the next ticket when it finishes.
    `add s4l/pr/reviews '{of:2 … verdict:pass}'`, it lands.
 9. `set s4l/status '{column:done reason:"Merged in #12"}'`. One write, one
    move carrying its reason.
-   Derivations: `⇒ s4l/claim this checkout → (none)`, `⇒
-   m2q/lanes/history head is now 7ka`, `⇒ 7ka/claim = this checkout`. The
+   Derivations: `⇒ m2q/lanes/history head is now 7ka, held by this
+   checkout`. The
    `capture/finished` handler fires. `get /next` serves `7ka`.
 
 **Relies on.** Every refusal names the requirement, the value found, and
-writes nothing. The claim follows the transitions with no claim command. The
-next ticket arrives with the finishing write.
+writes nothing. Starting writes the claim, with no claim command, and the
+lane stays held when its head finishes. The next ticket arrives with the finishing write.
 
 **Strain S-1.** If `of` were optional and defaulted to the latest revision,
 step 5's reviewer would have passed revision 2 unread. A review is a judgment
 of one revision, so `of` is required and names it. A review of an older
 revision is still a fact worth keeping, so it lands; only the derived verdict
 ignores it, and the echo says which revision is latest. One more token for the
-reviewer, who has the number from the read in step 4. Adopted.
-
-**Strain S-2.** "The reviewer is not the plan's author" compares the review's
-writer with the revision's writer. No requirement atom compares two
-paths, and adding one grows the test grammar for one rule. Not enforced by
-the engine; the `brief` handler states it; a workspace that wants it enforced
-is the signal to revisit. Left as data.
+reviewer, who has the number from the read in step 4.
 
 **Strain S-3.** Suppose `7ka` carried a `blocks` edge from a ticket in another
-epic that is still open. Its `held` is non-empty. The owner's ruling of
-2026-09-29, recorded in work-claims.md: a checkout whose held work is all
-blocked is never trapped and leaving is never silent. So
-`/next` prints the held head with its `held` lines, then falls through the
-rank order to the next eligible lane and labels it as outside the held lane.
-Starting it holds a second lane; a checkout may hold several, and `/next`
-serves held lanes in rank order first. Adopted in architecture §4.
+epic that is still open. Its `held` is non-empty. `/next` prints the held
+head with its `held` lines, then falls through the rank order to the next
+eligible lane and labels it as outside the held lane. Starting it holds a
+second lane; a checkout may hold several (work-claims.md).
 
 ## 4. The plan changes after it passed
 
@@ -170,16 +153,14 @@ and does not strand the ticket.
 **Walk.** `s4l` is in `impl` on a passed revision 2. `add s4l/plan/revisions -`
 appends revision 3; `⇒ s4l/plan/verdict (none), was pass on revision 2`. The
 ticket stays in `impl`: a
-requirement is evaluated at the transition and never again. At `set
+requirement is checked as a gate only at the transition write. At `set
 s4l/status review`, `review/entry` carries `plan/verdict=pass` at `warning`,
 so the write lands with one advisory line naming the revision the verdict was
 on. A workspace that wants a re-review blocks it by setting that
-requirement's `severity` to `error` or adding it to `impl`'s `entry`.
+requirement's `severity` to `error`.
 
 **Relies on.** The fact is on the record and in the echo; the severity of the
 nudge is one word in data.
-
-**Strain.** None.
 
 ## 5. Two worktrees, one clone
 
@@ -194,22 +175,19 @@ without being briefed, and never silently duplicate.
    common dir; A's snapshot is rewritten by atomic rename.
 3. B runs `set s4l/status plan` a moment later. B's open reads every open log
    under the common dir, sees A's new event, folds it, and finds the lane held
-   by A. Refused: `s4l is the head of m2q/lanes/history, held by <A> · 2s`.
-   Nothing written. B's `get /next` now passes that lane over, naming A, and
+   by A. Refused locally: `s4l is the head of m2q/lanes/history, held by <A>
+   · 2s`, offering the explicit take `add m2q/lanes/history/claim`. Nothing
+   written. B's `get /next` now passes that lane over, naming A, and
    serves the next.
 4. The genuine race: both write within the same open. Both events land in
    their own logs; no lock, no loss. The next fold on either side computes
    the lane's holders as `{A, B}`; `claim` is whichever the total order puts
    last and `contested` names the other. Both agents' next command prints the
    advisory from `/integrity`, and the one named in `contested` runs
-   `rm m2q/lanes/history/claim` or keeps working, which is a human's call.
-5. Both snapshots raced on the cache file. The loser's rename is discarded;
-   the next open refolds a handful of events.
+   `rm m2q/lanes/history/claim` or keeps working.
 
 **Relies on.** The common case is a refusal with a name; the rare case is a
-visible contest, never a lost write and never a lock.
-
-**Strain.** None. The holder set is what makes step 4 representable.
+visible contest, never a lost write.
 
 ## 6. Two machines, offline
 
@@ -243,7 +221,7 @@ node, so two creations collide on the address. A rule the fold can apply
 identically everywhere: `lane.create` is idempotent on `(node, name)`, and
 members from both creations are placed in total order, so the lane folds to
 `[dee, b64, fw9]` on both machines with an advisory naming both creators.
-This is the same rule as two `member.add` of one member. Adopted.
+This is the same rule as two `member.add` of one member.
 
 ## 7. The process changes under running work
 
@@ -280,15 +258,13 @@ how the team works.
 process is versioned, diffed and reviewed by git; and nothing is hidden:
 `/integrity` lists the ticket in a column its ancestors no longer declare.
 
-**Strain S-6.** columns-and-phases.md says a stored column its workflow does
-not define is unrepresentable. With the model in a file that merges
-independently of the events, it is representable, and the engine needs one
-rule for it. The rule follows the existing stance for an undeclared field
+**Strain S-6.** Step 5. With the model in a file that merges independently
+of the events, a stored column the applied version does not declare is
+representable, and the engine needs one rule for it. The rule follows the existing stance for an undeclared field
 value: the transition stands, evaluate reports `status: audit (undeclared)`,
 `stage` reads `active` (an undeclared column has neither flag), `/next`
 passes the lane over and says so, `/integrity` lists it, and the way out is a
 transition to a column that exists, which the universal edges always offer.
-Adopted.
 
 ## 8. An epic with its own process and its own guidance
 
@@ -306,8 +282,7 @@ its own text for that step, without touching the rest of the workspace.
    terminal reachable, every `next` present.
 2. In the same section, a workflow `audit` with one handler: `on = ["enter
    audit", "in audit"]`, `body = "Run the law audit on the diff."`. Handlers
-   resolve from the ticket up, so the body prints for `rin`'s tickets and no
-   others.
+   resolve from the ticket up, so the body prints for `rin`'s tickets.
 3. `set rin.4ou/status audit` from `plan` lands; `set rin.4ou/status impl`
    from `plan` is refused, `plan/next = [audit]`.
 4. `(status=audit)` matches `rin`'s tickets; `(stage=active)` matches them
@@ -317,8 +292,6 @@ its own text for that step, without touching the rest of the workspace.
 
 **Relies on.** A process change is data on one node; no other ticket or
 handler changed.
-
-**Strain.** None.
 
 ## 9. A grooming pass at scale
 
@@ -337,30 +310,20 @@ and reorders, with every change visible before and after.
    have landed.
 4. `set lq3.9od/body - 2d80.d66/status '{column:dup of:lq3.9od}' < merged.md`:
    the canonical body and the duplicate's close in one write.
-5. Eleven different grooming notes on eleven tickets.
+5. `add a/comments "…" b/comments "…" …`: eleven different grooming notes on
+   eleven tickets in one call.
 6. `get /integrity` ends the pass. It lists what the fold could not settle
    silently, and each line names the write that clears it: a lane ranked
    against an anchor that no longer exists, an edge to a deleted ticket.
-   Nothing on it is a repair lit2 runs.
 7. The groomer runs those writes, dry run first; `get /integrity` prints
    none.
 
 **Relies on.** Expansion once, all or nothing, dry run first, and the echoes
 are the grooming report; the pass ends on an empty `/integrity`.
 
-**Strain S-7.** Step 5 is eleven `add` calls because `add` takes one value.
-`set` already takes `path value` pairs; `add` taking the same pairs removes
-the asymmetry and no grammar: `add a/comments "…" b/comments "…"`. The
-one-path-many-elements form stays a list value. Adopted.
-
-**Strain S-8.** Six bodies from six files in one call: `-` reads stdin once.
-Frequency in the v1 transcripts is low and the one-body form is the common
-case. Open; a `@file` value form is the natural
-addition if it bites, and nothing in the grammar forecloses it.
-
 ## 10. Purge while others still write
 
-**Need.** Content that must go is gone on every replica, and nothing that
+**Need.** Content that must go is gone on every replica that syncs, and nothing that
 happened around it is silently lost.
 
 **Walk.**
@@ -374,21 +337,21 @@ happened around it is silently lost.
    no edge; a mention in prose stays prose.
 3. Each writer, on its next sync, re-seals its segments without the purged
    events and replaces its ref with the new tree. A receiver accepts the new
-   tree because the events it lacks are the ones the rewrite names. Objects
-   die at the next `gc`.
+   tree because the events it lacks are the ones the rewrite names.
 
-**Relies on.** One command, one echo, convergence everywhere; the purged id
+**Relies on.** One command, one echo, convergence on every replica that
+syncs; the purged id
 is never reused because an id is random bits minted once.
 
 **Strain S-9.** B's second comment was written to an item B still saw. It is
 dropped, correctly, and B should learn that. The fold counts events whose
 subject is purged and arrived after the purge, and `/integrity` lists them
-with the writer, so B's next command names its own lost comment. Adopted.
+with the writer, so B's next command names its own lost comment.
 
 ## 11. A dead worktree holding a lane
 
 **Need.** A lane whose holder vanished returns to the pool without a human
-cleaning up, and a live holder is never robbed by a clock.
+cleaning up.
 
 **Walk.**
 
@@ -397,7 +360,7 @@ cleaning up, and a live holder is never robbed by a clock.
    list` and treats the hold as void now; `/next` on a sibling worktree serves
    the lane.
 3. On another machine, the hold persists until `claim_ttl` has passed since
-   W's last event, then prints as none. `get k7q/claim` during the window
+   W's newest event on the lane, then prints as none. `get k7q/claim` during the window
    shows the holder and the expiry.
 4. Taking over before expiry is a deliberate write: `add <lane>/claim`,
    echoed; W is `contested` until its claim expires, and the head changes
@@ -405,11 +368,8 @@ cleaning up, and a live holder is never robbed by a clock.
 5. A later sweep anchors W's tree under a live ref and deletes W's ref; a W
    that reappears with events the anchor lacks is alive and kept.
 
-**Relies on.** No heartbeat, no release verb in the common path, and the
-override of fresh evidence is always a visible act.
-
-**Strain.** None beyond S-3, which applies here if the dead lane's head is
-also blocked.
+**Relies on.** No release verb in the common path, and the override of
+fresh evidence is always a visible act.
 
 ## 12. An old binary meets newer events
 
@@ -431,8 +391,6 @@ store that newer clients have written to.
 
 **Relies on.** Failure to read is never treated as absence.
 
-**Strain.** None.
-
 ## 13. Scale
 
 **Need.** A store ten times the largest in the fleet answers every command
@@ -440,22 +398,17 @@ inside the budgets.
 
 **Walk.** 10,000 items, 200,000 events, 400 lanes. `get '*/title'` is one
 walk of folded state. `/next` is a walk of the lane order, linear in lanes.
-On every read, evaluate runs each rule's selector over every ticket, linear
-in tickets times rules. A warm read is a snapshot load plus a delta fold. A cold
-refold applies 200,000 events in under a second, which sets the bar for the
-codec and for the fold's data structures, and is measured in the harness
-before anything else is built on them. The snapshot holds the folded lane
-order, so a new `rank.place` applies to a known order and nothing replays
-from genesis.
+A warm read is a snapshot load plus a delta fold. A cold refold applies all
+200,000 events. The snapshot holds the folded lane
+order, so a new `rank.place` applies to a known order.
 
-**Relies on.** The budgets in event-store/budgets.md, checked in the harness
-from step 2 of the build order.
+**Relies on.** The budgets in event-store/budgets.md, checked in the load
+harness.
 
 **Strain S-10.** A `rank.place {above: y}` arriving after lane `y` was
 dissolved or purged. The fold needs one rule: an intent whose anchor no
 longer exists places the subject at the bottom of the order and
-`/integrity` names the intent. Deterministic, and loses nothing the writer
-could have meant. Adopted; the event-store design's §rank states it.
+`/integrity` names the intent.
 
 ## 14. A human at the terminal
 
@@ -473,8 +426,6 @@ prints the scalar; on many paths, one object.
 **Relies on.** The surface is one table; nothing is reachable only by a flag
 the table does not show.
 
-**Strain.** None.
-
 ## 15. Access control from the first event
 
 **Need.** A contributor may file and work tickets but not delete epics or
@@ -483,8 +434,8 @@ modified client cannot forge any of it; no server.
 
 **Walk.**
 
-1. `lit2 admin init` on a fresh repository mints the checkout's principal,
-   prints one recovery phrase, and writes the enrollment: the first policy,
+1. `lit2 admin init` on a fresh repository mints the person's principal and
+   this clone's delegated signing key, prints one recovery phrase, and writes the enrollment: the first policy,
    one owner, one tier, encrypted, as the first signed event, named in
    `.lit/founding` for the owner to commit. Every event after it is signed
    and cites the policy version in force.
@@ -494,12 +445,13 @@ modified client cannot forge any of it; no server.
    contributor}'`; the proposal and its approval are one command because
    one owner is the threshold. The joiner's next sync wraps the tier's
    epochs to them and their backlog reads in full.
-3. The contributor runs `rm <epic>`. The enforcer refuses it at the write:
+3. The contributor runs `rm <epic>`. The capability rule refuses it at the
+   write:
    `rm own/*` at level 1 is the contributor's capability and this path is
    neither. The refusal names the capability it needed. A modified client
    that appends the event anyway publishes a segment every receiver refuses
-   before folding; the local copies stay, `/integrity` names the writer and
-   the event, and a valid replica re-publishes over the remote.
+   before folding; the local copies stay, and `/integrity` names the writer
+   and the event.
 4. `set x/tier internal` on a ticket re-keys its current prose under the
    `internal` tier's epoch; the ticket's comments keep their own tiers. A
    member without the key sees the skeleton: id, column, lane, labels,
@@ -513,16 +465,12 @@ modified client cannot forge any of it; no server.
    decrypt and says how many envelopes it could not open.
 
 **Relies on.** Signatures, envelopes and the policy are in the event shape
-and the fold from the first event, so nothing is retrofitted. Every
-capability is a verb on a path, so the policy vocabulary is the surface.
+and the fold from the first event.
 
 **Strain S-11.** A requirement whose `test` reads a prose field by content,
 `description~'Done when'`, cannot be evaluated by a reader lacking the tier's
-key. The writer always holds the key for prose it writes, so the transition
-write is unaffected; `held`, computed by any reader, reports that
-requirement as `unknown (tier internal)` rather than met or unmet. A new
-value in the verdict's result type, not a branch. Adopted as a constraint in
-architecture §8.
+key. `held`, computed by any reader, reports that
+requirement as `unknown (tier internal)` rather than met or unmet.
 
 ## 16. A fold-version bump across the fleet
 
@@ -531,18 +479,8 @@ machine without a slow morning.
 
 **Walk.** The snapshot key includes the fold version, so every store's
 snapshot misses once. The first command in each store refolds from genesis,
-inside the one-second cold budget, and rewrites the snapshot. Nothing runs at
-install time; the cost is paid per store, on first use, once. Machines that
-never touch a store never pay.
+inside the cold budget, and rewrites the snapshot. Nothing runs at
+install time; the cost is paid per store, on first use, once.
 
 **Relies on.** The disposable cache: deleting every snapshot on the machine
 costs one refold per store and nothing else.
-
-**Strain.** None.
-
-## What the scenarios did not reach
-
-Listed so the gap is visible, not to rule on them: the Jira bridge as a
-principal; witness cosigning; the user-layer workflow file's own concurrency
-(it is one person's file); the inbox ref's abuse surface; the harness's
-corpus construction. Each is a later scenario when its work is pulled.

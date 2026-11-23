@@ -1,23 +1,26 @@
 # lit2: the requirements
 
 What lit2 must do and must not do, from what lit is for: an issue tracker
-that lives in the code repository and is worked mostly by agents. The plan
-is judged against this document. The constraints are the charters' own
-(`event-store/charter.md`, `access-control/charter.md`) and `architecture.md`
-§8; a constraint that no requirement here needs is a choice, not a
-requirement.
+that lives in the code repository and is worked mostly by agents.
 
 ## 1. What lit must do
 
-The operations of an issue tracker, as `architecture.md` §4 lists them:
-file and groom, pick and claim, move work through a configurable process
-with requirements and guidance, review and send back, close with a reason,
-order and sequence, link and block, comment and label, search and edit in
-bulk, undo, delete and purge, configure the process, export the whole store
-and import one. Role-based access
-control and the workflow features are part of this. Several rows of that
-table are specializations of other rows and are not requirements of their
-own.
+The operations of an issue tracker, as `architecture.md` "Functionality,
+composed" lists them: file and groom, pick and claim, move work through a
+configurable process with requirements and guidance, review and send back,
+close with a reason, order and sequence, link and block, comment and label,
+search and edit in bulk, undo, delete and purge, configure the process,
+export the whole store and import one. Role-based access control and the
+workflow features are part of this. Under role-based access control a
+contributor can file tickets but cannot delete an epic or a ticket it did
+not create, and a ticket can be kept private from people who can read the
+repository.
+
+Work in the backlog is groomed before an agent pulls it, and what groomed
+means is part of the configurable process. The process is built from
+workflows made of handlers, one mechanism for every use case, and a project
+or a person can override any part of a shipped workflow without breaking the
+features built on it.
 
 Work is grouped in containers so that a process can be scoped, and
 sequenced so that an order can be set. Which containers and sequences exist
@@ -26,6 +29,9 @@ scopes are design.
 
 All of it works from several worktrees of one clone and from several
 machines, offline, with sync through the code's own remote and no server.
+Ticket data lives in the code's own repository, not a separate one. The
+remote stays a dumb replicated store, and all enforcement is client-side:
+signatures verified by every client, encryption for visibility.
 
 Agents are the primary user. Output is deterministic. Its default form is
 human-readable text, because that is what a language model reads;
@@ -35,7 +41,7 @@ machine-readable forms are secondary.
 
 The same backlog on every machine that holds the same data. Nothing lost
 silently under concurrent writes; a contradiction is shown, not resolved by
-luck. Deleting and purging are possible and reach every replica. History is
+luck. Deleting and purging are possible and reach every replica that syncs. History is
 readable. An old binary never corrupts a newer store.
 
 ## 3. Performance of lit
@@ -55,13 +61,15 @@ without bound. Nothing lit keeps appears in normal git tooling.
 ## 5. A complexity budget
 
 Fewer mechanisms than v1, not a different set of the same size. No locks,
-no write engines, no network on a foreground path. Reconciliation is
+no write engines. Reconciliation is
 allowed, because it is typically trivial in time and in complexity:
 decidable cases are decided automatically, undecidable cases are not. Every
-mechanism is justified by an operation in §1. Anything intricate is a cost
+mechanism is justified by an operation in "What lit must do". Anything intricate is a cost
 to be removed, not a feature.
 
 ## 6. Operational
 
 One static binary, permissively licensed, working against GitHub, GitLab
 and a plain ssh remote, with the git credentials the user already has.
+Every dependency is permissively licensed; prior art under a non-permissive
+license is reimplemented from its behavior, never copied.
