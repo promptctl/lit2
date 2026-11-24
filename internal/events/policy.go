@@ -692,25 +692,21 @@ var readMembership = declare("a member", []field[membership]{
 	nameField(2, partRole, one, func(m *membership) *Name { return &m.role }),
 }, whole).read
 
-// readThreshold reads a threshold's stored form: exactly one of a majority
-// and a fixed number.
-var readThreshold = declare("a threshold", []field[[]Threshold]{
-	{thresholdMajority, partMajority, optional, func(made *[]Threshold, r *wire.Reader) error {
-		r.Bytes()
-		*made = append(*made, Majority{})
-		return nil
+// readThreshold reads a threshold's stored form: one of a majority, which
+// carries nothing, and a fixed number. The fold activates a policy by it,
+// so one in a form this binary does not know is a payload it cannot read:
+// refused, and its event Unread (INV:preserve-unknown), never a policy
+// with no threshold.
+var readThreshold = declare("a threshold", []field[Threshold]{
+	{thresholdMajority, partMajority, optional, func(th *Threshold, r *wire.Reader) error {
+		*th = Majority{}
+		return sized(partMajority, r.Bytes(), 0)
 	}},
-	{thresholdFixed, partFixed, optional, func(made *[]Threshold, r *wire.Reader) error {
-		f, err := fixedOf(r.Uvarint())
-		*made = append(*made, f)
+	{thresholdFixed, partFixed, optional, func(th *Threshold, r *wire.Reader) (err error) {
+		*th, err = fixedOf(r.Uvarint())
 		return err
 	}},
-}, func(made *[]Threshold, _ wire.Unknown) (Threshold, error) {
-	if len(*made) != 1 {
-		return nil, fmt.Errorf("a threshold is a majority or a number, and this one is in %d forms: %w", len(*made), notOneForm{What: partThreshold})
-	}
-	return (*made)[0], nil
-}).read
+}, whole, forms{partThreshold, one, []uint32{thresholdMajority, thresholdFixed}}).read
 
 // policy.approve = 1:proposal (its digest) · unknown….
 func (p Approve) AppendTo(w *wire.Writer) {

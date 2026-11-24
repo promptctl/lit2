@@ -130,10 +130,10 @@ func (p part) String() string { return partNames[p] }
 
 // The decoders' shared refusals, each one type wherever it is met, with
 // the field it is about as a value, so two refusals of one kind stay two
-// refusals `[LAW:one-type-per-behavior]`: a field a message cannot be
-// without is absent, a field a message gives once is given again, a
+// refusals `[LAW:one-type-per-behavior]`: a field or a sum a message cannot
+// be without is absent, a field a message gives once is given again, a
 // fixed-length field is another length, a header field is at the zero no
-// event carries, and a message of a sum holds other than one of its forms.
+// event carries, and a message holds more than one form of a sum.
 // Each is comparable, so errors.Is names one refusal by its value.
 type (
 	missing    struct{ What part }
@@ -147,7 +147,7 @@ func (m missing) Error() string    { return "no " + m.What.String() }
 func (t twice) Error() string      { return t.What.String() + " given twice" }
 func (s wrongSize) Error() string  { return s.What.String() + " of the wrong length" }
 func (z zeroField) Error() string  { return "a zero " + z.What.String() }
-func (f notOneForm) Error() string { return f.What.String() + " not in one form" }
+func (f notOneForm) Error() string { return f.What.String() + " in more than one form" }
 
 // sized is b's refusal as what, a field of want bytes, when b is another
 // length: the one check of a fixed-length field, saying both lengths.

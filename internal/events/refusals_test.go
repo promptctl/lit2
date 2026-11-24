@@ -171,6 +171,92 @@ func controls(t *testing.T) map[string][][]byte {
 	}
 }
 
+// newerForms is each message whose writer writes back a form a newer binary
+// wrote, as it writes it: the oracle of which sums admit a form this
+// binary does not know. A message absent here is one every writer writes
+// in a form this binary knows, since its type has no other.
+func newerForms(t *testing.T) map[string][]byte {
+	t.Helper()
+	r := wire.NewReader(futureField(9, "a newer binary's form"))
+	if err := r.Each(func(uint32, *wire.Reader) error { return nil }); err != nil {
+		t.Fatalf("a newer binary's form: %v", err)
+	}
+	return map[string][]byte{
+		"an envelope": Envelope{form: unknownForm{}, commitment: Commitment{9}, unknown: r.Rest()}.wire(),
+	}
+}
+
+// Every sum is read by its declaration alone, against what its writers
+// write: a control in one form joined by another form is refused as the
+// sum in more than one form; a control in none of its forms is refused as
+// no sum; and beside a field this binary does not know, it reads where a
+// writer writes a newer binary's form back, and is refused where none
+// does. The rows come from the declarations, so a sum added to one is held
+// to its writers with no edit here, and a sum declared to admit what no
+// writer writes, or refuse what one does, fails a row.
+func TestEverySumHoldsOneFormOfIt(t *testing.T) {
+	cs, ns := controls(t), newerForms(t)
+	for _, d := range declarations {
+		nc, admitsNewer := ns[d.name]
+		if admitsNewer {
+			if err := d.read(nc); err != nil {
+				t.Errorf("%s as a newer binary writes it reads with %v; want it read", d.name, err)
+			}
+		}
+		for _, s := range d.sums {
+			holding := map[uint32][]byte{}
+			whole := len(s.tags) > 1
+			if !whole {
+				t.Errorf("%s's sum %s has %d forms; want more than one", d.name, s.what, len(s.tags))
+			}
+			for _, tag := range s.tags {
+				if !slices.ContainsFunc(d.fields, func(f shape) bool { return f.tag == tag && f.card == optional }) {
+					t.Errorf("%s's sum %s names field %d, which it does not declare optional", d.name, s.what, tag)
+					whole = false
+				}
+				for _, c := range cs[d.name] {
+					if held(t, c, tag) > 0 && holding[tag] == nil {
+						holding[tag] = c
+					}
+				}
+				if holding[tag] == nil {
+					t.Errorf("no control of %s holds its %s's form %d", d.name, s.what, tag)
+					whole = false
+				}
+			}
+			if !whole {
+				continue
+			}
+			a, b := s.tags[0], s.tags[1]
+			other := holding[b]
+			both := append(append([]byte(nil), holding[a]...), other[firstOf(t, other, b).start:firstOf(t, other, b).end]...)
+			if err := d.read(both); !errors.Is(err, notOneForm{What: s.what}) {
+				t.Errorf("%s in its forms %d and %d reads with %v; want its %s in more than one form", d.name, a, b, err, s.what)
+			}
+			bare := holding[a]
+			for _, tag := range s.tags {
+				bare = omitted(t, bare, tag)
+			}
+			if err := d.read(bare); !errors.Is(err, missing{What: s.what}) {
+				t.Errorf("%s in none of its forms reads with %v; want no %s", d.name, err, s.what)
+			}
+			unknown := slices.MaxFunc(d.fields, func(p, q shape) int { return int(p.tag) - int(q.tag) }).tag + 1
+			beside := append(bare, futureField(unknown, "a newer binary's form")...)
+			switch err := d.read(beside); {
+			case admitsNewer && err != nil:
+				t.Errorf("%s in no form it knows, beside field %d, reads with %v; want it read, as its writer writes a newer form back", d.name, unknown, err)
+			case !admitsNewer && !errors.Is(err, missing{What: s.what}):
+				t.Errorf("%s in no form it knows, beside field %d, reads with %v; want no %s, as no writer writes a newer form", d.name, unknown, err, s.what)
+			}
+		}
+	}
+	for n := range ns {
+		if !slices.ContainsFunc(declarations, func(d declaration) bool { return d.name == n && len(d.sums) > 0 }) {
+			t.Errorf("a newer binary's form is written for %s, which no declaration holds a sum of", n)
+		}
+	}
+}
+
 // Every declared message is read by its declaration alone: each control
 // reads; a field its writers hold at most once is refused, given twice, as
 // that field given twice; a field its writers always write is refused,
@@ -324,19 +410,38 @@ func isIdent(e ast.Expr, name string) bool {
 	return ok && id.Name == name
 }
 
-// A body giving its payload twice is not the body its writer signed, even
-// when the second is the one the header's hash commits to; the body once
+// A body that does not read is refused by the body's own decoder, said by
+// why, and the record stands with its signed header, its body uncommitted:
+// a torn write or damage costs the payload, never the event. The body whole
 // is the control, which reads.
-func TestABodyGivingAFieldTwiceIsUncommitted(t *testing.T) {
+func TestABodyThatDoesNotReadIsUncommitted(t *testing.T) {
 	k := keyOf(1)
 	e := mint(t, context(1, Frontier{}, Known{}), k, 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0]
 	body := bodyWire(t, e)
 	if got, ok := decoded(t, here, recordOf(e.raw, e.Signature(), body)).Body().(Readable); !ok {
-		t.Fatalf("the body once reads as %#v; the control must read", got)
+		t.Fatalf("the body whole reads as %#v; the control must read", got)
 	}
-	for _, tag := range []uint32{1, 2} {
-		if got := decoded(t, here, recordOf(e.raw, e.Signature(), repeated(t, body, tag))).Body(); got != (Uncommitted{}) {
-			t.Errorf("a body giving field %d twice reads as %#v; want it uncommitted", tag, got)
+	if _, err := readBody(body); err != nil {
+		t.Fatalf("control: the body whole is refused with %v", err)
+	}
+	torn := []byte{0xff}
+	for name, c := range map[string]struct {
+		body []byte
+		want error
+	}{
+		"giving its salt twice":    {repeated(t, body, 1), twice{What: partSalt}},
+		"giving its payload twice": {repeated(t, body, 2), twice{What: partPayload}},
+		"without its payload":      {omitted(t, body, 2), missing{What: partPayload}},
+		"with a short salt":        {append(futureField(1, "short"), body[firstOf(t, body, 2).start:]...), wrongSize{What: partSalt}},
+		"torn":                     {torn, wireRefusal(t, torn)},
+	} {
+		if _, err := readBody(c.body); !errors.Is(err, c.want) {
+			t.Errorf("a body %s reads with %v; want %v", name, err, c.want)
+			continue
+		}
+		got := decoded(t, here, recordOf(e.raw, e.Signature(), c.body))
+		if got.Body() != (Uncommitted{}) || got.ID() != e.ID() || got.Header().About() != e.Header().About() {
+			t.Errorf("a record whose body is %s decodes as %#v; want the event, its body uncommitted", name, got.Body())
 		}
 	}
 }

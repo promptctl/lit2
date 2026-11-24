@@ -1,6 +1,7 @@
 package events
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -36,5 +37,23 @@ func TestAWireThresholdOutsideOneTo255IsRefusedAsTheTextOneIs(t *testing.T) {
 		if _, err := ParseThreshold(s); !errors.Is(err, errThresholdRange) || !strings.Contains(err.Error(), "from 1 to 255") {
 			t.Errorf("the threshold %q parses with %v; want errThresholdRange, saying from 1 to 255", s, err)
 		}
+	}
+}
+
+// A majority carries nothing, so one carrying bytes is refused as a
+// majority of the wrong length; the majority its writer writes, empty, is
+// the control.
+func TestAMajorityCarryingBytesIsRefused(t *testing.T) {
+	majority := func(b []byte) []byte {
+		var w wire.Writer
+		w.Bytes(thresholdMajority, b)
+		return w.Encoded()
+	}
+	written := nested(t, payloadBytes(Propose{Base: Digest{3}, Members: map[PrincipalID]Name{}, Threshold: Majority{}}), 3)
+	if th, err := readThreshold(majority(nil)); err != nil || th != (Majority{}) || !bytes.Equal(written, majority(nil)) {
+		t.Fatalf("the empty majority, as its writer writes it (%x), reads as %#v, %v; the control must read as a majority", written, th, err)
+	}
+	if th, err := readThreshold(majority([]byte{1})); !errors.Is(err, wrongSize{What: partMajority}) {
+		t.Errorf("a majority carrying a byte reads as %#v, %v; want a majority of the wrong length", th, err)
 	}
 }

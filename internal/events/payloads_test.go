@@ -3,7 +3,6 @@ package events
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -228,20 +227,6 @@ func TestAZeroAgentLabelIsRefusedByItsWriter(t *testing.T) {
 }
 
 func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
-	var twoForms wire.Writer
-	twoForms.Bytes(valueProse, text("a").wire())
-	twoForms.Bytes(valuePlain, []byte("b"))
-	if _, err := readValue(Plain{Canonical: "b"}.wire()); err != nil {
-		t.Fatalf("a value in one form: %v; the control must read", err)
-	}
-	for b, n := range map[string]int{string(twoForms.Encoded()): 2, "": 0} {
-		_, err := readValue([]byte(b))
-		if !errors.Is(err, notOneForm{What: partValue}) {
-			t.Errorf("a value in %d forms reads with %v; want a value not in one form", n, err)
-		} else if says := fmt.Sprintf("in %d forms", n); !strings.Contains(err.Error(), says) {
-			t.Errorf("a value in %d forms is refused as %q; want it to say %s", n, err, says)
-		}
-	}
 	var noValue wire.Writer
 	noValue.Bytes(1, []byte("title"))
 	var badField wire.Writer

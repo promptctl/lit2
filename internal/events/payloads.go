@@ -165,26 +165,25 @@ func (p Plain) wire() []byte {
 	return w.Encoded()
 }
 
-// readValue reads a value's stored form: exactly one of the two forms.
-// Each form's constructor waits for the unknown fields, which are only
-// whole once the message is read.
-var readValue = declare("a value", []field[[]func(wire.Unknown) Value]{
-	{valueProse, partProse, optional, func(made *[]func(wire.Unknown) Value, r *wire.Reader) error {
+// readValue reads a value's stored form: one of its two forms. The fold
+// reads a value to apply it, so one in a form this binary does not know is
+// a payload it cannot read: refused, and its event Unread
+// (INV:preserve-unknown), never a value of no form. A form's constructor waits for the unknown
+// fields, which are only whole once the message is read.
+var readValue = declare("a value", []field[func(wire.Unknown) Value]{
+	{valueProse, partProse, optional, func(made *func(wire.Unknown) Value, r *wire.Reader) error {
 		e, err := readEnvelope(r.Bytes())
-		*made = append(*made, func(u wire.Unknown) Value { return Prose{Body: e, unknown: u} })
+		*made = func(u wire.Unknown) Value { return Prose{Body: e, unknown: u} }
 		return err
 	}},
-	{valuePlain, partPlain, optional, func(made *[]func(wire.Unknown) Value, r *wire.Reader) error {
+	{valuePlain, partPlain, optional, func(made *func(wire.Unknown) Value, r *wire.Reader) error {
 		c := string(r.Bytes())
-		*made = append(*made, func(u wire.Unknown) Value { return Plain{Canonical: c, unknown: u} })
+		*made = func(u wire.Unknown) Value { return Plain{Canonical: c, unknown: u} }
 		return nil
 	}},
-}, func(made *[]func(wire.Unknown) Value, u wire.Unknown) (Value, error) {
-	if len(*made) != 1 {
-		return nil, fmt.Errorf("a value is prose or plain, and this one is in %d forms: %w", len(*made), notOneForm{What: partValue})
-	}
-	return (*made)[0](u), nil
-}).read
+}, func(made *func(wire.Unknown) Value, u wire.Unknown) (Value, error) {
+	return (*made)(u), nil
+}, forms{partValue, one, []uint32{valueProse, valuePlain}}).read
 
 // ItemCreate is item.create: About is the NewItem it creates, and Place
 // is the one record of where the item sits.
@@ -340,26 +339,25 @@ var itemCreates = declare("an item.create", []field[ItemCreate]{
 // ReadItemCreate reads item.create at version 1.
 func ReadItemCreate(r *wire.Reader) (Versioned, error) { return itemCreates.decode(r) }
 
-// placements is a placement's stored form: exactly one of a level and
-// below its parent. Each form's constructor waits for the unknown fields,
-// which are only whole once the message is read.
-var placements = declare("a placement", []field[[]func(wire.Unknown) Placement]{
-	{placeAtLevel, partLevel, optional, func(made *[]func(wire.Unknown) Placement, r *wire.Reader) error {
+// placements is a placement's stored form: one of a level and below its
+// parent. The fold places an item by it, so one in a form this binary does
+// not know is a payload it cannot read: refused, and its event Unread
+// (INV:preserve-unknown), never an item placed nowhere. A form's constructor waits for the
+// unknown fields, which are only whole once the message is read.
+var placements = declare("a placement", []field[func(wire.Unknown) Placement]{
+	{placeAtLevel, partLevel, optional, func(made *func(wire.Unknown) Placement, r *wire.Reader) error {
 		l, err := ParseLevel(int(min(r.Uvarint(), topLevel+1)))
-		*made = append(*made, func(u wire.Unknown) Placement { return AtLevel{Level: l, unknown: u} })
+		*made = func(u wire.Unknown) Placement { return AtLevel{Level: l, unknown: u} }
 		return err
 	}},
-	{placeBelowParent, partParent, optional, func(made *[]func(wire.Unknown) Placement, r *wire.Reader) error {
+	{placeBelowParent, partParent, optional, func(made *func(wire.Unknown) Placement, r *wire.Reader) error {
 		parent, err := idBits(partParent, r.Bytes())
-		*made = append(*made, func(u wire.Unknown) Placement { return BelowParent{Parent: ItemID{b: parent}, unknown: u} })
+		*made = func(u wire.Unknown) Placement { return BelowParent{Parent: ItemID{b: parent}, unknown: u} }
 		return err
 	}},
-}, func(made *[]func(wire.Unknown) Placement, u wire.Unknown) (Placement, error) {
-	if len(*made) != 1 {
-		return nil, fmt.Errorf("a placement is a level or below its parent, and this one is in %d forms: %w", len(*made), notOneForm{What: partPlacement})
-	}
-	return (*made)[0](u), nil
-})
+}, func(made *func(wire.Unknown) Placement, u wire.Unknown) (Placement, error) {
+	return (*made)(u), nil
+}, forms{partPlacement, one, []uint32{placeAtLevel, placeBelowParent}})
 
 // ReadPlacement reads a placement's stored form.
 func ReadPlacement(b []byte) (Placement, error) { return placements.read(b) }

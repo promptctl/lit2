@@ -205,7 +205,8 @@ type Unread struct{ Why UnreadWhy }
 type Erased struct{}
 
 // Uncommitted is a body the header's payload hash does not commit to: a
-// rewrite replaced it.
+// rewrite replaced it, or a torn write or damage left bytes that do not
+// read. Either way the signed header stands and only the payload is lost.
 type Uncommitted struct{}
 
 func (Readable) body()    {}

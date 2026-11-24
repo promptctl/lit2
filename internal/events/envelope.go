@@ -155,42 +155,43 @@ func (e Envelope) wire() []byte {
 	return w.Encoded()
 }
 
-// envelopeFields is an envelope's fields: each form, held or not, and the
-// commitment.
+// envelopeFields is an envelope's fields: its form, nil when it is none
+// this binary knows, and its commitment.
 type envelopeFields struct {
-	plain      *plain
-	sealed     *sealed
+	form       form
 	commitment Commitment
 }
 
-// readEnvelope reads an envelope's wire message. One holding neither form
-// this binary knows is an unknownForm, its fields kept; one holding both,
-// or a plaintext whose commitment is not its text's, is refused.
+// readEnvelope reads an envelope's wire message: one of its forms, and its
+// commitment, which is no form. A form is the one thing an envelope's
+// layer may change without its readers, since below the verbs an envelope
+// is compared by commitment and never read (INV:opaque-envelope), so its
+// sum is optional: an envelope holding neither form this binary knows and
+// a field it does not know is a newer binary's form, kept whole and opened
+// Unopenable (INV:preserve-unknown). One holding only its commitment holds
+// no form at all, and is refused, as one holding both forms is, and a
+// plaintext whose commitment is not its text's.
 var readEnvelope = declare("an envelope", []field[envelopeFields]{
-	{envelopePlain, partPlaintext, optional, func(e *envelopeFields, r *wire.Reader) error {
-		p, err := readPlain(r.Bytes())
-		e.plain = &p
+	{envelopePlain, partPlaintext, optional, func(e *envelopeFields, r *wire.Reader) (err error) {
+		e.form, err = readPlain(r.Bytes())
 		return err
 	}},
-	{envelopeSealed, partSealed, optional, func(e *envelopeFields, r *wire.Reader) error {
-		s, err := readSealed(r.Bytes())
-		e.sealed = &s
+	{envelopeSealed, partSealed, optional, func(e *envelopeFields, r *wire.Reader) (err error) {
+		e.form, err = readSealed(r.Bytes())
 		return err
 	}},
 	fixedField(envelopeCommitment, partCommitment, one, func(e *envelopeFields) []byte { return e.commitment[:] }),
 }, func(e *envelopeFields, u wire.Unknown) (Envelope, error) {
-	switch {
-	case e.plain != nil && e.sealed != nil:
-		return Envelope{}, fmt.Errorf("an envelope is plain or sealed, and this one is both: %w", notOneForm{What: partEnvelope})
-	case e.plain != nil && plainCommitment(e.plain.text) != e.commitment:
+	if p, ok := e.form.(plain); ok && plainCommitment(p.text) != e.commitment {
 		return Envelope{}, errCommitmentNotText
-	case e.plain != nil:
-		return Envelope{form: *e.plain, commitment: e.commitment, unknown: u}, nil
-	case e.sealed != nil:
-		return Envelope{form: *e.sealed, commitment: e.commitment, unknown: u}, nil
 	}
-	return Envelope{form: unknownForm{}, commitment: e.commitment, unknown: u}, nil
-}).read
+	if e.form == nil {
+		// the sum's declaration admitted no form this binary knows only
+		// beside a field it does not know: a newer binary's form
+		e.form = unknownForm{}
+	}
+	return Envelope{form: e.form, commitment: e.commitment, unknown: u}, nil
+}, forms{partEnvelope, optional, []uint32{envelopePlain, envelopeSealed}}).read
 
 // readPlain reads a plaintext form: its text.
 var readPlain = declare("a plaintext form", []field[plain]{
