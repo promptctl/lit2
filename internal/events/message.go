@@ -18,6 +18,9 @@ const (
 	optional
 	// many is a list, each element its own field, in stored order.
 	many
+	// alternative is one of the forms of the message's sum: held once or
+	// not at all, and counted against the sum.
+	alternative
 )
 
 // field is one field of a message, declared once: its tag, the part a
@@ -30,13 +33,16 @@ type field[T any] struct {
 	read func(*T, *wire.Reader) error
 }
 
-// forms is a sum a message holds: the fields, by tag, that are alternative
-// forms of one thing, the part a refusal names that thing by, and how many
-// of the forms this binary knows the message holds. One holds exactly one.
+// forms is a sum a message holds: the part a refusal names the thing its
+// forms are of, how many of the forms this binary knows the message holds,
+// and the forms' tags, which declare reads off the fields declared alternative, so
+// a form is stated once, on its field `[LAW:one-source-of-truth]`. One
+// holds exactly one.
 // Optional holds one or none, and none is a form a newer binary wrote,
 // which the message holds as a field this binary does not know; a message
 // holding no field at all for its thing is refused either way. Each form is
-// itself an optional field, so a form given twice is that field twice.
+// itself a field held at most once, so a form given twice is that field
+// twice.
 type forms struct {
 	what part
 	card cardinality
@@ -97,16 +103,32 @@ var declarations []declaration
 
 // declare is the message name holding fields, among them the sums, built by
 // build, and registers it, so no decoder reads a message the tests do not
-// hold to its declaration. Two messages of one name, or one tag declared
-// twice, is a build fault.
+// hold to its declaration. Two messages of one name, one tag declared
+// twice, a message of more than one sum, a sum of fewer than two forms, or
+// a form of no sum, is a build fault.
 func declare[T, R any](name string, fields []field[T], build func(*T, wire.Unknown) (R, error), sums ...forms) *message[T, R] {
-	d := declaration{name: name, sums: sums}
+	d := declaration{name: name}
+	var formTags []uint32
 	for _, f := range fields {
 		if slices.ContainsFunc(d.fields, func(s shape) bool { return s.tag == f.tag }) {
 			panic(fmt.Errorf("events: %s's field %d: %w", name, f.tag, errRegisteredTwice))
 		}
 		d.fields = append(d.fields, shape{tag: f.tag, what: f.what, card: f.card})
+		if f.card == alternative {
+			formTags = append(formTags, f.tag)
+		}
 	}
+	switch {
+	case len(sums) > 1:
+		panic(fmt.Errorf("events: %s declares %d sums; a message holds at most one", name, len(sums)))
+	case len(sums) == 1 && len(formTags) < 2:
+		panic(fmt.Errorf("events: %s's sum %s has %d forms; a sum has more than one", name, sums[0].what, len(formTags)))
+	case len(sums) == 0 && len(formTags) > 0:
+		panic(fmt.Errorf("events: %s declares forms of no sum", name))
+	case len(sums) == 1:
+		sums[0].tags = formTags
+	}
+	d.sums = sums
 	if slices.ContainsFunc(declarations, func(o declaration) bool { return o.name == name }) {
 		panic(fmt.Errorf("events: the message %s: %w", name, errRegisteredTwice))
 	}

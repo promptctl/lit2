@@ -171,19 +171,19 @@ func (p Plain) wire() []byte {
 // (INV:preserve-unknown), never a value of no form. A form's constructor waits for the unknown
 // fields, which are only whole once the message is read.
 var readValue = declare("a value", []field[func(wire.Unknown) Value]{
-	{valueProse, partProse, optional, func(made *func(wire.Unknown) Value, r *wire.Reader) error {
+	{valueProse, partProse, alternative, func(made *func(wire.Unknown) Value, r *wire.Reader) error {
 		e, err := readEnvelope(r.Bytes())
 		*made = func(u wire.Unknown) Value { return Prose{Body: e, unknown: u} }
 		return err
 	}},
-	{valuePlain, partPlain, optional, func(made *func(wire.Unknown) Value, r *wire.Reader) error {
+	{valuePlain, partPlain, alternative, func(made *func(wire.Unknown) Value, r *wire.Reader) error {
 		c := string(r.Bytes())
 		*made = func(u wire.Unknown) Value { return Plain{Canonical: c, unknown: u} }
 		return nil
 	}},
 }, func(made *func(wire.Unknown) Value, u wire.Unknown) (Value, error) {
 	return (*made)(u), nil
-}, forms{partValue, one, []uint32{valueProse, valuePlain}}).read
+}, forms{what: partValue, card: one}).read
 
 // ItemCreate is item.create: About is the NewItem it creates, and Place
 // is the one record of where the item sits.
@@ -345,19 +345,19 @@ func ReadItemCreate(r *wire.Reader) (Versioned, error) { return itemCreates.deco
 // (INV:preserve-unknown), never an item placed nowhere. A form's constructor waits for the
 // unknown fields, which are only whole once the message is read.
 var placements = declare("a placement", []field[func(wire.Unknown) Placement]{
-	{placeAtLevel, partLevel, optional, func(made *func(wire.Unknown) Placement, r *wire.Reader) error {
+	{placeAtLevel, partLevel, alternative, func(made *func(wire.Unknown) Placement, r *wire.Reader) error {
 		l, err := ParseLevel(int(min(r.Uvarint(), topLevel+1)))
 		*made = func(u wire.Unknown) Placement { return AtLevel{Level: l, unknown: u} }
 		return err
 	}},
-	{placeBelowParent, partParent, optional, func(made *func(wire.Unknown) Placement, r *wire.Reader) error {
+	{placeBelowParent, partParent, alternative, func(made *func(wire.Unknown) Placement, r *wire.Reader) error {
 		parent, err := idBits(partParent, r.Bytes())
 		*made = func(u wire.Unknown) Placement { return BelowParent{Parent: ItemID{b: parent}, unknown: u} }
 		return err
 	}},
 }, func(made *func(wire.Unknown) Placement, u wire.Unknown) (Placement, error) {
 	return (*made)(u), nil
-}, forms{partPlacement, one, []uint32{placeAtLevel, placeBelowParent}})
+}, forms{what: partPlacement, card: one})
 
 // ReadPlacement reads a placement's stored form.
 func ReadPlacement(b []byte) (Placement, error) { return placements.read(b) }

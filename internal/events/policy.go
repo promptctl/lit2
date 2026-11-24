@@ -698,15 +698,15 @@ var readMembership = declare("a member", []field[membership]{
 // refused, and its event Unread (INV:preserve-unknown), never a policy
 // with no threshold.
 var readThreshold = declare("a threshold", []field[Threshold]{
-	{thresholdMajority, partMajority, optional, func(th *Threshold, r *wire.Reader) error {
+	{thresholdMajority, partMajority, alternative, func(th *Threshold, r *wire.Reader) error {
 		*th = Majority{}
 		return sized(partMajority, r.Bytes(), 0)
 	}},
-	{thresholdFixed, partFixed, optional, func(th *Threshold, r *wire.Reader) (err error) {
+	{thresholdFixed, partFixed, alternative, func(th *Threshold, r *wire.Reader) (err error) {
 		*th, err = fixedOf(r.Uvarint())
 		return err
 	}},
-}, whole, forms{partThreshold, one, []uint32{thresholdMajority, thresholdFixed}}).read
+}, whole, forms{what: partThreshold, card: one}).read
 
 // policy.approve = 1:proposal (its digest) · unknown….
 func (p Approve) AppendTo(w *wire.Writer) {

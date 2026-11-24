@@ -210,6 +210,13 @@ type Absent struct{}
 func (Named) was()  {}
 func (Absent) was() {}
 
+// String is the object the ref names.
+func (n Named) String() string { return n.Target.String() }
+
+// String says there is no ref, so a refusal naming a ref's state reads it
+// in words.
+func (Absent) String() string { return "absent" }
+
 // name is the one grammar of a tree entry's name and of a refname's
 // component in lit's repository: a letter or digit, then letters, digits,
 // _ and -. It admits every name lit makes, hex ids and words, and nothing

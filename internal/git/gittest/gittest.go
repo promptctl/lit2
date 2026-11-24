@@ -5,6 +5,7 @@ package gittest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -326,6 +327,9 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 			if !errors.As(err, &moved) || moved != (git.Moved{Name: c.name, From: c.from, Now: c.now}) {
 				t.Errorf("Replace(%s) from %v, while it is %v, = %v; want Moved from %v, now %v", c.name, c.from, c.now, err, c.from, c.now)
 			}
+			if err != nil && err.Error() != fmt.Sprintf("%s is %s, not %s", c.name, said(c.now), said(c.from)) {
+				t.Errorf("Replace(%s) from %v, while it is %v, says %q; want each state in words", c.name, c.from, c.now, err)
+			}
 		}
 		if heads := list(t, refs, "refs/lit/"); !slices.Equal(heads, []git.RefHead{{Name: name, Target: a}}) {
 			t.Errorf("after refused replaces the refs are %v; want %s at %s alone", heads, name, a)
@@ -418,4 +422,13 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 			}
 		}
 	})
+}
+
+// said is how a refusal reads a ref's state: the object it names, or
+// "absent".
+func said(w git.Was) string {
+	if n, ok := w.(git.Named); ok {
+		return n.Target.String()
+	}
+	return "absent"
 }

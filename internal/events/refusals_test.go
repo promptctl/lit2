@@ -204,16 +204,11 @@ func TestEverySumHoldsOneFormOfIt(t *testing.T) {
 			}
 		}
 		for _, s := range d.sums {
+			// declare refuses a sum of fewer than two forms, so s.tags, read
+			// off the fields declared alternative, has two to join
 			holding := map[uint32][]byte{}
-			whole := len(s.tags) > 1
-			if !whole {
-				t.Errorf("%s's sum %s has %d forms; want more than one", d.name, s.what, len(s.tags))
-			}
+			whole := true
 			for _, tag := range s.tags {
-				if !slices.ContainsFunc(d.fields, func(f shape) bool { return f.tag == tag && f.card == optional }) {
-					t.Errorf("%s's sum %s names field %d, which it does not declare optional", d.name, s.what, tag)
-					whole = false
-				}
 				for _, c := range cs[d.name] {
 					if held(t, c, tag) > 0 && holding[tag] == nil {
 						holding[tag] = c

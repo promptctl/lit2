@@ -172,11 +172,11 @@ type envelopeFields struct {
 // no form at all, and is refused, as one holding both forms is, and a
 // plaintext whose commitment is not its text's.
 var readEnvelope = declare("an envelope", []field[envelopeFields]{
-	{envelopePlain, partPlaintext, optional, func(e *envelopeFields, r *wire.Reader) (err error) {
+	{envelopePlain, partPlaintext, alternative, func(e *envelopeFields, r *wire.Reader) (err error) {
 		e.form, err = readPlain(r.Bytes())
 		return err
 	}},
-	{envelopeSealed, partSealed, optional, func(e *envelopeFields, r *wire.Reader) (err error) {
+	{envelopeSealed, partSealed, alternative, func(e *envelopeFields, r *wire.Reader) (err error) {
 		e.form, err = readSealed(r.Bytes())
 		return err
 	}},
@@ -191,7 +191,7 @@ var readEnvelope = declare("an envelope", []field[envelopeFields]{
 		e.form = unknownForm{}
 	}
 	return Envelope{form: e.form, commitment: e.commitment, unknown: u}, nil
-}, forms{partEnvelope, optional, []uint32{envelopePlain, envelopeSealed}}).read
+}, forms{what: partEnvelope, card: optional}).read
 
 // readPlain reads a plaintext form: its text.
 var readPlain = declare("a plaintext form", []field[plain]{
