@@ -410,10 +410,11 @@ func isIdent(e ast.Expr, name string) bool {
 	return ok && id.Name == name
 }
 
-// A body that does not read is refused by the body's own decoder, said by
-// why, and the record stands with its signed header, its body uncommitted:
-// a torn write or damage costs the payload, never the event. The body whole
-// is the control, which reads.
+// A body that does not read is refused by the body's own decoder, which
+// names why, and the record stands with its signed header, its body
+// uncommitted as a rewritten one is: the verdict does not carry the cause,
+// and a torn write or damage costs the payload, never the event. The body
+// whole is the control, which reads.
 func TestABodyThatDoesNotReadIsUncommitted(t *testing.T) {
 	k := keyOf(1)
 	e := mint(t, context(1, Frontier{}, Known{}), k, 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0]
