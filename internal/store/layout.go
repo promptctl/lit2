@@ -17,7 +17,7 @@ import (
 // The layout is the one builder of a Path.
 const (
 	logDir Path = "log"
-	// repoDir is lit's repository's directory, which go-git opens.
+	// repoDir is lit's repository's directory, a bare repository git keeps.
 	repoDir = "repo"
 )
 

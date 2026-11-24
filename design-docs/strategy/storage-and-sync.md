@@ -55,6 +55,16 @@ Serves: Impact on git, Operations.
 Spec: `specifications/events-and-store.md`; the checks are in
 `specifications/budgets.md`.
 
+**git writes; go-git reads.** Two writers of one repository is a bug class,
+so the user's own `git` binary is the one writer of lit's repository and owns
+its formats, locks and fsync. It is also the one reader of the code
+repository, never writing it, so lit finds and reads there what git finds and
+reads. go-git reads lit's repository in process, because a process per read
+grows with history.
+Serves: Data, Performance, Impact on git.
+Spec: `specifications/events-and-store.md`, "Sync";
+`specifications/code-layout.md`, "Module and tooling".
+
 **The remote is a dumb replicated store.** Sync is push and fetch of writer
 refs, run by the user's own git so their credentials, ssh configuration and
 URL rewriting apply unchanged. Arrival needs no merge: new events simply

@@ -1,98 +1,81 @@
 package git
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-billy/v5/osfs"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/filesystem"
-	"github.com/go-git/go-git/v5/storage/memory"
+	none "github.com/go-git/go-git/v5/storage/memory"
 )
 
-// Repository is lit's own object database on disk: a bare git repository at
-// its directory, holding lit's objects and refs/lit/**, never the code
+// Repository is lit's own object database on disk: a bare git repository
+// at its directory, holding lit's objects and refs/lit/**, never the code
 // repository's (specifications/events-and-store.md, "Log, segments and
-// refs"). It is created by its first write,
-// in a temporary directory renamed into place, so a read creates nothing
-// and a reader never sees half a repository.
-type Repository struct {
-	objectDB
+// refs"). git is its one writer, so git owns its formats, its locks and its
+// fsync `[LAW:one-source-of-truth]`;
+// go-git reads it in process, so a read costs no process and no pipe round
+// trip per object. It is created by its first write, so a read creates
+// nothing.
+type Repository struct{ repo }
+
+// RepositoryAt is lit's repository at dir, which need not exist yet,
+// written by g.
+func (g *Git) RepositoryAt(dir string) Repository {
+	return Repository{repo{b: &onDisk{g: g, dir: dir}}}
+}
+
+type onDisk struct {
+	g   *Git
 	dir string
-	db  *storage
+	// mu guards db, the go-git storage every read shares, opened once the
+	// repository exists, and packs, when its pack directory last changed as
+	// db read it.
+	mu    sync.Mutex
+	db    *filesystem.Storage
+	packs time.Time
 }
 
-// storage is a repository's one go-git storage, built once the repository
-// exists and shared by every copy of its Repository, and the lock every
-// object operation holds while it uses it.
-type storage struct {
-	mu sync.Mutex
-	fs *filesystem.Storage
+// git runs git on the repository at dir: the one place a spawn names
+// which repository it is for.
+func (d *onDisk) git(dir string, stdin []byte, args ...string) (string, error) {
+	out, err := d.g.run("", d.g.litEnv(), stdin, append([]string{"--git-dir=" + dir}, args...)...)
+	return strings.TrimSuffix(string(out), "\n"), err
 }
 
-// RepositoryAt is lit's repository at dir, which need not exist yet.
-func RepositoryAt(dir string) Repository {
-	r := Repository{dir: dir, db: &storage{}}
-	r.objectDB = objectDB{reach: r.reach}
-	return r
-}
-
-// reach hands over the repository's storer, locked until released.
-func (r Repository) reach(create bool) (storer.EncodedObjectStorer, func(), error) {
-	r.db.mu.Lock()
-	s, err := r.storer(create)
-	if err != nil {
-		r.db.mu.Unlock()
-		return nil, nil, err
-	}
-	return s, r.db.mu.Unlock, nil
-}
-
-// storer is the repository's storage, built the first time the repository
-// exists. A repository not yet created holds no objects, which an empty
-// storer says exactly, and nothing is kept of it.
-func (r Repository) storer(create bool) (storer.EncodedObjectStorer, error) {
-	if r.db.fs != nil {
-		return r.db.fs, nil
-	}
-	exists, err := r.exists()
-	switch {
-	case err != nil:
-		return nil, err
-	case !exists && !create:
-		return memory.NewStorage(), nil
-	case !exists:
-		if err := r.create(); err != nil {
-			return nil, err
-		}
-	}
-	r.db.fs = filesystem.NewStorage(osfs.New(r.dir), cache.NewObjectLRUDefault())
-	return r.db.fs, nil
-}
-
-func (r Repository) exists() (bool, error) {
-	_, err := os.Stat(r.dir)
+// exists says whether the repository has been created. Before then it
+// holds nothing, which every read answers without opening it.
+func (d *onDisk) exists() (bool, error) {
+	_, err := os.Stat(d.dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-// create builds a bare repository in a sibling temporary directory and
-// renames it into place. Two racing creations each build one; the rename
-// that loses finds the directory there, which is the repository it wanted.
-func (r Repository) create() error {
-	parent := filepath.Dir(r.dir)
+// create makes the repository, once, as its own step: git init in a
+// sibling temporary directory, renamed into place, so a reader never sees
+// half a repository. Two racing creations each make one; the rename that
+// loses finds the directory there, and whatever it is, every git command
+// after reads it as a repository or refuses it.
+func (d *onDisk) create() error {
+	exists, err := d.exists()
+	if err != nil || exists {
+		return err
+	}
+	parent := filepath.Dir(d.dir)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return err
 	}
@@ -100,10 +83,10 @@ func (r Repository) create() error {
 	if err != nil {
 		return err
 	}
-	if err := bare(tmp); err != nil {
+	if err := d.init(tmp); err != nil {
 		return errors.Join(err, os.RemoveAll(tmp))
 	}
-	err = os.Rename(tmp, r.dir)
+	err = os.Rename(tmp, d.dir)
 	if errors.Is(err, fs.ErrExist) {
 		return os.RemoveAll(tmp)
 	}
@@ -113,153 +96,352 @@ func (r Repository) create() error {
 	return nil
 }
 
-// bare lays out a bare repository at dir as git init --bare does, enough
-// for go-git and for git fsck: HEAD, config, objects and refs.
-func bare(dir string) error {
-	for _, d := range []string{"objects/info", "objects/pack", "refs/heads", "refs/tags"} {
-		if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(d)), 0o755); err != nil {
+// pinned is the config lit's repository keeps, set once git init has
+// made it in the format go-git reads whole, SHA-1 with refs as files. No
+// automatic gc or maintenance, so nothing repacks it under a reader. And
+// every object and ref git writes is fsynced to the disk: git's default
+// hardens neither a loose object nor a ref, and lit's history is its only
+// copy until it is pushed.
+var pinned = []string{
+	"gc.auto=0",
+	"maintenance.auto=false",
+	"core.fsync=objects,reference",
+	"core.fsyncMethod=fsync",
+}
+
+// init makes a repository at dir with the pinned config: its ref format
+// given to init itself, the one place it is chosen, and no template, so
+// none of the user's hooks is copied in. It holds the empty tree as an
+// object, since git holds that tree in every repository without one.
+func (d *onDisk) init(dir string) error {
+	if _, err := d.g.run("", d.g.litEnv(), nil, "-c", "init.defaultRefFormat=files", "init", "-q", "--bare", "--template=", "--initial-branch=main", "--object-format=sha1", dir); err != nil {
+		return err
+	}
+	for _, kv := range pinned {
+		k, v, _ := strings.Cut(kv, "=")
+		if _, err := d.git(dir, nil, "config", k, v); err != nil {
 			return err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "config"), []byte("[core]\n\trepositoryformatversion = 0\n\tbare = true\n"), 0o644)
+	_, err := d.git(dir, nil, "mktree")
+	return err
 }
 
-// List reads the refs under prefix from packed-refs and from the loose ref
-// files, a loose ref winning over its packed copy, as git reads them.
-func (r Repository) List(prefix RefName) ([]RefHead, []BadRef, error) {
-	if err := checkPrefix(prefix); err != nil {
-		return nil, nil, err
+// created says whether the repository has been created, refusing a
+// directory at its path that is no repository: git's own mark of one is
+// its HEAD, and go-git would read any directory as one.
+func (d *onDisk) created() (bool, error) {
+	exists, err := d.exists()
+	if err != nil || !exists {
+		return false, err
 	}
-	found := map[RefName]refFile{}
-	if err := r.packed(prefix, found); err != nil {
-		return nil, nil, err
+	head, err := os.Stat(filepath.Join(d.dir, "HEAD"))
+	if err == nil && !head.Mode().IsRegular() {
+		err = errors.New("its HEAD is no file")
 	}
-	if err := r.loose(prefix, found); err != nil {
-		return nil, nil, err
+	if err != nil {
+		return false, fmt.Errorf("%s is no git repository: %w", d.dir, err)
 	}
-	heads, bad := []RefHead{}, []BadRef{}
-	for _, name := range slices.Sorted(maps.Keys(found)) {
-		f := found[name]
-		id, err := ParseObjectID(SHA1, f.text)
-		if err != nil {
-			bad = append(bad, BadRef{Name: name, Why: fmt.Errorf("%s holds no object id: %w", f.where, err)})
+	return true, nil
+}
+
+// reader is what reads of lit's repository ask of go-git: an object by
+// id, and a ref by name.
+type reader interface {
+	EncodedObject(plumbing.ObjectType, plumbing.Hash) (plumbing.EncodedObject, error)
+	Reference(plumbing.ReferenceName) (*plumbing.Reference, error)
+}
+
+// storage is what reads see: the repository's storage once it
+// exists, opened once and shared, or, before then, an empty one, so a read
+// of a repository not yet created takes the same steps over nothing
+// `[LAW:dataflow-not-control-flow]`. go-git looks for a loose object on
+// disk on every read, so it sees each object git writes after opening; it
+// reads the list of packs once, so packs that arrive later need a storage
+// opened after them.
+func (d *onDisk) storage() (reader, error) {
+	if d.db != nil {
+		return d.db, nil
+	}
+	created, err := d.created()
+	if err != nil {
+		return nil, err
+	}
+	if !created {
+		return none.NewStorage(), nil
+	}
+	// an object is opened lazily, so a look reads its header alone and never
+	// inflates a segment to learn its size
+	d.db = filesystem.NewStorageWithOptions(osfs.New(d.dir), cache.NewObjectLRUDefault(), filesystem.Options{LargeObjectThreshold: 1})
+	if info, err := os.Stat(filepath.Join(d.dir, "objects", "pack")); err == nil {
+		d.packs = info.ModTime()
+	}
+	return d.db, nil
+}
+
+func (d *onDisk) look(id ObjectID) (kind, uint64, error) {
+	o, k, err := d.object(id)
+	if err != nil {
+		return "", 0, err
+	}
+	return k, uint64(o.Size()), nil
+}
+
+func (d *onDisk) read(id ObjectID) (kind, []byte, error) {
+	o, k, err := d.object(id)
+	if err != nil {
+		return "", nil, err
+	}
+	r, err := o.Reader()
+	if err != nil {
+		return "", nil, err
+	}
+	b, err := io.ReadAll(r)
+	return k, b, errors.Join(err, r.Close())
+}
+
+// object is the object id names and its kind, or MissingObject.
+func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s, err := d.storage()
+	if err != nil {
+		return nil, "", err
+	}
+	o, err := s.EncodedObject(plumbing.AnyObject, plumbing.Hash(id.Sum()))
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		o, err = d.again(s, id)
+	}
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		return nil, "", MissingObject{ID: id}
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	k, ok := kinds[o.Type()]
+	if !ok {
+		return nil, "", NotLit{ID: id, Why: fmt.Sprintf("a %s, which lit never writes", o.Type())}
+	}
+	return o, k, nil
+}
+
+// again looks id up once more if a pack has arrived since go-git last read
+// the list of packs, which it reads once, so an object a fetch or a repack
+// brought is found, not answered missing.
+func (d *onDisk) again(s reader, id ObjectID) (plumbing.EncodedObject, error) {
+	info, err := os.Stat(filepath.Join(d.dir, "objects", "pack"))
+	if d.db == nil || errors.Is(err, fs.ErrNotExist) || err == nil && info.ModTime().Equal(d.packs) {
+		return nil, plumbing.ErrObjectNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	d.packs = info.ModTime()
+	d.db.Reindex()
+	return s.EncodedObject(plumbing.AnyObject, plumbing.Hash(id.Sum()))
+}
+
+// kinds is each of go-git's object types that is one of lit's kinds.
+var kinds = map[plumbing.ObjectType]kind{
+	plumbing.BlobObject:   blobKind,
+	plumbing.TreeObject:   treeKind,
+	plumbing.CommitObject: commitKind,
+}
+
+// write has git store each object's bytes, lit's encoding, as an object of
+// its kind, so git, not lit, writes every object file, and checks every
+// tree and commit as it would one of its own. The bytes reach git as files
+// in a directory of lit's own beside the repository, never in it, one git
+// process for each kind objs holds, however many objects that is.
+func (d *onDisk) write(objs []object) ([]ObjectID, error) {
+	ids := make([]ObjectID, len(objs))
+	if len(objs) == 0 {
+		return ids, nil
+	}
+	if err := d.writable(); err != nil {
+		return nil, err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(d.dir), ".objects-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	paths := map[kind][]string{}
+	at := map[kind][]int{}
+	for i, o := range objs {
+		k, b := o.encode()
+		p := filepath.Join(tmp, strconv.Itoa(i))
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			return nil, err
+		}
+		paths[k], at[k] = append(paths[k], p), append(at[k], i)
+	}
+	for _, k := range []kind{blobKind, treeKind, commitKind} {
+		if len(paths[k]) == 0 {
 			continue
 		}
-		heads = append(heads, RefHead{Name: name, Target: id})
+		out, err := d.git(d.dir, []byte(strings.Join(paths[k], "\n")+"\n"), "hash-object", "-w", "-t", string(k), "--no-filters", "--stdin-paths")
+		if err != nil {
+			return nil, err
+		}
+		lines := strings.Split(out, "\n")
+		if len(lines) != len(paths[k]) {
+			return nil, fmt.Errorf("git hash-object stored %d %ss; lit gave it %d", len(lines), k, len(paths[k]))
+		}
+		for j, line := range lines {
+			if ids[at[k][j]], err = ParseObjectID(SHA1, line); err != nil {
+				return nil, err
+			}
+		}
 	}
-	return heads, bad, nil
+	return ids, nil
 }
 
-// refFile is one ref's text and the file it was read from.
-type refFile struct{ text, where string }
-
-// packed reads packed-refs: "<id> <name>" lines, with # header lines and
-// ^<id> lines peeling the tag above them. No packed-refs is no packed ref.
-func (r Repository) packed(prefix RefName, found map[RefName]refFile) error {
-	where := filepath.Join(r.dir, "packed-refs")
-	b, err := os.ReadFile(where)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
+// writable creates the repository if it is not yet, under a git that
+// keeps it durable.
+func (d *onDisk) writable() error {
+	if err := d.g.durable(); err != nil {
 		return err
 	}
-	lines := bufio.NewScanner(bytes.NewReader(b))
-	for lines.Scan() {
-		line := lines.Text()
-		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "^") {
-			continue // the header, or a peeled tag: neither is a ref
-		}
-		id, name, ok := strings.Cut(line, " ")
-		if !ok {
-			return fmt.Errorf("%s holds %q, which is no ref", where, line)
-		}
-		if strings.HasPrefix(name, string(prefix)) {
-			found[RefName(name)] = refFile{text: id, where: where}
-		}
-	}
-	return lines.Err()
+	return d.create()
 }
 
-// loose reads the loose ref files under prefix. A name starting with . or
-// ending in .lock, a directory's or a file's, is no ref, as git's refnames
-// allow neither, so neither the
-// temporary file of a replace in flight nor the lock of a git command
-// updating a ref is read as one, as git's own iteration skips them.
-func (r Repository) loose(prefix RefName, found map[RefName]refFile) error {
-	dir := string(prefix[:strings.LastIndexByte(string(prefix), '/')])
-	root := filepath.Join(r.dir, filepath.FromSlash(dir))
-	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil && p == root && errors.Is(err, fs.ErrNotExist) {
-			return fs.SkipAll // no directory under prefix: no loose ref
+// list is every ref under prefix, each name read by go-git on its own, so
+// a ref go-git cannot read is broken alone and hides no other. Reading
+// never writes: a broken ref is listed as such. A read during a write is safe, since git
+// writes a ref as <ref>.lock and renames it into place and writes each
+// object whole before any ref names it, so a reader sees a ref as it was
+// or as it is.
+func (d *onDisk) list(prefix RefName) (Listing, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	l := Listing{Heads: []RefHead{}, Broken: []BrokenRef{}}
+	s, err := d.storage()
+	if err != nil {
+		return Listing{}, err
+	}
+	names, err := d.refNames()
+	if err != nil {
+		return Listing{}, fmt.Errorf("reading the refs of %s: %w", d.dir, err)
+	}
+	for _, n := range names {
+		if !under(n, prefix) {
+			continue
 		}
-		if err != nil {
-			return err
-		}
+		h, err := d.ref(s, n)
+		var broken BrokenRef
 		switch {
-		case d.IsDir() && strings.HasPrefix(d.Name(), "."):
-			return fs.SkipDir // no ref is under it
-		case d.IsDir(), strings.HasPrefix(d.Name(), "."), strings.HasSuffix(d.Name(), ".lock"):
-			return nil
+		case errors.As(err, &broken):
+			l.Broken = append(l.Broken, broken)
+		case errors.Is(err, plumbing.ErrReferenceNotFound):
+		case err != nil:
+			return Listing{}, fmt.Errorf("reading the refs of %s: %w", d.dir, err)
+		default:
+			l.Heads = append(l.Heads, h)
 		}
-		rel, err := filepath.Rel(r.dir, p)
-		if err != nil {
-			return err
-		}
-		name := RefName(filepath.ToSlash(rel))
-		if !strings.HasPrefix(string(name), string(prefix)) {
-			return nil
-		}
-		if !d.Type().IsRegular() {
-			found[name] = refFile{text: "", where: p + " (not a regular file)"}
-			return nil
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		found[name] = refFile{text: strings.TrimSuffix(string(b), "\n"), where: p}
-		return nil
-	})
+	}
+	return l, nil
 }
 
-// Replace points name at to by writing a temporary file beside the loose
-// ref and renaming it over the ref, so a concurrent reader sees the old
-// ref or the new one whole, never an empty file, and no lock file is taken
-// (the store's decision 6). The temporary file is not fsynced: a power loss
-// before its bytes land can leave the ref empty, which reads as a torn ref,
-// and the next publish reseals it (decision 11). It creates the repository
-// first, by the one path every object write takes.
-func (r Repository) Replace(name RefName, to ObjectID) error {
-	if err := checkRefName(name); err != nil {
+// refNames is the name of every ref the repository holds, sorted: each
+// file under refs/ git would read as one, any name with a component that
+// begins with a dot or ends in .lock left out as git leaves it out, and
+// each name packed-refs holds. Only the names are lit's to find; each ref
+// is go-git's to read.
+func (d *onDisk) refNames() ([]RefName, error) {
+	seen := map[RefName]bool{}
+	err := filepath.WalkDir(filepath.Join(d.dir, "refs"), func(path string, e fs.DirEntry, err error) error {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil
+		case err != nil:
+			return err
+		case strings.HasPrefix(e.Name(), ".") || strings.HasSuffix(e.Name(), ".lock"):
+			if e.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		case e.IsDir():
+			return nil
+		}
+		rel, err := filepath.Rel(d.dir, path)
+		seen[RefName(filepath.ToSlash(rel))] = true
 		return err
-	}
-	if _, err := to.hash(); err != nil {
-		return err
-	}
-	_, release, err := r.reach(true)
+	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	release()
-	file := filepath.Join(r.dir, filepath.FromSlash(string(name)))
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return err
+	packed, err := os.ReadFile(filepath.Join(d.dir, "packed-refs"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(file), ".ref-")
+	// a packed ref is "<id> <name>"; a header begins with #, and a peeled
+	// id, ^<id>, has no name
+	for _, line := range strings.Split(string(packed), "\n") {
+		if _, n, ok := strings.Cut(line, " "); ok && !strings.HasPrefix(line, "#") {
+			seen[RefName(n)] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
+}
+
+// ref is the ref n as go-git reads it, BrokenRef if it names no object,
+// or plumbing.ErrReferenceNotFound if it is gone.
+func (d *onDisk) ref(s reader, n RefName) (RefHead, error) {
+	r, err := s.Reference(plumbing.ReferenceName(n))
+	// go-git reads a loose file it cannot parse as the packed ref, which a
+	// name lit found on disk need not have, so not found is gone only if
+	// the file is; any other failure to read it is a broken ref, never the
+	// listing's
 	if err != nil {
+		if _, serr := os.Lstat(d.refPath(n)); errors.Is(err, plumbing.ErrReferenceNotFound) && errors.Is(serr, fs.ErrNotExist) {
+			return RefHead{}, err
+		}
+		return RefHead{}, d.broken(n, fmt.Sprintf("go-git cannot read it: %v", err))
+	}
+	h := r.Hash()
+	if r.Type() != plumbing.HashReference || h.IsZero() {
+		return RefHead{}, d.broken(n, fmt.Sprintf("it holds %q, no object id", r.Strings()[1]))
+	}
+	target, err := ObjectIDFrom(SHA1, h[:])
+	return RefHead{Name: n, Target: target}, err
+}
+
+// broken is the ref n, which names no object, said by what its file holds,
+// since go-git reads a torn file as the zero id or the packed ref; packed
+// is why, for a name with no loose file.
+func (d *onDisk) broken(n RefName, packed string) BrokenRef {
+	b, err := os.ReadFile(d.refPath(n))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return BrokenRef{Name: n, Why: packed}
+	case err != nil:
+		return BrokenRef{Name: n, Why: err.Error()}
+	}
+	return BrokenRef{Name: n, Why: fmt.Sprintf("it holds %.80q, no object id", b)}
+}
+
+// replace has git move name from what it named to to, refusing if it
+// names anything else by then; git's zero id as the old value is a ref
+// that must not exist yet.
+func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
+	var old string
+	switch from := from.(type) {
+	case Named:
+		old = from.Target.String()
+	case Absent:
+		old = strings.Repeat("0", 2*SHA1.size())
+	default:
+		panic(fmt.Sprintf("git: %T is not what a ref was", from))
+	}
+	if err := d.g.durable(); err != nil {
 		return err
 	}
-	_, werr := tmp.WriteString(to.String() + "\n")
-	// 0644, as go-git writes the objects the ref names
-	if err := errors.Join(werr, tmp.Chmod(0o644), tmp.Close()); err != nil {
-		return errors.Join(err, os.Remove(tmp.Name()))
-	}
-	if err := os.Rename(tmp.Name(), file); err != nil {
-		return errors.Join(err, os.Remove(tmp.Name()))
-	}
-	return nil
+	_, err := d.git(d.dir, nil, "update-ref", string(name), to.String(), old)
+	return err
+}
+
+// refPath is the file of the loose ref name.
+func (d *onDisk) refPath(name RefName) string {
+	return filepath.Join(d.dir, filepath.FromSlash(string(name)))
 }

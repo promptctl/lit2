@@ -3,7 +3,7 @@ package git
 import (
 	"encoding/hex"
 	"fmt"
-	"path"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -53,18 +53,14 @@ type ObjectID struct {
 // ParseObjectID reads an object id written as git writes one: the format's
 // length in lowercase hex digits.
 func ParseObjectID(f ObjectFormat, s string) (ObjectID, error) {
-	switch f {
-	case SHA1, SHA256:
-	default:
-		return ObjectID{}, fmt.Errorf("%q cannot be read as an id of %s", s, f)
-	}
 	b, err := hex.DecodeString(s)
-	if err != nil || len(b) != f.size() || hex.EncodeToString(b) != s {
-		return ObjectID{}, fmt.Errorf("%q is not a %s object id", s, f)
+	if err == nil && hex.EncodeToString(b) == s {
+		var id ObjectID
+		if id, err = ObjectIDFrom(f, b); err == nil {
+			return id, nil
+		}
 	}
-	id := ObjectID{format: f}
-	copy(id.sum[:], b)
-	return id, nil
+	return ObjectID{}, fmt.Errorf("%q is not a %s object id", s, f)
 }
 
 // ObjectIDFrom reads an object id held as its format and its sum, the
@@ -133,18 +129,38 @@ type RefHead struct {
 	Target ObjectID
 }
 
-// BadRef is a ref whose file does not hold an object id: torn by a crash,
-// symbolic, or written by something other than lit.
-type BadRef struct {
+// Listing is the refs under a prefix, each sorted by name: those that name
+// an object, and those that are broken.
+type Listing struct {
+	Heads  []RefHead
+	Broken []BrokenRef
+}
+
+// BrokenRef is a ref that cannot be read as naming an object, which git
+// never writes: its file empty, torn, symbolic or the zero id. A read
+// lists it and goes on.
+type BrokenRef struct {
 	Name RefName
-	Why  error
+	Why  string
+}
+
+func (b BrokenRef) Error() string {
+	return fmt.Sprintf("ref %s is broken: %s", b.Name, b.Why)
+}
+
+// Put is one object a put names: its id, and whether the put added it.
+type Put struct {
+	ID     ObjectID
+	Stored Stored
 }
 
 // Objects stores and reads blobs, trees and commits by object id in lit's
 // own object database, which is SHA-1 (the store's decision 11). An id of
 // another format is ForeignFormat; an id it does not hold is MissingObject.
 type Objects interface {
-	PutBlob(b []byte) (ObjectID, Stored, error)
+	// PutBlobs stores every blob of bs in one write, its Put for each in
+	// order.
+	PutBlobs(bs [][]byte) ([]Put, error)
 	Blob(id ObjectID) ([]byte, error)
 	// BlobSize reads the object's header only, so listing heads never
 	// inflates a segment.
@@ -157,37 +173,66 @@ type Objects interface {
 }
 
 // Refs lists and replaces refs in lit's own object database. A ref is
-// replaced, never advanced: only its writer updates it.
+// replaced, never advanced, and only from what its writer read it naming,
+// so a replace that raced another fails rather than undoing it.
 type Refs interface {
-	// List is every ref whose name starts with prefix, sorted by name,
-	// and every such ref that does not hold an object id.
-	List(prefix RefName) ([]RefHead, []BadRef, error)
-	Replace(name RefName, to ObjectID) error
+	// List is every ref under prefix: the ref the prefix names and every
+	// ref below it, as git for-each-ref matches a prefix. A broken ref is
+	// listed as one, never the listing's failure.
+	List(prefix RefName) (Listing, error)
+	// Replace points name at to, an object the repository holds, if name
+	// still is what from says; otherwise it refuses.
+	Replace(name RefName, from Was, to ObjectID) error
 }
 
-// checkRefName is the one check both of lit's repositories make of a
-// name they write, so the one on disk and its twin take the same names
-// `[LAW:single-enforcer]`: a clean path under refs/, no component
-// starting with . or ending in .lock, which refnames forbid and which
-// mark a replace's temporary file and a git command's lock.
-func checkRefName(n RefName) error {
-	s := string(n)
-	bad := checkPrefix(n) != nil || path.Clean(s) != s
-	for _, c := range strings.Split(s, "/") {
-		bad = bad || strings.HasPrefix(c, ".") || strings.HasSuffix(c, ".lock")
+// Was is what a ref named when its writer read it: an object, or nothing.
+//
+//sumtype:decl
+type Was interface{ was() }
+
+// Named is a ref naming Target.
+type Named struct{ Target ObjectID }
+
+// Absent is no ref.
+type Absent struct{}
+
+func (Named) was()  {}
+func (Absent) was() {}
+
+// name is the one grammar of a tree entry's name and of a refname's
+// component in lit's repository: a letter or digit, then letters, digits,
+// _ and -. It admits every name lit makes, hex ids and words, and nothing
+// git refuses anywhere: no dot, so no ., .., .git or .lock, and none of
+// the characters git check-ref-format or fsck forbid
+// `[LAW:single-enforcer]`. gittest holds it to git itself.
+var name = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// parseRefName refuses a name that is not refs/ and one or more names.
+func parseRefName(n RefName) error {
+	parts := strings.Split(string(n), "/")
+	ok := len(parts) >= 2 && parts[0] == "refs"
+	for _, p := range parts[1:] {
+		ok = ok && name.MatchString(p)
 	}
-	if bad {
-		return fmt.Errorf("%q is not a refname under refs/", n)
+	if !ok {
+		return fmt.Errorf("%q is not a refname lit writes: refs/ and names of letters, digits, _ and -", n)
 	}
 	return nil
 }
 
-// checkPrefix refuses a list prefix outside refs/.
-func checkPrefix(p RefName) error {
-	if !strings.HasPrefix(string(p), "refs/") {
-		return fmt.Errorf("%q is not a prefix under refs/", p)
+// parsePrefix refuses a prefix that is not refs/, a refname, or a refname
+// and a slash.
+func parsePrefix(p RefName) error {
+	if p == "refs/" {
+		return nil
 	}
-	return nil
+	return parseRefName(RefName(strings.TrimSuffix(string(p), "/")))
+}
+
+// under says whether n is named by prefix p, as git for-each-ref matches
+// one: n is p, or p's next component begins it.
+func under(n, p RefName) bool {
+	return n == p || strings.HasPrefix(string(n), strings.TrimSuffix(string(p), "/")+"/")
 }
 
 // MissingObject is an id the object database does not hold.
@@ -197,10 +242,31 @@ func (m MissingObject) Error() string {
 	return fmt.Sprintf("object %s is not in lit's repository", m.ID)
 }
 
-// ForeignFormat is an id of a format lit's repository does not use, the
-// zero id's included.
-type ForeignFormat struct{ ID ObjectID }
+// NotLit is an object the repository holds that lit did not write: of
+// another kind than asked for, or of a shape lit's encoding never makes.
+type NotLit struct {
+	ID  ObjectID
+	Why string
+}
+
+func (n NotLit) Error() string { return fmt.Sprintf("object %s is %s", n.ID, n.Why) }
+
+// ForeignFormat is an id of another format than the repository it is asked
+// of, the zero id's included: it names nothing there, so it is refused,
+// never answered as an object missing.
+type ForeignFormat struct {
+	ID         ObjectID
+	Repository ObjectFormat
+}
 
 func (f ForeignFormat) Error() string {
-	return fmt.Sprintf("%s id %s cannot name an object in lit's sha1 repository", f.ID.format, f.ID)
+	return fmt.Sprintf("%s id %s cannot name an object in a %s repository", f.ID.format, f.ID, f.Repository)
+}
+
+// inFormat refuses an id that is not of format f.
+func inFormat(id ObjectID, f ObjectFormat) error {
+	if id.format != f {
+		return ForeignFormat{ID: id, Repository: f}
+	}
+	return nil
 }

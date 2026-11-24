@@ -39,7 +39,7 @@ func TestTheLineNamesTheWriterAndItsPrincipalNeverItsKey(t *testing.T) {
 func TestTheLineNamesEachMissingOrUnreadableFilesPath(t *testing.T) {
 	id, principal := PathOf(IDFile{}, checkout), PathOf(PrincipalFile{}, checkout)
 	if id != "/w/.git/lit/checkout/id" || principal != "/w/.git/lit/principal" {
-		t.Errorf("the identity files are at %s and %s; want the private dir's id and the common dir's principal (D11)", id, principal)
+		t.Errorf("the identity files are at %s and %s; want the private dir's id and the common dir's principal (specifications/code-layout.md, 'On disk')", id, principal)
 	}
 	for _, tc := range []struct {
 		missing Missing

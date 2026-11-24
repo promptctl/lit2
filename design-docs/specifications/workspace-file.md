@@ -63,7 +63,10 @@ each writer sees only its own apply.
 edited or the other applied. `config status` reports the drift and whether
 the active blob is in HEAD's history, and the board carries one line for it.
 The board compares git's id for the working file's bytes with the active
-blob rather than parsing the file.
+blob rather than parsing the file. The code repository's HEAD and history are
+read through the user's git, in either object format. A history walk that
+reaches a commit the clone does not hold, past a shallow clone's boundary, is
+refused as unknown, never answered no.
 
 Rejected: reading the configuration from the code repository at command
 time. Because the log carries the applied version's bytes, every verifier

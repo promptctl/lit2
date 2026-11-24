@@ -32,12 +32,6 @@ func (e Env) Registry() Registry { return e.registry }
 // Suites is the suites the fold judges signatures by.
 func (e Env) Suites() events.Suites { return e.suites }
 
-// Scanned is one range of a stream and what reading it found.
-type Scanned struct {
-	Range store.Range
-	Scan  store.Scan
-}
-
 // Folded is a fold's state and the fold's facts for the command event.
 type Folded struct {
 	State State
@@ -47,7 +41,7 @@ type Folded struct {
 // Replay folds scans, every stream from 0, from the zero State: the one
 // walk, which decodes every record, keeps one of each event, sorts by the
 // total order, checks every signature, and steps each in order onto s.
-func Replay(e Env, f Founding, scans []Scanned) Folded {
+func Replay(e Env, f Founding, scans []store.Scanned) Folded {
 	facts := newFacts()
 	s := Seed(f)
 	kinds := e.registry.Kinds()

@@ -26,15 +26,15 @@ func TestTwoWorktreesOfOneCloneShareOneStoreEachWithItsOwnLogAndRef(t *testing.T
 	main := gittest.Clone(t)
 	linked := filepath.Join(filepath.Dir(main.WorkTree), "linked")
 	gittest.Git(t, main.WorkTree, "worktree", "add", "-q", linked)
-	second, err := git.Locate(linked)
+	second, err := gittest.Runner(t).Locate(linked)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second.CommonDir != main.CommonDir || second.GitDir == main.GitDir {
 		t.Fatalf("the linked worktree is %+v; want the main's common dir and its own git dir", second)
 	}
-	sa := store.Open(ida, store.DiskPorts(main, storetest.Entropy(1)), store.DefaultSegmentBound)
-	sb := store.Open(idb, store.DiskPorts(second, storetest.Entropy(2)), store.DefaultSegmentBound)
+	sa := store.Open(ida, store.DiskPorts(gittest.Runner(t), main, storetest.Entropy(1)), store.DefaultSegmentBound)
+	sb := store.Open(idb, store.DiskPorts(gittest.Runner(t), second, storetest.Entropy(2)), store.DefaultSegmentBound)
 	ba, bb := storetest.Numbered(t, 3, "a"), storetest.Numbered(t, 2, "b")
 	storetest.AppendAll(t, sa, ba...)
 	storetest.AppendAll(t, sb, bb...)
@@ -84,7 +84,7 @@ func codeRepository(t *testing.T, c git.Checkout) string {
 func TestAThousandAppendsAndAPublishLeaveTheCodeRepositoryAsItWasAndPassFsck(t *testing.T) {
 	c := gittest.Clone(t)
 	before := codeRepository(t, c)
-	s := store.Open(ida, store.DiskPorts(c, storetest.Entropy(1)), 4096)
+	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(1)), 4096)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1000, "event")...)
 	first := storetest.PublishOwn(t, s)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 10, "more")...)
@@ -114,7 +114,7 @@ func TestAppendingProcess(t *testing.T) {
 	if _, err := fmt.Sscan(os.Getenv("LIT2_APPENDS"), &n); err != nil {
 		t.Fatal(err)
 	}
-	repo := git.RepositoryAt(filepath.Join(root, "repo"))
+	repo := gittest.Runner(t).RepositoryAt(filepath.Join(root, "repo"))
 	ports := store.Ports{Files: store.FilesAt(root), Objects: repo, Refs: repo, Entropy: storetest.Entropy(byte(os.Getpid()))}
 	storetest.AppendAll(t, store.Open(ida, ports, store.DefaultSegmentBound), storetest.Numbered(t, n, os.Getenv("LIT2_PREFIX"))...)
 }
@@ -132,7 +132,7 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	repo := git.RepositoryAt(filepath.Join(root, "repo"))
+	repo := gittest.Runner(t).RepositoryAt(filepath.Join(root, "repo"))
 	s := store.Open(idb, store.Ports{Files: store.FilesAt(root), Objects: repo, Refs: repo, Entropy: storetest.Entropy(3)}, store.DefaultSegmentBound)
 	got := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: ida}))
 	if len(got) != 200 || len(slices.Compact(slices.Sorted(slices.Values(got)))) != 200 {
@@ -140,46 +140,75 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 	}
 }
 
-// Only a file can hold a torn ref, so the case is the disk's: a ref file
-// that holds no object id, beside its writer's log, is the writer's stream
-// and not unreadable, and is resealed from 0 and created again, at the
-// commit the log's bytes make; an idle publish then leaves the file as it is.
-func TestATornWriterRefIsResealedAndCreatedAgain(t *testing.T) {
+// A ref broken by something other than git, which writes every ref
+// whole, a commit that will not read, and a segment whose header reads but
+// whose body does not are each one unreadable stream, said, hiding no
+// other, and the read that finds them writes nothing.
+func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 	c := gittest.Clone(t)
-	s := store.Open(ida, store.DiskPorts(c, storetest.Entropy(4)), store.DefaultSegmentBound)
-	storetest.AppendAll(t, s, storetest.Numbered(t, 3, "event")...)
-	first := storetest.PublishOwn(t, s)
-	ref := filepath.Join(c.SharedDir(), "store", "repo", filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name())))
+	publish := func(id store.CheckoutID, seed byte) store.Published {
+		s := store.Open(id, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(seed)), store.DefaultSegmentBound)
+		// each writer's own records, so no two share a segment's blob
+		storetest.AppendAll(t, s, storetest.Numbered(t, 2, id.String())...)
+		return storetest.PublishOwn(t, s)
+	}
+	publish(ida, 4)
+	pb := publish(idb, 5)
+	publish(store.CheckoutID{0xc}, 6)
+	pd := publish(store.CheckoutID{0xd}, 8)
+	repo := filepath.Join(c.SharedDir(), "store", "repo")
+	cut := func(id git.ObjectID, keep int) {
+		t.Helper()
+		path := filepath.Join(repo, "objects", id.String()[:2], id.String()[2:])
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, b[:min(keep, len(b)/2)], 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ref := filepath.Join(repo, filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name())))
 	if err := os.WriteFile(ref, []byte("torn"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// its log is here, so the writer is one stream, read from the log
-	if h, err := s.Heads(); err != nil || len(h.Streams) != 1 || len(h.Unreadable) != 0 {
-		t.Errorf("with its own ref torn a writer's heads are %+v, %v; want its one stream and nothing unreadable", h, err)
-	}
-	out := storetest.PublishOwn(t, s)
-	if _, ok := out.Prior.(store.Resealed); !ok || out.Move != (store.RefCreated{}) || out.Commit != first.Commit {
-		t.Errorf("over a torn ref the publish was %+v; want it resealed, the ref created again at the same commit", out)
-	}
-	before, err := os.Stat(ref)
+	ports := store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7))
+	ports.Files = store.NewMemoryFiles()
+	// d's one segment, its loose file cut to half, so its header reads and
+	// its body does not, as a filesystem that lost a write would leave it
+	commit, err := ports.Objects.Commit(pd.Commit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	idle := storetest.PublishOwn(t, s)
-	after, err := os.Stat(ref)
+	segs, err := ports.Objects.Tree(commit.Tree)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if idle.Move != (store.RefUnchanged{}) || !os.SameFile(before, after) {
-		t.Errorf("an idle publish was %+v and replaced the ref file: %v; want the ref unchanged and its file kept", idle, !os.SameFile(before, after))
+	cut(segs[0].Blob, 1<<20)
+	// b's commit, cut to its first byte
+	cut(pb.Commit, 1)
+	h, read, err := store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound).ReadAll()
+	names := []string{}
+	for _, u := range h.Unreadable {
+		names = append(names, u.Name)
+	}
+	want := []string{string(store.WriterRef{Checkout: ida}.Name()), string(store.WriterRef{Checkout: idb}.Name()), string(store.WriterRef{Checkout: store.CheckoutID{0xd}}.Name())}
+	if err != nil || !slices.Equal(names, want) || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: store.CheckoutID{0xc}}) || len(read) != 1 || len(storetest.Read(read[0].Scan)) != 2 {
+		t.Errorf("with a's ref torn, b's commit and d's segment cut short a reader's heads are %+v and reads %d, %v; want %v unreadable and c's stream read whole", h, len(read), err, want)
+	}
+	if got, err := os.ReadFile(ref); err != nil || string(got) != "torn" {
+		t.Errorf("a read changed the broken ref: %q, %v", got, err)
 	}
 }
 
 // Whoever can read a clone's objects reads its logs and refs
-// too: the store's files are 0644, as go-git makes the objects.
+// too: the store's files are 0644, as git makes the objects.
 func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	c := gittest.Clone(t)
-	s := store.Open(ida, store.DiskPorts(c, storetest.Entropy(5)), store.DefaultSegmentBound)
+	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(5)), store.DefaultSegmentBound)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "event")...)
 	storetest.PublishOwn(t, s)
 	root := filepath.Join(c.SharedDir(), "store")

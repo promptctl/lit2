@@ -83,7 +83,7 @@ func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 	repo := git.NewMemory()
 	files := store.NewMemoryFiles()
 	ports := store.Ports{Files: files, Objects: repo, Refs: repo, Entropy: rand.NewChaCha8([32]byte{5})}
-	opened := command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound), Format: git.SHA1}
+	opened := command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound)}
 	twin.Process.Store, twin.Process.Open = opened, func(git.Checkout, command.Minted) command.Opening { return opened }
 	if status := Run(twin.Process, []string{"admin", "init"}); status != 0 {
 		t.Fatalf("admin init exited %d: %s", status, twin.Err)

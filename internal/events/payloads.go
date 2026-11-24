@@ -114,7 +114,7 @@ func (BelowParent) placement() {}
 
 // Value is a field's value by its form, never a bare string: prose, which
 // concurrent writers may each hold, or a structural value the fold
-// settles (charter #5).
+// settles (specifications/fold.md, "Contradictions are values").
 //
 //sumtype:decl
 type Value interface {

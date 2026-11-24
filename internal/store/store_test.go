@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/git/gittest"
 )
 
 func TestACheckoutIDHasOneSpelling(t *testing.T) {
@@ -44,7 +45,7 @@ func forge(t *testing.T, p Ports, ref Ref, log LogID, at []Offset, bs [][]byte) 
 	t.Helper()
 	es := make([]git.Entry, len(at))
 	for i := range at {
-		blob, _, err := p.Objects.PutBlob(bs[i])
+		blob, err := gittest.Put(p.Objects, bs[i])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +59,7 @@ func forge(t *testing.T, p Ports, ref Ref, log LogID, at []Offset, bs [][]byte) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Refs.Replace(ref.Name(), commit); err != nil {
+	if err := p.Refs.Replace(ref.Name(), git.Absent{}, commit); err != nil {
 		t.Fatal(err)
 	}
 }

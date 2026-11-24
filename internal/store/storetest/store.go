@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
 )
 
@@ -293,6 +294,76 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 	})
 
+	t.Run("a publication sealed before another publish of its log is refused, and the ref keeps the later one", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		AppendAll(t, s, Numbered(t, 3, "first")...)
+		sealed, err := s.SealOwn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale, ok := sealed.(store.Publication)
+		if !ok {
+			t.Fatalf("sealing the own log made %#v; want a publication", sealed)
+		}
+		AppendAll(t, s, Numbered(t, 3, "more")...)
+		later := PublishOwn(t, s)
+		if out, err := s.Publish(stale); err == nil {
+			t.Fatalf("publishing what was sealed before the later publish was %+v; want it refused", out)
+		}
+		ref := store.WriterRef{Checkout: a}
+		got, err := p.Refs.List(ref.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []git.RefHead{{Name: ref.Name(), Target: later.Commit}}; !slices.Equal(got.Heads, want) {
+			t.Errorf("after the refused publish the ref is %v; want the later publish's %v", got, want)
+		}
+	})
+
+	t.Run("two publications of one sealed state both succeed, converging on one commit", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		AppendAll(t, s, Numbered(t, 3, "event")...)
+		seal := func() store.Publication {
+			t.Helper()
+			sealed, err := s.SealOwn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return sealed.(store.Publication)
+		}
+		first, second := seal(), seal()
+		one, err := s.Publish(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		two, err := s.Publish(second)
+		if err != nil || two.Commit != one.Commit || two.Move != (store.RefUnchanged{}) {
+			t.Errorf("the second publish of one state was %+v, %v; want it unchanged at %s", two, err, one.Commit)
+		}
+	})
+
+	t.Run("an idle publication sealed before another publish moved its ref is refused, not reported unchanged", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		AppendAll(t, s, Numbered(t, 3, "event")...)
+		PublishOwn(t, s)
+		sealed, err := s.SealOwn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle := sealed.(store.Publication)
+		AppendAll(t, s, Numbered(t, 1, "more")...)
+		PublishOwn(t, s)
+		if out, err := s.Publish(idle); err == nil {
+			t.Errorf("an idle publish after the ref moved was %+v; want it refused", out)
+		}
+	})
+
 	t.Run("a log with no whole frame has nothing to publish, and makes no ref", func(t *testing.T) {
 		t.Parallel()
 		p := fresh(t)
@@ -317,8 +388,8 @@ func Store(t *testing.T, fresh Fresh) {
 		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
 			t.Errorf("sealing a log with no whole frame made %#v, %v; want %#v", sealed, err, want)
 		}
-		if refs, bad, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs)+len(bad) != 0 {
-			t.Errorf("with nothing to publish the refs are %v, %v, %v; want none", refs, bad, err)
+		if refs, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs.Heads)+len(refs.Broken) != 0 {
+			t.Errorf("with nothing to publish the refs are %v, %v; want none", refs, err)
 		}
 	})
 
@@ -329,29 +400,23 @@ func Store(t *testing.T, fresh Fresh) {
 		bs := Numbered(t, 10, "event")
 		AppendAll(t, s, bs...)
 		ref := store.WriterRef{Checkout: a}
-		blob, _, err := p.Objects.PutBlob([]byte("not a commit"))
+		held, err := gittest.Put(p.Objects, []byte("not a commit"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		lost, err := git.ParseObjectID(git.SHA1, "ce013625030ba8dba906f756967f9e9ca394464a")
-		if err != nil {
+		if err := p.Refs.Replace(ref.Name(), git.Absent{}, held); err != nil {
 			t.Fatal(err)
 		}
-		for _, held := range []git.ObjectID{lost, blob} {
-			if err := p.Refs.Replace(ref.Name(), held); err != nil {
-				t.Fatal(err)
-			}
-			out := PublishOwn(t, s)
-			resealed, ok := out.Prior.(store.Resealed)
-			if !ok || resealed.Why == nil || out.Kept != 0 || out.Move != (store.RefReplaced{Previous: held}) {
-				t.Errorf("over a ref holding %s the publish was %+v; want it resealed from 0 with a reason, the ref replaced", held, out)
-			}
-			// a clone that fetched lit's repository and holds no log of a
-			other := fresh(t)
-			other.Objects, other.Refs = p.Objects, p.Refs
-			if got := Read(Whole(t, store.Open(b, other, 64), ref)); !slices.Equal(got, All(bs)) {
-				t.Errorf("the resealed publication reads %v; want the log's %v", got, All(bs))
-			}
+		out := PublishOwn(t, s)
+		resealed, ok := out.Prior.(store.Resealed)
+		if !ok || resealed.Why == nil || out.Kept != 0 || out.Move != (store.RefReplaced{Previous: held}) {
+			t.Errorf("over a ref holding %s the publish was %+v; want it resealed from 0 with a reason, the ref replaced", held, out)
+		}
+		// a clone that fetched lit's repository and holds no log of a
+		other := fresh(t)
+		other.Objects, other.Refs = p.Objects, p.Refs
+		if got := Read(Whole(t, store.Open(b, other, 64), ref)); !slices.Equal(got, All(bs)) {
+			t.Errorf("the resealed publication reads %v; want the log's %v", got, All(bs))
 		}
 	})
 
@@ -386,9 +451,9 @@ func Store(t *testing.T, fresh Fresh) {
 		p := fresh(t)
 		s := store.Open(a, p, store.DefaultSegmentBound)
 		inbox := store.InboxRef{Inbox: store.InboxID{1}}
-		publish := func(log store.LogID, records ...string) store.Published {
+		publish := func(from git.Was, log store.LogID, records ...string) store.Published {
 			t.Helper()
-			pub, err := store.NewPublication(inbox, log, []store.Segment{store.Fresh{Start: 0, Bytes: store.Encode(batch(t, records...))}})
+			pub, err := store.NewPublication(inbox, from, log, []store.Segment{store.Fresh{Start: 0, Bytes: store.Encode(batch(t, records...))}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -398,11 +463,11 @@ func Store(t *testing.T, fresh Fresh) {
 			}
 			return out
 		}
-		filed := publish(store.LogID{1}, "filed", "remotely")
+		filed := publish(git.Absent{}, store.LogID{1}, "filed", "remotely")
 		if got := Read(Whole(t, s, inbox)); filed.Move != (store.RefCreated{}) || !slices.Equal(got, []string{"filed", "remotely"}) {
 			t.Errorf("the inbox reads %v after %+v; want its two records", got, filed)
 		}
-		rewrite := publish(store.LogID{2}, "filed")
+		rewrite := publish(git.Named{Target: filed.Commit}, store.LogID{2}, "filed")
 		if rewrite.Move != (store.RefReplaced{Previous: filed.Commit}) {
 			t.Errorf("the rewrite's publish was %+v; want it to replace the ref", rewrite)
 		}
@@ -427,7 +492,8 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 		PublishOwn(t, sa)
 		PublishOwn(t, sb)
-		refs, _, err := p.Refs.List("refs/lit/")
+		l, err := p.Refs.List("refs/lit/")
+		refs := l.Heads
 		if err != nil || len(refs) != 2 || refs[0].Name != (store.WriterRef{Checkout: a}).Name() || refs[1].Name != (store.WriterRef{Checkout: b}).Name() {
 			t.Errorf("after both publish the refs are %v, %v; want one per checkout", refs, err)
 		}

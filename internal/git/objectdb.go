@@ -1,221 +1,272 @@
 package git
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
-	"time"
-
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
-// objectDB is Objects over a go-git object storer. The adapter and the twin
-// are this one type and differ only in how a storer is reached
-// `[LAW:one-type-per-behavior]`: reach hands over the storer and the
-// function that releases it, creating the repository first when create is
-// set, since nothing is created by a read.
-type objectDB struct {
-	reach func(create bool) (storer.EncodedObjectStorer, func(), error)
+// kind is an object's type as git names it.
+type kind string
+
+const (
+	blobKind   kind = "blob"
+	treeKind   kind = "tree"
+	commitKind kind = "commit"
+)
+
+// object is one object lit puts: its kind and bytes are lit's encoding,
+// which is git's, so its id is computed before any write.
+//
+//sumtype:decl
+type object interface{ encode() (kind, []byte) }
+
+type (
+	blob []byte
+	// tree is a lit tree's entries, sorted by name.
+	tree   []Entry
+	commit Commit
+)
+
+func (b blob) encode() (kind, []byte) { return blobKind, b }
+
+// fileMode is the mode of every entry in a lit tree: a regular file.
+const fileMode = "100644"
+
+// encode writes each entry as git does: its mode, a space, its name, a NUL
+// and its blob's sum.
+func (t tree) encode() (kind, []byte) {
+	var b []byte
+	for _, e := range t {
+		b = append(append(append(b, fileMode+" "+e.Name...), 0), e.Blob.Sum()...)
+	}
+	return treeKind, b
 }
 
-// identity is every lit commit's author and committer: fixed, at time zero,
-// so a commit is a pure function of its tree and message, publish reads no
-// clock, and racing publishes of one log converge on one id
+// byName is git's order of a tree's entries, which lit's names, holding no
+// / and no byte past ASCII, share with plain byte order.
+func byName(a, b Entry) int { return strings.Compare(a.Name, b.Name) }
+
+// identity is every lit commit's author and committer line: fixed, at time
+// zero, so a commit is a pure function of its tree and message, publish
+// reads no clock, and racing publishes of one log converge on one id
 // `[LAW:effects-at-boundaries]`.
-var identity = object.Signature{Name: "lit", Email: "lit", When: time.Unix(0, 0).UTC()}
+const identity = "author lit <lit> 0 +0000\ncommitter lit <lit> 0 +0000\n"
 
-func (db objectDB) PutBlob(b []byte) (ObjectID, Stored, error) {
-	return db.put(plumbing.BlobObject, b)
+func (c commit) encode() (kind, []byte) {
+	return commitKind, []byte("tree " + c.Tree.String() + "\n" + identity + "\n" + c.Message)
 }
 
-func (db objectDB) Blob(id ObjectID) ([]byte, error) {
-	return db.content(plumbing.BlobObject, id)
+func idOf(o object) ObjectID {
+	k, b := o.encode()
+	return hashObject(SHA1, k, b)
 }
 
-func (db objectDB) BlobSize(id ObjectID) (uint64, error) {
-	h, err := id.hash()
-	if err != nil {
-		return 0, err
-	}
-	s, release, err := db.reach(false)
-	if err != nil {
-		return 0, err
-	}
-	defer release()
-	size, err := s.EncodedObjectSize(h)
-	if errors.Is(err, plumbing.ErrObjectNotFound) {
-		return 0, MissingObject{ID: id}
-	}
-	if err != nil {
-		return 0, err
-	}
-	return uint64(size), nil
+// backend is where a repository's objects and refs are kept: git, or the
+// twin's maps. Every rule of lit's own, its names, kinds and shapes, a
+// repository checks above this, once for both
+// `[LAW:one-type-per-behavior]`; a rule of git's, that a ref cannot sit
+// beside its own directory or move from what it no longer names, git
+// enforces for the disk and the twin copies below.
+type backend interface {
+	// look is the kind and size of the object id names, or MissingObject.
+	look(id ObjectID) (kind, uint64, error)
+	// read is its kind and bytes, or MissingObject.
+	read(id ObjectID) (kind, []byte, error)
+	// write stores objs and is the id the backend gave each, in order: in
+	// one step for any number of them, so a publish's cost in git
+	// processes does not grow with what it writes.
+	write(objs []object) ([]ObjectID, error)
+	list(prefix RefName) (Listing, error)
+	// replace points name at to if it still is what from says.
+	replace(name RefName, from Was, to ObjectID) error
 }
 
-// PutTree stores es as a tree, sorted by name as git requires. A name git
-// would refuse, or two entries of one name, is refused here.
-func (db objectDB) PutTree(es []Entry) (ObjectID, Stored, error) {
-	sorted := slices.SortedFunc(slices.Values(es), func(a, b Entry) int { return strings.Compare(a.Name, b.Name) })
-	t := object.Tree{Entries: make([]object.TreeEntry, len(sorted))}
+// repo is lit's repository over a backend: its Objects and Refs.
+type repo struct{ b backend }
+
+func (r repo) PutBlobs(bs [][]byte) ([]Put, error) {
+	objs := make([]object, len(bs))
+	for i, b := range bs {
+		objs[i] = blob(b)
+	}
+	return r.put(objs)
+}
+
+func (r repo) Blob(id ObjectID) ([]byte, error) { return r.content(blobKind, id) }
+
+// BlobSize answers for a blob alone, so a tree naming another kind of
+// object never passes as one.
+func (r repo) BlobSize(id ObjectID) (uint64, error) { return r.holds(blobKind, id) }
+
+// PutTree stores es as a tree, sorted by name as git requires. Each entry's
+// name is one the name grammar admits, no two alike, and each holds a blob
+// the repository has.
+func (r repo) PutTree(es []Entry) (ObjectID, Stored, error) {
+	sorted := slices.SortedFunc(slices.Values(es), byName)
 	for i, e := range sorted {
-		if e.Name == "" || e.Name == "." || e.Name == ".." || strings.ContainsAny(e.Name, "/\x00") {
-			return ObjectID{}, 0, fmt.Errorf("%q cannot name a tree entry", e.Name)
+		if !name.MatchString(e.Name) {
+			return ObjectID{}, 0, fmt.Errorf("%q cannot name a tree entry: a name is letters, digits, _ and -", e.Name)
 		}
 		if i > 0 && sorted[i-1].Name == e.Name {
 			return ObjectID{}, 0, fmt.Errorf("two tree entries are named %q", e.Name)
 		}
-		h, err := e.Blob.hash()
-		if err != nil {
+		if _, err := r.holds(blobKind, e.Blob); err != nil {
 			return ObjectID{}, 0, err
 		}
-		t.Entries[i] = object.TreeEntry{Name: e.Name, Mode: filemode.Regular, Hash: h}
 	}
-	o := &plumbing.MemoryObject{}
-	if err := t.Encode(o); err != nil {
-		return ObjectID{}, 0, err
-	}
-	return db.store(o)
+	return r.putOne(tree(sorted))
 }
 
-// Tree reads a lit tree: every entry a regular file. Any other entry is a
-// tree lit did not write, refused rather than read as less than it is.
-func (db objectDB) Tree(id ObjectID) ([]Entry, error) {
-	var t object.Tree
-	if err := db.decode(plumbing.TreeObject, id, t.Decode); err != nil {
+// Tree reads a lit tree: what lit's encoding writes, and nothing else, so
+// a tree lit did not write is refused rather than read as less than it is.
+func (r repo) Tree(id ObjectID) ([]Entry, error) {
+	b, err := r.content(treeKind, id)
+	if err != nil {
 		return nil, err
 	}
-	es := make([]Entry, len(t.Entries))
-	for i, e := range t.Entries {
-		if e.Mode != filemode.Regular {
-			return nil, fmt.Errorf("tree %s holds %q of mode %s: not a lit tree", id, e.Name, e.Mode)
+	es := []Entry{}
+	for rest := b; len(rest) > 0; {
+		mode, after, _ := bytes.Cut(rest, []byte(" "))
+		n, after, _ := bytes.Cut(after, []byte{0})
+		if string(mode) != fileMode || !name.Match(n) || len(after) < 20 {
+			return nil, NotLit{ID: id, Why: "a tree lit did not write"}
 		}
-		es[i] = Entry{Name: e.Name, Blob: sha1ID(e.Hash)}
+		blob, _ := ObjectIDFrom(SHA1, after[:20])
+		es, rest = append(es, Entry{Name: string(n), Blob: blob}), after[20:]
+	}
+	// the entries' bytes are all read above, so only their order is left
+	for i := 1; i < len(es); i++ {
+		if byName(es[i-1], es[i]) >= 0 {
+			return nil, NotLit{ID: id, Why: "a tree lit did not write"}
+		}
 	}
 	return es, nil
 }
 
-func (db objectDB) PutCommit(c Commit) (ObjectID, Stored, error) {
-	tree, err := c.Tree.hash()
-	if err != nil {
+// PutCommit stores c as a lit commit over a tree the repository has.
+func (r repo) PutCommit(c Commit) (ObjectID, Stored, error) {
+	if _, err := r.holds(treeKind, c.Tree); err != nil {
 		return ObjectID{}, 0, err
 	}
-	commit := object.Commit{Author: identity, Committer: identity, Message: c.Message, TreeHash: tree}
-	o := &plumbing.MemoryObject{}
-	if err := commit.Encode(o); err != nil {
-		return ObjectID{}, 0, err
-	}
-	return db.store(o)
+	return r.putOne(commit(c))
 }
 
-// Commit reads a lit commit. A commit with parents carries history, which
-// no lit commit does, so it is refused.
-func (db objectDB) Commit(id ObjectID) (Commit, error) {
-	var c object.Commit
-	if err := db.decode(plumbing.CommitObject, id, c.Decode); err != nil {
+// Commit reads a lit commit: its tree, lit's identity at time zero, no
+// parent, no signature, then the message. Anything else is a commit lit
+// did not write, refused, so a read commit puts back as the same id.
+func (r repo) Commit(id ObjectID) (Commit, error) {
+	b, err := r.content(commitKind, id)
+	if err != nil {
 		return Commit{}, err
 	}
-	if len(c.ParentHashes) != 0 {
-		return Commit{}, fmt.Errorf("commit %s has %d parents: not a lit commit", id, len(c.ParentHashes))
+	s, ok := strings.CutPrefix(string(b), "tree ")
+	tree, rest, _ := strings.Cut(s, "\n")
+	msg, okShape := strings.CutPrefix(rest, identity+"\n")
+	t, err := ParseObjectID(SHA1, tree)
+	if !ok || !okShape || err != nil {
+		return Commit{}, NotLit{ID: id, Why: "a commit lit did not write"}
 	}
-	return Commit{Tree: sha1ID(c.TreeHash), Message: c.Message}, nil
+	return Commit{Tree: t, Message: msg}, nil
 }
 
-func (db objectDB) put(t plumbing.ObjectType, b []byte) (ObjectID, Stored, error) {
-	o := &plumbing.MemoryObject{}
-	o.SetType(t)
-	if _, err := o.Write(b); err != nil {
-		return ObjectID{}, 0, err
+// List is every ref under prefix.
+func (r repo) List(prefix RefName) (Listing, error) {
+	if err := parsePrefix(prefix); err != nil {
+		return Listing{}, err
 	}
-	return db.store(o)
+	return r.b.list(prefix)
 }
 
-// store adds o unless the database holds it already; content addressing
-// makes a second write of one object the same object.
-func (db objectDB) store(o *plumbing.MemoryObject) (ObjectID, Stored, error) {
-	s, release, err := db.reach(true)
-	if err != nil {
-		return ObjectID{}, 0, err
-	}
-	defer release()
-	id := sha1ID(o.Hash())
-	err = s.HasEncodedObject(o.Hash())
-	if err == nil {
-		return id, Existing, nil
-	}
-	if !errors.Is(err, plumbing.ErrObjectNotFound) {
-		return ObjectID{}, 0, err
-	}
-	if _, err := s.SetEncodedObject(o); err != nil {
-		return ObjectID{}, 0, err
-	}
-	return id, New, nil
-}
-
-func (db objectDB) object(t plumbing.ObjectType, id ObjectID) (plumbing.EncodedObject, error) {
-	h, err := id.hash()
-	if err != nil {
-		return nil, err
-	}
-	s, release, err := db.reach(false)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	o, err := s.EncodedObject(plumbing.AnyObject, h)
-	if errors.Is(err, plumbing.ErrObjectNotFound) {
-		return nil, MissingObject{ID: id}
-	}
-	if err != nil {
-		return nil, err
-	}
-	if o.Type() != t {
-		return nil, fmt.Errorf("object %s is a %s, not a %s", id, o.Type(), t)
-	}
-	return o, nil
-}
-
-func (db objectDB) content(t plumbing.ObjectType, id ObjectID) (b []byte, err error) {
-	o, err := db.object(t, id)
-	if err != nil {
-		return nil, err
-	}
-	r, err := o.Reader()
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, r.Close()) }()
-	return io.ReadAll(r)
-}
-
-func (db objectDB) decode(t plumbing.ObjectType, id ObjectID, decode func(plumbing.EncodedObject) error) error {
-	o, err := db.object(t, id)
-	if err != nil {
+// Replace points name at to, an object the repository holds, if name still
+// is what from says.
+func (r repo) Replace(name RefName, from Was, to ObjectID) error {
+	if err := parseRefName(name); err != nil {
 		return err
 	}
-	return decode(o)
-}
-
-// sha1ID is a go-git hash as an id in lit's repository.
-func sha1ID(h plumbing.Hash) ObjectID {
-	id := ObjectID{format: SHA1}
-	copy(id.sum[:], h[:])
-	return id
-}
-
-// hash is the id as go-git names it: lit's repository is SHA-1, so an id of
-// another format, or the zero id, names nothing in it.
-func (id ObjectID) hash() (plumbing.Hash, error) {
-	switch id.format {
-	case SHA1:
-		var h plumbing.Hash
-		copy(h[:], id.sum[:len(h)])
-		return h, nil
-	case SHA256:
+	if err := own(to); err != nil {
+		return err
 	}
-	return plumbing.Hash{}, ForeignFormat{ID: id}
+	if _, _, err := r.b.look(to); err != nil {
+		return err
+	}
+	return r.b.replace(name, from, to)
 }
+
+func (r repo) putOne(o object) (ObjectID, Stored, error) {
+	ps, err := r.put([]object{o})
+	if err != nil {
+		return ObjectID{}, 0, err
+	}
+	return ps[0].ID, ps[0].Stored, nil
+}
+
+// put stores each of objs the repository does not hold already, all in one
+// write; content addressing makes a second write of one object the same
+// object. The backend's ids must be the ones lit computed: git is the
+// oracle of every id lit names.
+func (r repo) put(objs []object) ([]Put, error) {
+	ps := make([]Put, len(objs))
+	var fresh []object
+	var at []int
+	queued := map[ObjectID]bool{}
+	for i, o := range objs {
+		ps[i] = Put{ID: idOf(o), Stored: Existing}
+		if queued[ps[i].ID] {
+			continue
+		}
+		_, _, err := r.b.look(ps[i].ID)
+		if errors.As(err, new(MissingObject)) {
+			ps[i].Stored, queued[ps[i].ID] = New, true
+			fresh, at = append(fresh, o), append(at, i)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	got, err := r.b.write(fresh)
+	if err != nil {
+		return nil, err
+	}
+	for j, id := range got {
+		if want := ps[at[j]].ID; id != want {
+			k, _ := fresh[j].encode()
+			return nil, fmt.Errorf("git stored a %s as %s; lit computes %s", k, id, want)
+		}
+	}
+	return ps, nil
+}
+
+// holds is the size of the object of kind k id names, refusing an id the
+// repository does not hold as one.
+func (r repo) holds(k kind, id ObjectID) (uint64, error) {
+	if err := own(id); err != nil {
+		return 0, err
+	}
+	got, size, err := r.b.look(id)
+	if err == nil && got != k {
+		err = NotLit{ID: id, Why: fmt.Sprintf("a %s, not a %s", got, k)}
+	}
+	return size, err
+}
+
+func (r repo) content(k kind, id ObjectID) ([]byte, error) {
+	if err := own(id); err != nil {
+		return nil, err
+	}
+	got, b, err := r.b.read(id)
+	if err != nil {
+		return nil, err
+	}
+	if got != k {
+		return nil, NotLit{ID: id, Why: fmt.Sprintf("a %s, not a %s", got, k)}
+	}
+	return b, nil
+}
+
+// own refuses an id of another format, or the zero id: lit's repository is
+// SHA-1, so neither names anything in it.
+func own(id ObjectID) error { return inFormat(id, SHA1) }

@@ -264,7 +264,7 @@ func TestOneEventSetFoldsEqualInAnyStreamOrder(t *testing.T) {
 	}
 	scans := w.scans()
 	for _, order := range [][]int{{0, 1, 2, 3, 4, 5}, {5, 4, 3, 2, 1, 0}, {2, 5, 0, 4, 1, 3}} {
-		var in []fold.Scanned
+		var in []store.Scanned
 		for _, i := range order {
 			if i < len(scans) {
 				in = append(in, scans[i])

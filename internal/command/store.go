@@ -6,7 +6,6 @@ import (
 	"slices"
 
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
 
@@ -21,7 +20,7 @@ import (
 type StoreFacts struct {
 	Opening   Opening
 	Heads     []store.Heads
-	Reads     []Read
+	Reads     []store.Scanned
 	Folds     []fold.FoldFacts
 	Appends   []store.Appended
 	Publishes []store.Publishing
@@ -32,27 +31,17 @@ type StoreFacts struct {
 // found it there already.
 type Fresh struct{ Checkout, Key store.Made }
 
-// Read is one range a fold read and what the scan found in it.
-type Read struct {
-	Range store.Range
-	Scan  store.Scan
-}
-
 // Opening is the store an invocation's checkout opened, once, or why it has
 // none.
 //
 //sumtype:decl
 type Opening interface{ opening() }
 
-// Opened is a minted checkout's store, and its code repository's object
-// format, read once beside it for the workspace file's config-ref.
-type Opened struct {
-	Store  *store.Store
-	Format git.ObjectFormat
-}
+// Opened is a minted checkout's store.
+type Opened struct{ Store *store.Store }
 
 // Unopened is a place with no store: outside a checkout, in one not yet
-// minted, or one whose writer or object format cannot be read.
+// minted, or one whose writer cannot be read.
 type Unopened struct{ Why error }
 
 func (Opened) opening()   {}
@@ -78,9 +67,8 @@ type (
 		KeyCreated      bool `json:"key_created"`
 	}
 	openLine struct {
-		State        string `json:"state"`
-		ObjectFormat string `json:"object_format,omitempty"`
-		Why          string `json:"why,omitempty"`
+		State string `json:"state"`
+		Why   string `json:"why,omitempty"`
 	}
 	headsLine struct {
 		RefsRead   int             `json:"refs_read"`
@@ -168,7 +156,7 @@ func publish(p store.Publishing) publishLine {
 	panic(fmt.Sprintf("command: %T is not a Publishing", p))
 }
 
-func reads(rs []Read) *readLine {
+func reads(rs []store.Scanned) *readLine {
 	l := &readLine{Torn: []tornLine{}}
 	torn := map[string]tornLine{}
 	for _, r := range rs {
@@ -234,7 +222,7 @@ func open(o Opening) *openLine {
 	case nil:
 		return nil
 	case Opened:
-		return &openLine{State: "opened", ObjectFormat: o.Format.String()}
+		return &openLine{State: "opened"}
 	case Unopened:
 		return &openLine{State: "unopened", Why: o.Why.Error()}
 	}

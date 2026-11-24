@@ -16,7 +16,7 @@ import (
 
 var (
 	t0       = time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
-	checkout = git.Checkout{WorkTree: "/w", GitDir: "/w/.git", CommonDir: "/w/.git"}
+	checkout = git.Checkout{WorkTree: "/w", GitDir: "/w/.git", CommonDir: "/w/.git", Format: git.SHA256}
 	key      = func() events.Key {
 		k, err := events.NewKey(strings.NewReader(strings.Repeat("k", 32)))
 		if err != nil {
@@ -41,7 +41,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 		{"help", cli.Done{}, 0},
 		{"get", cli.Failed{Failure: Internal{Err: errors.New("not built")}}, 70},
 	} {
-		e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, r Recorder) cli.Outcome {
+		e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
 			r.Asked(cli.Summary{Name: tc.name})
 			return tc.outcome
 		})
@@ -52,7 +52,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 }
 
 func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
-	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, r Recorder) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
 		cmd, err := cli.Parse(cli.Verbs(), cli.Groups(), []string{"get", "x"})
 		if err != nil {
 			t.Fatal(err)
@@ -74,7 +74,7 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 }
 
 func TestWorkThatPanicsBeforeAskingIsUnparsed(t *testing.T) {
-	e := Record(&FixedClock{At: t0}, inv, func(time.Time, Recorder) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, noGit, inv, func(time.Time, Recorder) cli.Outcome {
 		panic("the parse broke")
 	})
 	if e.Command.Name != cli.Unparsed || cli.ExitCode(e.Outcome) != 70 {
@@ -85,7 +85,7 @@ func TestWorkThatPanicsBeforeAskingIsUnparsed(t *testing.T) {
 func TestRecordHandsNowToWorkAndTimesIt(t *testing.T) {
 	clock := &FixedClock{At: t0}
 	var handed time.Time
-	e := Record(clock, inv, func(now time.Time, _ Recorder) cli.Outcome {
+	e := Record(clock, noGit, inv, func(now time.Time, _ Recorder) cli.Outcome {
 		handed = now
 		clock.At = clock.At.Add(1500 * time.Millisecond)
 		return cli.Done{}
@@ -99,7 +99,7 @@ func TestRecordHandsNowToWorkAndTimesIt(t *testing.T) {
 // body gives it, and a run that read none has no config block at all.
 func TestTheVersionInForceIsRecordedOnceTheBodyGivesIt(t *testing.T) {
 	given := ConfigFacts{Ref: "ab12", Facts: config.Facts{Gate: "none"}}
-	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, r Recorder) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
 		r.Configured(given)
 		panic("after the fold")
 	})
@@ -111,7 +111,7 @@ func TestTheVersionInForceIsRecordedOnceTheBodyGivesIt(t *testing.T) {
 	if block["ref"] != "ab12" || counts["levels"] != 0.0 {
 		t.Errorf("the config block is %v; want the ref and every zero count written", block)
 	}
-	none := Record(&FixedClock{At: t0}, inv, func(time.Time, Recorder) cli.Outcome { return cli.Done{} })
+	none := Record(&FixedClock{At: t0}, noGit, inv, func(time.Time, Recorder) cli.Outcome { return cli.Done{} })
 	if _, ok := decode(t, none)["config"]; ok || none.Config != nil {
 		t.Error("a run that read no version has a config block")
 	}
@@ -178,5 +178,30 @@ func TestTheLineSaysWhereAndWho(t *testing.T) {
 	unlocatable, _ := place["unlocatable"].(map[string]any)
 	if unlocatable["dir"] != "/gone" || unlocatable["error"] != "permission denied" || m["agent"] != "claude" {
 		t.Errorf("the line is %v; want the unlocatable dir and its error, agent claude", m)
+	}
+}
+
+func noGit() []git.Spawn { return []git.Spawn{} }
+
+// Every git process the invocation ran is on its logged line, how each
+// ended included, and a run that ran none logs an empty block.
+func TestEverySpawnReachesTheLoggedLine(t *testing.T) {
+	ran := []git.Spawn{
+		{Args: []string{"rev-parse"}, Ended: git.Exited{Code: 128}, Stderr: "fatal: not a git repository"},
+		{Args: []string{"hash-object"}, Ended: git.Unstarted{Why: "git is not on PATH"}},
+	}
+	e := Record(&FixedClock{At: t0}, func() []git.Spawn { return ran }, inv, func(time.Time, Recorder) cli.Outcome { return cli.Done{} })
+	block, _ := decode(t, e)["git"].([]any)
+	if len(block) != 2 {
+		t.Fatalf("the git block is %v; want both spawns", block)
+	}
+	exited, _ := block[0].(map[string]any)
+	unstarted, _ := block[1].(map[string]any)
+	if exited["exit"] != 128.0 || exited["stderr"] != "fatal: not a git repository" || unstarted["unstarted"] != "git is not on PATH" || unstarted["exit"] != nil {
+		t.Errorf("the git block is %v; want git's exit and stderr, and why the other never started", block)
+	}
+	none := Record(&FixedClock{At: t0}, noGit, inv, func(time.Time, Recorder) cli.Outcome { return cli.Done{} })
+	if block, ok := decode(t, none)["git"].([]any); !ok || len(block) != 0 {
+		t.Errorf("a run with no git logged %v; want an empty block", decode(t, none)["git"])
 	}
 }

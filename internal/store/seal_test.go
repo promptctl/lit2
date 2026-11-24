@@ -71,7 +71,7 @@ func TestSealingFromAPriorPublicationEqualsSealingFromScratch(t *testing.T) {
 				t.Fatalf("trial %d: segment %d holds other bytes when sealed from a prior publication", trial, i)
 			}
 		}
-		if _, err := NewPublication(WriterRef{}, LogID{}, scratch); len(scratch) > 0 && err != nil {
+		if _, err := NewPublication(WriterRef{}, git.Absent{}, LogID{}, scratch); len(scratch) > 0 && err != nil {
 			t.Fatalf("trial %d: the sealed segments do not tile the stream: %v", trial, err)
 		}
 	}
@@ -110,11 +110,11 @@ func TestAPublicationHasNoGapAndNoOverlap(t *testing.T) {
 		"a late start":     {Fresh{Start: 1, Bytes: []byte("a")}},
 		"an empty segment": {Fresh{Start: 0, Bytes: nil}},
 	} {
-		if _, err := NewPublication(InboxRef{}, LogID{}, segs); err == nil {
+		if _, err := NewPublication(InboxRef{}, git.Absent{}, LogID{}, segs); err == nil {
 			t.Errorf("%s: NewPublication accepted %v", name, segs)
 		}
 	}
-	if _, err := NewPublication(InboxRef{}, LogID{}, []Segment{Kept{Span: Span{From: 0, To: 2}}, Fresh{Start: 2, Bytes: []byte("c")}}); err != nil {
+	if _, err := NewPublication(InboxRef{}, git.Absent{}, LogID{}, []Segment{Kept{Span: Span{From: 0, To: 2}}, Fresh{Start: 2, Bytes: []byte("c")}}); err != nil {
 		t.Errorf("a tiling publication was refused: %v", err)
 	}
 }

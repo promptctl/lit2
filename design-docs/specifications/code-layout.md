@@ -11,10 +11,10 @@ go tool golangci-lint run
 ## Module and tooling
 
 - Module path `github.com/promptctl/lit2`; `go 1.26`.
-- Go, with go-git (Apache-2.0) in process for lit's objects and refs and for
-  reading the code repository's HEAD and history, never writing it. go-git is
-  used through its storage and object packages, so none of its transport
-  packages is linked.
+- Go. The user's `git` binary writes lit's repository and reads the code
+  repository's HEAD and history, never writing it, in either object format.
+  go-git (Apache-2.0) reads lit's repository in process, through its storage
+  and object packages, so none of its transport packages is linked.
 - Tests are the standard `testing` package.
 - Lint is golangci-lint v2 as a `tool` directive: `default: standard` plus
   `exhaustive` and `gochecksumtype`, and gofmt. Sealed interfaces marked
@@ -46,7 +46,7 @@ it importing them; `scenarios` is test only.
 | `fold` | events → state; the capability rule; rank; holders; conflicts |
 | `events` | record, codec, upcasters, ids, signature, envelope |
 | `store` | the append-only log; sealing into segments; one commit and one ref per writer, inbox refs; rewrites; the snapshot; the background sync process |
-| `git` | go-git, in process, for objects and refs; the user's `git` binary for push and fetch, run only by the background sync process |
+| `git` | go-git, in process, reading lit's objects and refs; the user's `git` binary writing them, reading the code repository, and running push and fetch, which only the background sync process starts |
 | `reason` | the exit classes; each layer's failure names its own reasons |
 | `assets` | every shipped file, the default profile among them |
 
@@ -109,6 +109,10 @@ of these packages counts as a read.
 | per checkout | `<git-dir>/lit/checkout/id` | the checkout id (`specifications/events-and-store.md`, "Log, segments and refs") |
 | per work tree | `.lit/workspace.toml` | the workspace file, committed with the code |
 | per machine | `$XDG_STATE_HOME/lit/commands/<UTC date>.jsonl` (`~/.local/state` when unset) | the command log: one line per invocation in one `O_APPEND` write; every write removes day files older than 30 days |
+
+**Checkout discovery** is `git rev-parse` from the working directory, under
+the process's environment, so `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_CEILING_DIRECTORIES` and `safe.directory` count as they do for git.
 
 ## One command, start to finish
 

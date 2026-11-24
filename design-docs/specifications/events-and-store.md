@@ -270,8 +270,13 @@ outcome, and reports either in one advisory line on read and on write.
 
 **Transport.** The background sync process runs the user's own `git` binary
 for push and fetch, so the user's credential helpers, `~/.ssh/config` and
-`insteadOf` apply. go-git, in process, handles lit's objects and refs and
-does no network I/O.
+`insteadOf` apply. The same binary writes every object and ref of lit's
+repository. git creates that repository in the one format go-git reads
+whole: SHA-1, refs as files, no automatic gc, and every object and ref
+fsynced, which needs git 2.36 or later, so lit refuses an older git before
+any write. go-git reads it in process and does no network I/O. A read never
+writes: a ref or an object that will not read is one unreadable stream, said,
+and stops no other.
 
 **Adoption**, the first clone of an existing workspace, fetches
 `refs/lit/log/*` and `refs/lit/inbox/*`. Inbox events fold exactly as an

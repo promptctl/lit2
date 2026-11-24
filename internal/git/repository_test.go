@@ -16,7 +16,9 @@ import (
 
 func TestObjectsContract(t *testing.T) {
 	t.Run("repository", func(t *testing.T) {
-		gittest.Objects(t, func(t *testing.T) git.Objects { return git.RepositoryAt(filepath.Join(t.TempDir(), "repo")) })
+		gittest.Objects(t, func(t *testing.T) git.Objects {
+			return gittest.Runner(t).RepositoryAt(filepath.Join(t.TempDir(), "repo"))
+		})
 	})
 	t.Run("memory", func(t *testing.T) {
 		gittest.Objects(t, func(*testing.T) git.Objects { return git.NewMemory() })
@@ -25,27 +27,46 @@ func TestObjectsContract(t *testing.T) {
 
 func TestRefsContract(t *testing.T) {
 	t.Run("repository", func(t *testing.T) {
-		gittest.Refs(t, func(t *testing.T) git.Refs { return git.RepositoryAt(filepath.Join(t.TempDir(), "repo")) })
+		gittest.Refs(t, func(t *testing.T) gittest.Repository {
+			return gittest.Runner(t).RepositoryAt(filepath.Join(t.TempDir(), "repo"))
+		})
 	})
 	t.Run("memory", func(t *testing.T) {
-		gittest.Refs(t, func(*testing.T) git.Refs { return git.NewMemory() })
+		gittest.Refs(t, func(*testing.T) gittest.Repository { return git.NewMemory() })
 	})
 }
 
-// agrees holds Locate from dir to what git rev-parse says of it.
-func agrees(t *testing.T, dir string) {
-	t.Helper()
-	got, err := git.Locate(dir)
-	if err != nil {
-		t.Fatalf("Locate(%s): %v", dir, err)
+// TestTheNameGrammarIsASubsetOfGits holds the one name grammar to git:
+// every name lit takes, git takes, as a refname and as a tree entry under
+// fsck --strict; and every name the audit found lit taking where git
+// refuses, git refuses.
+func TestTheNameGrammarIsASubsetOfGits(t *testing.T) {
+	taken := []string{"lit", "log", "0123456789abcdef", "A-b_9", "Z"}
+	repo := gittest.Physical(t)
+	gittest.Git(t, repo, "init", "-q", "--bare")
+	blob := gittest.Git(t, repo, "hash-object", "-w", "--stdin")
+	for _, n := range taken {
+		if _, err := gittest.Ask(t, repo, "check-ref-format", "refs/lit/"+n); err != nil {
+			t.Errorf("lit takes refs/lit/%s; git refuses it: %v", n, err)
+		}
+		tree := gittest.GitIn(t, repo, "100644 blob "+blob+"\t"+n+"\x00", "mktree", "-z")
+		gittest.Git(t, repo, "update-ref", "refs/t", gittest.GitIn(t, repo, "m", "commit-tree", tree))
+		if _, err := gittest.Ask(t, repo, "fsck", "--strict", "--no-dangling"); err != nil {
+			t.Errorf("lit takes the tree entry %q; git fsck --strict refuses it: %v", n, err)
+		}
 	}
-	want := strings.Split(gittest.Git(t, dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"), "\n")
-	if have := []string{got.WorkTree, got.GitDir, got.CommonDir}; !slices.Equal(have, want) {
-		t.Errorf("Locate(%s) = %v; git says %v", dir, have, want)
+	for _, n := range gittest.Refused() {
+		if strings.HasPrefix(string(n), "refs/") && !strings.ContainsRune(string(n), 0) {
+			if _, err := gittest.Ask(t, repo, "check-ref-format", string(n)); err == nil {
+				t.Errorf("lit refuses %q as the audit found git does; git check-ref-format takes it", n)
+			}
+		}
 	}
 }
 
-func TestLocateAgreesWithGit(t *testing.T) {
+// Locate finds what git rev-parse finds, from a main worktree, a linked
+// one, a submodule and a directory nested in one.
+func TestLocateFindsWhatGitFinds(t *testing.T) {
 	root := gittest.Physical(t)
 	main, linked, sub := filepath.Join(root, "main"), filepath.Join(root, "linked"), filepath.Join(root, "sub")
 	gittest.Git(t, root, "init", "-q", "-b", "main", main)
@@ -54,130 +75,419 @@ func TestLocateAgreesWithGit(t *testing.T) {
 	gittest.Git(t, root, "init", "-q", "-b", "main", sub)
 	gittest.Git(t, sub, "commit", "-q", "--allow-empty", "-m", "first")
 	gittest.Git(t, main, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub")
-	for _, dir := range []string{main, linked, filepath.Join(main, "sub")} {
-		agrees(t, dir)
+	nested := filepath.Join(main, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
 	}
-}
-
-// ReadObjectFormat reads what git reads, git being the one source of when
-// the extension counts: in a repository git made in each format, with its
-// config removed, and with the extension under a format version that does
-// not admit extensions.
-func TestReadObjectFormatAgreesWithGit(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		init   git.ObjectFormat
-		config func(path string) error
-	}{
-		{"sha1", git.SHA1, nil},
-		{"sha256", git.SHA256, nil},
-		{"no config", git.SHA1, os.Remove},
-		{"sha256 under version 0", git.SHA1, underVersion0("sha256")},
-		{"sha1 under version 0", git.SHA1, underVersion0("sha1")},
+	g := gittest.Runner(t)
+	for dir, want := range map[string]git.Checkout{
+		main:                       {WorkTree: main, GitDir: filepath.Join(main, ".git"), CommonDir: filepath.Join(main, ".git"), Format: git.SHA1},
+		nested:                     {WorkTree: main, GitDir: filepath.Join(main, ".git"), CommonDir: filepath.Join(main, ".git"), Format: git.SHA1},
+		linked:                     {WorkTree: linked, GitDir: filepath.Join(main, ".git", "worktrees", "linked"), CommonDir: filepath.Join(main, ".git"), Format: git.SHA1},
+		filepath.Join(main, "sub"): {WorkTree: filepath.Join(main, "sub"), GitDir: filepath.Join(main, ".git", "modules", "sub"), CommonDir: filepath.Join(main, ".git", "modules", "sub"), Format: git.SHA1},
 	} {
-		dir := gittest.Physical(t)
-		gittest.Git(t, dir, "init", "-q", "--object-format="+tc.init.String())
-		c, err := git.Locate(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if tc.config != nil {
-			if err := tc.config(filepath.Join(c.CommonDir, "config")); err != nil {
-				t.Fatal(err)
-			}
-		}
-		got, err := git.ReadObjectFormat(c.CommonDir)
-		want, refused := gittest.Ask(t, dir, "rev-parse", "--show-object-format")
-		switch {
-		case refused != nil && err == nil:
-			t.Errorf("%s: ReadObjectFormat = %v; git refuses: %v", tc.name, got, refused)
-		case refused == nil && (err != nil || got.String() != want):
-			t.Errorf("%s: ReadObjectFormat = %v, %v; git says %s", tc.name, got, err, want)
+		if got, err := g.Locate(dir); err != nil || got != want {
+			t.Errorf("Locate(%s) = %+v, %v; want %+v", dir, got, err, want)
 		}
 	}
 }
 
-// underVersion0 writes a config naming format as extensions.objectformat
-// under repository format version 0.
-func underVersion0(format string) func(path string) error {
-	return func(path string) error {
-		return os.WriteFile(path, []byte("[core]\n\trepositoryformatversion = 0\n\tbare = false\n[extensions]\n\tobjectformat = "+format+"\n"), 0o644)
+// Locate honors what git honors in the environment: GIT_DIR, as a hook
+// runs with it, and GIT_CEILING_DIRECTORIES, which stops the walk.
+func TestLocateReadsTheEnvironmentAsGitDoes(t *testing.T) {
+	clone := gittest.Clone(t)
+	elsewhere := gittest.Physical(t)
+	c, err := gittest.Runner(t, "GIT_DIR="+clone.GitDir).Locate(elsewhere)
+	if err != nil || c.GitDir != clone.GitDir || c.WorkTree != elsewhere {
+		t.Errorf("Locate under GIT_DIR = %+v, %v; want its git dir with the working directory as its work tree", c, err)
+	}
+	nested := filepath.Join(clone.WorkTree, "a")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = gittest.Runner(t, "GIT_CEILING_DIRECTORIES="+clone.WorkTree).Locate(nested)
+	if want := (git.NotFound{Dir: nested}); err != want {
+		t.Errorf("Locate below a ceiling = %v; want %v", err, want)
+	}
+}
+
+func TestLocateWithNoGitIsNotFoundAndARefusalIsGits(t *testing.T) {
+	dir := gittest.Physical(t)
+	if _, err := gittest.Runner(t).Locate(dir); err != (git.NotFound{Dir: dir}) {
+		t.Errorf("Locate(%s) failed with %v; want NotFound", dir, err)
+	}
+	bare := gittest.Physical(t)
+	gittest.Git(t, bare, "init", "-q", "--bare")
+	_, err := gittest.Runner(t).Locate(bare)
+	if !errors.As(err, new(git.Refused)) || !strings.Contains(err.Error(), "work tree") {
+		t.Errorf("Locate in a bare repository failed with %v; want git's refusal, which names the work tree", err)
+	}
+	// a pruned worktree: its .git names a git dir that is gone
+	pruned := gittest.Physical(t)
+	gone := filepath.Join(gittest.Physical(t), "worktrees", "gone")
+	if err := os.WriteFile(filepath.Join(pruned, ".git"), []byte("gitdir: "+gone+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gittest.Runner(t).Locate(pruned); !errors.As(err, new(git.Refused)) || !strings.Contains(err.Error(), gone) {
+		t.Errorf("Locate in a pruned worktree failed with %v; want git's refusal, naming the git dir %s", err, gone)
+	}
+}
+
+// lit's repository is created with its format and durability pinned: git
+// fsyncs every object and ref it writes, and runs no gc or maintenance.
+func TestLitsRepositoryIsCreatedPinned(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	if _, err := gittest.Put(gittest.Runner(t).RepositoryAt(dir), nil); err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{"core.fsync": "objects,reference", "core.fsyncMethod": "fsync", "gc.auto": "0", "maintenance.auto": "false", "extensions.objectFormat": "", "core.repositoryFormatVersion": "0"} {
+		got, _ := gittest.Ask(t, dir, "config", "--file", "config", k)
+		if strings.TrimSpace(got) != want {
+			t.Errorf("lit's repository has %s = %q; want %q", k, strings.TrimSpace(got), want)
+		}
+	}
+	if format := strings.TrimSpace(gittest.Git(t, dir, "rev-parse", "--show-ref-format")); format != "files" {
+		t.Errorf("lit's repository keeps its refs as %s; want files", format)
+	}
+}
+
+// A git missing from PATH is one loud error from every spawn, each on the
+// record as never started.
+func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
+	g := git.Find([]string{"PATH=" + t.TempDir() + "::relative"})
+	_, errLocate := g.Locate(t.TempDir())
+	_, errPut := gittest.Put(g.RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil)
+	for _, err := range []error{errLocate, errPut} {
+		if err == nil || !strings.Contains(err.Error(), "git is not in an absolute directory on PATH") {
+			t.Errorf("a spawn with no git failed with %v; want the one error naming PATH", err)
+		}
+	}
+	spawns := g.Spawns()
+	if len(spawns) != 2 {
+		t.Fatalf("with no git the record is %+v; want both attempts", spawns)
+	}
+	for _, s := range spawns {
+		if u, ok := s.Ended.(git.Unstarted); !ok || !strings.Contains(u.Why, "PATH") {
+			t.Errorf("an attempt with no git is recorded as %+v; want it never started, naming PATH", s)
+		}
+	}
+}
+
+// A Git that Find never made is a git missing from PATH, the same loud
+// error, never a spawn of nothing.
+func TestAZeroGitIsAMissingOne(t *testing.T) {
+	g := &git.Git{}
+	_, errLocate := g.Locate(t.TempDir())
+	_, errPut := gittest.Put(g.RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil)
+	for _, err := range []error{errLocate, errPut} {
+		if err == nil || !strings.Contains(err.Error(), "git is not in an absolute directory on PATH") {
+			t.Errorf("a spawn of a zero Git failed with %v; want the one error naming PATH", err)
+		}
+	}
+	if spawns := g.Spawns(); spawns == nil || len(spawns) != 2 {
+		t.Errorf("a zero Git's record is %#v; want both attempts", spawns)
+	}
+}
+
+// Every git process is on the record: its arguments, how it ended and its
+// stderr. A read of lit's repository is go-git's, in process, and spawns
+// nothing.
+func TestEverySpawnIsRecorded(t *testing.T) {
+	g := gittest.Runner(t)
+	dir := gittest.Physical(t)
+	if _, err := g.Locate(dir); err == nil {
+		t.Fatal("Locate outside a repository succeeded")
+	}
+	refused := g.Spawns()
+	if len(refused) != 1 || refused[0].Ended != (git.Exited{Code: 128}) || !strings.Contains(refused[0].Stderr, "not a git repository") || !slices.Contains(refused[0].Args, "rev-parse") {
+		t.Errorf("the refused Locate is recorded as %+v; want rev-parse, exit 128 and git's stderr", refused)
+	}
+	repo := g.RepositoryAt(filepath.Join(dir, "repo"))
+	id, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := g.Spawns()
+	if last := written[len(written)-1]; last.Ended != (git.Exited{Code: 0}) || len(last.Args) == 0 {
+		t.Errorf("the write is recorded as %+v; want its arguments and exit 0", last)
+	}
+	if _, err := repo.Blob(id); err != nil {
+		t.Fatal(err)
+	}
+	if read := g.Spawns(); len(read) != len(written) {
+		t.Errorf("a read spawned %+v", read[len(written):])
+	}
+}
+
+func TestLocateReadsTheObjectFormatAsGitDoes(t *testing.T) {
+	for _, f := range []git.ObjectFormat{git.SHA1, git.SHA256} {
+		dir := gittest.Physical(t)
+		gittest.Git(t, dir, "init", "-q", "--object-format="+f.String())
+		if got, err := gittest.Runner(t).Locate(dir); err != nil || got.Format != f {
+			t.Errorf("Locate in a %s repository = %+v, %v", f, got, err)
+		}
 	}
 }
 
 func TestRepositoryListsPackedAndLooseRefs(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := git.RepositoryAt(dir)
-	blob, _, err := repo.PutBlob([]byte("hello\n"))
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("hello\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _, err := repo.PutBlob(nil)
+	other, err := gittest.Put(repo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	gittest.Git(t, dir, "update-ref", "refs/lit/log/packed", blob.String())
 	gittest.Git(t, dir, "update-ref", "refs/lit/log/both", blob.String())
 	gittest.Git(t, dir, "pack-refs", "--all")
-	if err := repo.Replace("refs/lit/log/both", other); err != nil {
+	if err := repo.Replace("refs/lit/log/both", git.Named{Target: blob}, other); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Replace("refs/lit/log/loose", other); err != nil {
+	if err := repo.Replace("refs/lit/log/loose", git.Absent{}, other); err != nil {
 		t.Fatal(err)
 	}
-	heads, bad, err := repo.List("refs/lit/")
+	l, err := repo.List("refs/lit/")
 	want := []git.RefHead{{Name: "refs/lit/log/both", Target: other}, {Name: "refs/lit/log/loose", Target: other}, {Name: "refs/lit/log/packed", Target: blob}}
-	if err != nil || len(bad) != 0 || !slices.Equal(heads, want) {
-		t.Errorf("List = %v, %v, %v; want %v, the loose ref over its packed copy", heads, bad, err, want)
-	}
-	if got := gittest.Git(t, dir, "rev-parse", "refs/lit/log/both"); got != other.String() {
-		t.Errorf("git reads the replaced ref as %s; want %s", got, other)
+	if err != nil || !slices.Equal(l.Heads, want) || len(l.Broken) != 0 {
+		t.Errorf("List = %+v, %v; want %v, the loose ref over its packed copy", l, err, want)
 	}
 }
 
-func TestATornRefIsBadAndTheRestRead(t *testing.T) {
+// An object of a kind lit never writes, a tag, is NotLit, the refusal of
+// every object lit did not write, never a failure of another kind.
+func TestATagIsNotLit(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := git.RepositoryAt(dir)
-	blob, _, err := repo.PutBlob([]byte("x"))
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Replace("refs/lit/log/good", blob); err != nil {
+	tag := gittest.ID(t, gittest.GitIn(t, dir, "object "+blob.String()+"\ntype blob\ntag t\ntagger t <t@t> 0 +0000\n\nt\n", "mktag"))
+	if _, err := repo.Commit(tag); !errors.As(err, new(git.NotLit)) {
+		t.Errorf("reading a tag as a commit failed with %v; want NotLit", err)
+	}
+}
+
+// A ref go-git cannot read as naming an object, which git never writes, is
+// listed as broken by name beside every other ref, and the listing, a
+// read, leaves it there; an empty HEAD, which no listing reads, is left
+// too.
+func TestABrokenRefIsListedAndLeftByARead(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	// as a power loss after a rename and before the data reached the disk
-	if err := os.WriteFile(filepath.Join(dir, "refs", "lit", "log", "torn"), nil, 0o644); err != nil {
+	if err := repo.Replace("refs/lit/log/good", git.Absent{}, blob); err != nil {
 		t.Fatal(err)
 	}
-	// a git command updating a ref holds its lock, half written, beside it
-	if err := os.WriteFile(filepath.Join(dir, "refs", "lit", "log", "good.lock"), []byte("ce01"), 0o644); err != nil {
+	torn := filepath.Join(dir, "refs", "lit", "log", "torn")
+	for _, text := range []string{"", "torn", "ref: refs/lit/log/good", strings.Repeat("0", 40) + "\n"} {
+		if err := os.WriteFile(torn, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		l, err := repo.List("refs/lit/")
+		if err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/good", Target: blob}}) || len(l.Broken) != 1 || l.Broken[0].Name != "refs/lit/log/torn" {
+			t.Errorf("with a ref file holding %q, List = %+v, %v; want refs/lit/log/good, and refs/lit/log/torn broken", text, l, err)
+		} else if !strings.Contains(l.Broken[0].Why, strings.TrimSpace(text)) {
+			t.Errorf("a ref file holding %q is broken because %q; want what it holds said", text, l.Broken[0].Why)
+		}
+		if got, err := os.ReadFile(torn); err != nil || string(got) != text {
+			t.Errorf("listing changed the broken ref holding %q: %q, %v", text, got, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "HEAD"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// and a directory starting with . holds no ref, whatever is in it
-	hidden := filepath.Join(dir, "refs", "lit", ".hidden")
-	if err := os.MkdirAll(hidden, 0o755); err != nil {
+	if l, err := repo.List("refs/lit/"); err != nil || len(l.Heads) != 1 || len(l.Broken) != 1 {
+		t.Errorf("with an empty HEAD, List = %+v, %v; want both refs as before", l, err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil || info.Size() != 0 {
+		t.Errorf("listing touched the empty HEAD: %v, %v", info, err)
+	}
+}
+
+// Objects a pack brings after the storage was opened, as a fetch or a
+// repack brings them, are read, with no other step between.
+func TestAPackArrivingAfterTheFirstReadIsRead(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	first, err := gittest.Put(repo, []byte("first"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(hidden, "torn"), nil, 0o644); err != nil {
+	// the storage is opened by a read of another object, so the blob is in
+	// no cache when it is read after the repack
+	if _, err := repo.Blob(first); err != nil {
 		t.Fatal(err)
 	}
-	heads, bad, err := repo.List("refs/lit/")
-	if err != nil || !slices.Equal(heads, []git.RefHead{{Name: "refs/lit/log/good", Target: blob}}) || len(bad) != 1 || bad[0].Name != "refs/lit/log/torn" {
-		t.Errorf("List = %v, %v, %v; want the good ref, the torn one bad, no lock, nothing hidden", heads, bad, err)
+	blob, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a ref makes the blob reachable, so the repack moves it out of its loose file
+	if err := repo.Replace("refs/lit/log/w", git.Absent{}, blob); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Git(t, dir, "repack", "-a", "-d", "-q")
+	if loose, _ := filepath.Glob(filepath.Join(dir, "objects", blob.String()[:2], "*")); len(loose) != 0 {
+		t.Fatalf("the repack left the blob loose: %v", loose)
+	}
+	if _, err := repo.Blob(blob); err != nil {
+		t.Errorf("a blob moved into a new pack read as %v; want it read", err)
+	}
+}
+
+// A write is one git process for each kind it holds, however many objects
+// that is, and the version check before it runs once per Git.
+func TestAWriteIsOneSpawnPerKind(t *testing.T) {
+	g := gittest.Runner(t)
+	repo := g.RepositoryAt(filepath.Join(gittest.Physical(t), "repo"))
+	if _, err := gittest.Put(repo, nil); err != nil {
+		t.Fatal(err)
+	}
+	before := len(g.Spawns())
+	bs := make([][]byte, 100)
+	for i := range bs {
+		bs[i] = fmt.Appendf(nil, "blob %d", i)
+	}
+	if _, err := repo.PutBlobs(bs); err != nil {
+		t.Fatal(err)
+	}
+	spawns := g.Spawns()
+	if len(spawns) != before+1 {
+		t.Errorf("putting %d blobs spawned %+v; want one git process", len(bs), spawns[before:])
+	}
+	versions := 0
+	for _, s := range spawns {
+		if slices.Contains(s.Args, "version") {
+			versions++
+		}
+	}
+	if versions != 1 {
+		t.Errorf("two writes asked git its version %d times; want once", versions)
+	}
+}
+
+// A GIT_ variable of the caller's, as a hook sets one, never sends lit's
+// objects anywhere but lit's repository.
+func TestTheCallersGitVariablesNeverRedirectAWrite(t *testing.T) {
+	root := gittest.Physical(t)
+	elsewhere := filepath.Join(root, "elsewhere")
+	gittest.Git(t, root, "init", "-q", "--bare", elsewhere)
+	dir := filepath.Join(root, "repo")
+	g := gittest.Runner(t, "GIT_DIR="+elsewhere, "GIT_OBJECT_DIRECTORY="+filepath.Join(elsewhere, "objects"), "GIT_INDEX_FILE="+filepath.Join(elsewhere, "index"))
+	id, err := gittest.Put(g.RepositoryAt(dir), []byte("mine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gittest.Ask(t, dir, "cat-file", "-e", id.String()); err != nil {
+		t.Errorf("the blob is not in lit's repository: %v", err)
+	}
+	if _, err := gittest.Ask(t, elsewhere, "cat-file", "-e", id.String()); err == nil {
+		t.Errorf("the blob was written into the repository the caller's GIT_ variables name")
+	}
+}
+
+// git writes a ref as its lock file, renamed into place: a lock, empty or
+// half-written, is never a ref, so a listing during a write sees the ref
+// as it was; nor is a dotfile, a name git never reads as a ref.
+func TestALockFileIsNoRef(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Replace("refs/lit/log/a", git.Absent{}, blob); err != nil {
+		t.Fatal(err)
+	}
+	for _, lock := range []string{"", blob.String() + "\n"} {
+		for _, n := range []string{"a.lock", "b.lock", ".b", ".tmp-c"} {
+			if err := os.WriteFile(filepath.Join(dir, "refs", "lit", "log", n), []byte(lock), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if l, err := repo.List("refs/lit/"); err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/a", Target: blob}}) || len(l.Broken) != 0 {
+			t.Errorf("with lock files and dotfiles holding %q, List = %+v, %v; want refs/lit/log/a alone", lock, l, err)
+		}
 	}
 }
 
 func TestReadingCreatesNoRepository(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := git.RepositoryAt(dir)
+	g := gittest.Runner(t)
+	repo := g.RepositoryAt(dir)
 	if _, err := repo.Blob(gittest.ID(t, "ce013625030ba8dba906f756967f9e9ca394464a")); !errors.As(err, new(git.MissingObject)) {
 		t.Errorf("reading an absent repository failed with %v; want MissingObject", err)
 	}
-	if heads, bad, err := repo.List("refs/lit/"); err != nil || len(heads)+len(bad) != 0 {
-		t.Errorf("listing an absent repository = %v, %v, %v; want nothing", heads, bad, err)
+	if l, err := repo.List("refs/lit/"); err != nil || len(l.Heads)+len(l.Broken) != 0 {
+		t.Errorf("listing an absent repository = %+v, %v; want nothing", l, err)
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("reading created %s: %v", dir, err)
+	}
+	if spawns := g.Spawns(); len(spawns) != 0 {
+		t.Errorf("reading an absent repository ran %v", spawns)
+	}
+}
+
+// A directory at the path that is not a repository is refused, read or
+// written, never taken as an empty one.
+func TestADirectoryThatIsNoRepositoryIsRefused(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	_, errPut := gittest.Put(repo, []byte("x"))
+	_, errList := repo.List("refs/lit/")
+	_, errRead := repo.Blob(gittest.ID(t, "ce013625030ba8dba906f756967f9e9ca394464a"))
+	for _, err := range []error{errPut, errList, errRead} {
+		if err == nil || !strings.Contains(err.Error(), dir+" is no git repository") {
+			t.Errorf("using a directory that is no repository failed with %v; want its refusal, naming it", err)
+		}
+	}
+}
+
+// A tree or commit git holds that lit did not write is refused, never read
+// as less than it is: a commit with another identity, a time or a parent,
+// a tree with an executable entry.
+func TestAnObjectLitDidNotWriteIsRefused(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, _, err := repo.PutTree([]git.Entry{{Name: "a", Blob: blob}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lit, _, err := repo.PutCommit(git.Commit{Tree: tree, Message: "m\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gittest.Ask(t, dir, "fsck", "--strict"); err != nil {
+		t.Errorf("git fsck --strict refuses what lit wrote: %v", err)
+	}
+	foreign := gittest.GitIn(t, dir, "m\n", "commit-tree", tree.String())
+	child := gittest.GitIn(t, dir, "m\n", "commit-tree", "-p", lit.String(), tree.String())
+	for _, c := range []string{foreign, child} {
+		if got, err := repo.Commit(gittest.ID(t, c)); err == nil {
+			t.Errorf("Commit(%s) read a commit lit did not write as %+v", c, got)
+		}
+	}
+	exec := gittest.GitIn(t, dir, "100755 blob "+blob.String()+"\ta\x00", "mktree", "-z")
+	twice := gittest.GitIn(t, dir, "100644 blob "+blob.String()+"\ta\x00100644 blob "+blob.String()+"\ta\x00", "mktree", "-z")
+	for _, tr := range []string{exec, twice} {
+		if got, err := repo.Tree(gittest.ID(t, tr)); err == nil {
+			t.Errorf("Tree(%s) read a tree lit did not write as %v", tr, got)
+		}
 	}
 }
 

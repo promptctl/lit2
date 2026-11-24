@@ -86,22 +86,13 @@ func (r body) stored(do func(opened) cli.Outcome) cli.Outcome {
 // each step's result lands on stored as it returns, so a failing step
 // leaves the steps before it on the event.
 func replay(env fold.Env, founding fold.Founding, s *store.Store, stored *command.StoreFacts) (fold.Folded, error) {
-	heads, err := s.Heads()
+	heads, read, err := s.ReadAll()
 	if err != nil {
 		return fold.Folded{}, err
 	}
 	stored.Heads = append(stored.Heads, heads)
-	scans := make([]fold.Scanned, 0, len(heads.Streams))
-	for _, st := range heads.Streams {
-		r := store.Range{Stream: st, From: 0}
-		scan, err := s.Read(r)
-		if err != nil {
-			return fold.Folded{}, err
-		}
-		stored.Reads = append(stored.Reads, command.Read{Range: r, Scan: scan})
-		scans = append(scans, fold.Scanned{Range: r, Scan: scan})
-	}
-	folded := fold.Replay(env, founding, scans)
+	stored.Reads = append(stored.Reads, read...)
+	folded := fold.Replay(env, founding, read)
 	stored.Folds = append(stored.Folds, folded.Facts)
 	return folded, nil
 }
