@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,11 +16,11 @@ import (
 	"github.com/promptctl/lit2/internal/git/gittest"
 )
 
-// repositoryAt is lit's repository at path, the directory it is in one
-// element checked from the directory above.
+// repositoryAt is lit's repository at path, it and the directory it is in
+// checked from the directory above.
 func repositoryAt(g *git.Git, path string) git.Repository {
 	in := filepath.Dir(path)
-	return g.RepositoryAt(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))), files.MustName(filepath.Base(path)))
+	return g.RepositoryAt(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))).Sub(files.MustName(filepath.Base(path))))
 }
 
 func TestObjectsContract(t *testing.T) {
@@ -647,4 +648,70 @@ func TestTheZeroIDPrintsAsNoIDAndNoFormatReadsOne(t *testing.T) {
 	if id, err := git.ParseObjectID(0, sum); !errors.Is(err, git.ErrNoFormat) {
 		t.Errorf("an id read in no format = %v, %v; want ErrNoFormat", id, err)
 	}
+}
+
+// held is every file under dir with its size and modification time, so a
+// test sees whether anything was written there.
+func held(t *testing.T, dir string) []string {
+	t.Helper()
+	var held []string
+	err := filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := e.Info()
+		if err != nil {
+			return err
+		}
+		held = append(held, fmt.Sprintf("%s %d %v", p, info.Size(), info.ModTime()))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held
+}
+
+// A repository directory that is a link is not lit's repository, wherever
+// it points: every read and write through it is refused, and nothing is
+// written where it points.
+func TestARepositoryDirThatIsALinkIsRefused(t *testing.T) {
+	t.Run("a link to another bare repository", func(t *testing.T) {
+		g := gittest.Runner(t)
+		other := filepath.Join(gittest.Physical(t), "other")
+		if _, err := gittest.Put(repositoryAt(g, other), []byte("theirs")); err != nil {
+			t.Fatal(err)
+		}
+		before := held(t, other)
+		at := filepath.Join(gittest.Physical(t), "repo")
+		if err := os.Symlink(other, at); err != nil {
+			t.Fatal(err)
+		}
+		repo := repositoryAt(g, at)
+		if l, err := repo.List("refs/"); !errors.As(err, new(files.NotTheDirectory)) {
+			t.Errorf("a list through the link = %+v, %v; want NotTheDirectory", l, err)
+		}
+		if _, err := gittest.Put(repo, []byte("mine")); !errors.As(err, new(files.NotTheDirectory)) {
+			t.Errorf("a write through the link failed with %v; want NotTheDirectory", err)
+		}
+		if after := held(t, other); !slices.Equal(after, before) {
+			t.Errorf("the repository the link points to holds %v; want %v, as it was", after, before)
+		}
+	})
+	t.Run("a link to nothing", func(t *testing.T) {
+		nothing := filepath.Join(gittest.Physical(t), "nothing")
+		at := filepath.Join(gittest.Physical(t), "repo")
+		if err := os.Symlink(nothing, at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := gittest.Put(repositoryAt(gittest.Runner(t), at), []byte("mine")); !errors.As(err, new(files.NotTheDirectory)) {
+			t.Errorf("the first write through a link to nothing failed with %v; want NotTheDirectory", err)
+		}
+		if _, err := os.Lstat(nothing); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the link's target is there after the write: %v; want nothing made", err)
+		}
+		if info, err := os.Lstat(at); err != nil || info.Mode().Type() != fs.ModeSymlink {
+			t.Errorf("the link is %v, %v after the write; want it still the link, never renamed over", info, err)
+		}
+	})
 }

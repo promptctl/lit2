@@ -79,7 +79,7 @@ func (d Dir) walk(do intent) (*os.Root, error) {
 		var next *os.Root
 		err := do.made(func() error { return r.Mkdir(e.s, 0o755) })
 		if err == nil {
-			next, err = step(r, e.s, d.upTo(i+1), directory)
+			next, err = step(r, e.s, d.upTo(i+1), directory, d.gate)
 		}
 		if err = errors.Join(err, r.Close()); err != nil {
 			if next != nil {
@@ -92,14 +92,18 @@ func (d Dir) walk(do intent) (*os.Root, error) {
 	return r, nil
 }
 
+// Check checks each element of d by the step every Files call takes,
+// holding nothing open, and makes nothing: one missing is fs.ErrNotExist.
 // Make makes d where it is missing, its base by os.MkdirAll and each
-// element inside its parent, and checks each element by the step every
-// Files call takes, holding nothing open. It is for a writer that is
-// handed a path, as git is: lit's repository is written by git
-// processes, which take a path and no descriptor, so its directory is
-// checked, then named by its path `[LAW:single-enforcer]`.
-func (d Dir) Make() error {
-	r, err := d.walk(creating)
+// element inside its parent, checked alike. Both are for a user handed a
+// path, as git is, which checks the directory, then names it by its path.
+func (d Dir) Check() error { return d.walked(opening) }
+
+func (d Dir) Make() error { return d.walked(creating) }
+
+// walked is d walked as do says, and closed.
+func (d Dir) walked(do intent) error {
+	r, err := d.walk(do)
 	if err != nil {
 		return err
 	}
@@ -158,23 +162,16 @@ func file(flag int) entry[*os.File, NotAFile] {
 	}
 }
 
-// betweenLookAndOpen runs between the step's look at an entry and its
-// open, given the entry's path: nothing, but in files' own tests, a swap
-// of the entry, the race the step's checks of what it opened close.
-//
-// [LAW:no-shared-mutable-globals] exception: a seam only files' own test
-// build sets, one test at a time.
-var betweenLookAndOpen = func(string) {}
-
 // step is the one way an entry of a Dir is reached, a directory entered
 // or a file opened: the entry name in parent, at path, looked at without
 // following it and refused unless it is k's kind, so a symlink, wherever
 // it points, or anything else is never opened; then opened, and what was
-// opened refused unless it is k's kind and the very entry looked at. The
-// check of the opened kind holds where a swap reuses the looked-at
-// entry's inode number, which SameFile alone would take for the same
-// entry `[LAW:single-enforcer]`.
-func step[T io.Closer, R error](parent *os.Root, name, path string, k entry[T, R]) (T, error) {
+// opened refused: by k's refusal when it is not k's kind, and as Changed
+// when it is but is not the very entry looked at. The check of the opened
+// kind holds where a swap reuses the looked-at entry's inode number, which
+// SameFile alone would take for the same entry `[LAW:single-enforcer]`.
+// gate runs between the look and the open.
+func step[T io.Closer, R error](parent *os.Root, name, path string, k entry[T, R], gate func(path string)) (T, error) {
 	var none T
 	at, err := parent.Lstat(name)
 	if err != nil {
@@ -183,7 +180,7 @@ func step[T io.Closer, R error](parent *os.Root, name, path string, k entry[T, R
 	if r, refused := k.refusal(path, at.Mode()); refused {
 		return none, r
 	}
-	betweenLookAndOpen(path)
+	gate(path)
 	h, err := k.open(parent, name)
 	if err != nil {
 		return none, err
@@ -192,9 +189,11 @@ func step[T io.Closer, R error](parent *os.Root, name, path string, k entry[T, R
 	if err != nil {
 		return none, errors.Join(err, h.Close())
 	}
-	r, refused := k.refusal(path, opened.Mode())
-	if refused || !os.SameFile(opened, at) {
+	if r, refused := k.refusal(path, opened.Mode()); refused {
 		return none, errors.Join(r, h.Close())
+	}
+	if !os.SameFile(opened, at) {
+		return none, errors.Join(Changed{Path: path}, h.Close())
 	}
 	return h, nil
 }
@@ -219,7 +218,7 @@ func (o Disk) with(n Name, flag int, do func(*os.File) error) (err error) {
 		return missing(n, err)
 	}
 	defer func() { err = errors.Join(err, r.Close()) }()
-	f, err := step(r, n.s, o.dir.PathOf(n), file(flag))
+	f, err := step(r, n.s, o.dir.PathOf(n), file(flag), o.dir.gate)
 	if err != nil {
 		return missing(n, err)
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 )
@@ -162,4 +163,20 @@ func (h heldFiles) CreateOnce(p files.Name, b []byte) (files.Made, error) {
 		<-h.release
 	}
 	return h.Files.CreateOnce(p, b)
+}
+
+// The founding pin is no secret: on disk it is 0644, readable as the
+// clone's other files are, unlike the identity files beside it.
+func TestThePinOnDiskIsReadable(t *testing.T) {
+	c := worktrees(t.TempDir())[1]
+	if _, err := pin(pinFiles(c), events.EventID{0x1}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(pinPath(c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("%s is %v; want -rw-r--r--", pinPath(c), info.Mode().Perm())
+	}
 }

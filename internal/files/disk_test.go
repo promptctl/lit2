@@ -265,30 +265,42 @@ func TestAListRefusesEveryEntryThatIsNoFile(t *testing.T) {
 	}
 }
 
-// The step's checks of what it opened refuse an entry swapped after its
-// look: each row swaps it in the gap, by the seam files' tests alone set.
-func TestAnEntrySwappedAfterItsLookIsRefused(t *testing.T) {
-	// swap runs do once, when the step reaches path
-	swap := func(t *testing.T, path string, do func()) {
-		files.BetweenLookAndOpen(t, func(p string) {
-			if p == path {
-				do()
-			}
-		})
+// swapped is base/dir, gated so that do runs when the step, between its
+// look and its open, reaches path: the gate files' tests alone set.
+func swapped(base, path string, do func()) files.Dir {
+	return files.Gated(files.DirAt(base, dir), func(p string) {
+		if p == path {
+			do()
+		}
+	})
+}
+
+// changed fails t unless err is Changed, at path.
+func changed(t *testing.T, call, path string, err error) {
+	t.Helper()
+	var c files.Changed
+	if !errors.As(err, &c) || c.Path != path {
+		t.Errorf("%s failed with %v; want Changed at %s", call, err, path)
 	}
+}
+
+// The step's checks of what it opened refuse an entry swapped after its
+// look: an entry of the kind wanted that is another one is Changed, and
+// one of another kind is the kind's own refusal.
+func TestAnEntrySwappedAfterItsLookIsRefused(t *testing.T) {
 	t.Run("a directory swapped for a link to another", func(t *testing.T) {
 		base := t.TempDir()
 		at := filepath.Join(base, dir.String())
 		mkdir(t, at)
-		swap(t, at, func() {
+		d := swapped(base, at, func() {
 			if err := os.Rename(at, filepath.Join(base, "old")); err != nil {
 				t.Fatal(err)
 			}
 			mkdir(t, filepath.Join(base, "real"))
 			symlink(t, "real", at)
 		})
-		_, err := files.At(files.DirAt(base, dir)).CreateOnce(a, []byte("x"))
-		notTheDirectory(t, "CreateOnce through a directory swapped for a link", err)
+		_, err := files.At(d).CreateOnce(a, []byte("x"))
+		changed(t, "CreateOnce through a directory swapped for a link to another", at, err)
 		empty(t, filepath.Join(base, "real"))
 	})
 	t.Run("a file swapped for a link to another", func(t *testing.T) {
@@ -297,14 +309,14 @@ func TestAnEntrySwappedAfterItsLookIsRefused(t *testing.T) {
 		mkdir(t, at)
 		write(t, filepath.Join(at, a.String()), "a")
 		write(t, filepath.Join(at, "b"), "b")
-		swap(t, filepath.Join(at, a.String()), func() {
+		d := swapped(base, filepath.Join(at, a.String()), func() {
 			if err := os.Remove(filepath.Join(at, a.String())); err != nil {
 				t.Fatal(err)
 			}
 			symlink(t, "b", filepath.Join(at, a.String()))
 		})
-		_, err := files.At(files.DirAt(base, dir)).Append(a, []byte("x"))
-		notAFile(t, "Append to a file swapped for a link", err)
+		_, err := files.At(d).Append(a, []byte("x"))
+		changed(t, "Append to a file swapped for a link to another", filepath.Join(at, a.String()), err)
 		holds(t, filepath.Join(at, "b"), "b")
 	})
 	t.Run("a file swapped for a directory", func(t *testing.T) {
@@ -312,18 +324,53 @@ func TestAnEntrySwappedAfterItsLookIsRefused(t *testing.T) {
 		at := filepath.Join(base, dir.String())
 		mkdir(t, at)
 		write(t, filepath.Join(at, a.String()), "a")
-		swap(t, filepath.Join(at, a.String()), func() {
+		d := swapped(base, filepath.Join(at, a.String()), func() {
 			if err := os.Remove(filepath.Join(at, a.String())); err != nil {
 				t.Fatal(err)
 			}
 			mkdir(t, filepath.Join(at, a.String()))
 		})
-		b, err := files.At(files.DirAt(base, dir)).ReadAll(a)
+		b, err := files.At(d).ReadAll(a)
 		var refused files.NotAFile
 		if !errors.As(err, &refused) || !refused.Mode.IsDir() {
 			t.Errorf("ReadAll of a file swapped for a directory = %q, %v; want NotAFile, a directory", b, err)
 		}
 	})
+}
+
+// Check and Make take the step every call takes, holding nothing open:
+// an element that is not the directory itself is refused by both, and
+// one missing is made by Make alone.
+func TestADirIsCheckedAndMadeByTheStep(t *testing.T) {
+	base, outside := t.TempDir(), t.TempDir()
+	symlink(t, outside, filepath.Join(base, dir.String()))
+	linked := files.DirAt(base, dir).Sub(a)
+	notTheDirectory(t, "Check", linked.Check())
+	notTheDirectory(t, "Make", linked.Make())
+	empty(t, outside)
+	missing := files.DirAt(t.TempDir(), a).Sub(dir)
+	if err := missing.Check(); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Check of a missing Dir failed with %v; want fs.ErrNotExist", err)
+	}
+	if _, err := os.Lstat(missing.Path()); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Check made %s: %v; want nothing made", missing.Path(), err)
+	}
+	if err := missing.Make(); err != nil {
+		t.Fatal(err)
+	}
+	if err := missing.Check(); err != nil {
+		t.Errorf("Check of the Dir Make made failed with %v", err)
+	}
+}
+
+// A Dir's parent is it without its last element; a Dir of one element has
+// none, and asking for it is a bug.
+func TestADirsParentIsItWithoutItsLastElement(t *testing.T) {
+	base := t.TempDir()
+	if got, want := files.DirAt(base, dir).Sub(a).Parent().Path(), filepath.Join(base, dir.String()); got != want {
+		t.Errorf("the parent of dir/a is %s; want %s", got, want)
+	}
+	panics.With(t, files.ErrNoParent, func() { files.DirAt(base, dir).Parent() })
 }
 
 // A file is made in the port's mode, whatever the umask, and its

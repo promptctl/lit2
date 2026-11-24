@@ -33,18 +33,17 @@ import (
 // nothing.
 type Repository struct{ repo }
 
-// RepositoryAt is lit's repository, name in the directory in, neither of
-// which need exist yet, written by g.
-func (g *Git) RepositoryAt(in files.Dir, name files.Name) Repository {
-	return Repository{repo{b: &onDisk{g: g, in: in, dir: in.PathOf(name)}}}
+// RepositoryAt is lit's repository, the directory at, which need not
+// exist yet, written by g.
+func (g *Git) RepositoryAt(at files.Dir) Repository {
+	return Repository{repo{b: &onDisk{g: g, at: at}}}
 }
 
 type onDisk struct {
 	g *Git
-	// in is the directory the repository is in, checked before every
-	// write, and dir the repository's path in it
-	in  files.Dir
-	dir string
+	// at is the repository's directory, its one location: every path git
+	// or go-git is given comes from path
+	at files.Dir
 	// mu guards db, the go-git storage every read shares, opened once the
 	// repository exists, and packs, when its pack directory last changed as
 	// db read it.
@@ -60,14 +59,16 @@ func (d *onDisk) git(dir string, stdin []byte, args ...string) (string, error) {
 	return strings.TrimSuffix(string(out), "\n"), err
 }
 
-// exists says whether the repository has been created. Before then it
-// holds nothing, which every read answers without opening it.
-func (d *onDisk) exists() (bool, error) {
-	_, err := os.Stat(d.dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	return err == nil, err
+// path is the repository's directory as git and go-git take it, once the
+// files step has checked every element of it from its base, the
+// repository's own directory among them, by Lstat: one that is a symlink,
+// dangling or not, or no directory is NotTheDirectory, and one missing is
+// fs.ErrNotExist, beside the path, at which a read then finds nothing.
+// git takes paths, not descriptors, so the directory is checked, then
+// named by its path; this is the one place every use of it starts
+// `[LAW:single-enforcer]`.
+func (d *onDisk) path() (string, error) {
+	return d.at.Path(), d.at.Check()
 }
 
 // create makes the repository, once, as its own step: git init in a
@@ -76,18 +77,24 @@ func (d *onDisk) exists() (bool, error) {
 // loses finds the directory there, and whatever it is, every git command
 // after reads it as a repository or refuses it.
 func (d *onDisk) create() error {
-	exists, err := d.exists()
-	if err != nil || exists {
+	// a directory there is created; anything else at its name, a link to
+	// nothing among them, is refused, never renamed over
+	_, err := d.path()
+	if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	tmp, err := os.MkdirTemp(d.in.Path(), ".repo-")
+	in := d.at.Parent()
+	if err := in.Make(); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(in.Path(), ".repo-")
 	if err != nil {
 		return err
 	}
 	if err := d.init(tmp); err != nil {
 		return errors.Join(err, os.RemoveAll(tmp))
 	}
-	err = os.Rename(tmp, d.dir)
+	err = os.Rename(tmp, d.at.Path())
 	if errors.Is(err, fs.ErrExist) {
 		return os.RemoveAll(tmp)
 	}
@@ -128,22 +135,27 @@ func (d *onDisk) init(dir string) error {
 	return err
 }
 
-// created says whether the repository has been created, refusing a
-// directory at its path that is no repository: git's own mark of one is
-// its HEAD, and go-git would read any directory as one.
-func (d *onDisk) created() (bool, error) {
-	exists, err := d.exists()
-	if err != nil || !exists {
-		return false, err
+// created is the repository's path, and whether it has been created,
+// refusing a directory at its path that is no repository: git's own mark
+// of one is its HEAD, and go-git would read any directory as one. Before
+// it is created it holds nothing, which every read answers without
+// opening it.
+func (d *onDisk) created() (string, bool, error) {
+	p, err := d.path()
+	if errors.Is(err, fs.ErrNotExist) {
+		return p, false, nil
 	}
-	head, err := os.Stat(filepath.Join(d.dir, "HEAD"))
+	if err != nil {
+		return "", false, err
+	}
+	head, err := os.Lstat(filepath.Join(p, "HEAD"))
 	if err == nil && !head.Mode().IsRegular() {
 		err = errors.New("its HEAD is no file")
 	}
 	if err != nil {
-		return false, fmt.Errorf("%s: %w: %w", d.dir, errNoRepository, err)
+		return "", false, fmt.Errorf("%s: %w: %w", p, errNoRepository, err)
 	}
-	return true, nil
+	return p, true, nil
 }
 
 // errNoRepository is a directory at the repository's path that is not one.
@@ -163,24 +175,26 @@ type reader interface {
 // disk on every read, so it sees each object git writes after opening; it
 // reads the list of packs once, so packs that arrive later need a storage
 // opened after them.
-func (d *onDisk) storage() (reader, error) {
-	if d.db != nil {
-		return d.db, nil
-	}
-	created, err := d.created()
+//
+// Every read checks the repository's directory again, so a repo/ swapped
+// for a link after go-git opened it is refused, not read through.
+func (d *onDisk) storage() (reader, string, error) {
+	p, created, err := d.created()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !created {
-		return none.NewStorage(), nil
+		return none.NewStorage(), p, nil
 	}
-	// an object is opened lazily, so a look reads its header alone and never
-	// inflates a segment to learn its size
-	d.db = filesystem.NewStorageWithOptions(osfs.New(d.dir), cache.NewObjectLRUDefault(), filesystem.Options{LargeObjectThreshold: 1})
-	if info, err := os.Stat(filepath.Join(d.dir, "objects", "pack")); err == nil {
-		d.packs = info.ModTime()
+	if d.db == nil {
+		// an object is opened lazily, so a look reads its header alone and
+		// never inflates a segment to learn its size
+		d.db = filesystem.NewStorageWithOptions(osfs.New(p), cache.NewObjectLRUDefault(), filesystem.Options{LargeObjectThreshold: 1})
+		if info, err := os.Stat(filepath.Join(p, "objects", "pack")); err == nil {
+			d.packs = info.ModTime()
+		}
 	}
-	return d.db, nil
+	return d.db, p, nil
 }
 
 func (d *onDisk) look(id ObjectID) (kind, uint64, error) {
@@ -208,13 +222,13 @@ func (d *onDisk) read(id ObjectID) (kind, []byte, error) {
 func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	s, err := d.storage()
+	s, p, err := d.storage()
 	if err != nil {
 		return nil, "", err
 	}
 	o, err := s.EncodedObject(plumbing.AnyObject, plumbing.Hash(id.Sum()))
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
-		o, err = d.again(s, id)
+		o, err = d.again(s, p, id)
 	}
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
 		return nil, "", MissingObject{ID: id}
@@ -232,8 +246,8 @@ func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
 // again looks id up once more if a pack has arrived since go-git last read
 // the list of packs, which it reads once, so an object a fetch or a repack
 // brought is found, not answered missing.
-func (d *onDisk) again(s reader, id ObjectID) (plumbing.EncodedObject, error) {
-	info, err := os.Stat(filepath.Join(d.dir, "objects", "pack"))
+func (d *onDisk) again(s reader, p string, id ObjectID) (plumbing.EncodedObject, error) {
+	info, err := os.Stat(filepath.Join(p, "objects", "pack"))
 	if d.db == nil || errors.Is(err, fs.ErrNotExist) || err == nil && info.ModTime().Equal(d.packs) {
 		return nil, plumbing.ErrObjectNotFound
 	}
@@ -262,10 +276,11 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 	if len(objs) == 0 {
 		return ids, nil
 	}
-	if err := d.writable(); err != nil {
+	p, err := d.writable()
+	if err != nil {
 		return nil, err
 	}
-	tmp, err := os.MkdirTemp(d.in.Path(), ".objects-")
+	tmp, err := os.MkdirTemp(filepath.Dir(p), ".objects-")
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +299,7 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 		if len(paths[k]) == 0 {
 			continue
 		}
-		out, err := d.git(d.dir, []byte(strings.Join(paths[k], "\n")+"\n"), "hash-object", "-w", "-t", string(k), "--no-filters", "--stdin-paths")
+		out, err := d.git(p, []byte(strings.Join(paths[k], "\n")+"\n"), "hash-object", "-w", "-t", string(k), "--no-filters", "--stdin-paths")
 		if err != nil {
 			return nil, err
 		}
@@ -301,26 +316,16 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 	return ids, nil
 }
 
-// writable creates the repository if it is not yet, where a write may
-// go, under a git that keeps it durable.
-func (d *onDisk) writable() error {
-	if err := d.writer(); err != nil {
-		return err
-	}
-	return d.create()
-}
-
-// writer is nil when a git may write the repository: one that keeps it
-// durable, and the directory it is in made where missing and each element
-// of it the directory itself, so a symlinked store/ is refused as it is
-// for the logs. git is handed paths, not descriptors, so the directory is
-// checked, then named by its path: the files port's own check, in the one
-// place every write starts `[LAW:single-enforcer]`.
-func (d *onDisk) writer() error {
+// writable is the repository's path, created if it is not yet, under a
+// git that keeps it durable.
+func (d *onDisk) writable() (string, error) {
 	if err := d.g.durable(); err != nil {
-		return err
+		return "", err
 	}
-	return d.in.Make()
+	if err := d.create(); err != nil {
+		return "", err
+	}
+	return d.path()
 }
 
 // list is every ref under prefix, each name read by go-git on its own, so
@@ -333,26 +338,26 @@ func (d *onDisk) list(prefix RefName) (Listing, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	l := Listing{Heads: []RefHead{}, Broken: []BrokenRef{}}
-	s, err := d.storage()
+	s, p, err := d.storage()
 	if err != nil {
 		return Listing{}, err
 	}
-	names, err := d.refNames()
+	names, err := refNames(p)
 	if err != nil {
-		return Listing{}, fmt.Errorf("reading the refs of %s: %w", d.dir, err)
+		return Listing{}, fmt.Errorf("reading the refs of %s: %w", p, err)
 	}
 	for _, n := range names {
 		if !under(n, prefix) {
 			continue
 		}
-		h, err := d.ref(s, n)
+		h, err := ref(s, p, n)
 		var broken BrokenRef
 		switch {
 		case errors.As(err, &broken):
 			l.Broken = append(l.Broken, broken)
 		case errors.Is(err, plumbing.ErrReferenceNotFound):
 		case err != nil:
-			return Listing{}, fmt.Errorf("reading the refs of %s: %w", d.dir, err)
+			return Listing{}, fmt.Errorf("reading the refs of %s: %w", p, err)
 		default:
 			l.Heads = append(l.Heads, h)
 		}
@@ -360,14 +365,14 @@ func (d *onDisk) list(prefix RefName) (Listing, error) {
 	return l, nil
 }
 
-// refNames is the name of every ref the repository holds, sorted: each
+// refNames is the name of every ref the repository at p holds, sorted: each
 // file under refs/ git would read as one, any name with a component that
 // begins with a dot or ends in .lock left out as git leaves it out, and
 // each name packed-refs holds. Only the names are lit's to find; each ref
 // is go-git's to read.
-func (d *onDisk) refNames() ([]RefName, error) {
+func refNames(p string) ([]RefName, error) {
 	seen := map[RefName]bool{}
-	err := filepath.WalkDir(filepath.Join(d.dir, "refs"), func(path string, e fs.DirEntry, err error) error {
+	err := filepath.WalkDir(filepath.Join(p, "refs"), func(path string, e fs.DirEntry, err error) error {
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			return nil
@@ -381,14 +386,14 @@ func (d *onDisk) refNames() ([]RefName, error) {
 		case e.IsDir():
 			return nil
 		}
-		rel, err := filepath.Rel(d.dir, path)
+		rel, err := filepath.Rel(p, path)
 		seen[RefName(filepath.ToSlash(rel))] = true
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	packed, err := os.ReadFile(filepath.Join(d.dir, "packed-refs"))
+	packed, err := os.ReadFile(filepath.Join(p, "packed-refs"))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
@@ -402,23 +407,23 @@ func (d *onDisk) refNames() ([]RefName, error) {
 	return slices.Sorted(maps.Keys(seen)), nil
 }
 
-// ref is the ref n as go-git reads it, BrokenRef if it names no object,
-// or plumbing.ErrReferenceNotFound if it is gone.
-func (d *onDisk) ref(s reader, n RefName) (RefHead, error) {
+// ref is the ref n of the repository at p as go-git reads it, BrokenRef if
+// it names no object, or plumbing.ErrReferenceNotFound if it is gone.
+func ref(s reader, p string, n RefName) (RefHead, error) {
 	r, err := s.Reference(plumbing.ReferenceName(n))
 	// go-git reads a loose file it cannot parse as the packed ref, which a
 	// name lit found on disk need not have, so not found is gone only if
 	// the file is; any other failure to read it is a broken ref, never the
 	// listing's
 	if err != nil {
-		if _, serr := os.Lstat(d.refPath(n)); errors.Is(err, plumbing.ErrReferenceNotFound) && errors.Is(serr, fs.ErrNotExist) {
+		if _, serr := os.Lstat(refPath(p, n)); errors.Is(err, plumbing.ErrReferenceNotFound) && errors.Is(serr, fs.ErrNotExist) {
 			return RefHead{}, err
 		}
-		return RefHead{}, d.broken(n, fmt.Sprintf("go-git cannot read it: %v", err))
+		return RefHead{}, broken(p, n, fmt.Sprintf("go-git cannot read it: %v", err))
 	}
 	h := r.Hash()
 	if r.Type() != plumbing.HashReference || h.IsZero() {
-		return RefHead{}, d.broken(n, fmt.Sprintf("it holds %q, no object id", r.Strings()[1]))
+		return RefHead{}, broken(p, n, fmt.Sprintf("it holds %q, no object id", r.Strings()[1]))
 	}
 	target, err := ObjectIDFrom(SHA1, h[:])
 	return RefHead{Name: n, Target: target}, err
@@ -427,8 +432,8 @@ func (d *onDisk) ref(s reader, n RefName) (RefHead, error) {
 // broken is the ref n, which names no object, said by what its file holds,
 // since go-git reads a torn file as the zero id or the packed ref; packed
 // is why, for a name with no loose file.
-func (d *onDisk) broken(n RefName, packed string) BrokenRef {
-	b, err := os.ReadFile(d.refPath(n))
+func broken(p string, n RefName, packed string) BrokenRef {
+	b, err := os.ReadFile(refPath(p, n))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return BrokenRef{Name: n, Why: packed}
@@ -451,10 +456,14 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	default:
 		panic(fmt.Sprintf("git: %T is not what a ref was", from))
 	}
-	if err := d.writer(); err != nil {
+	if err := d.g.durable(); err != nil {
 		return err
 	}
-	_, err := d.git(d.dir, nil, "update-ref", string(name), to.String(), old)
+	p, err := d.path()
+	if err != nil {
+		return err
+	}
+	_, err = d.git(p, nil, "update-ref", string(name), to.String(), old)
 	if err == nil {
 		return nil
 	}
@@ -475,11 +484,11 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 func (d *onDisk) was(name RefName) (Was, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	s, err := d.storage()
+	s, p, err := d.storage()
 	if err != nil {
 		return nil, err
 	}
-	h, err := d.ref(s, name)
+	h, err := ref(s, p, name)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return Absent{}, nil
 	}
@@ -489,7 +498,7 @@ func (d *onDisk) was(name RefName) (Was, error) {
 	return Named{Target: h.Target}, nil
 }
 
-// refPath is the file of the loose ref name.
-func (d *onDisk) refPath(name RefName) string {
-	return filepath.Join(d.dir, filepath.FromSlash(string(name)))
+// refPath is the file of the loose ref name in the repository at p.
+func refPath(p string, name RefName) string {
+	return filepath.Join(p, filepath.FromSlash(string(name)))
 }

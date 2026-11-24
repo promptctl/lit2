@@ -3,6 +3,8 @@
 package files_test
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -44,7 +46,7 @@ func TestAFileSwappedForAFIFOIsRefusedAtOnce(t *testing.T) {
 	at := filepath.Join(base, dir.String(), a.String())
 	mkdir(t, filepath.Dir(at))
 	write(t, at, "a")
-	files.BetweenLookAndOpen(t, func(p string) {
+	f := files.At(files.Gated(files.DirAt(base, dir), func(p string) {
 		if p != at {
 			return
 		}
@@ -54,8 +56,7 @@ func TestAFileSwappedForAFIFOIsRefusedAtOnce(t *testing.T) {
 		if err := syscall.Mkfifo(at, 0o644); err != nil {
 			t.Error(err)
 		}
-	})
-	f := files.At(files.DirAt(base, dir))
+	}))
 	done := make(chan error, 1)
 	go func() {
 		_, err := f.ReadAt(a, 0, 100)
@@ -63,7 +64,10 @@ func TestAFileSwappedForAFIFOIsRefusedAtOnce(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		notAFile(t, "ReadAt of a file swapped for a FIFO", err)
+		var refused files.NotAFile
+		if !errors.As(err, &refused) || refused.Mode.Type() != fs.ModeNamedPipe {
+			t.Errorf("ReadAt of a file swapped for a FIFO failed with %v; want NotAFile, a FIFO", err)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("a read of a file swapped for a FIFO had not returned after 10s; want it refused at once")
 	}

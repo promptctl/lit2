@@ -23,16 +23,16 @@ var (
 	repoDir  = files.MustName("repo")
 )
 
-// location is where the store of at's clone lives: its own directory,
-// which holds lit's repository, and its logs' directory, each element of
-// both checked from the common dir.
+// location is where the store of at's clone lives: its logs' directory
+// and lit's repository's, each element of both checked from the common
+// dir.
 type location struct {
-	store, logs files.Dir
+	logs, repo files.Dir
 }
 
 func locate(at git.Checkout) location {
 	store := at.Shared().Sub(storeDir)
-	return location{store: store, logs: store.Sub(logDir)}
+	return location{logs: store.Sub(logDir), repo: store.Sub(repoDir)}
 }
 
 // LogName is the log of the checkout id names, in the logs' directory.

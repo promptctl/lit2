@@ -76,7 +76,14 @@ var ErrNotABase = errors.New("not an absolute path to start a Dir from")
 type Dir struct {
 	base  string
 	elems []Name
+	// gate runs between the step's look at each entry and its open, given
+	// the entry's path: ungated, but in a Dir files' own tests gate, a
+	// swap of the entry, the race the step's checks of what it opened close
+	gate func(path string)
 }
+
+// ungated is the gate of every Dir but a test's: nothing.
+func ungated(string) {}
 
 // DirAt is the directory first in base, which must be absolute; a base
 // that is not is a bug, so it panics `[LAW:parse-dont-validate]`.
@@ -84,12 +91,25 @@ func DirAt(base string, first Name) Dir {
 	if !filepath.IsAbs(base) {
 		panic(fmt.Errorf("files: DirAt(%q): %w", base, ErrNotABase))
 	}
-	return Dir{base: base, elems: []Name{first}}
+	return Dir{base: base, elems: []Name{first}, gate: ungated}
 }
 
 // Sub is the directory n in d.
 func (d Dir) Sub(n Name) Dir {
-	return Dir{base: d.base, elems: append(slices.Clone(d.elems), n)}
+	return Dir{base: d.base, elems: append(slices.Clone(d.elems), n), gate: d.gate}
+}
+
+// ErrNoParent is the parent asked of a Dir of one element, whose parent is
+// its base, a path, which no Dir names.
+var ErrNoParent = errors.New("no Dir is the parent of a Dir of one element")
+
+// Parent is the directory d is in: d without its last element. Asking it
+// of a Dir of one element is a bug, so it panics.
+func (d Dir) Parent() Dir {
+	if len(d.elems) < 2 {
+		panic(fmt.Errorf("files: the parent of %s: %w", d.Path(), ErrNoParent))
+	}
+	return Dir{base: d.base, elems: slices.Clone(d.elems[:len(d.elems)-1]), gate: d.gate}
 }
 
 // Path is the directory's path, as a message names it.
@@ -200,6 +220,15 @@ func (n NotAFile) Error() string {
 // a symlink, inside the base, outside it or dangling, or anything else
 // that is not a directory.
 type NotTheDirectory struct{ Path string }
+
+// Changed is an entry that was another one, of the kind the step wanted,
+// when it was opened than when it was looked at: it changed between the
+// look and the open, so nothing is read or written through it.
+type Changed struct{ Path string }
+
+func (c Changed) Error() string {
+	return fmt.Sprintf("%s changed between its look and its open, so nothing is read or written through it", c.Path)
+}
 
 func (n NotTheDirectory) Error() string {
 	return fmt.Sprintf("%s is not a directory itself, so nothing is read or written through it", n.Path)

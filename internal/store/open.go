@@ -30,7 +30,7 @@ type Ports struct {
 // ports.
 func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader) Ports {
 	l := locate(at)
-	repo := g.RepositoryAt(l.store, repoDir)
+	repo := g.RepositoryAt(l.repo)
 	return Ports{files: files.At(l.logs), objects: repo, refs: repo, entropy: entropy}
 }
 

@@ -23,11 +23,11 @@ func WithFiles(p Ports, f files.Files) Ports {
 func LogDir(at git.Checkout) files.Dir { return locate(at).logs }
 
 // RepositoryDir is lit's repository of at's clone, as DiskPorts opens it.
-func RepositoryDir(at git.Checkout) string { return locate(at).store.PathOf(repoDir) }
+func RepositoryDir(at git.Checkout) string { return locate(at).repo.Path() }
 
-// StoreDir is the directory of at's clone's store, lit's repository's
-// directory, as DiskPorts opens it.
-func StoreDir(at git.Checkout) files.Dir { return locate(at).store }
+// StoreDir is the directory of at's clone's store, which lit's repository
+// is in, as DiskPorts opens it.
+func StoreDir(at git.Checkout) files.Dir { return locate(at).repo.Parent() }
 
 // RepositoryOf is lit's repository p's store runs over.
 func RepositoryOf(p Ports) (git.Objects, git.Refs) { return p.objects, p.refs }
