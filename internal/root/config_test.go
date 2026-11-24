@@ -345,7 +345,7 @@ func (unreadableHistory) EverAt(string, git.ObjectID) (bool, error) {
 func TestConfigStatusSaysTheLineWhenTheHistoryDoesNotRead(t *testing.T) {
 	s := newSession(t)
 	code := s.twin.Code
-	s.twin.Process.Code = func(git.Checkout, git.ObjectFormat) git.Code { return unreadableHistory{Code: code} }
+	s.twin.Process.Code = func(git.Checkout) git.Code { return unreadableHistory{Code: code} }
 	r := s.lit("config", "status")
 	def := blob(assets.DefaultWorkspace.Bytes()).String()
 	if r.status != 78 || reasonOf(r.event) != "workspace" || r.out != def[:7]+" in force · .lit/workspace.toml matches\n" || !strings.Contains(r.err, "the history is gone") {

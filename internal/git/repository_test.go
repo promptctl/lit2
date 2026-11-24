@@ -55,7 +55,7 @@ func TestTheNameGrammarIsASubsetOfGits(t *testing.T) {
 			t.Errorf("lit takes the tree entry %q; git fsck --strict refuses it: %v", n, err)
 		}
 	}
-	for _, n := range gittest.Refused {
+	for _, n := range gittest.Refused() {
 		if strings.HasPrefix(string(n), "refs/") && !strings.ContainsRune(string(n), 0) {
 			if _, err := gittest.Ask(t, repo, "check-ref-format", string(n)); err == nil {
 				t.Errorf("lit refuses %q as the audit found git does; git check-ref-format takes it", n)
@@ -122,51 +122,84 @@ func TestLocateWithNoGitIsNotFoundAndARefusalIsGits(t *testing.T) {
 	if !errors.As(err, new(git.Refused)) || !strings.Contains(err.Error(), "work tree") {
 		t.Errorf("Locate in a bare repository failed with %v; want git's refusal, which names the work tree", err)
 	}
+	// a pruned worktree: its .git names a git dir that is gone
+	pruned := gittest.Physical(t)
+	gone := filepath.Join(gittest.Physical(t), "worktrees", "gone")
+	if err := os.WriteFile(filepath.Join(pruned, ".git"), []byte("gitdir: "+gone+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gittest.Runner(t).Locate(pruned); !errors.As(err, new(git.Refused)) || !strings.Contains(err.Error(), gone) {
+		t.Errorf("Locate in a pruned worktree failed with %v; want git's refusal, naming the git dir %s", err, gone)
+	}
 }
 
-// A git missing from PATH is one loud error from every spawn, and nothing
-// ran.
+// lit's repository is created with its format and durability pinned: git
+// fsyncs every object and ref it writes, and runs no gc or maintenance.
+func TestLitsRepositoryIsCreatedPinned(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	if _, _, err := gittest.Runner(t).RepositoryAt(dir).PutBlob(nil); err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{"core.fsync": "objects,reference", "core.fsyncMethod": "fsync", "gc.auto": "0", "maintenance.auto": "false", "extensions.objectFormat": "", "core.repositoryFormatVersion": "0"} {
+		got, _ := gittest.Ask(t, dir, "config", "--file", "config", k)
+		if strings.TrimSpace(got) != want {
+			t.Errorf("lit's repository has %s = %q; want %q", k, strings.TrimSpace(got), want)
+		}
+	}
+	if format := strings.TrimSpace(gittest.Git(t, dir, "rev-parse", "--show-ref-format")); format != "files" {
+		t.Errorf("lit's repository keeps its refs as %s; want files", format)
+	}
+}
+
+// A git missing from PATH is one loud error from every spawn, each on the
+// record as never started.
 func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
-	g := git.Find([]string{"PATH=" + t.TempDir()})
+	g := git.Find([]string{"PATH=" + t.TempDir() + "::relative"})
 	_, errLocate := g.Locate(t.TempDir())
 	_, _, errPut := g.RepositoryAt(filepath.Join(t.TempDir(), "repo")).PutBlob(nil)
 	for _, err := range []error{errLocate, errPut} {
-		if err == nil || !strings.Contains(err.Error(), "git is not on PATH") {
+		if err == nil || !strings.Contains(err.Error(), "git is not in an absolute directory on PATH") {
 			t.Errorf("a spawn with no git failed with %v; want the one error naming PATH", err)
 		}
 	}
-	if spawns := g.Spawns(); len(spawns) != 0 {
-		t.Errorf("with no git %v ran", spawns)
+	spawns := g.Spawns()
+	if len(spawns) != 2 {
+		t.Fatalf("with no git the record is %+v; want both attempts", spawns)
+	}
+	for _, s := range spawns {
+		if u, ok := s.Ended.(git.Unstarted); !ok || !strings.Contains(u.Why, "PATH") {
+			t.Errorf("an attempt with no git is recorded as %+v; want it never started, naming PATH", s)
+		}
 	}
 }
 
-// Every git process is on the record: its arguments, its exit and its
-// stderr, the long-lived batch included once it ends.
+// Every git process is on the record: its arguments, how it ended and its
+// stderr. A read of lit's repository is go-git's, in process, and spawns
+// nothing.
 func TestEverySpawnIsRecorded(t *testing.T) {
 	g := gittest.Runner(t)
 	dir := gittest.Physical(t)
 	if _, err := g.Locate(dir); err == nil {
 		t.Fatal("Locate outside a repository succeeded")
 	}
+	refused := g.Spawns()
+	if len(refused) != 1 || refused[0].Ended != (git.Exited{Code: 128}) || !strings.Contains(refused[0].Stderr, "not a git repository") || !slices.Contains(refused[0].Args, "rev-parse") {
+		t.Errorf("the refused Locate is recorded as %+v; want rev-parse, exit 128 and git's stderr", refused)
+	}
 	repo := g.RepositoryAt(filepath.Join(dir, "repo"))
 	id, _, err := repo.PutBlob([]byte("x"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	written := g.Spawns()
+	if last := written[len(written)-1]; last.Ended != (git.Exited{Code: 0}) || len(last.Args) == 0 {
+		t.Errorf("the write is recorded as %+v; want its arguments and exit 0", last)
+	}
 	if _, err := repo.Blob(id); err != nil {
 		t.Fatal(err)
 	}
-	spawns := g.Spawns()
-	var commands []string
-	for _, s := range spawns {
-		commands = append(commands, s.Args[slices.IndexFunc(s.Args, func(a string) bool { return !strings.HasPrefix(a, "-") && !strings.Contains(a, "=") })])
-	}
-	// the read is go-git's, in process, so it spawns nothing
-	if want := []string{"rev-parse", "init", "config", "config", "mktree", "hash-object"}; !slices.Equal(commands, want) {
-		t.Errorf("the spawns ran %v; want %v", commands, want)
-	}
-	if spawns[0].Exit != 128 || !strings.Contains(spawns[0].Stderr, "not a git repository") || spawns[len(spawns)-1].Exit != 0 {
-		t.Errorf("the spawns were %+v; want the refusal with git's stderr and the write's success", spawns)
+	if read := g.Spawns(); len(read) != len(written) {
+		t.Errorf("a read spawned %+v", read[len(written):])
 	}
 }
 
@@ -194,10 +227,10 @@ func TestRepositoryListsPackedAndLooseRefs(t *testing.T) {
 	gittest.Git(t, dir, "update-ref", "refs/lit/log/packed", blob.String())
 	gittest.Git(t, dir, "update-ref", "refs/lit/log/both", blob.String())
 	gittest.Git(t, dir, "pack-refs", "--all")
-	if err := repo.Replace("refs/lit/log/both", other); err != nil {
+	if err := repo.Replace("refs/lit/log/both", git.Named{Target: blob}, other); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Replace("refs/lit/log/loose", other); err != nil {
+	if err := repo.Replace("refs/lit/log/loose", git.Absent{}, other); err != nil {
 		t.Fatal(err)
 	}
 	heads, err := repo.List("refs/lit/")
@@ -217,7 +250,7 @@ func TestABrokenRefFailsTheListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Replace("refs/lit/log/good", blob); err != nil {
+	if err := repo.Replace("refs/lit/log/good", git.Absent{}, blob); err != nil {
 		t.Fatal(err)
 	}
 	for _, torn := range []string{"", "torn", "ref: refs/lit/log/good"[:9]} {
@@ -240,7 +273,7 @@ func TestALockFileIsNoRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Replace("refs/lit/log/a", blob); err != nil {
+	if err := repo.Replace("refs/lit/log/a", git.Absent{}, blob); err != nil {
 		t.Fatal(err)
 	}
 	for _, lock := range []string{"", blob.String() + "\n"} {
@@ -309,6 +342,9 @@ func TestAnObjectLitDidNotWriteIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := gittest.Ask(t, dir, "fsck", "--strict"); err != nil {
+		t.Errorf("git fsck --strict refuses what lit wrote: %v", err)
+	}
 	foreign := gittest.GitIn(t, dir, "m\n", "commit-tree", tree.String())
 	child := gittest.GitIn(t, dir, "m\n", "commit-tree", "-p", lit.String(), tree.String())
 	for _, c := range []string{foreign, child} {
@@ -317,11 +353,11 @@ func TestAnObjectLitDidNotWriteIsRefused(t *testing.T) {
 		}
 	}
 	exec := gittest.GitIn(t, dir, "100755 blob "+blob.String()+"\ta\x00", "mktree", "-z")
-	if got, err := repo.Tree(gittest.ID(t, exec)); err == nil {
-		t.Errorf("Tree(%s) read a tree lit did not write as %v", exec, got)
-	}
-	if _, err := gittest.Ask(t, dir, "fsck", "--strict"); err != nil {
-		t.Errorf("git fsck --strict refuses what lit wrote: %v", err)
+	twice := gittest.GitIn(t, dir, "100644 blob "+blob.String()+"\ta\x00100644 blob "+blob.String()+"\ta\x00", "mktree", "-z")
+	for _, tr := range []string{exec, twice} {
+		if got, err := repo.Tree(gittest.ID(t, tr)); err == nil {
+			t.Errorf("Tree(%s) read a tree lit did not write as %v", tr, got)
+		}
 	}
 }
 

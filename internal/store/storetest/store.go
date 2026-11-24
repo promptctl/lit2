@@ -333,7 +333,7 @@ func Store(t *testing.T, fresh Fresh) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := p.Refs.Replace(ref.Name(), held); err != nil {
+		if err := p.Refs.Replace(ref.Name(), git.Absent{}, held); err != nil {
 			t.Fatal(err)
 		}
 		out := PublishOwn(t, s)

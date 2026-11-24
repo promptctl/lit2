@@ -127,16 +127,26 @@ type line struct {
 
 // spawnLine is one git process the invocation ran; the block is empty,
 // never absent, when none ran.
+// It carries its exit status, or why it never started.
 type spawnLine struct {
-	Args   []string `json:"args"`
-	Exit   int      `json:"exit"`
-	Stderr string   `json:"stderr,omitempty"`
+	Args      []string `json:"args"`
+	Exit      *int     `json:"exit,omitempty"`
+	Unstarted string   `json:"unstarted,omitempty"`
+	Stderr    string   `json:"stderr,omitempty"`
 }
 
 func gitBlock(spawns []git.Spawn) []spawnLine {
 	l := make([]spawnLine, len(spawns))
 	for i, s := range spawns {
-		l[i] = spawnLine(s)
+		l[i] = spawnLine{Args: s.Args, Stderr: s.Stderr}
+		switch e := s.Ended.(type) {
+		case git.Exited:
+			l[i].Exit = &e.Code
+		case git.Unstarted:
+			l[i].Unstarted = e.Why
+		default:
+			panic(fmt.Sprintf("command: %T is not how a spawn ended", e))
+		}
 	}
 	return l
 }
@@ -228,7 +238,7 @@ func placeLine(p Place) any {
 	switch p := p.(type) {
 	case InCheckout:
 		c := p.Checkout
-		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, Identity: identityLine(p.Identity, c)}}
+		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, ObjectFormat: c.Format.String(), Identity: identityLine(p.Identity, c)}}
 	case NoCheckout:
 		return noCheckoutLine{dirLine(p)}
 	case Unlocatable:
@@ -277,10 +287,11 @@ type (
 	}
 
 	checkoutLine struct {
-		WorkTree  string `json:"work_tree"`
-		GitDir    string `json:"git_dir"`
-		CommonDir string `json:"common_dir"`
-		Identity  any    `json:"identity"`
+		WorkTree     string `json:"work_tree"`
+		GitDir       string `json:"git_dir"`
+		CommonDir    string `json:"common_dir"`
+		ObjectFormat string `json:"object_format"`
+		Identity     any    `json:"identity"`
 	}
 	dirLine struct {
 		Dir string `json:"dir"`

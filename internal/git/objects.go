@@ -146,14 +146,30 @@ type Objects interface {
 }
 
 // Refs lists and replaces refs in lit's own object database. A ref is
-// replaced, never advanced: only its writer updates it.
+// replaced, never advanced, and only from what its writer read it naming,
+// so a replace that raced another fails rather than undoing it.
 type Refs interface {
 	// List is every ref under prefix, sorted by name: the ref the prefix
 	// names and every ref below it, as git for-each-ref matches a prefix.
 	List(prefix RefName) ([]RefHead, error)
-	// Replace points name at to, an object the repository holds.
-	Replace(name RefName, to ObjectID) error
+	// Replace points name at to, an object the repository holds, if name
+	// still is what from says; otherwise it refuses.
+	Replace(name RefName, from Was, to ObjectID) error
 }
+
+// Was is what a ref named when its writer read it: an object, or nothing.
+//
+//sumtype:decl
+type Was interface{ was() }
+
+// Named is a ref naming Target.
+type Named struct{ Target ObjectID }
+
+// Absent is no ref.
+type Absent struct{}
+
+func (Named) was()  {}
+func (Absent) was() {}
 
 // name is the one grammar of a tree entry's name and of a refname's
 // component in lit's repository: a letter or digit, then letters, digits,

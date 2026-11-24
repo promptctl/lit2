@@ -32,20 +32,27 @@ type (
 
 func (b blob) encode() (kind, []byte) { return blobKind, b }
 
+// fileMode is the mode of every entry in a lit tree: a regular file.
+const fileMode = "100644"
+
 // encode writes each entry as git does: its mode, a space, its name, a NUL
-// and its blob's sum. Every entry is a regular file.
+// and its blob's sum.
 func (t tree) encode() (kind, []byte) {
 	var b []byte
 	for _, e := range t {
-		b = append(append(append(b, "100644 "+e.Name...), 0), e.Blob.Sum()...)
+		b = append(append(append(b, fileMode+" "+e.Name...), 0), e.Blob.Sum()...)
 	}
 	return treeKind, b
 }
 
+// byName is git's order of a tree's entries, which lit's names, holding no
+// / and no byte past ASCII, share with plain byte order.
+func byName(a, b Entry) int { return strings.Compare(a.Name, b.Name) }
+
 // identity is every lit commit's author and committer line: fixed, at time
 // zero, so a commit is a pure function of its tree and message, publish
 // reads no clock, and racing publishes of one log converge on one id
-// `[LAW:effects-at-boundaries]`. litEnv hands git the same identity.
+// `[LAW:effects-at-boundaries]`.
 const identity = "author lit <lit> 0 +0000\ncommitter lit <lit> 0 +0000\n"
 
 func (c commit) encode() (kind, []byte) {
@@ -58,8 +65,11 @@ func idOf(o object) ObjectID {
 }
 
 // backend is where a repository's objects and refs are kept: git, or the
-// twin's maps. Everything a repository checks, it checks above this, once
-// for both `[LAW:one-type-per-behavior]`.
+// twin's maps. Every rule of lit's own, its names, kinds and shapes, a
+// repository checks above this, once for both
+// `[LAW:one-type-per-behavior]`; a rule of git's, that a ref cannot sit
+// beside its own directory or move from what it no longer names, git
+// enforces for the disk and the twin copies below.
 type backend interface {
 	// look is the kind and size of the object id names, or MissingObject.
 	look(id ObjectID) (kind, uint64, error)
@@ -68,7 +78,8 @@ type backend interface {
 	// write stores o and is the id the backend gave it.
 	write(o object) (ObjectID, error)
 	list(prefix RefName) ([]RefHead, error)
-	replace(name RefName, to ObjectID) error
+	// replace points name at to if it still is what from says.
+	replace(name RefName, from Was, to ObjectID) error
 }
 
 // repo is lit's repository over a backend: its Objects and Refs.
@@ -86,7 +97,7 @@ func (r repo) BlobSize(id ObjectID) (uint64, error) { return r.holds(blobKind, i
 // name is one the name grammar admits, no two alike, and each holds a blob
 // the repository has.
 func (r repo) PutTree(es []Entry) (ObjectID, Stored, error) {
-	sorted := slices.SortedFunc(slices.Values(es), func(a, b Entry) int { return strings.Compare(a.Name, b.Name) })
+	sorted := slices.SortedFunc(slices.Values(es), byName)
 	for i, e := range sorted {
 		if !name.MatchString(e.Name) {
 			return ObjectID{}, 0, fmt.Errorf("%q cannot name a tree entry: a name is letters, digits, _ and -", e.Name)
@@ -112,13 +123,18 @@ func (r repo) Tree(id ObjectID) ([]Entry, error) {
 	for rest := b; len(rest) > 0; {
 		mode, after, _ := bytes.Cut(rest, []byte(" "))
 		n, after, _ := bytes.Cut(after, []byte{0})
-		if string(mode) != "100644" || !name.Match(n) || len(after) < 20 {
+		if string(mode) != fileMode || !name.Match(n) || len(after) < 20 {
 			return nil, fmt.Errorf("tree %s: not a lit tree", id)
 		}
 		blob, _ := ObjectIDFrom(SHA1, after[:20])
 		es, rest = append(es, Entry{Name: string(n), Blob: blob}), after[20:]
 	}
-	if _, again := tree(es).encode(); !bytes.Equal(again, b) || !slices.IsSortedFunc(es, func(a, b Entry) int { return strings.Compare(a.Name, b.Name) }) {
+	_, again := tree(es).encode()
+	strict := true
+	for i := 1; i < len(es); i++ {
+		strict = strict && byName(es[i-1], es[i]) < 0
+	}
+	if !bytes.Equal(again, b) || !strict {
 		return nil, fmt.Errorf("tree %s: not a lit tree", id)
 	}
 	return es, nil
@@ -158,8 +174,9 @@ func (r repo) List(prefix RefName) ([]RefHead, error) {
 	return r.b.list(prefix)
 }
 
-// Replace points name at to, an object the repository holds.
-func (r repo) Replace(name RefName, to ObjectID) error {
+// Replace points name at to, an object the repository holds, if name still
+// is what from says.
+func (r repo) Replace(name RefName, from Was, to ObjectID) error {
 	if err := parseRefName(name); err != nil {
 		return err
 	}
@@ -169,7 +186,7 @@ func (r repo) Replace(name RefName, to ObjectID) error {
 	if _, _, err := r.b.look(to); err != nil {
 		return err
 	}
-	return r.b.replace(name, to)
+	return r.b.replace(name, from, to)
 }
 
 // put stores o unless the repository holds it already; content addressing

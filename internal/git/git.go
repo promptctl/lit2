@@ -45,12 +45,16 @@ func (n NotFound) Error() string { return fmt.Sprintf("no git checkout at or abo
 // there: under the process's environment, so GIT_DIR, GIT_WORK_TREE and
 // GIT_CEILING_DIRECTORIES count as they do for git (D10), in the one git
 // process every command starts. git finding no repository is NotFound;
-// any other refusal, a bare repository or one git will not trust, is
-// git's own error.
-func (g Git) Locate(dir string) (Checkout, error) {
+// any other refusal, a bare repository, one git will not trust, or a .git
+// naming a git dir that is gone, as a pruned worktree's does, is git's own
+// error.
+func (g *Git) Locate(dir string) (Checkout, error) {
 	out, err := g.run(dir, g.userEnv(), nil, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir", "--show-object-format")
 	var refused Refused
-	if errors.As(err, &refused) && strings.Contains(refused.Spawn.Stderr, "not a git repository") {
+	// git's words for a search that found nothing, to / or to a ceiling or
+	// mount point; a .git it found but cannot follow says "not a git
+	// repository: <dir>"
+	if errors.As(err, &refused) && strings.Contains(refused.Spawn.Stderr, "not a git repository (or any ") {
 		return Checkout{}, NotFound{Dir: dir}
 	}
 	if err != nil {

@@ -74,7 +74,7 @@ row; the architecture test fails on one without.
 | §3.13 Rewrite | `fold`, `store` | applied by the fold; segments re-sealed by store |
 | §3.14 Identity | `root`, `events` | the checkout id, principal and agent label read in root; attribution carried in events |
 | §3.15 The workspace file | `config`, `fold`, `evaluate`, `verbs`, `root`, `assets` | the one schema parse of an applied version in config; the applies and which version is in force folded; the §3.5 check against every live version in evaluate; the one judge of an apply, `Admit`, and the board's `workspace` line in verbs; `config commit`, `config status` and init's version one in root; the default profile in assets |
-| §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs through git |
+| §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs written by the git binary and read by go-git |
 | §3.17 Principal and policy | `events`, `fold` | the key, signature and suite in events; the policy as events folded |
 | §3.18 Capability | `verbs`, `fold` | the capability verdict in fold's step, the one enforcer, over roles from the folded policy; the default roles, membership paths compiled to proposals and a refusal's rendering in verbs |
 | §3.19 Tier and envelope | `events`, `verbs` | the envelope and suite in events; prose sealed in verbs, so no layer below sees it |

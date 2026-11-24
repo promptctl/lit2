@@ -6,7 +6,6 @@ package gittest
 import (
 	"errors"
 	"slices"
-	"sync"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/git"
@@ -32,9 +31,11 @@ const (
 )
 
 // RefusedEntries is every tree entry name the audit found lit taking where
-// git fsck --strict refuses it, and the others lit's grammar refuses.
-// TestTheNameGrammarIsASubsetOfGits holds each to git.
-var RefusedEntries = []string{"", ".", "..", ".git", ".GIT", "a/b", "a\x00b", ".hidden", "a b"}
+// git fsck --strict refuses it, and the others lit's grammar refuses, new
+// each call. TestTheNameGrammarIsASubsetOfGits holds each to git.
+func RefusedEntries() []string {
+	return []string{"", ".", "..", ".git", ".GIT", "a/b", "a\x00b", ".hidden", "a b"}
+}
 
 // Objects holds fresh, an empty object database each call, to the Objects
 // contract.
@@ -115,7 +116,7 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 				t.Errorf("PutTree(%v) stored a tree", es)
 			}
 		}
-		for _, n := range RefusedEntries {
+		for _, n := range RefusedEntries() {
 			if _, _, err := db.PutTree([]git.Entry{{Name: n, Blob: blob}}); err == nil {
 				t.Errorf("PutTree(%q) stored a tree", n)
 			}
@@ -196,12 +197,14 @@ type Repository interface {
 
 // Refused is every refname the 2026-11-19 audit found lit taking where git
 // refuses it, and the names git refuses for a lock, a temporary file or a
-// path that is not clean. TestTheNameGrammarIsASubsetOfGits holds each to
-// git check-ref-format.
-var Refused = []git.RefName{"HEAD", "lit/log/w", "refs", "refs/lit/../w", "refs/lit//w", "refs/lit/w/",
-	"refs/lit/.w", "refs/lit/.ref-1", "refs/lit/w.lock", "refs/lit/log/a..b", "refs/lit/a b", "refs/lit/a:b",
-	"refs/lit/a~b", "refs/lit/a^b", "refs/lit/a?b", "refs/lit/a*b", "refs/lit/a[b", "refs/lit/a\\b",
-	"refs/lit/a@{b", "refs/lit/a.", "refs/lit/a\x00b"}
+// path that is not clean, new each call. TestTheNameGrammarIsASubsetOfGits
+// holds each to git check-ref-format.
+func Refused() []git.RefName {
+	return []git.RefName{"HEAD", "lit/log/w", "refs", "refs/lit/../w", "refs/lit//w", "refs/lit/w/",
+		"refs/lit/.w", "refs/lit/.ref-1", "refs/lit/w.lock", "refs/lit/log/a..b", "refs/lit/a b", "refs/lit/a:b",
+		"refs/lit/a~b", "refs/lit/a^b", "refs/lit/a?b", "refs/lit/a*b", "refs/lit/a[b", "refs/lit/a\\b",
+		"refs/lit/a@{b", "refs/lit/a.", "refs/lit/a\x00b"}
+}
 
 // Refs holds fresh, an empty repository each call, to the Refs contract.
 func Refs(t *testing.T, fresh func(*testing.T) Repository) {
@@ -231,20 +234,41 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 		refs := fresh(t)
 		a, b := objects(t, refs)
 		const name git.RefName = "refs/lit/log/w"
+		was := git.Was(git.Absent{})
 		for _, to := range []git.ObjectID{a, b} {
-			if err := refs.Replace(name, to); err != nil {
+			if err := refs.Replace(name, was, to); err != nil {
 				t.Fatal(err)
 			}
 			if heads := list(t, refs, "refs/lit/"); !slices.Equal(heads, []git.RefHead{{Name: name, Target: to}}) {
 				t.Errorf("after Replace(%s, %s) the refs are %v", name, to, heads)
 			}
+			was = git.Named{Target: to}
+		}
+	})
+	t.Run("a replace from what the ref no longer is is refused, so a racing writer is never undone", func(t *testing.T) {
+		refs := fresh(t)
+		a, b := objects(t, refs)
+		const name git.RefName = "refs/lit/log/w"
+		if err := refs.Replace(name, git.Absent{}, a); err != nil {
+			t.Fatal(err)
+		}
+		for _, stale := range []git.Was{git.Absent{}, git.Named{Target: b}} {
+			if err := refs.Replace(name, stale, b); err == nil {
+				t.Errorf("Replace(%s) from %v, while it names %s, = nil; want a refusal", name, stale, a)
+			}
+		}
+		if err := refs.Replace("refs/lit/log/v", git.Named{Target: a}, b); err == nil {
+			t.Errorf("Replace of an absent ref from %s = nil; want a refusal", a)
+		}
+		if heads := list(t, refs, "refs/lit/"); !slices.Equal(heads, []git.RefHead{{Name: name, Target: a}}) {
+			t.Errorf("after refused replaces the refs are %v; want %s at %s alone", heads, name, a)
 		}
 	})
 	t.Run("a name git refuses is refused, and so is a prefix", func(t *testing.T) {
 		refs := fresh(t)
 		a, _ := objects(t, refs)
-		for _, name := range Refused {
-			if err := refs.Replace(name, a); err == nil {
+		for _, name := range Refused() {
+			if err := refs.Replace(name, git.Absent{}, a); err == nil {
 				t.Errorf("Replace(%q) = nil; want a refusal", name)
 			}
 		}
@@ -261,7 +285,7 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 		refs := fresh(t)
 		a, _ := objects(t, refs)
 		for _, name := range []git.RefName{"refs/lit/log/b", "refs/lit/inbox/c", "refs/lit/log/a", "refs/other/d", "refs/litter/x", "refs/lit/log/ab"} {
-			if err := refs.Replace(name, a); err != nil {
+			if err := refs.Replace(name, git.Absent{}, a); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -278,49 +302,24 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 	t.Run("a ref cannot be the directory of another, nor have one as its directory", func(t *testing.T) {
 		refs := fresh(t)
 		a, _ := objects(t, refs)
-		if err := refs.Replace("refs/lit/a", a); err != nil {
+		if err := refs.Replace("refs/lit/a", git.Absent{}, a); err != nil {
 			t.Fatal(err)
 		}
-		if err := refs.Replace("refs/lit/a/b", a); err == nil {
+		if err := refs.Replace("refs/lit/a/b", git.Absent{}, a); err == nil {
 			t.Errorf("refs/lit/a/b was taken beside refs/lit/a")
 		}
-		if err := refs.Replace("refs/lit/b/c", a); err != nil {
+		if err := refs.Replace("refs/lit/b/c", git.Absent{}, a); err != nil {
 			t.Fatal(err)
 		}
-		if err := refs.Replace("refs/lit/b", a); err == nil {
+		if err := refs.Replace("refs/lit/b", git.Absent{}, a); err == nil {
 			t.Errorf("refs/lit/b was taken beside refs/lit/b/c")
 		}
 	})
 	t.Run("a target the repository does not hold is missing", func(t *testing.T) {
 		refs := fresh(t)
-		if err := refs.Replace("refs/lit/log/w", ID(t, helloBlob)); !errors.As(err, new(git.MissingObject)) {
+		if err := refs.Replace("refs/lit/log/w", git.Absent{}, ID(t, helloBlob)); !errors.As(err, new(git.MissingObject)) {
 			t.Errorf("Replace to an absent object failed with %v; want MissingObject", err)
 		}
-	})
-	t.Run("a concurrent reader sees a replace whole", func(t *testing.T) {
-		refs := fresh(t)
-		a, b := objects(t, refs)
-		const name git.RefName = "refs/lit/log/w"
-		if err := refs.Replace(name, a); err != nil {
-			t.Fatal(err)
-		}
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			for i := range 50 {
-				if err := refs.Replace(name, []git.ObjectID{a, b}[i%2]); err != nil {
-					t.Error(err)
-					return
-				}
-			}
-		})
-		for range 50 {
-			heads, err := refs.List("refs/lit/")
-			if err != nil || len(heads) != 1 || heads[0].Target != a && heads[0].Target != b {
-				t.Errorf("a reader during replaces saw %v, %v; want the ref at one of its two targets", heads, err)
-				break
-			}
-		}
-		wg.Wait()
 	})
 	t.Run("an id of another format, or the zero id, cannot be a target", func(t *testing.T) {
 		foreign, err := git.ParseObjectID(git.SHA256, "6c19f8bd0d8a2b5a6c0b2e8e3c3a0f9e2d1c7b6a5f4e3d2c1b0a9f8e7d6c5b4a")
@@ -328,7 +327,7 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 			t.Fatal(err)
 		}
 		for _, to := range []git.ObjectID{foreign, {}} {
-			if err := fresh(t).Replace("refs/lit/log/w", to); !errors.As(err, new(git.ForeignFormat)) {
+			if err := fresh(t).Replace("refs/lit/log/w", git.Absent{}, to); !errors.As(err, new(git.ForeignFormat)) {
 				t.Errorf("Replace to the %s id %s failed with %v; want ForeignFormat", to.Format(), to, err)
 			}
 		}

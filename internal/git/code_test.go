@@ -35,7 +35,7 @@ func TestALinkedWorktreeReadsItsOwnHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := g.CodeAt(c, git.SHA1).AtHead("f")
+	got, err := g.CodeAt(c).AtHead("f")
 	if want := (git.Tracked{Blob: git.HashBlob(git.SHA1, []byte("side\n"))}); err != nil || got != want {
 		t.Errorf("the linked worktree's f = %#v, %v; want its own commit's %#v", got, err, want)
 	}
@@ -56,7 +56,7 @@ func TestASHA256CodeRepositoryIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, id := g.CodeAt(c, git.SHA256), git.HashBlob(git.SHA256, []byte("x\n"))
+	code, id := g.CodeAt(c), git.HashBlob(git.SHA256, []byte("x\n"))
 	if got, err := code.AtHead("f"); err != nil || got != (git.Tracked{Blob: id}) {
 		t.Errorf("AtHead in a sha256 repository = %#v, %v; want %v", got, err, id)
 	}
@@ -90,8 +90,34 @@ func TestASymlinkAtThePathIsNoFile(t *testing.T) {
 	}
 	gittest.Git(t, repo.Dir, "add", "link.toml")
 	gittest.Git(t, repo.Dir, "commit", "-q", "-m", "link")
-	if got, err := repo.AtHead("link.toml"); err != nil || got != (git.Untracked{}) {
-		t.Errorf("AtHead(a symlink) = %#v, %v; want Untracked", got, err)
+	if got, err := repo.AtHead("link.toml"); err != nil || got != (git.NotAFile{Mode: "120000"}) {
+		t.Errorf("AtHead(a symlink) = %#v, %v; want NotAFile, mode 120000", got, err)
+	}
+}
+
+// A HEAD whose branch names an object the repository does not hold is a
+// damaged repository, git's error, never a branch with no commit.
+func TestAHeadNamingAMissingObjectIsAnError(t *testing.T) {
+	repo := gittest.NewRepo(t)
+	const missing = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	if err := os.WriteFile(filepath.Join(repo.Dir, ".git", "refs", "heads", "main"), []byte(missing+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repo.AtHead("f"); err == nil || !strings.Contains(err.Error(), missing) {
+		t.Errorf("AtHead over a missing HEAD = %#v, %v; want an error naming %s", got, err, missing)
+	}
+	if ever, err := repo.EverAt("f", git.HashBlob(git.SHA1, nil)); err == nil {
+		t.Errorf("EverAt over a missing HEAD = %v, nil; want an error", ever)
+	}
+}
+
+// An id of another format than the code repository's names nothing in it,
+// refused, never answered no.
+func TestEverAtRefusesAnIDOfAnotherFormat(t *testing.T) {
+	repo := gittest.NewRepo(t)
+	repo.Commit(t, map[string][]byte{"f": []byte("x\n")})
+	if ever, err := repo.EverAt("f", git.HashBlob(git.SHA256, []byte("x\n"))); err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Errorf("EverAt(a sha256 id) in a sha1 repository = %v, %v; want a refusal naming the format", ever, err)
 	}
 }
 
@@ -111,7 +137,7 @@ func TestAShallowCloneSaysWhatItCannotKnow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code := g.CodeAt(c, git.SHA1)
+	code := g.CodeAt(c)
 	if ever, err := code.EverAt(path, git.HashBlob(git.SHA1, two)); err != nil || !ever {
 		t.Errorf("EverAt(HEAD's blob) in a shallow clone = %v, %v; want true", ever, err)
 	}

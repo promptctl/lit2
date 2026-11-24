@@ -68,11 +68,20 @@ func (m *memory) list(prefix RefName) ([]RefHead, error) {
 	return heads, nil
 }
 
-// replace refuses a name that is a directory of another ref, or has one
-// as its directory, as git's refs, which are paths, cannot hold both.
-func (m *memory) replace(name RefName, to ObjectID) error {
+// replace refuses as git update-ref does: a ref that no longer is what
+// from says, and a name that is a directory of another ref, or has one as
+// its directory, as git's refs, which are paths, cannot hold both.
+func (m *memory) replace(name RefName, from Was, to ObjectID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	target, ok := m.refs[name]
+	now := Was(Absent{})
+	if ok {
+		now = Named{Target: target}
+	}
+	if now != from {
+		return fmt.Errorf("%s is %v, not %v", name, now, from)
+	}
 	for n := range m.refs {
 		if n != name && (under(n, name) || under(name, n)) {
 			return fmt.Errorf("%s cannot be a ref beside %s", name, n)

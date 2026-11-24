@@ -25,7 +25,7 @@ type Ports struct {
 // <git-common-dir>/lit/store/ (D11), lit's repository at repo/ beneath it,
 // kept by g. It reads nothing; every worktree of a clone builds the same
 // ports.
-func DiskPorts(g git.Git, at git.Checkout, entropy io.Reader) Ports {
+func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader) Ports {
 	root := filepath.Join(at.SharedDir(), "store")
 	repo := g.RepositoryAt(filepath.Join(root, repoDir))
 	return Ports{Files: FilesAt(root), Objects: repo, Refs: repo, Entropy: entropy}
@@ -374,48 +374,36 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, error) {
 		return nil, 0, nil, err
 	}
 	switch h := h.(type) {
-	case unnamed:
+	case git.Absent:
 		return nil, 0, NoPrior{}, nil
-	case named:
-		pub, log, err := s.publication(h.commit)
+	case git.Named:
+		pub, log, err := s.publication(h.Target)
 		switch {
 		case err != nil:
-			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s does not read: %w", h.commit, err)}, nil
+			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s does not read: %w", h.Target, err)}, nil
 		case log != until.Log:
-			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s", h.commit, log, until.Log)}, nil
+			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s", h.Target, log, until.Log)}, nil
 		case pub.end > until.At:
 			return nil, 0, nil, ShorterThanPublished{Ref: ref, Log: until.At, Published: pub.end}
 		}
 		kept, from := keepWithin(pub.segs, s.bound)
-		return kept, from, KeptFrom{Commit: h.commit}, nil
+		return kept, from, KeptFrom{Commit: h.Target}, nil
 	}
-	panic(fmt.Sprintf("store: %T is not a refHead", h))
+	panic(fmt.Sprintf("store: %T is not what a ref was", h))
 }
 
-// refHead is what a ref holds: an object, or nothing.
-//
-//sumtype:decl
-type refHead interface{ refHead() }
-
-type (
-	named   struct{ commit git.ObjectID }
-	unnamed struct{}
-)
-
-func (named) refHead()   {}
-func (unnamed) refHead() {}
-
-func (s *Store) head(ref Ref) (refHead, error) {
+// head is what ref names now.
+func (s *Store) head(ref Ref) (git.Was, error) {
 	heads, err := s.ports.Refs.List(ref.Name())
 	if err != nil {
 		return nil, err
 	}
 	for _, h := range heads {
 		if h.Name == ref.Name() {
-			return named{commit: h.Target}, nil
+			return git.Named{Target: h.Target}, nil
 		}
 	}
-	return unnamed{}, nil
+	return git.Absent{}, nil
 }
 
 // RefMove is what a publish did to its ref.
@@ -483,7 +471,7 @@ func (s *Store) Publish(p Publication) (Published, error) {
 	switch out.Move.(type) {
 	case RefUnchanged:
 	case RefCreated, RefReplaced:
-		if err := s.ports.Refs.Replace(p.ref.Name(), commit); err != nil {
+		if err := s.ports.Refs.Replace(p.ref.Name(), h, commit); err != nil {
 			return Published{}, err
 		}
 	}
@@ -491,17 +479,17 @@ func (s *Store) Publish(p Publication) (Published, error) {
 }
 
 // moved is what pointing a ref holding h at to does to it.
-func moved(h refHead, to git.ObjectID) RefMove {
+func moved(h git.Was, to git.ObjectID) RefMove {
 	switch h := h.(type) {
-	case named:
-		if h.commit == to {
+	case git.Named:
+		if h.Target == to {
 			return RefUnchanged{}
 		}
-		return RefReplaced{Previous: h.commit}
-	case unnamed:
+		return RefReplaced{Previous: h.Target}
+	case git.Absent:
 		return RefCreated{}
 	}
-	panic(fmt.Sprintf("store: %T is not a refHead", h))
+	panic(fmt.Sprintf("store: %T is not what a ref was", h))
 }
 
 // store is a segment's blob: a kept one's id, or a fresh one's bytes put.

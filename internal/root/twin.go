@@ -119,7 +119,7 @@ func NewTwinBeside(t Twin) Twin {
 func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events.Key, seed [32]byte) Twin {
 	out, errOut, commands := &bytes.Buffer{}, &bytes.Buffer{}, &command.Memory{}
 	entropy := rand.NewChaCha8(seed)
-	opened := command.Opened{Store: store.Open(id, ports, store.DefaultSegmentBound), Format: git.SHA1}
+	opened := command.Opened{Store: store.Open(id, ports, store.DefaultSegmentBound)}
 	tree, code := store.NewMemoryFiles(), &git.CodeMemory{}
 	// the twin is minted: its identity files hold its id and key, so init
 	// finds them there
@@ -139,7 +139,7 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 			Store:         opened,
 			Open:          func(git.Checkout, command.Minted) command.Opening { return opened },
 			WorkTree:      func(git.Checkout) store.Files { return tree },
-			Code:          func(git.Checkout, git.ObjectFormat) git.Code { return code },
+			Code:          func(git.Checkout) git.Code { return code },
 			Git:           func() []git.Spawn { return []git.Spawn{} },
 			Fold:          foldEnv(2),
 			Reader:        twinReader(),

@@ -6,7 +6,6 @@ import (
 	"slices"
 
 	"github.com/promptctl/lit2/internal/fold"
-	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
 
@@ -44,15 +43,11 @@ type Read struct {
 //sumtype:decl
 type Opening interface{ opening() }
 
-// Opened is a minted checkout's store, and its code repository's object
-// format, read once beside it for the workspace file's config-ref.
-type Opened struct {
-	Store  *store.Store
-	Format git.ObjectFormat
-}
+// Opened is a minted checkout's store.
+type Opened struct{ Store *store.Store }
 
 // Unopened is a place with no store: outside a checkout, in one not yet
-// minted, or one whose writer or object format cannot be read.
+// minted, or one whose writer cannot be read.
 type Unopened struct{ Why error }
 
 func (Opened) opening()   {}
@@ -78,9 +73,8 @@ type (
 		KeyCreated      bool `json:"key_created"`
 	}
 	openLine struct {
-		State        string `json:"state"`
-		ObjectFormat string `json:"object_format,omitempty"`
-		Why          string `json:"why,omitempty"`
+		State string `json:"state"`
+		Why   string `json:"why,omitempty"`
 	}
 	headsLine struct {
 		RefsRead   int             `json:"refs_read"`
@@ -234,7 +228,7 @@ func open(o Opening) *openLine {
 	case nil:
 		return nil
 	case Opened:
-		return &openLine{State: "opened", ObjectFormat: o.Format.String()}
+		return &openLine{State: "opened"}
 	case Unopened:
 		return &openLine{State: "unopened", Why: o.Why.Error()}
 	}

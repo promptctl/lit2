@@ -56,14 +56,18 @@ These are settled. Do not reopen them in the design.
    in [budgets.md](budgets.md). Network transfer is excluded only where
    physics demands (first-clone download); network never sits on a command's
    foreground path.
-4. **Permissive licensing only; the user's git for transport, in the
-   background.** No copyleft dependencies; linked libraries must be
-   permissive. lit reads and writes git objects and refs in-process through
-   such a library, which never touches the network. Push and fetch run the
-   user's own `git` binary, only from the background sync process, so the
-   credential helpers, `~/.ssh/config` and every host's dialect work as they
-   do for the code, and no foreground path waits on it. Where prior art is
-   non-permissive, rewrite from behavior, never from code.
+4. **Permissive licensing only; the user's git writes, and transports in
+   the background.** No copyleft dependencies; linked libraries must be
+   permissive. The user's own `git` binary is the one writer of lit's
+   repository, so git owns its formats, locks and fsync, and the one reader
+   of the code repository, so lit finds and reads what git finds and reads
+   there. lit reads its own repository's objects and refs in-process through
+   such a library, which never touches the network, so a read costs no
+   process. Push and fetch run the user's `git` too, only from the
+   background sync process, so the credential helpers, `~/.ssh/config` and
+   every host's dialect work as they do for the code, and no foreground path
+   waits on them. Where prior art is non-permissive, rewrite from behavior,
+   never from code.
 5. **Local enforcement stays; cross-machine conflicts resolve at the fold.**
    A machine validates its own writes against its own current fold exactly as
    strictly as today. Contradictions that only concurrent offline machines can
@@ -142,3 +146,8 @@ is a second thing to keep true.
   removed. lit2 is built fresh and never migrates lit v1's store, so the
   oracle, the shadow states and their gates have nothing to govern. The
   constraint on the code repository's git, formerly #10, is #9.
+- 2026-11-20: owner amendment: #4 makes the user's `git` binary the one
+  writer of lit's repository and the one reader of the code repository,
+  since two writers of one repository was the bug class; the library stays
+  as the in-process reader of lit's repository alone, since a process per
+  read grows with history against #3.

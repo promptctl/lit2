@@ -54,9 +54,11 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		opened, ok := opening(place(gittest.Runner(t), dir), diskStore(gittest.Runner(t), rand.Reader)).(command.Opened)
-		if !ok || opened.Format != want {
-			t.Fatalf("a minted checkout opens %#v; want its store, format %s", opening(place(gittest.Runner(t), dir), diskStore(gittest.Runner(t), rand.Reader)), want)
+		p := place(gittest.Runner(t), dir)
+		in, located := p.(command.InCheckout)
+		opened, ok := opening(p, diskStore(gittest.Runner(t), rand.Reader)).(command.Opened)
+		if !located || !ok || in.Checkout.Format != want {
+			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, opening(p, diskStore(gittest.Runner(t), rand.Reader)), want)
 		}
 		if got := appendOne(t, opened.Store, twinID); !slices.Equal(got, []string{"an event"}) {
 			t.Errorf("the opened store reads back %v", got)

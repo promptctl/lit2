@@ -58,7 +58,7 @@ func forge(t *testing.T, p Ports, ref Ref, log LogID, at []Offset, bs [][]byte) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Refs.Replace(ref.Name(), commit); err != nil {
+	if err := p.Refs.Replace(ref.Name(), git.Absent{}, commit); err != nil {
 		t.Fatal(err)
 	}
 }

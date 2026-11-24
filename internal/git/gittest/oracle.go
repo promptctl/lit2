@@ -69,13 +69,10 @@ func Env(t testing.TB) []string {
 	return []string{"PATH=" + filepath.Dir(bin), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}
 }
 
-// Runner is lit2's git as a test runs it, every process it leaves running
-// ended when the test ends.
-func Runner(t testing.TB, env ...string) git.Git {
+// Runner is lit2's git as a test runs it.
+func Runner(t testing.TB, env ...string) *git.Git {
 	t.Helper()
-	g := git.Find(append(Env(t), env...))
-	t.Cleanup(func() { g.Spawns() })
-	return g
+	return git.Find(append(Env(t), env...))
 }
 
 // Physical is a temporary directory by its physical path, as Locate and

@@ -66,7 +66,7 @@ type systemClock struct{}
 func (systemClock) Now() time.Time { return time.Now() }
 
 // here is the place of the working directory.
-func here(g git.Git) command.Place {
+func here(g *git.Git) command.Place {
 	dir, err := os.Getwd()
 	if err != nil {
 		return command.Unlocatable{Err: fmt.Errorf("reading the working directory: %w", err)}
@@ -75,7 +75,7 @@ func here(g git.Git) command.Place {
 }
 
 // place is the checkout git locates at dir, and its writer.
-func place(g git.Git, dir string) command.Place {
+func place(g *git.Git, dir string) command.Place {
 	c, err := g.Locate(dir)
 	var none git.NotFound
 	if errors.As(err, &none) {
@@ -111,9 +111,9 @@ func opening(p command.Place, open func(git.Checkout, command.Minted) command.Op
 
 // diskStore opens a minted checkout's store over its clone's common dir on
 // disk, beside the code repository's object format, read once.
-func diskStore(g git.Git, entropy io.Reader) func(git.Checkout, command.Minted) command.Opening {
+func diskStore(g *git.Git, entropy io.Reader) func(git.Checkout, command.Minted) command.Opening {
 	return func(c git.Checkout, id command.Minted) command.Opening {
-		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(g, c, entropy), store.DefaultSegmentBound), Format: c.Format}
+		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(g, c, entropy), store.DefaultSegmentBound)}
 	}
 }
 

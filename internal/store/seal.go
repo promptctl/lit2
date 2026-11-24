@@ -85,8 +85,8 @@ type KeptFrom struct{ Commit git.ObjectID }
 // built every segment.
 type NoPrior struct{}
 
-// Resealed is a ref whose publication could not be kept, torn, unreadable
-// or of another log, so sealing started at 0: the log derives it again
+// Resealed is a ref whose publication could not be kept, unreadable or of
+// another log, so sealing started at 0: the log derives it again
 // (the store's decision 11), and Why says why
 // `[LAW:nothing-unseen]`.
 type Resealed struct{ Why error }

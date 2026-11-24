@@ -115,7 +115,7 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 
 func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 	appended := store.Appended{Records: 2, Bytes: 40, Log: store.Existing}
-	e := Record(&FixedClock{At: t0}, inv, func(_ time.Time, r Recorder) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
 		r.Stored.Appends = append(r.Stored.Appends, appended)
 		panic("after the append")
 	})
@@ -124,13 +124,21 @@ func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 	}
 }
 
-func TestTheOpeningSaysOpenedAndItsFormatOrWhyNot(t *testing.T) {
-	opened := storeBlockOf(t, StoreFacts{Opening: Opened{Store: memoryStore(), Format: git.SHA256}})
-	if o, _ := opened["open"].(map[string]any); o["state"] != "opened" || o["object_format"] != "sha256" || o["why"] != nil {
-		t.Errorf("an opened store's line is %v; want opened, sha256", o)
+func TestTheOpeningSaysOpenedOrWhyNot(t *testing.T) {
+	opened := storeBlockOf(t, StoreFacts{Opening: Opened{Store: memoryStore()}})
+	if o, _ := opened["open"].(map[string]any); o["state"] != "opened" || o["why"] != nil {
+		t.Errorf("an opened store's line is %v; want opened", o)
 	}
 	unopened := storeBlockOf(t, StoreFacts{Opening: Unopened{Why: errors.New("this checkout has no id")}})
-	if o, _ := unopened["open"].(map[string]any); o["state"] != "unopened" || o["why"] != "this checkout has no id" || o["object_format"] != nil {
+	if o, _ := unopened["open"].(map[string]any); o["state"] != "unopened" || o["why"] != "this checkout has no id" {
 		t.Errorf("an unopened store's line is %v; want unopened, and why", o)
+	}
+}
+
+// The checkout's object format is on the place line, beside its paths.
+func TestThePlaceSaysTheCheckoutsObjectFormat(t *testing.T) {
+	place, _ := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "get"}, Started: t0, Outcome: cli.Done{}})["place"].(map[string]any)
+	if c, _ := place["checkout"].(map[string]any); c["object_format"] != "sha256" || c["git_dir"] != "/w/.git" {
+		t.Errorf("the place line is %v; want the checkout's paths and its format, sha256", place)
 	}
 }

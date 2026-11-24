@@ -16,8 +16,7 @@ import (
 // events each, an event a few hundred bytes, read by a clone that fetched
 // lit's repository and holds no log. Heads is the staleness check, every
 // writer's ref head; Read is every stream read whole after it, as a full
-// refold reads. Each run is one invocation's: its own git, its batch
-// process started and ended.
+// refold reads. Each run is one invocation's, with its own git.
 func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 	const writers, batches, perBatch = 10, 2000, 10
 	c, env := gittest.Clone(b), gittest.Env(b)
@@ -45,11 +44,11 @@ func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	open := func() (*store.Store, git.Git) {
+	open := func() *store.Store {
 		g := git.Find(env)
 		ports := store.DiskPorts(g, c, storetest.Entropy(0))
 		ports.Files = store.NewMemoryFiles()
-		return store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound), g
+		return store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound)
 	}
 	heads := func(s *store.Store) store.Heads {
 		h, err := s.Heads()
@@ -60,14 +59,13 @@ func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 	}
 	b.Run("Heads", func(b *testing.B) {
 		for b.Loop() {
-			s, g := open()
+			s := open()
 			heads(s)
-			g.Spawns()
 		}
 	})
 	b.Run("Read", func(b *testing.B) {
 		for b.Loop() {
-			s, g := open()
+			s := open()
 			frames := 0
 			for _, st := range heads(s).Streams {
 				scan, err := s.Read(store.Range{Stream: st})
@@ -76,7 +74,6 @@ func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 				}
 				frames += len(scan.Frames)
 			}
-			g.Spawns()
 			if frames != writers*batches {
 				b.Fatalf("a fold read %d frames; want %d", frames, writers*batches)
 			}

@@ -94,7 +94,7 @@ func NewRepo(t *testing.T) Repo {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Repo{Code: g.CodeAt(c, git.SHA1), Dir: dir}
+	return Repo{Code: g.CodeAt(c), Dir: dir}
 }
 
 // Commit writes files as the work tree's whole content and commits it.

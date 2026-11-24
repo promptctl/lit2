@@ -1,7 +1,6 @@
 package git
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,7 +14,8 @@ type Code interface {
 	EverAt(path string, id ObjectID) (bool, error)
 }
 
-// HeadBlob is what HEAD's tree holds at a path: a blob, or none.
+// HeadBlob is what HEAD's tree holds at a path: a file's blob, something
+// that is not a file, or nothing.
 //
 //sumtype:decl
 type HeadBlob interface{ headBlob() }
@@ -23,22 +23,27 @@ type HeadBlob interface{ headBlob() }
 // Tracked is a blob HEAD's tree holds at the path.
 type Tracked struct{ Blob ObjectID }
 
-// Untracked is no blob at the path in HEAD's tree, or a HEAD with no commit.
+// NotAFile is an entry at the path in HEAD's tree that holds no file: a
+// directory, a symlink, whose blob is its target's name, or a submodule,
+// by its git mode.
+type NotAFile struct{ Mode string }
+
+// Untracked is no entry at the path in HEAD's tree, or a HEAD with no commit.
 type Untracked struct{}
 
 func (Tracked) headBlob()   {}
+func (NotAFile) headBlob()  {}
 func (Untracked) headBlob() {}
 
-// CodeAt is the code repository of the checkout c, in format f, read by
-// git: HEAD through the checkout's own git dir, so a linked worktree reads
-// its own branch, under the process's environment, as git reads it for
-// the user. Every path is literal, from the work tree's root.
-func (g Git) CodeAt(c Checkout, f ObjectFormat) Code { return codeRepo{g: g, c: c, f: f} }
+// CodeAt is the code repository of the checkout c, in its object format,
+// read by git: HEAD through the checkout's own git dir, so a linked
+// worktree reads its own branch, under the process's environment, as git
+// reads it for the user. Every path is literal, from the work tree's root.
+func (g *Git) CodeAt(c Checkout) Code { return codeRepo{g: g, c: c} }
 
 type codeRepo struct {
-	g Git
+	g *Git
 	c Checkout
-	f ObjectFormat
 }
 
 func (r codeRepo) git(stdin []byte, args ...string) (string, error) {
@@ -46,20 +51,29 @@ func (r codeRepo) git(stdin []byte, args ...string) (string, error) {
 	return string(out), err
 }
 
-// head is HEAD's commit, or false when HEAD names a branch with no commit,
-// which git rev-parse --verify answers with exit 1 and nothing said.
+// head is HEAD's commit, or false when HEAD names a branch with no commit.
+// git rev-parse --verify answers exit 1, saying nothing, both for that
+// branch and for a HEAD whose object is missing, so only then is the
+// branch itself asked whether it names anything: a damaged repository is
+// git's error, never a branch with no commit `[LAW:no-silent-failure]`.
 func (r codeRepo) head() (string, bool, error) {
 	out, err := r.git(nil, "rev-parse", "-q", "--verify", "HEAD^{commit}")
-	var refused Refused
-	if errors.As(err, &refused) && refused.Spawn.Exit == 1 {
-		return "", false, nil
+	if code, ok := exitCode(err); !ok || code != 1 {
+		return strings.TrimSuffix(out, "\n"), err == nil, err
 	}
-	return strings.TrimSuffix(out, "\n"), err == nil, err
+	branch, err := r.git(nil, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return "", false, fmt.Errorf("HEAD names no commit: %w", err)
+	}
+	names, err := r.git(nil, "for-each-ref", "--format=%(objectname)", "--", strings.TrimSuffix(branch, "\n"))
+	if err == nil && names != "" {
+		err = fmt.Errorf("HEAD's %s names %s, which is no commit this repository holds", strings.TrimSpace(branch), strings.TrimSpace(names))
+	}
+	return "", false, err
 }
 
 // AtHead reads HEAD's entry at path. A file is a blob of a regular mode;
-// a directory, a symlink, whose blob is its target's name, or a submodule
-// holds no file there.
+// any other entry is NotAFile.
 func (r codeRepo) AtHead(path string) (HeadBlob, error) {
 	commit, ok, err := r.head()
 	if err != nil || !ok {
@@ -72,15 +86,21 @@ func (r codeRepo) AtHead(path string) (HeadBlob, error) {
 	for _, e := range strings.Split(out, "\x00") {
 		meta, p, _ := strings.Cut(e, "\t")
 		f := strings.Fields(meta)
-		if p == path && len(f) == 3 && regular(f[0]) {
-			id, err := ParseObjectID(r.f, f[2])
+		switch {
+		case p != path || len(f) != 3:
+		case regular(f[0]):
+			id, err := ParseObjectID(r.c.Format, f[2])
 			return Tracked{Blob: id}, err
+		default:
+			return NotAFile{Mode: f[0]}, nil
 		}
 	}
 	return Untracked{}, nil
 }
 
-func regular(mode string) bool { return mode == "100644" || mode == "100755" }
+// regular is a mode of a file in the code repository: lit's own, or
+// executable.
+func regular(mode string) bool { return mode == fileMode || mode == "100755" }
 
 // EverAt asks whether any commit in HEAD's history holds id at path. Every
 // blob ever at a path is one some commit's diff against a parent, or a
@@ -89,6 +109,9 @@ func regular(mode string) bool { return mode == "100644" || mode == "100755" }
 // found in a shallow clone may be past its boundary, so the answer is
 // unknown, refused as such, never answered no.
 func (r codeRepo) EverAt(path string, id ObjectID) (bool, error) {
+	if id.Format() != r.c.Format {
+		return false, fmt.Errorf("%s is a %s id, which names nothing in this %s repository", id, id.Format(), r.c.Format)
+	}
 	commit, ok, err := r.head()
 	if err != nil || !ok {
 		return false, err
