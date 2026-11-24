@@ -156,5 +156,7 @@ func TestAShallowCloneSaysWhatItCannotKnow(t *testing.T) {
 	}
 	if ever, err := code.EverAt(path, git.HashBlob(git.SHA1, one)); !errors.Is(err, git.ErrShallow) {
 		t.Errorf("EverAt(a blob past the boundary) = %v, %v; want ErrShallow", ever, err)
+	} else if !strings.Contains(err.Error(), "shallow") {
+		t.Errorf("EverAt(a blob past the boundary) = %v; want it to say the clone is shallow", err)
 	}
 }

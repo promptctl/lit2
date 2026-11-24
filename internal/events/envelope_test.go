@@ -78,9 +78,9 @@ func TestAnEnvelopeThatLiesOrIsAmbiguousIsRefused(t *testing.T) {
 		want error
 	}{
 		"a plaintext whose commitment is not its text's": {lying.Encoded(), errCommitmentNotText},
-		"two forms":           {both, errForms},
-		"no commitment":       {futureField(envelopePlain, string(p.Encoded())), errMissing},
-		"a short commitment":  {futureField(envelopeCommitment, "short"), errSize},
+		"two forms":           {both, notOneForm{What: "an envelope", N: 2}},
+		"no commitment":       {futureField(envelopePlain, string(p.Encoded())), missing{What: "commitment"}},
+		"a short commitment":  {futureField(envelopeCommitment, "short"), wrongSize{What: "an envelope's commitment", Got: len("short"), Want: 32}},
 		"bytes that are none": {none, wireRefusal(t, none)},
 	} {
 		if e, err := readEnvelope(c.b); !errors.Is(err, c.want) {

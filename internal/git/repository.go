@@ -140,7 +140,7 @@ func (d *onDisk) created() (bool, error) {
 		err = errors.New("its HEAD is no file")
 	}
 	if err != nil {
-		return false, fmt.Errorf("%s is %w: %w", d.dir, errNoRepository, err)
+		return false, fmt.Errorf("%s: %w: %w", d.dir, errNoRepository, err)
 	}
 	return true, nil
 }
@@ -223,7 +223,7 @@ func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
 	}
 	k, ok := kinds[o.Type()]
 	if !ok {
-		return nil, "", NotLit{ID: id, Why: fmt.Errorf("%w: a %s, which lit never writes", ErrWrongKind, o.Type())}
+		return nil, "", NotLit{ID: id, Why: fmt.Errorf("a %s, which lit never writes: %w", o.Type(), ErrWrongKind)}
 	}
 	return o, k, nil
 }
@@ -445,9 +445,13 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 		return nil
 	}
 	// git refuses a stale old value as it refuses everything else, so the
-	// ref's state after the refusal, not git's words, says whether it moved
+	// ref's state as read after the refusal, not git's words, says whether
+	// it moved: a ref still what from says was git's own failure, Refused
 	now, rerr := d.was(name)
-	if rerr == nil && now != from {
+	if rerr != nil {
+		return errors.Join(err, rerr)
+	}
+	if now != from {
 		return Moved{Name: name, From: from, Now: now}
 	}
 	return err

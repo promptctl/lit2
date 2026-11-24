@@ -24,7 +24,7 @@ func TestARefusalIsTheOperandsWhoseWriteWasRefused(t *testing.T) {
 		w.Me = joiner.Principal()
 		c := verbs.Compile(w, verb, ops, func() (string, error) { return "", nil })
 		if no, refused := c.Refusal(); refused {
-			t.Fatalf("%s %+v refused at compile: %s: %v", verb, ops, no.Reason, no.Err)
+			t.Fatalf("%s %+v refused at compile: %s: %v", verb, ops, no.Reason, no.Err())
 		}
 		m := must(events.Mint(events.Context{Writer: two, Agent: events.Unlabeled{}, ConfigRef: ref, Policy: b.st.Cites(),
 			Frontier: b.st.Frontier(), Known: b.st.Known(), Now: time.Date(2026, time.November, 17, 9, 0, 0, 0, time.UTC)},

@@ -59,7 +59,7 @@ func TestAnEnumReadsOnlyItsValues(t *testing.T) {
 	if got, err := e.Parse("5"); err != nil || got != "5" {
 		t.Errorf("Parse(5) = %q, %v; want 5", got, err)
 	}
-	if _, err := e.Parse("13"); !errors.Is(err, errNotOneOf) {
-		t.Errorf("Parse(13) = %v; want errNotOneOf", err)
+	if _, err := e.Parse("13"); !errors.Is(err, ErrNotOneOf) {
+		t.Errorf("Parse(13) = %v; want ErrNotOneOf", err)
 	}
 }

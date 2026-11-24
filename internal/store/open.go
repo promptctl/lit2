@@ -321,13 +321,13 @@ type Range struct {
 }
 
 // errPastHead is a range that starts after its stream's head.
-var errPastHead = errors.New("past its head")
+var errPastHead = errors.New("a read past the stream's head")
 
 // Read reads a range of a stream, from From to the stream's head as Heads
 // saw it, so what a fold consumes matches the heads it read.
 func (s *Store) Read(r Range) (Scan, error) {
 	if r.From > r.Stream.Until.At {
-		return Scan{}, fmt.Errorf("%s: reading from %d, %w at %d", r.Stream.Ref.Name(), r.From, errPastHead, r.Stream.Until.At)
+		return Scan{}, fmt.Errorf("%s: reading from %d, after its head at %d: %w", r.Stream.Ref.Name(), r.From, r.Stream.Until.At, errPastHead)
 	}
 	b, err := s.bytes(r.Stream.src, Span{From: r.From, To: r.Stream.Until.At})
 	if err != nil {
@@ -429,7 +429,7 @@ func (e ShorterThanPublished) Error() string {
 }
 
 // errOtherLog is a ref's publication of a log other than the one sealed.
-var errOtherLog = errors.New("of log")
+var errOtherLog = errors.New("another log")
 
 // prior is what keepWithin keeps of ref's publication of the log now at
 // until, where sealing resumes, what was kept, and what the ref was when
@@ -452,7 +452,7 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, git.Was, 
 		case err != nil:
 			return nil, 0, nil, nil, err
 		case log != until.Log:
-			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is %w %s, not %s", h.Target, errOtherLog, log, until.Log)}, h, nil
+			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s: %w", h.Target, log, until.Log, errOtherLog)}, h, nil
 		case pub.end > until.At:
 			return nil, 0, nil, nil, ShorterThanPublished{Ref: ref, Log: until.At, Published: pub.end}
 		}
@@ -560,29 +560,28 @@ func (s *Store) Publish(p Publication) (Published, error) {
 	out.Commit, out.Move = commit, moved(p.from, commit)
 	// a ref already naming the commit is what this publish wanted, whoever
 	// moved it there, so racing publishes of one log converge; one naming
-	// anything else has moved since the seal, and this publish is stale. An
-	// idle publish reads its ref, and a replace's refusal says what it is
-	var now git.Was
-	var moved git.Moved
-	switch _, unchanged := out.Move.(RefUnchanged); {
-	case unchanged:
-		now, err = s.head(p.ref)
-	default:
-		err = s.ports.Refs.Replace(p.ref.Name(), p.from, commit)
-		if err == nil {
-			return out, nil
+	// anything else is a ref no longer what the seal read, Moved, and this
+	// publish is stale. An idle publish reads its ref and says Moved
+	// itself; a replace's refusal is returned as the backend said it
+	if _, idle := out.Move.(RefUnchanged); idle {
+		now, err := s.head(p.ref)
+		if err != nil {
+			return Published{}, err
 		}
-		if errors.As(err, &moved) {
-			now, err = moved.Now, nil
+		if now != (git.Named{Target: commit}) {
+			return Published{}, git.Moved{Name: p.ref.Name(), From: p.from, Now: now}
 		}
+		return out, nil
+	}
+	err = s.ports.Refs.Replace(p.ref.Name(), p.from, commit)
+	var refusal git.Moved
+	if errors.As(err, &refusal) && refusal.Now == (git.Named{Target: commit}) {
+		out.Move = RefUnchanged{}
+		return out, nil
 	}
 	if err != nil {
 		return Published{}, err
 	}
-	if now != (git.Named{Target: commit}) {
-		return Published{}, git.Moved{Name: p.ref.Name(), From: p.from, Now: now}
-	}
-	out.Move = RefUnchanged{}
 	return out, nil
 }
 

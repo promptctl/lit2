@@ -225,8 +225,8 @@ func TestEverySubjectRoundTripsAndNoOtherShapeReads(t *testing.T) {
 	}{
 		"an element of the root": {subject(func(w *wire.Writer) { w.Bytes(subjectElement, anElement.b[:]) }), errRootNamesPart},
 		"a segment of the root":  {subject(func(w *wire.Writer) { w.Uvarint(subjectWidth, 3) }), errRootNamesPart},
-		"a short item id":        {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:15]) }), errSize},
-		"a long element id":      {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Bytes(subjectElement, make([]byte, 17)) }), errSize},
+		"a short item id":        {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:15]) }), wrongSize{What: "an id", Got: 15, Want: 16}},
+		"a long element id":      {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Bytes(subjectElement, make([]byte, 17)) }), wrongSize{What: "an id", Got: 17, Want: 16}},
 		"a two-digit segment":    {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 2) }), errWidth},
 		"a segment past the id":  {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 27) }), errWidth},
 	} {
@@ -255,8 +255,8 @@ func TestAShortIDParsesBareOrUnderAKnownPrefixOnly(t *testing.T) {
 			t.Errorf("ParseShortID(%q) = %#v, %v; want %#v", s, got, err, want)
 		}
 	}
-	if _, err := ParseShortID("rin-1f9", known); !errors.Is(err, ErrForeignPrefix) || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "is lit") {
-		t.Errorf("an id under another prefix reads, or its refusal does not name it and the active one: %v", err)
+	if _, err := ParseShortID("rin-1f9", known); !errors.Is(err, ErrForeignPrefix) || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "another project's") || !strings.Contains(err.Error(), "is lit") {
+		t.Errorf("an id under another prefix reads, or its refusal does not name it as another project's and name the active one: %v", err)
 	}
 	if _, err := ParseShortID("1f9", Prefixes{}); err != nil {
 		t.Fatalf("the zero Prefixes refuses a bare id: %v; the control must read", err)
@@ -314,7 +314,7 @@ func TestAnEventIDReadsBackAndAShortOneIsRefused(t *testing.T) {
 	if got, err := ReadEventID(id[:]); err != nil || got != id {
 		t.Errorf("an event id reads back as %v, %v", got, err)
 	}
-	if _, err := ReadEventID(id[1:]); !errors.Is(err, errSize) {
-		t.Errorf("a short event id reads with %v; want errSize", err)
+	if _, err := ReadEventID(id[1:]); !errors.Is(err, wrongSize{What: "an event id", Got: len(id) - 1, Want: len(id)}) {
+		t.Errorf("a short event id reads with %v; want an event id of %d bytes, not %d", err, len(id)-1, len(id))
 	}
 }

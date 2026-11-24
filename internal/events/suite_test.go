@@ -34,6 +34,27 @@ func TestASuiteWiderThanAByteIsRefused(t *testing.T) {
 	}
 }
 
+// A principal or a signature names its suite, or it is refused; one of suite
+// 1 is the control that reads.
+func TestAPrincipalOrSignatureNamingNoSuiteIsRefused(t *testing.T) {
+	var named, unnamed wire.Writer
+	named.Uvarint(1, uint64(SuiteEd25519))
+	named.Bytes(2, []byte("k"))
+	unnamed.Bytes(2, []byte("k"))
+	if _, err := readPrincipal(named.Encoded()); err != nil {
+		t.Fatalf("a principal naming its suite does not read: %v", err)
+	}
+	if _, err := readSignature(named.Encoded()); err != nil {
+		t.Fatalf("a signature naming its suite does not read: %v", err)
+	}
+	if _, err := readPrincipal(unnamed.Encoded()); !errors.Is(err, missing{What: "suite"}) {
+		t.Errorf("a principal naming no suite reads with %v; want no suite", err)
+	}
+	if _, err := readSignature(unnamed.Encoded()); !errors.Is(err, missing{What: "suite"}) {
+		t.Errorf("a signature naming no suite reads with %v; want no suite", err)
+	}
+}
+
 // Two suites of one id is a build fault; two of different ids is the control.
 func TestTwoSuitesOfOneIDPanic(t *testing.T) {
 	NewSuites(Ed25519(), twin{})

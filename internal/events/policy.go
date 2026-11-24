@@ -150,7 +150,7 @@ func ParseCapability(text string) (Capability, error) {
 	body, atoms, hasAtoms := strings.Cut(text, " (")
 	verbText, path, ok := strings.Cut(body, " ")
 	if !ok {
-		return fail(errors.New("a capability is a verb, a subject and a field glob, as `set own/*`"))
+		return fail(fmt.Errorf("a capability is a verb, a subject and a field glob, as `set own/*`: %w", errNoPath))
 	}
 	var c Capability
 	switch verbText {
@@ -161,11 +161,11 @@ func ParseCapability(text string) (Capability, error) {
 	case "rm":
 		c.Verb = Rm
 	default:
-		return fail(errVerb)
+		return fail(fmt.Errorf("its verb is set, add or rm: %w", errVerb))
 	}
 	subject, glob, ok := strings.Cut(path, "/")
 	if !ok || glob == "" {
-		return fail(errPath)
+		return fail(fmt.Errorf("its path is a subject, then / and a field glob: %w", errPath))
 	}
 	switch subject {
 	case "*":
@@ -177,7 +177,7 @@ func ParseCapability(text string) (Capability, error) {
 	case "own-or-assignee":
 		c.Binding = OwnOrAssignee
 	default:
-		return fail(errBinding)
+		return fail(fmt.Errorf("its subject is *, own, assignee or own-or-assignee: %w", errBinding))
 	}
 	steps := strings.Split(glob, "/")
 	for i, s := range steps {
@@ -187,7 +187,7 @@ func ParseCapability(text string) (Capability, error) {
 		case s == "*":
 			c.Field.Steps = append(c.Field.Steps, AnyOne{})
 		case s == "":
-			return fail(errEmptyStep)
+			return fail(fmt.Errorf("its glob: %w", errEmptyStep))
 		default:
 			c.Field.Steps = append(c.Field.Steps, Literal{Segment: s})
 		}
@@ -197,7 +197,7 @@ func ParseCapability(text string) (Capability, error) {
 	}
 	inner, closed := strings.CutSuffix(atoms, ")")
 	if !closed || inner == "" {
-		return fail(errConditions)
+		return fail(fmt.Errorf("its conditions are atoms in parentheses, as (level=1): %w", errConditions))
 	}
 	for _, a := range strings.Split(inner, " ") {
 		op, n := Eq, ""
@@ -206,11 +206,13 @@ func ParseCapability(text string) (Capability, error) {
 		} else if v, ok := strings.CutPrefix(a, "level="); ok {
 			n = v
 		} else {
-			return fail(fmt.Errorf("%q is not a condition: %w", a, errCondition))
+			return fail(fmt.Errorf("%q is not a condition, level=N or level!=N: %w", a, errCondition))
 		}
 		i, err := strconv.Atoi(n)
 		if err != nil {
-			return fail(fmt.Errorf("%q: a level is a number, %w", a, ErrNotALevel))
+			// [LAW:one-type-per-behavior] a level that is no number is a
+			// condition outside the grammar, not a number outside the levels
+			return fail(fmt.Errorf("%q is not a condition: its level is a number, 1 to 5: %w", a, errCondition))
 		}
 		l, err := ParseLevel(i)
 		if err != nil {
@@ -221,14 +223,16 @@ func ParseCapability(text string) (Capability, error) {
 	return c, nil
 }
 
-// The capability grammar's refusals, one per part of it.
+// The capability grammar's refusals, one per part of it; the grammar each
+// part keeps is said where it is refused.
 var (
-	errVerb       = errors.New("its verb is set, add or rm")
-	errPath       = errors.New("its path is a subject, then / and a field glob")
-	errBinding    = errors.New("its subject is *, own, assignee or own-or-assignee")
-	errEmptyStep  = errors.New("its glob has an empty step")
-	errConditions = errors.New("its conditions are atoms in parentheses, as (level=1)")
-	errCondition  = errors.New("level=N or level!=N")
+	errNoPath     = errors.New("a capability with no path after its verb")
+	errVerb       = errors.New("a verb outside a capability's")
+	errPath       = errors.New("a path with no subject or no field glob")
+	errBinding    = errors.New("a subject outside a capability's")
+	errEmptyStep  = errors.New("a glob with an empty step")
+	errConditions = errors.New("conditions outside parentheses, or none in them")
+	errCondition  = errors.New("a condition outside a capability's")
 )
 
 // MustCapability is text, which the caller's own table holds as a
@@ -315,14 +319,14 @@ func ParseThreshold(s string) (Threshold, error) {
 }
 
 // errThresholdRange is a number of owners outside a byte's 1 to 255.
-var errThresholdRange = errors.New("a number of owners is from 1 to 255")
+var errThresholdRange = errors.New("a number of owners outside a threshold's range")
 
 // fixedOf is the threshold of n owners, from 1 to 255: the one judge the
 // text and the wire readers share, so no two spellings read as one
 // threshold `[LAW:single-enforcer]`.
 func fixedOf(n uint64) (Threshold, error) {
 	if n < 1 || n > 255 {
-		return nil, fmt.Errorf("%d is not a threshold: %w", n, errThresholdRange)
+		return nil, fmt.Errorf("%d is not a threshold, a number of owners from 1 to 255: %w", n, errThresholdRange)
 	}
 	return Fixed{N: uint8(n)}, nil
 }
@@ -344,9 +348,9 @@ type Policy struct {
 // The refusals of a policy that locks its workspace out. errOwnerRoleListed
 // is one refusal wherever it is met, as NewPolicy and ReadEnroll meet it.
 var (
-	errOwnerRoleListed     = errors.New("is the owner role, which grants every path and lists none")
-	errUndeclaredRole      = errors.New("is not a role this policy declares")
-	errNoOwner             = errors.New("no member holds the owner role")
+	errOwnerRoleListed     = errors.New("a listed owner role")
+	errUndeclaredRole      = errors.New("a role the policy does not declare")
+	errNoOwner             = errors.New("a policy with no owner")
 	errThresholdOverOwners = errors.New("a threshold beyond the owners")
 )
 
@@ -356,7 +360,7 @@ var (
 // within the owners.
 func NewPolicy(v PolicyVersion, owner Name, roles map[Name][]Capability, members map[PrincipalID]Name, t Threshold) (Policy, error) {
 	if _, ok := roles[owner]; ok {
-		return Policy{}, fmt.Errorf("the role %s %w", owner, errOwnerRoleListed)
+		return Policy{}, fmt.Errorf("the role %s is the owner role, which grants every path and lists none: %w", owner, errOwnerRoleListed)
 	}
 	owners := 0
 	for _, p := range slices.SortedFunc(maps.Keys(members), ComparePrincipals) {
@@ -366,11 +370,11 @@ func NewPolicy(v PolicyVersion, owner Name, roles map[Name][]Capability, members
 			continue
 		}
 		if _, ok := roles[r]; !ok {
-			return Policy{}, fmt.Errorf("%s's role %s %w", p, r, errUndeclaredRole)
+			return Policy{}, fmt.Errorf("%s's role %s is not a role this policy declares: %w", p, r, errUndeclaredRole)
 		}
 	}
 	if owners == 0 {
-		return Policy{}, fmt.Errorf("%w %s", errNoOwner, owner)
+		return Policy{}, fmt.Errorf("no member holds the owner role %s: %w", owner, errNoOwner)
 	}
 	if f, ok := t.(Fixed); ok && (f.N == 0 || int(f.N) > owners) {
 		return Policy{}, fmt.Errorf("a threshold of %d owners is more than the %d owners there are: %w", f.N, owners, errThresholdOverOwners)
@@ -559,7 +563,7 @@ func ReadEnroll(r *wire.Reader) (Versioned, error) {
 		switch tag {
 		case 1:
 			if hasOwner {
-				return fmt.Errorf("it gives its owner role %w", errTwice)
+				return twice{What: "its owner role"}
 			}
 			n, err := ParseName(string(r.Bytes()))
 			p.Owner, hasOwner = n, true
@@ -570,7 +574,7 @@ func ReadEnroll(r *wire.Reader) (Versioned, error) {
 				return err
 			}
 			if _, ok := p.Roles[name]; ok {
-				return fmt.Errorf("it declares the role %s %w", name, errTwice)
+				return twice{What: "the role " + name.s}
 			}
 			p.Roles[name] = caps
 		}
@@ -581,9 +585,9 @@ func ReadEnroll(r *wire.Reader) (Versioned, error) {
 	switch {
 	case err != nil:
 	case !hasOwner:
-		err = fmt.Errorf("it names no owner role: %w", errMissing)
+		err = missing{What: "owner role"}
 	case ownerListed:
-		err = fmt.Errorf("the role %s %w", p.Owner, errOwnerRoleListed)
+		err = fmt.Errorf("the role %s is the owner role, which grants every path and lists none: %w", p.Owner, errOwnerRoleListed)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("a policy.enroll: %w", err)
@@ -607,7 +611,7 @@ func readRole(b []byte) (Name, []Capability, error) {
 		return err
 	})
 	if err == nil && name.s == "" {
-		err = fmt.Errorf("a role has no name: %w", errMissing)
+		err = missing{What: "name"}
 	}
 	if err != nil {
 		return Name{}, nil, fmt.Errorf("a role: %w", err)
@@ -673,13 +677,13 @@ func ReadPropose(r *wire.Reader) (Versioned, error) {
 			var role Name
 			if who, role, err = readMembership(r.Bytes()); err == nil {
 				if _, ok := p.Members[who]; ok {
-					return fmt.Errorf("it names the member %s %w", who, errTwice)
+					return twice{What: "the member " + who.String()}
 				}
 				p.Members[who] = role
 			}
 		case 3:
 			if p.Threshold != nil {
-				return fmt.Errorf("it gives its threshold %w", errTwice)
+				return twice{What: "its threshold"}
 			}
 			p.Threshold, err = readThreshold(r.Bytes())
 		}
@@ -689,9 +693,9 @@ func ReadPropose(r *wire.Reader) (Versioned, error) {
 	switch {
 	case err != nil:
 	case !hasBase:
-		err = fmt.Errorf("it names no base policy: %w", errMissing)
+		err = missing{What: "base policy"}
 	case p.Threshold == nil:
-		err = fmt.Errorf("it gives no threshold: %w", errMissing)
+		err = missing{What: "threshold"}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("a policy.propose: %w", err)
@@ -717,9 +721,9 @@ func readMembership(b []byte) (PrincipalID, Name, error) {
 	switch {
 	case err != nil:
 	case !hasWho:
-		err = fmt.Errorf("it names no principal: %w", errMissing)
+		err = missing{What: "principal"}
 	case role.s == "":
-		err = fmt.Errorf("it names no role: %w", errMissing)
+		err = missing{What: "role"}
 	}
 	if err != nil {
 		return PrincipalID{}, Name{}, fmt.Errorf("a member: %w", err)
@@ -747,7 +751,7 @@ func readThreshold(b []byte) (Threshold, error) {
 	case err != nil:
 		return nil, fmt.Errorf("a threshold: %w", err)
 	case len(made) != 1:
-		return nil, fmt.Errorf("a threshold is a majority or a number; this one is %d of them: %w", len(made), errForms)
+		return nil, fmt.Errorf("a threshold is a majority or a number: %w", notOneForm{What: "a threshold", N: len(made)})
 	}
 	return made[0], nil
 }
@@ -776,7 +780,7 @@ func ReadApprove(r *wire.Reader) (Versioned, error) {
 	})
 	p.unknown = r.Rest()
 	if err == nil && !has {
-		err = fmt.Errorf("it cites no proposal: %w", errMissing)
+		err = missing{What: "proposal"}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("a policy.approve: %w", err)
@@ -799,15 +803,15 @@ func ReadRequest(r *wire.Reader) (Versioned, error) {
 // The refusals of a proposal's name: none given, or one no pending
 // proposal's digest starts.
 var (
-	errEmptyDigestPrefix = errors.New("a proposal is named by its digest or a prefix of it")
-	errNoPendingProposal = errors.New("no pending proposal's digest starts")
+	errEmptyDigestPrefix = errors.New("an empty digest prefix")
+	errNoPendingProposal = errors.New("a digest prefix no pending proposal's digest starts with")
 )
 
 // ParseDigestPrefix is the one digest among ds that hex starts, as an
 // approval names a pending proposal.
 func ParseDigestPrefix(hex string, ds []Digest) (Digest, error) {
 	if hex == "" {
-		return Digest{}, errEmptyDigestPrefix
+		return Digest{}, fmt.Errorf("a proposal is named by its digest or a prefix of it: %w", errEmptyDigestPrefix)
 	}
 	var found []Digest
 	for _, d := range ds {
@@ -817,7 +821,7 @@ func ParseDigestPrefix(hex string, ds []Digest) (Digest, error) {
 	}
 	switch len(found) {
 	case 0:
-		return Digest{}, fmt.Errorf("%w %s", errNoPendingProposal, hex)
+		return Digest{}, fmt.Errorf("%s: %w", hex, errNoPendingProposal)
 	case 1:
 		return found[0], nil
 	}

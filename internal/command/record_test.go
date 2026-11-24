@@ -39,7 +39,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 		exit    int
 	}{
 		{"help", cli.Done{}, 0},
-		{"get", cli.Failed{Failure: Internal{Err: errors.New("not built")}}, 70},
+		{"get", cli.Failed{Failure: Broke(errors.New("not built"))}, 70},
 	} {
 		e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
 			r.Asked(cli.Summary{Name: tc.name})
@@ -68,7 +68,7 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 		t.Fatalf("a panic ended %#v; want Failed", e.Outcome)
 	}
 	in, ok := failed.Failure.(Internal)
-	if !ok || !strings.Contains(in.Error(), "the body broke") || len(in.Stack) == 0 || cli.ExitCode(e.Outcome) != 70 {
+	if !ok || !strings.Contains(in.Error(), "the body broke") || len(in.Stack()) == 0 || cli.ExitCode(e.Outcome) != 70 {
 		t.Errorf("a panic is %#v; want Internal with its value and stack, exit 70", failed.Failure)
 	}
 }
@@ -167,7 +167,7 @@ func TestAVerbsLineSaysWhetherTheStoreTookAnAppend(t *testing.T) {
 }
 
 func TestAFailedLineSaysWhy(t *testing.T) {
-	m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: cli.Unparsed}, Started: t0, Outcome: cli.Failed{Failure: Internal{Err: errors.New("broke")}}})
+	m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: cli.Unparsed}, Started: t0, Outcome: cli.Failed{Failure: Broke(errors.New("broke"))}})
 	if m["outcome"] != "internal" || m["reason"] != "internal" || m["error"] != "broke" || m["exit_code"] != 70.0 {
 		t.Errorf("the line is %v; want internal, internal, broke, 70", m)
 	}
@@ -192,7 +192,7 @@ func noGit() []git.Spawn { return []git.Spawn{} }
 func TestEverySpawnReachesTheLoggedLine(t *testing.T) {
 	ran := []git.Spawn{
 		{Args: []string{"rev-parse"}, Ended: git.Exited{Code: 128}, Stderr: "fatal: not a git repository"},
-		{Args: []string{"hash-object"}, Ended: git.Unstarted{Why: "git is not on PATH"}},
+		{Args: []string{"hash-object"}, Ended: git.Unstarted{Why: errors.New("git is not on PATH")}},
 	}
 	e := Record(&FixedClock{At: t0}, func() []git.Spawn { return ran }, inv, func(time.Time, Recorder) cli.Outcome { return cli.Done{} })
 	block, _ := decode(t, e)["git"].([]any)

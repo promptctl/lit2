@@ -136,7 +136,7 @@ func paths(ps []cli.PathText) []verbs.Operand {
 // refusal is an operand a verb refused: the command's, class refused.
 type refusal struct{ r verbs.Refused }
 
-func (f refusal) Error() string     { return f.r.Err.Error() }
-func (f refusal) Unwrap() error     { return f.r.Err }
+func (f refusal) Error() string     { return f.r.Err().Error() }
+func (f refusal) Unwrap() error     { return f.r.Err() }
 func (refusal) Class() reason.Class { return reason.ClassRefused }
 func (f refusal) Reason() string    { return f.r.Reason }

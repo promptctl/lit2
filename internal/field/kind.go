@@ -25,12 +25,13 @@ type Kind interface {
 
 // The refusals of a raw value its kind does not read, and of a declared
 // pattern that does not compile, each wrapped where it is refused so the
-// message still says what was refused.
+// message still says what was refused. ErrNotOneOf is exported so a caller
+// that holds an Enum only as a Kind, a config row's, can identify its refusal.
 var (
-	errNotAnItem  = errors.New("is not an item")
-	errNotOneOf   = errors.New("is not one of")
-	errNoMatch    = errors.New("does not match")
-	errNotARegexp = errors.New("is not a regular expression")
+	errNotAnItem  = errors.New("invalid item")
+	ErrNotOneOf   = errors.New("a value outside the enum")
+	errNoMatch    = errors.New("a value the pattern does not match")
+	errNotARegexp = errors.New("invalid regular expression")
 )
 
 // Text is any non-empty line of text.
@@ -153,7 +154,7 @@ func (Column) Parse(raw string) (string, error) {
 // Parse reads an item as a path renders it: one word.
 func (ItemRef) Parse(raw string) (string, error) {
 	if raw == "" || strings.ContainsAny(raw, " \t\n\r\"") {
-		return "", fmt.Errorf("%q %w: an id, as its path renders it", raw, errNotAnItem)
+		return "", fmt.Errorf("%q: %w; an item is an id, as its path renders it", raw, errNotAnItem)
 	}
 	return raw, nil
 }
@@ -199,7 +200,7 @@ func (Date) Parse(raw string) (string, error) {
 // Parse reads one of the enum's values.
 func (e Enum) Parse(raw string) (string, error) {
 	if !slices.Contains(e.values, raw) {
-		return "", fmt.Errorf("%q %w %s", raw, errNotOneOf, strings.Join(e.values, ", "))
+		return "", fmt.Errorf("%q: %w; the values are %s", raw, ErrNotOneOf, strings.Join(e.values, ", "))
 	}
 	return raw, nil
 }
@@ -207,7 +208,7 @@ func (e Enum) Parse(raw string) (string, error) {
 // Parse reads text the pattern matches.
 func (p Pattern) Parse(raw string) (string, error) {
 	if !p.re.MatchString(raw) {
-		return "", fmt.Errorf("%q %w %s", raw, errNoMatch, p.src)
+		return "", fmt.Errorf("%q: %w; the pattern is %s", raw, errNoMatch, p.src)
 	}
 	return raw, nil
 }
@@ -238,7 +239,7 @@ func NewEnum(values []string) (Enum, error) {
 // value, so it matches anchored at both ends whether or not src says so.
 func NewPattern(src string) (Pattern, error) {
 	if _, err := regexp.Compile(src); err != nil {
-		return Pattern{}, fmt.Errorf("%q %w: %w", src, errNotARegexp, err)
+		return Pattern{}, fmt.Errorf("%q: %w: %w", src, errNotARegexp, err)
 	}
 	// src compiles alone, so wrapping it cannot close a group it opened.
 	re := regexp.MustCompile(`^(?:` + src + `)$`)

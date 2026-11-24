@@ -48,21 +48,21 @@ func logHeader(id LogID) []byte {
 // The refusals of a log header: too few bytes, no magic, a format this
 // lit2 does not read, and a CRC that disagrees.
 var (
-	errShortLogHeader = errors.New("the log header is short")
-	errNotALog        = errors.New("the log does not start with a log header")
+	errShortLogHeader = errors.New("a short log header")
+	errNotALog        = errors.New("a log that does not start with a log header")
 	errLogFormat      = errors.New("a log format this lit2 does not read")
-	errLogHeaderCRC   = errors.New("the log header's CRC disagrees with it")
+	errLogHeaderCRC   = errors.New("a log header its CRC disagrees with")
 )
 
 func parseLogHeader(h []byte) (LogID, error) {
 	var id LogID
 	switch {
 	case len(h) < headerSize:
-		return id, fmt.Errorf("%w: %d bytes; it is %d", errShortLogHeader, len(h), headerSize)
+		return id, fmt.Errorf("the log header is %d bytes, not %d: %w", len(h), headerSize, errShortLogHeader)
 	case !bytes.Equal(h[:4], logMagic[:]):
 		return id, errNotALog
 	case binary.BigEndian.Uint32(h[4:]) != logVersion:
-		return id, fmt.Errorf("%w: the log is format %d; this lit2 reads %d", errLogFormat, binary.BigEndian.Uint32(h[4:]), logVersion)
+		return id, fmt.Errorf("the log is format %d; this lit2 reads %d: %w", binary.BigEndian.Uint32(h[4:]), logVersion, errLogFormat)
 	case crc32.Checksum(h[:headerSize-4], castagnoli) != binary.BigEndian.Uint32(h[headerSize-4:]):
 		return id, errLogHeaderCRC
 	}
@@ -76,14 +76,14 @@ func segmentName(at Offset) string { return fmt.Sprintf("%016x", uint64(at)) }
 
 // The two names a publication's commit carries that lit never writes.
 var (
-	errNotASegmentName   = errors.New("is not a segment's start offset")
-	errNotACommitMessage = errors.New("is not a lit-log commit message")
+	errNotASegmentName   = errors.New("a name that is no segment's start offset")
+	errNotACommitMessage = errors.New("a message that is no lit-log commit message")
 )
 
 func parseSegmentName(s string) (Offset, error) {
 	at, err := strconv.ParseUint(s, 16, 64)
 	if err != nil || segmentName(Offset(at)) != s {
-		return 0, fmt.Errorf("%q %w", s, errNotASegmentName)
+		return 0, fmt.Errorf("%q: %w", s, errNotASegmentName)
 	}
 	return Offset(at), nil
 }
@@ -97,7 +97,7 @@ func parseCommitMessage(m string) (LogID, error) {
 	s, ok := strings.CutPrefix(m, messagePrefix)
 	id, okID := token(strings.TrimSuffix(s, "\n"))
 	if !ok || !okID || !strings.HasSuffix(s, "\n") {
-		return LogID{}, fmt.Errorf("%q %w", m, errNotACommitMessage)
+		return LogID{}, fmt.Errorf("%q: %w", m, errNotACommitMessage)
 	}
 	return id, nil
 }

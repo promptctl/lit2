@@ -25,7 +25,7 @@ const identityMode fs.FileMode = 0o600
 
 // errIdentityUnreadable is a mint refused because an identity file already
 // there does not parse: the mint never writes over it.
-var errIdentityUnreadable = errors.New("an identity file does not read")
+var errIdentityUnreadable = errors.New("an unreadable identity file")
 
 // MintIdentity creates the checkout id in private and the principal's key
 // in shared, each once, then reads both back, so a worktree that loses a

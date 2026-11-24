@@ -46,7 +46,7 @@ type KindRow struct {
 }
 
 // errRowVersion is a row whose decoders do not reach its kind's version.
-var errRowVersion = errors.New("a row's decoders do not reach its kind's version")
+var errRowVersion = errors.New("a row whose decoders do not reach its kind's version")
 
 // Row is P's row: decode[i] reads version i+1, so the last reads P's own
 // version. The row's kind is P's, so the two cannot disagree
@@ -72,7 +72,7 @@ func NewKinds(rows ...KindRow) Kinds {
 	by := map[Kind]KindRow{}
 	for _, r := range rows {
 		if _, ok := by[r.kind]; ok {
-			panic(fmt.Errorf("events: kind %s is %w", r.kind, errRegisteredTwice))
+			panic(fmt.Errorf("events: kind %s: %w", r.kind, errRegisteredTwice))
 		}
 		by[r.kind] = r
 	}

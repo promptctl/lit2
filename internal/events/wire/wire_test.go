@@ -113,6 +113,16 @@ func TestTornOrForeignBytesStopTheReader(t *testing.T) {
 	if m, err := decode(w.Encoded()); !errors.Is(err, wire.ErrReadAsOther) {
 		t.Errorf("a LEN read as a varint decodes as %+v, %v; want the reader stopped", m, err)
 	}
+	// and a VARINT read as bytes, beside its control, a LEN read as bytes
+	var asList, notAList wire.Writer
+	asList.Bytes(2, []byte("x"))
+	notAList.Uvarint(2, 9)
+	if m, err := decode(asList.Encoded()); err != nil || len(m.list) != 1 {
+		t.Fatalf("a LEN read as bytes decodes as %+v, %v; the control must read", m, err)
+	}
+	if m, err := decode(notAList.Encoded()); !errors.Is(err, wire.ErrReadAsOther) {
+		t.Errorf("a VARINT read as bytes decodes as %+v, %v; want the reader stopped", m, err)
+	}
 }
 
 func TestAReaderStopsAtItsFirstError(t *testing.T) {

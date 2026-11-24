@@ -106,8 +106,8 @@ func TestNotALit2CommandLine(t *testing.T) {
 		}
 		_, err := parse(tc.args...)
 		var f ParseFailure
-		if !errors.As(err, &f) || f.Code != tc.code || f.Class() != reason.ClassUsage || !errors.Is(err, tc.want) {
-			t.Errorf("Parse(%q) failed with %v (code %d); want a usage-class failure with code %d, %v", tc.args, err, f.Code, tc.code, tc.want)
+		if !errors.As(err, &f) || f.code != tc.code || f.Class() != reason.ClassUsage || !errors.Is(err, tc.want) {
+			t.Errorf("Parse(%q) failed with %v (code %d); want a usage-class failure with code %d, %v", tc.args, err, f.code, tc.code, tc.want)
 		}
 	}
 }
@@ -115,7 +115,7 @@ func TestNotALit2CommandLine(t *testing.T) {
 func TestEveryParseCodeHasItsOwnWireName(t *testing.T) {
 	seen := map[string]ParseCode{}
 	for _, code := range []ParseCode{UnknownVerb, Usage} {
-		name := ParseFailure{Code: code}.Reason()
+		name := refuseParse(code, errUnknownVerb).Reason()
 		if prior, ok := seen[name]; ok || name == "" {
 			t.Errorf("codes %d and %d share the wire name %q", prior, code, name)
 		}

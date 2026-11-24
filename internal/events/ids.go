@@ -76,9 +76,9 @@ func ParseItemID(s string) (ItemID, error) {
 // whose two pad bits are set, and a segment not of a segment's length or
 // alphabet.
 var (
-	errNotFullID   = fmt.Errorf("a full id is %d lowercase Crockford base32 digits", fullWidth)
-	errPadBits     = errors.New("a full id's last digit holds three bits and two zeros")
-	errNotASegment = fmt.Errorf("%d to %d lowercase Crockford base32 digits", minWidth, fullWidth)
+	errNotFullID   = errors.New("a text that is no full id")
+	errPadBits     = errors.New("a full id whose last digit's pad bits are set")
+	errNotASegment = errors.New("a text that is no id segment")
 )
 
 // parseFull reads 26 Crockford digits whose last two bits are zero: the
@@ -86,7 +86,7 @@ var (
 func parseFull(s string) ([16]byte, error) {
 	var b [16]byte
 	if len(s) != fullWidth || strings.Trim(s, crockford) != "" {
-		return b, errNotFullID
+		return b, fmt.Errorf("a full id is %d lowercase Crockford base32 digits: %w", fullWidth, errNotFullID)
 	}
 	var acc uint32
 	var held, at int
@@ -100,7 +100,7 @@ func parseFull(s string) ([16]byte, error) {
 		}
 	}
 	if acc&(1<<held-1) != 0 {
-		return [16]byte{}, errPadBits
+		return [16]byte{}, fmt.Errorf("a full id's last digit holds three bits and two zeros: %w", errPadBits)
 	}
 	return b, nil
 }
@@ -146,7 +146,7 @@ type Segment struct{ s string }
 // so its last digit holds the id's two zero bits.
 func ParseSegment(s string) (Segment, error) {
 	if len(s) < minWidth || len(s) > fullWidth || strings.Trim(s, crockford) != "" {
-		return Segment{}, fmt.Errorf("%q is not an id segment: %w", s, errNotASegment)
+		return Segment{}, fmt.Errorf("%q is not an id segment, %d to %d lowercase Crockford base32 digits: %w", s, minWidth, fullWidth, errNotASegment)
 	}
 	if len(s) == fullWidth {
 		if _, err := parseFull(s); err != nil {
@@ -310,7 +310,7 @@ func (k Prefixes) admits(pre string) bool {
 }
 
 // ErrForeignPrefix is an id typed under a prefix this project never declared.
-var ErrForeignPrefix = errors.New("another project's")
+var ErrForeignPrefix = errors.New("an id under another project's prefix")
 
 // ParseShortID reads an item reference a person typed: bare, or under a
 // known prefix as `<prefix>-…`; a full id or segments, their digits read
@@ -324,7 +324,7 @@ func ParseShortID(s string, known Prefixes) (ShortID, error) {
 			return nil, fmt.Errorf("%q is not an item id: %w", s, err)
 		}
 		if !known.admits(pre) {
-			return nil, fmt.Errorf("%q is under the prefix %s, %w; this one's is %s", s, pre, ErrForeignPrefix, known.active)
+			return nil, fmt.Errorf("%q is under the prefix %s; this one's is %s: %w", s, pre, known.active, ErrForeignPrefix)
 		}
 		body = rest
 	}

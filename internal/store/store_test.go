@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -131,6 +132,41 @@ func TestAPublicationWhoseSegmentDoesNotFillItsSpanIsUnreadableAndResealed(t *te
 		return
 	}
 	t.Errorf("a clone with no log sees no stream of %s after the reseal: %+v", mine.Name(), h)
+}
+
+// A lit-log commit whose tree holds no segment is no publication: tile
+// refuses it as it refuses a publication sealed of none, so its stream is
+// unreadable to every reader and its owner reseals from 0. A publication
+// of one segment, its control, reads.
+func TestAPublicationOfNoSegmentIsUnreadableAndResealed(t *testing.T) {
+	me := CheckoutID{0xa}
+	s, p, frames, log := appended(t, me, "one")
+	control, other := WriterRef{Checkout: CheckoutID{0xc}}, WriterRef{Checkout: CheckoutID{0xb}}
+	forge(t, p, control, log, []Offset{0}, frames)
+	forge(t, p, other, log, nil, nil)
+	h, err := s.Heads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Unreadable) != 1 || h.Unreadable[0].Name != string(other.Name()) || !errors.Is(h.Unreadable[0].Why, errNoSegment) {
+		t.Errorf("with a publication of no segment the unreadable streams are %+v; want %s, for errNoSegment", h.Unreadable, other.Name())
+	}
+	if !slices.ContainsFunc(h.Streams, func(st Stream) bool { return st.Ref == control }) {
+		t.Errorf("control: the streams are %+v; want %s, a publication of one segment", h.Streams, control.Name())
+	}
+
+	forge(t, p, WriterRef{Checkout: me}, log, nil, nil)
+	sealed, err := s.SealOwn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, ok := sealed.(Publication)
+	if !ok {
+		t.Fatalf("sealing the own log made %#v; want a publication", sealed)
+	}
+	if resealed, ok := pub.prior.(Resealed); !ok || !errors.Is(resealed.Why, errNoSegment) {
+		t.Errorf("over its own publication of no segment the owner seals with prior %#v; want it resealed for errNoSegment", pub.prior)
+	}
 }
 
 // appended is a store over fresh twins whose own log holds one frame per

@@ -2,6 +2,7 @@ package events
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -27,13 +28,13 @@ func TestAWireThresholdOutsideOneTo255IsRefusedAsTheTextOneIs(t *testing.T) {
 		}
 	}
 	for _, n := range []uint64{0, 256} {
-		if _, err := ReadPropose(wire.NewReader(proposal(n))); !errors.Is(err, errThresholdRange) {
-			t.Errorf("a proposal with threshold %d on the wire reads with error %v, want errThresholdRange", n, err)
+		if _, err := ReadPropose(wire.NewReader(proposal(n))); !errors.Is(err, errThresholdRange) || !strings.Contains(err.Error(), "from 1 to 255") {
+			t.Errorf("a proposal with threshold %d on the wire reads with error %v, want errThresholdRange, saying from 1 to 255", n, err)
 		}
 	}
 	for _, s := range []string{"0", "256"} {
-		if _, err := ParseThreshold(s); !errors.Is(err, errThresholdRange) {
-			t.Errorf("the threshold %q parses with %v; want errThresholdRange", s, err)
+		if _, err := ParseThreshold(s); !errors.Is(err, errThresholdRange) || !strings.Contains(err.Error(), "from 1 to 255") {
+			t.Errorf("the threshold %q parses with %v; want errThresholdRange, saying from 1 to 255", s, err)
 		}
 	}
 }

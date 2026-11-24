@@ -28,9 +28,11 @@ type commandLog struct{ dir string }
 
 // Housekeeping is a write whose event is in the log and whose removal of
 // old day files failed: a fact of its own, not a lost record.
-type Housekeeping struct{ Err error }
+type Housekeeping struct{ err error }
 
-func (h Housekeeping) Error() string { return h.Err.Error() }
+func (h Housekeeping) Error() string { return h.err.Error() }
+
+func (h Housekeeping) Unwrap() error { return h.err }
 
 // Write appends the event's line in one O_APPEND write, so concurrent
 // invocations never interleave, then removes the day files more than 30
@@ -55,7 +57,7 @@ func (l commandLog) Write(e Event) error {
 		return err
 	}
 	if err := l.prune(day.Add(-retention)); err != nil {
-		return Housekeeping{Err: err}
+		return Housekeeping{err: err}
 	}
 	return nil
 }
@@ -143,7 +145,7 @@ func gitBlock(spawns []git.Spawn) []spawnLine {
 		case git.Exited:
 			l[i].Exit = &e.Code
 		case git.Unstarted:
-			l[i].Unstarted = e.Why
+			l[i].Unstarted = e.Why.Error()
 		default:
 			panic(fmt.Sprintf("command: %T is not how a spawn ended", e))
 		}
@@ -219,7 +221,7 @@ func encode(e Event) ([]byte, error) {
 	case cli.Failed:
 		l.Outcome, l.Reason, l.Error = o.Failure.Class().String(), o.Failure.Reason(), o.Failure.Error()
 		if in, ok := o.Failure.(Internal); ok {
-			l.Stack = string(in.Stack)
+			l.Stack = string(in.Stack())
 		}
 	}
 	switch a := e.Agent.(type) {

@@ -190,7 +190,9 @@ type Refs interface {
 	// listed as one, never the listing's failure.
 	List(prefix RefName) (Listing, error)
 	// Replace points name at to, an object the repository holds, if name
-	// still is what from says; otherwise it refuses with Moved.
+	// still is what from says; otherwise it refuses with Moved, whose Now
+	// is the ref's state as read after git refused. A refusal that reads
+	// the ref still naming from is git's own failure, Refused, not Moved.
 	Replace(name RefName, from Was, to ObjectID) error
 }
 
@@ -219,11 +221,11 @@ var name = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 // ErrNotAName is a name the name grammar refuses, as a tree entry's name
 // or as a refname, which is refs/ and names: one refusal for the one
 // grammar.
-var ErrNotAName = errors.New("a name is letters, digits, _ and -")
+var ErrNotAName = errors.New("a name not of letters, digits, _ and -")
 
 // ErrDuplicateEntry is a tree given two entries of one name, which git
 // fsck refuses.
-var ErrDuplicateEntry = errors.New("two tree entries share a name")
+var ErrDuplicateEntry = errors.New("two tree entries of one name")
 
 // parseRefName refuses a name that is not refs/ and one or more names.
 func parseRefName(n RefName) error {
@@ -253,10 +255,11 @@ func under(n, p RefName) bool {
 	return n == p || strings.HasPrefix(string(n), strings.TrimSuffix(string(p), "/")+"/")
 }
 
-// Moved is a replace refused because its ref no longer is what its writer
-// read: From is what the writer read, Now what the ref names instead, so
-// the writer decides from the refusal itself whether it lost a race or won
-// it under another publish.
+// Moved is a ref no longer what its writer read: a replace refused, or a
+// publish with nothing to write whose ref has moved since its seal read
+// it. From is what the writer read, Now the ref's state as read after the
+// refusal, so the writer decides from the refusal itself whether it lost
+// a race or won it under another publish.
 type Moved struct {
 	Name RefName
 	From Was
@@ -285,11 +288,11 @@ func (n NotLit) Error() string { return fmt.Sprintf("object %s is %v", n.ID, n.W
 func (n NotLit) Unwrap() error { return n.Why }
 
 // ErrWrongKind is an object of another kind than the one asked for.
-var ErrWrongKind = errors.New("of another kind")
+var ErrWrongKind = errors.New("an object of another kind")
 
 // errForeignShape is a tree or commit of a shape lit's encoding never
 // writes.
-var errForeignShape = errors.New("of a shape lit never writes")
+var errForeignShape = errors.New("an object of a shape lit never writes")
 
 // ForeignFormat is an id of another format than the repository it is asked
 // of, the zero id's included: it names nothing there, so it is refused,

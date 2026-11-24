@@ -112,7 +112,7 @@ func (b *book) as(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops ...v
 	b.t.Helper()
 	c, minted, no, refused := b.run(w, seen, verb, ops)
 	if refused {
-		b.t.Fatalf("%s %+v refused: %s: %v", verb, ops, no.Reason, no.Err)
+		b.t.Fatalf("%s %+v refused: %s: %v", verb, ops, no.Reason, no.Err())
 	}
 	if minted == nil {
 		return ""
@@ -174,16 +174,16 @@ func (b *book) refusedAs(reason string, verb verbs.Verb, ops ...verbs.Operand) s
 	b.t.Helper()
 	no := b.refusal(verb, ops...)
 	if no.Reason != reason {
-		b.t.Fatalf("%s %+v is refused as %s: %v; want %s", verb, ops, no.Reason, no.Err, reason)
+		b.t.Fatalf("%s %+v is refused as %s: %v; want %s", verb, ops, no.Reason, no.Err(), reason)
 	}
-	return no.Err.Error()
+	return no.Err().Error()
 }
 
 func (b *book) get(path string) string {
 	b.t.Helper()
 	g := verbs.Get(b.world(b.st), []string{path})
 	if no, refused := g.Refusal(); refused {
-		b.t.Fatalf("get %s refused: %s: %v", path, no.Reason, no.Err)
+		b.t.Fatalf("get %s refused: %s: %v", path, no.Reason, no.Err())
 	}
 	return g.Out
 }
@@ -367,7 +367,7 @@ func TestStandardInputIsOneMemberPerLineForASet(t *testing.T) {
 	id := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
 	c := verbs.Compile(b.world(b.st), verbs.Add, []verbs.Operand{op(id+"/labels", verbs.Stdin)}, func() (string, error) { return "ready\nexternal\n", nil })
 	if no, refused := c.Refusal(); refused {
-		t.Fatalf("labels from standard input refused: %v", no.Err)
+		t.Fatalf("labels from standard input refused: %v", no.Err())
 	}
 	b.mint(one, b.st, c.Drafts)
 	if got := b.get(id + "/labels"); got != id+"/labels\tready\n"+id+"/labels\texternal\n" && got != id+"/labels\texternal\n"+id+"/labels\tready\n" {

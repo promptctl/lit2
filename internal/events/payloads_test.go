@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -232,11 +233,11 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	if _, err := readValue(Plain{Canonical: "b"}.wire()); err != nil {
 		t.Fatalf("a value in one form: %v; the control must read", err)
 	}
-	if _, err := readValue(twoForms.Encoded()); !errors.Is(err, errForms) {
-		t.Errorf("a value in both forms reads with %v; want errForms", err)
+	if _, err := readValue(twoForms.Encoded()); !errors.Is(err, notOneForm{What: "a value", N: 2}) {
+		t.Errorf("a value in both forms reads with %v; want a value in 2 forms", err)
 	}
-	if _, err := readValue(nil); !errors.Is(err, errForms) {
-		t.Errorf("a value in neither form reads with %v; want errForms", err)
+	if _, err := readValue(nil); !errors.Is(err, notOneForm{What: "a value", N: 0}) {
+		t.Errorf("a value in neither form reads with %v; want a value in 0 forms", err)
 	}
 	var noValue wire.Writer
 	noValue.Bytes(1, []byte("title"))
@@ -309,24 +310,24 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		b    []byte
 		want error
 	}{
-		{"a field.set with no value", ReadFieldSet, noValue.Encoded(), errMissing},
+		{"a field.set with no value", ReadFieldSet, noValue.Encoded(), missing{What: "value"}},
 		{"a field.set of a field that is no name", ReadFieldSet, badField.Encoded(), ErrNotAName},
-		{"an item.create placed nowhere", ReadItemCreate, nil, errMissing},
+		{"an item.create placed nowhere", ReadItemCreate, nil, missing{What: "placement"}},
 		{"an item.create at level 6", ReadItemCreate, place(levelSix.Encoded()), ErrNotALevel},
-		{"an item.create at a level and below its parent", ReadItemCreate, place(bothPlaces.Encoded()), errForms},
-		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded()), errSize},
-		{"a member.add of no member", ReadMemberAdd, place([]byte("labels")), errMissing},
-		{"a transition with two tos", ReadTransition, twoTos.Encoded(), errTwice},
+		{"an item.create at a level and below its parent", ReadItemCreate, place(bothPlaces.Encoded()), notOneForm{What: "a placement", N: 2}},
+		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded()), wrongSize{What: "an id", Got: 8, Want: 16}},
+		{"a member.add of no member", ReadMemberAdd, place([]byte("labels")), missing{What: "member"}},
+		{"a transition with two tos", ReadTransition, twoTos.Encoded(), twice{What: "its to"}},
 		{"a transition carrying one field twice", ReadTransition, twiceCarried.Encoded(), errFieldOrder},
 		{"a transition carrying its fields out of name order", ReadTransition, outOfOrder.Encoded(), errFieldOrder},
-		{"a transition carrying a field with no value", ReadTransition, noCarriedValue.Encoded(), errMissing},
-		{"a field.set with two fields", ReadFieldSet, twoFields.Encoded(), errTwice},
-		{"a comment.add with no body", ReadCommentAdd, nil, errMissing},
+		{"a transition carrying a field with no value", ReadTransition, noCarriedValue.Encoded(), missing{What: "value"}},
+		{"a field.set with two fields", ReadFieldSet, twoFields.Encoded(), twice{What: "its field"}},
+		{"a comment.add with no body", ReadCommentAdd, nil, missing{What: "body"}},
 		{"a workspace.apply whose blob names other bytes", ReadWorkspaceApply, otherBlob.Encoded(), errBlobNotVersion},
-		{"a workspace.apply with no blob", ReadWorkspaceApply, noBlob.Encoded(), errMissing},
-		{"a workspace.apply with no version", ReadWorkspaceApply, noVersion.Encoded(), errMissing},
-		{"a workspace.apply with two versions", ReadWorkspaceApply, twoVersions.Encoded(), errTwice},
-		{"a workspace.apply with two blobs", ReadWorkspaceApply, twoBlobs.Encoded(), errTwice},
+		{"a workspace.apply with no blob", ReadWorkspaceApply, noBlob.Encoded(), missing{What: "blob"}},
+		{"a workspace.apply with no version", ReadWorkspaceApply, noVersion.Encoded(), missing{What: "version"}},
+		{"a workspace.apply with two versions", ReadWorkspaceApply, twoVersions.Encoded(), twice{What: "its version"}},
+		{"a workspace.apply with two blobs", ReadWorkspaceApply, twoBlobs.Encoded(), twice{What: "its blob"}},
 	} {
 		if _, err := c.read(wire.NewReader(c.b)); !errors.Is(err, c.want) {
 			t.Errorf("%s reads with %v; want %v", c.name, err, c.want)
@@ -341,8 +342,8 @@ func TestNamesAndLevelsParseOnlyTheirOwnShape(t *testing.T) {
 		}
 	}
 	for _, s := range []string{"", "Title", "1a", "-a", "a b", "a.b", "a/b"} {
-		if _, err := ParseName(s); !errors.Is(err, ErrNotAName) {
-			t.Errorf("ParseName(%q) reads with %v; want ErrNotAName", s, err)
+		if _, err := ParseName(s); !errors.Is(err, ErrNotAName) || !strings.Contains(err.Error(), "a lowercase letter, then lowercase letters, digits, _ or -") {
+			t.Errorf("ParseName(%q) reads with %v; want ErrNotAName, saying a name's grammar", s, err)
 		}
 	}
 	for n := range 5 {
@@ -351,8 +352,8 @@ func TestNamesAndLevelsParseOnlyTheirOwnShape(t *testing.T) {
 		}
 	}
 	for _, n := range []int{0, 6, -1} {
-		if _, err := ParseLevel(n); !errors.Is(err, ErrNotALevel) {
-			t.Errorf("ParseLevel(%d) reads with %v; want ErrNotALevel", n, err)
+		if _, err := ParseLevel(n); !errors.Is(err, ErrNotALevel) || !strings.Contains(err.Error(), "1 to 5") {
+			t.Errorf("ParseLevel(%d) reads with %v; want ErrNotALevel, saying the levels are 1 to 5", n, err)
 		}
 	}
 	if _, ok := mustLevel(1).Below(); ok {

@@ -1,6 +1,7 @@
 package scenarios
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -23,8 +24,12 @@ func lit(tw root.Twin, args ...string) (out, errOut string, status int, event co
 
 func carriedUnauthorized(o fold.Outcome) bool {
 	c, ok := o.(fold.CarriedFor)
-	_, unauthorized := c.Why.(fold.Unauthorized)
-	return ok && unauthorized
+	return ok && isUnauthorized(c.Why)
+}
+
+func isUnauthorized(why fold.Reason) bool {
+	_, unauthorized := why.(fold.Unauthorized)
+	return unauthorized
 }
 
 func principal(tw root.Twin) string {
@@ -70,7 +75,11 @@ func TestScenario15AccessControlFromTheFirstEvent(t *testing.T) {
 	// 3. the contributor's rm of the epic is refused at the write, naming
 	// the capability it needed, and nothing is written
 	out, errOut, status, event = lit(joiner, "rm", epic)
-	if failed, ok := event.Outcome.(cli.Failed); status == 0 || !ok || failed.Failure.Reason() != "unauthorized" || !strings.Contains(errOut, "rm own/* (level=1)") || len(event.Store.Appends) != 0 {
+	var carried verbs.CarriedEvent
+	if failed, ok := event.Outcome.(cli.Failed); !ok || !errors.As(failed.Failure, &carried) || !isUnauthorized(carried.Why) || failed.Failure.Reason() != "unauthorized" {
+		t.Errorf("the contributor's rm %s ended %#v; want the fold to carry it as unauthorized", epic, event.Outcome)
+	}
+	if status == 0 || !strings.Contains(errOut, "rm own/* (level=1)") || len(event.Store.Appends) != 0 {
 		t.Errorf("the contributor's rm %s: status %d, out %q, stderr %q", epic, status, out, errOut)
 	}
 	if v := event.Policy.Verdicts; len(v) != 1 || !carriedUnauthorized(v[0].Outcome) {

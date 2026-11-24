@@ -150,7 +150,7 @@ func failed(err error) cli.Outcome {
 	if errors.As(err, &f) {
 		return cli.Failed{Failure: f}
 	}
-	return cli.Failed{Failure: command.Internal{Err: err}}
+	return cli.Failed{Failure: command.Broke(err)}
 }
 
 // logFailure is what a failed command log write says on stderr: an event
@@ -159,7 +159,7 @@ func failed(err error) cli.Outcome {
 func logFailure(err error) string {
 	var h command.Housekeeping
 	if errors.As(err, &h) {
-		return fmt.Sprintf("lit2: command log: pruning failed: %v\n", h.Err)
+		return fmt.Sprintf("lit2: command log: pruning failed: %v\n", h)
 	}
 	return fmt.Sprintf("lit2: command event not recorded: %v\n", err)
 }
@@ -167,8 +167,8 @@ func logFailure(err error) string {
 // notBuilt ends a row whose body is not in this binary yet (D14). Once the
 // last body is bound it is unused, and the lint forces its deletion.
 func notBuilt(verb string) cli.Outcome {
-	return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("lit2 %s %w", verb, errNotBuilt)}}
+	return cli.Failed{Failure: command.Broke(fmt.Errorf("%w: lit2 %s is not built in this binary", errNotBuilt, verb))}
 }
 
 // errNotBuilt is a row whose body this binary does not hold.
-var errNotBuilt = errors.New("is not built in this binary")
+var errNotBuilt = errors.New("an unbuilt command")

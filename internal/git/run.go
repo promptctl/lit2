@@ -49,8 +49,9 @@ type Ended interface{ ended() }
 // Exited is git run to its end, with its exit status.
 type Exited struct{ Code int }
 
-// Unstarted is a git that never ran, and why.
-type Unstarted struct{ Why string }
+// Unstarted is a git that never ran, and why: the error that kept it from
+// starting, so a reader asks errors.Is of it, never its text.
+type Unstarted struct{ Why error }
 
 func (Exited) ended()    {}
 func (Unstarted) ended() {}
@@ -79,7 +80,9 @@ func Find(env []string) *Git {
 	return g
 }
 
-var errNoGit = errors.New("git is not in an absolute directory on PATH: lit2 writes its repository and reads the code repository through the user's git")
+// errNoGit is no git to spawn: none in an absolute directory on PATH, or
+// a Git Find never made.
+var errNoGit = errors.New("no git in an absolute directory on PATH")
 
 // durable refuses a git older than 2.36, which takes core.fsync without a
 // word and fsyncs no ref, so lit's repository would be less durable than
@@ -100,13 +103,13 @@ var floor = [2]int{2, 36}
 
 // errBelowFloor is a git older than floor, or one whose version cannot be
 // read as one at it.
-var errBelowFloor = errors.New("git is below lit2's floor")
+var errBelowFloor = errors.New("a git below lit2's floor")
 
 // atFloor refuses a git whose git version says it is older than floor.
 func atFloor(version string) error {
 	var v [2]int
 	if _, err := fmt.Sscanf(version, "git version %d.%d", &v[0], &v[1]); err != nil || v[0] < floor[0] || v[0] == floor[0] && v[1] < floor[1] {
-		return fmt.Errorf("%w: lit2 needs git %d.%d or later to keep its repository durable; %q is what git says it is", errBelowFloor, floor[0], floor[1], strings.TrimSpace(version))
+		return fmt.Errorf("lit2 needs git %d.%d or later to keep its repository durable, and %q is what git says it is: %w", floor[0], floor[1], strings.TrimSpace(version), errBelowFloor)
 	}
 	return nil
 }
@@ -173,8 +176,9 @@ func (g *Git) run(dir string, env []string, stdin []byte, args ...string) ([]byt
 // ended.
 func (g *Git) exec(dir string, env []string, stdin []byte, args []string, s *Spawn) ([]byte, error) {
 	if g.bin == "" {
-		s.Ended = Unstarted{Why: errNoGit.Error()}
-		return nil, errNoGit
+		err := fmt.Errorf("lit2 writes its repository and reads the code repository through the user's git: %w", errNoGit)
+		s.Ended = Unstarted{Why: err}
+		return nil, err
 	}
 	cmd := exec.Command(g.bin, args...)
 	cmd.Dir, cmd.Env, cmd.Stdin = dir, env, bytes.NewReader(stdin)
@@ -183,7 +187,7 @@ func (g *Git) exec(dir string, env []string, stdin []byte, args []string, s *Spa
 	err := cmd.Run()
 	s.Stderr = scrub(stderr.Bytes())
 	if cmd.ProcessState == nil {
-		s.Ended = Unstarted{Why: err.Error()}
+		s.Ended = Unstarted{Why: err}
 		return nil, err
 	}
 	s.Ended = Exited{Code: cmd.ProcessState.ExitCode()}

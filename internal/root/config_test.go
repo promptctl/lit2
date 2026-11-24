@@ -392,10 +392,19 @@ func TestConfigCommitByAContributorIsRefusedNamingSetWorkspace(t *testing.T) {
 	joiner.file(next)
 	joiner.commit(next)
 	r := joiner.lit("config", "commit")
-	if r.status == 0 || reasonOf(r.event) != "unauthorized" || !strings.Contains(r.err, "set /workspace refused: role contributor") || appends(r.event) != 0 {
+	var carried verbs.CarriedEvent
+	if !errors.As(failure(t, r.event), &carried) || !isUnauthorized(carried.Why) || reasonOf(r.event) != "unauthorized" {
+		t.Errorf("a contributor's config commit failed %v; want the fold to carry its write as unauthorized", failure(t, r.event))
+	}
+	if r.status == 0 || !strings.Contains(r.err, "set /workspace refused: role contributor") || appends(r.event) != 0 {
 		t.Errorf("a contributor's config commit: status %d, stderr %q, %d appends; want refused naming set /workspace", r.status, r.err, appends(r.event))
 	}
 	if v := r.event.Policy.Verdicts; len(v) != 1 {
 		t.Errorf("the refused commit's verdicts are %+v; want its one event", v)
 	}
+}
+
+func isUnauthorized(why fold.Reason) bool {
+	_, unauthorized := why.(fold.Unauthorized)
+	return unauthorized
 }

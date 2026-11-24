@@ -39,12 +39,12 @@ func Get(w World, paths []string) Got {
 	for _, p := range paths {
 		a, r := address.Parse(w.View, p)
 		if r != nil {
-			g.Operands = append(g.Operands, Refused{Text: p, Reason: r.Reason(), Err: r, Detail: r.Error()})
+			g.Operands = append(g.Operands, Refused{Text: p, Reason: r.Reason(), err: r, Detail: r.Error()})
 			continue
 		}
 		ls, no := read(w, a)
 		if no != nil {
-			g.Operands = append(g.Operands, Refused{Text: p, Reason: no.reason, Err: no.err})
+			g.Operands = append(g.Operands, Refused{Text: p, Reason: no.reason, err: no.err})
 			continue
 		}
 		g.Operands = append(g.Operands, Accepted{Text: p, Canon: a.String(), Values: len(ls)})

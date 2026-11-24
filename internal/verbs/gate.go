@@ -117,7 +117,7 @@ func Gate(w World, c Compiled, minted []events.Event) Compiled {
 		if first {
 			err, first = errors.Join(errs...), false // the command's refusal lists every arrival refused
 		}
-		operands[i] = Refused{Text: res.(Accepted).Text, Reason: r.reason, Err: err}
+		operands[i] = Refused{Text: res.(Accepted).Text, Reason: r.reason, err: err}
 	}
 	c.Operands = operands
 	if len(refused) > 0 {

@@ -111,18 +111,29 @@ func TestGeneratedEventsDecodeAsMintedAndVerify(t *testing.T) {
 func TestAChangedHeaderPrincipalOrSuiteFailsTheSignature(t *testing.T) {
 	k := keyOf(1)
 	e := mint(t, context(1, Frontier{}, Known{}), k, 1, Act{About: Root{}, Payload: note{Text: text("the header is signed")}}).Events[0]
+	// a flip that still decodes reaches the signature check; one that does
+	// not is malformed, said why. Some flips must decode, or the check
+	// below is never run and the test proves nothing about the signature
+	checked := 0
 	for i := range len(e.raw) {
 		header := slices.Clone(e.raw)
 		header[i] ^= 0x01
 		switch d := Decode(here, recordOf(header, e.Signature(), bodyWire(t, e))).(type) {
 		case Malformed:
+			if d.Why == "" {
+				t.Errorf("header byte %d changed is malformed with no why", i)
+			}
 		case Event:
+			checked++
 			if v := suites.Check(d.Header().Attribution().Principal, d.SignedBytes(), d.Signature()); v == Valid {
 				t.Errorf("header byte %d changed, the signature still holds", i)
 			}
 		default:
 			t.Fatalf("header byte %d changed decodes as %#v, neither an event nor malformed", i, d)
 		}
+	}
+	if checked == 0 {
+		t.Fatalf("none of the %d header flips decodes to an event, so none reaches the signature check", len(e.raw))
 	}
 	if v := suites.Check(keyOf(2).Principal(), e.SignedBytes(), e.Signature()); v != Invalid {
 		t.Errorf("another principal's check is %s; want invalid", v)
@@ -279,16 +290,16 @@ func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 		header []byte
 		want   error
 	}{
-		"no config-ref":                {edited(e.raw, headerConfigRef, none), errMissing},
-		"no policy version":            {edited(e.raw, headerPolicy, none), errMissing},
-		"no causal position":           {edited(e.raw, headerPosition, none), errMissing},
-		"no payload hash":              {edited(e.raw, headerPayloadHash, none), errMissing},
-		"policy version 0":             {edited(e.raw, headerPolicy, func(w *wire.Writer) { w.Uvarint(headerPolicy, 0) }), errZeroField},
-		"causal position 0":            {edited(e.raw, headerPosition, func(w *wire.Writer) { w.Uvarint(headerPosition, 0) }), errZeroField},
+		"no config-ref":                {edited(e.raw, headerConfigRef, none), missing{What: "config-ref"}},
+		"no policy version":            {edited(e.raw, headerPolicy, none), missing{What: "policy version"}},
+		"no causal position":           {edited(e.raw, headerPosition, none), missing{What: "causal position"}},
+		"no payload hash":              {edited(e.raw, headerPayloadHash, none), missing{What: "payload hash"}},
+		"policy version 0":             {edited(e.raw, headerPolicy, func(w *wire.Writer) { w.Uvarint(headerPolicy, 0) }), zeroField{What: "policy version"}},
+		"causal position 0":            {edited(e.raw, headerPosition, func(w *wire.Writer) { w.Uvarint(headerPosition, 0) }), zeroField{What: "causal position"}},
 		"recorded-at 0":                {edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 0) }), errNotATime},
 		"recorded-at past int64":       {edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 1<<63) }), errNotATime},
 		"a root that names an element": {edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(2, "abc")) }), errRootNamesPart},
-		"a subject that is no item id": {edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(1, "not an id")) }), errSize},
+		"a subject that is no item id": {edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(1, "not an id")) }), wrongSize{What: "an id", Got: len("not an id"), Want: 16}},
 		"bytes that are no message":    {noMessage, wireRefusal(t, noMessage)},
 	} {
 		if _, err := readHeader(c.header); !errors.Is(err, c.want) {
@@ -300,11 +311,35 @@ func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 		}
 	}
 	unsigned := futureField(recordHeader, string(e.raw))
-	if _, err := readRecord(unsigned); !errors.Is(err, errMissing) {
-		t.Errorf("a record with no signature reads with %v; want errMissing", err)
+	if _, err := readRecord(unsigned); !errors.Is(err, missing{What: "signature"}) {
+		t.Errorf("a record with no signature reads with %v; want no signature", err)
 	}
 	if _, ok := Decode(here, store.Record(unsigned)).(Malformed); !ok {
 		t.Error("a record with no signature decodes; want it malformed")
+	}
+	if _, err := readRecord(futureField(recordSignature, string(signatureWire(e.Signature())))); !errors.Is(err, missing{What: "header"}) {
+		t.Errorf("a record with no header reads with %v; want no header", err)
+	}
+	// an attribution names its checkout and its principal; the one with both
+	// is the control
+	attribution := func(checkout, principal bool) []byte {
+		var w wire.Writer
+		if checkout {
+			w.Bytes(1, make([]byte, 16))
+		}
+		if principal {
+			w.Bytes(2, k.Principal().wire())
+		}
+		return w.Encoded()
+	}
+	if _, err := readAttribution(attribution(true, true)); err != nil {
+		t.Fatalf("an attribution with a checkout and a principal: %v; the control must read", err)
+	}
+	if _, err := readAttribution(attribution(false, true)); !errors.Is(err, missing{What: "16-byte checkout id"}) {
+		t.Errorf("an attribution with no checkout reads with %v; want no checkout id", err)
+	}
+	if _, err := readAttribution(attribution(true, false)); !errors.Is(err, missing{What: "principal"}) {
+		t.Errorf("an attribution with no principal reads with %v; want no principal", err)
 	}
 }
 
@@ -366,7 +401,7 @@ func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
 		"no clock reading":           {noClock, act, errNoClock},
 		"no agent":                   {noAgent, act, errNotAnAgent},
 		"a two-digit segment":        {at, Act{About: NewItem{ID: anItem, Width: 2}, Payload: act.Payload}, errWidth},
-		"no policy version":          {noPolicy, act, errZeroField},
+		"no policy version":          {noPolicy, act, zeroField{What: "policy version"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			panics.With(t, tc.want, func() { _, _ = Mint(tc.c, NewDrafts(tc.d), keyOf(1).Signer(), entropy(1)) })

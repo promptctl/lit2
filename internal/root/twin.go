@@ -168,7 +168,7 @@ func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 	out := body{p: t.Process, now: t.Process.Clock.Now(), rec: rec}.verb(func(v inForce) cli.Outcome {
 		c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
 		if no, refused := c.Refusal(); refused {
-			forged = no.Err
+			forged = no.Err()
 			return cli.Done{}
 		}
 		m, err := v.mint(c.Drafts, v.ref)

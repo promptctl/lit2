@@ -384,6 +384,7 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 		// lit's: each refused call is paired with the same call in the same
 		// state, its name alone changed so no ref is its directory or under
 		// it, which is taken.
+		// [LAW:verifiable-goals] exception: on disk git alone enforces this; proven by its minimal pair
 		for _, c := range []struct{ refused, taken git.RefName }{
 			{"refs/lit/a/b", "refs/lit/d/b"},
 			{"refs/lit/b", "refs/lit/e"},

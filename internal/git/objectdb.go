@@ -111,7 +111,7 @@ func (r repo) PutTree(es []Entry) (ObjectID, Stored, error) {
 			return ObjectID{}, 0, fmt.Errorf("%q cannot name a tree entry: %w", e.Name, ErrNotAName)
 		}
 		if i > 0 && sorted[i-1].Name == e.Name {
-			return ObjectID{}, 0, fmt.Errorf("%w: %q", ErrDuplicateEntry, e.Name)
+			return ObjectID{}, 0, fmt.Errorf("%q is given twice: %w", e.Name, ErrDuplicateEntry)
 		}
 		if _, err := r.holds(blobKind, e.Blob); err != nil {
 			return ObjectID{}, 0, err
@@ -132,7 +132,7 @@ func (r repo) Tree(id ObjectID) ([]Entry, error) {
 		mode, after, _ := bytes.Cut(rest, []byte(" "))
 		n, after, _ := bytes.Cut(after, []byte{0})
 		if string(mode) != fileMode || !name.Match(n) || len(after) < 20 {
-			return nil, NotLit{ID: id, Why: fmt.Errorf("a tree %w", errForeignShape)}
+			return nil, NotLit{ID: id, Why: fmt.Errorf("a tree: %w", errForeignShape)}
 		}
 		blob, _ := ObjectIDFrom(SHA1, after[:20])
 		es, rest = append(es, Entry{Name: string(n), Blob: blob}), after[20:]
@@ -140,7 +140,7 @@ func (r repo) Tree(id ObjectID) ([]Entry, error) {
 	// the entries' bytes are all read above, so only their order is left
 	for i := 1; i < len(es); i++ {
 		if byName(es[i-1], es[i]) >= 0 {
-			return nil, NotLit{ID: id, Why: fmt.Errorf("a tree %w", errForeignShape)}
+			return nil, NotLit{ID: id, Why: fmt.Errorf("a tree: %w", errForeignShape)}
 		}
 	}
 	return es, nil
@@ -167,7 +167,7 @@ func (r repo) Commit(id ObjectID) (Commit, error) {
 	msg, okShape := strings.CutPrefix(rest, identity+"\n")
 	t, err := ParseObjectID(SHA1, tree)
 	if !ok || !okShape || err != nil {
-		return Commit{}, NotLit{ID: id, Why: fmt.Errorf("a commit %w", errForeignShape)}
+		return Commit{}, NotLit{ID: id, Why: fmt.Errorf("a commit: %w", errForeignShape)}
 	}
 	return Commit{Tree: t, Message: msg}, nil
 }
@@ -248,7 +248,7 @@ func (r repo) holds(k kind, id ObjectID) (uint64, error) {
 	}
 	got, size, err := r.b.look(id)
 	if err == nil && got != k {
-		err = NotLit{ID: id, Why: fmt.Errorf("%w: a %s, not a %s", ErrWrongKind, got, k)}
+		err = NotLit{ID: id, Why: fmt.Errorf("a %s, not a %s: %w", got, k, ErrWrongKind)}
 	}
 	return size, err
 }
@@ -262,7 +262,7 @@ func (r repo) content(k kind, id ObjectID) ([]byte, error) {
 		return nil, err
 	}
 	if got != k {
-		return nil, NotLit{ID: id, Why: fmt.Errorf("%w: a %s, not a %s", ErrWrongKind, got, k)}
+		return nil, NotLit{ID: id, Why: fmt.Errorf("a %s, not a %s: %w", got, k, ErrWrongKind)}
 	}
 	return b, nil
 }

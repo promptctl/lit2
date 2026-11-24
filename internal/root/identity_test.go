@@ -85,7 +85,13 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 			got[0], made[0], err = MintIdentity(held, c.worktree[0], entropy(0))
 			first <- err
 		}()
-		<-held.reached
+		// a first mint that ends before the gate, failed or not, never
+		// reaches it, so the test fails with its error and does not wait
+		select {
+		case <-held.reached:
+		case err := <-first:
+			t.Fatalf("the first mint ended before its key landed, with %v; want it held at the gate", err)
+		}
 		var err error
 		if got[1], made[1], err = MintIdentity(c.shared, c.worktree[1], entropy(1)); err != nil {
 			t.Fatalf("the second mint: %v", err)

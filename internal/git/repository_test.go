@@ -162,6 +162,8 @@ func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
 	for _, err := range []error{errLocate, errPut} {
 		if !errors.Is(err, git.ErrNoGit) {
 			t.Errorf("a spawn with no git failed with %v; want ErrNoGit", err)
+		} else if !strings.Contains(err.Error(), "absolute directory on PATH") {
+			t.Errorf("a spawn with no git failed with %v; want it to say where git is looked for", err)
 		}
 	}
 	spawns := g.Spawns()
@@ -169,7 +171,7 @@ func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
 		t.Fatalf("with no git the record is %+v; want both attempts", spawns)
 	}
 	for _, s := range spawns {
-		if s.Ended != (git.Unstarted{Why: git.ErrNoGit.Error()}) {
+		if unstarted, ok := s.Ended.(git.Unstarted); !ok || !errors.Is(unstarted.Why, git.ErrNoGit) {
 			t.Errorf("an attempt with no git is recorded as %+v; want it never started, for ErrNoGit", s)
 		}
 	}
@@ -435,6 +437,38 @@ func TestALockFileIsNoRef(t *testing.T) {
 		if l, err := repo.List("refs/lit/"); err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/a", Target: blob}}) || len(l.Broken) != 0 {
 			t.Errorf("with lock files and dotfiles holding %q, List = %+v, %v; want refs/lit/log/a alone", lock, l, err)
 		}
+	}
+}
+
+// A replace git refuses is Moved only when the ref, read after the
+// refusal, has moved: a ref held by another's lock is still what its
+// writer read, so the refusal is git's own, Refused; a ref that will not
+// read after the refusal says that too, beside git's.
+func TestAReplaceGitRefusesIsSaidByTheRefsStateAfter(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Replace("refs/lit/log/control", git.Absent{}, blob); err != nil {
+		t.Fatalf("control: a replace from absent failed with %v", err)
+	}
+	logs := filepath.Join(dir, "refs", "lit", "log")
+	if err := os.WriteFile(filepath.Join(logs, "locked.lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = repo.Replace("refs/lit/log/locked", git.Absent{}, blob)
+	if !errors.As(err, new(git.Refused)) || errors.As(err, new(git.Moved)) {
+		t.Errorf("a replace of a locked ref still absent = %v; want Refused, not Moved", err)
+	}
+	if err := os.WriteFile(filepath.Join(logs, "torn"), []byte("torn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = repo.Replace("refs/lit/log/torn", git.Absent{}, blob)
+	var broken git.BrokenRef
+	if !errors.As(err, new(git.Refused)) || !errors.As(err, &broken) || broken.Name != "refs/lit/log/torn" {
+		t.Errorf("a replace of a ref that will not read = %v; want Refused and the ref broken", err)
 	}
 }
 

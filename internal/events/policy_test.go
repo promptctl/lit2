@@ -2,6 +2,7 @@ package events
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -29,19 +30,30 @@ func TestATextThatIsNoCapabilityIsRefusedSayingWhy(t *testing.T) {
 			t.Fatalf("%s: %v; the control must read", text, err)
 		}
 	}
-	for text, want := range map[string]error{
-		"get */*":            errVerb,
-		"set /policy":        errBinding,
-		"set own":            errPath,
-		"set own/":           errPath,
-		"set own/a//b":       errEmptyStep,
-		"rm own/* (level=9)": ErrNotALevel,
-		"rm own/* (level=x)": ErrNotALevel,
-		"rm own/* (stage=x)": errCondition,
-		"rm own/* (level=1":  errConditions,
+	// each refusal is named by its identity, then its message tells the
+	// person the grammar of the part refused
+	for text, c := range map[string]struct {
+		want error
+		says string
+	}{
+		"set":                {errNoPath, "a verb, a subject and a field glob"},
+		"get */*":            {errVerb, "set, add or rm"},
+		"set /policy":        {errBinding, "*, own, assignee or own-or-assignee"},
+		"set own":            {errPath, "a subject, then / and a field glob"},
+		"set own/":           {errPath, "a subject, then / and a field glob"},
+		"set own/a//b":       {errEmptyStep, "empty step"},
+		"rm own/* (level=9)": {ErrNotALevel, "1 to 5"},
+		"rm own/* (level=x)": {errCondition, "1 to 5"},
+		"rm own/* (stage=x)": {errCondition, "level=N or level!=N"},
+		"rm own/* (level=1":  {errConditions, "in parentheses"},
 	} {
-		if _, err := ParseCapability(text); !errors.Is(err, want) {
-			t.Errorf("%s: %v, want %v", text, err, want)
+		_, err := ParseCapability(text)
+		if !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, want %v", text, err, c.want)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: %v, want it to say %q", text, err, c.says)
 		}
 	}
 }
@@ -144,6 +156,53 @@ func TestThePolicyPayloadsReadBackAsWritten(t *testing.T) {
 		t.Errorf("the approval cites %s, want %s", ap.Proposal, prop.Digest())
 	}
 	readBack(t, Request{}, ReadRequest)
+}
+
+func TestAPolicyPayloadMissingAFieldOrGivingOneTwiceIsRefused(t *testing.T) {
+	owner, contributor := MustName("owner"), MustName("contributor")
+	a := keyOf(1).Principal()
+	again := func(p Payload, tag uint32, field []byte) []byte {
+		var w wire.Writer
+		w.Bytes(tag, field)
+		return append(payloadBytes(p), w.Encoded()...)
+	}
+	var fixedOne wire.Writer
+	fixedOne.Uvarint(thresholdFixed, 1)
+	var member wire.Writer
+	member.Bytes(1, a.wire())
+	member.Bytes(2, []byte("owner"))
+	enroll := Enroll{Owner: owner, Roles: map[Name][]Capability{contributor: nil}}
+	prop := Propose{Base: Digest{3}, Members: map[PrincipalID]Name{a: owner}, Threshold: Majority{}}
+	noBase := payloadBytes(prop)[len(futureField(1, string(make([]byte, 32)))):]
+	var noThreshold wire.Writer
+	noThreshold.Bytes(1, make([]byte, 32))
+	// the controls: each payload whole reads
+	for _, c := range []struct {
+		read func(*wire.Reader) (Versioned, error)
+		p    Payload
+	}{{ReadEnroll, enroll}, {ReadPropose, prop}, {ReadApprove, Approve{Proposal: Digest{1}}}} {
+		if _, err := c.read(wire.NewReader(payloadBytes(c.p))); err != nil {
+			t.Fatalf("a whole %s: %v; the control must read", c.p.Kind(), err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		read func(*wire.Reader) (Versioned, error)
+		b    []byte
+		want error
+	}{
+		{"an enrollment with two owner roles", ReadEnroll, again(enroll, 1, []byte("boss")), twice{What: "its owner role"}},
+		{"an enrollment with no owner role", ReadEnroll, payloadBytes(enroll)[len(futureField(1, "owner")):], missing{What: "owner role"}},
+		{"a proposal with two thresholds", ReadPropose, again(prop, 3, fixedOne.Encoded()), twice{What: "its threshold"}},
+		{"a proposal naming one member twice", ReadPropose, again(prop, 2, member.Encoded()), twice{What: "the member " + a.String()}},
+		{"a proposal with no base", ReadPropose, noBase, missing{What: "base policy"}},
+		{"a proposal with no threshold", ReadPropose, noThreshold.Encoded(), missing{What: "threshold"}},
+		{"an approval citing no proposal", ReadApprove, nil, missing{What: "proposal"}},
+	} {
+		if _, err := c.read(wire.NewReader(c.b)); !errors.Is(err, c.want) {
+			t.Errorf("%s reads with %v; want %v", c.name, err, c.want)
+		}
+	}
 }
 
 func TestAnEnrollmentListingTheOwnerRoleIsRefused(t *testing.T) {

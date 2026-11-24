@@ -20,14 +20,14 @@ type Name struct{ s string }
 // outside the levels, whether a reader or a writer meets it; the packages
 // that read names and levels from a person wrap and name them.
 var (
-	ErrNotAName  = errors.New("a lowercase letter, then lowercase letters, digits, _ or -")
-	ErrNotALevel = errors.New("1 to 5")
+	ErrNotAName  = errors.New("a text outside a name's grammar")
+	ErrNotALevel = errors.New("a number outside the levels 1 to 5")
 )
 
 // ParseName reads a name.
 func ParseName(s string) (Name, error) {
 	if s == "" || s[0] < 'a' || s[0] > 'z' || strings.TrimLeft(s, "abcdefghijklmnopqrstuvwxyz0123456789_-") != "" {
-		return Name{}, fmt.Errorf("%q is not a name: %w", s, ErrNotAName)
+		return Name{}, fmt.Errorf("%q is not a name, a lowercase letter, then lowercase letters, digits, _ or -: %w", s, ErrNotAName)
 	}
 	return Name{s: s}, nil
 }
@@ -39,7 +39,7 @@ func (n Name) String() string { return n.s }
 // signed event can carry it `[LAW:single-enforcer]`.
 func nameWire(n Name) []byte {
 	if n.s == "" {
-		panic(fmt.Errorf("events: a zero Name is not a name, %w: only ParseName makes one", ErrNotAName))
+		panic(fmt.Errorf("events: a zero Name, which only ParseName makes: %w", ErrNotAName))
 	}
 	return []byte(n.s)
 }
@@ -189,7 +189,7 @@ func readValue(b []byte) (Value, error) {
 	case err != nil:
 		return nil, fmt.Errorf("a value: %w", err)
 	case len(made) != 1:
-		return nil, fmt.Errorf("a value is prose or plain; this one is %d of them: %w", len(made), errForms)
+		return nil, fmt.Errorf("a value is prose or plain: %w", notOneForm{What: "a value", N: len(made)})
 	}
 	return made[0](r.Rest()), nil
 }
@@ -349,7 +349,7 @@ func ReadItemCreate(r *wire.Reader) (Versioned, error) {
 	case err != nil:
 		return nil, err
 	case p.Place == nil:
-		return nil, fmt.Errorf("an item.create has no placement: %w", errMissing)
+		return nil, fmt.Errorf("an item.create: %w", missing{What: "placement"})
 	}
 	return p, nil
 }
@@ -378,7 +378,7 @@ func ReadPlacement(b []byte) (Placement, error) {
 	case err != nil:
 		return nil, fmt.Errorf("a placement: %w", err)
 	case len(made) != 1:
-		return nil, fmt.Errorf("a placement is a level or below its parent; this one is %d of them: %w", len(made), errForms)
+		return nil, fmt.Errorf("a placement is a level or below its parent: %w", notOneForm{What: "a placement", N: len(made)})
 	}
 	return made[0](r.Rest()), nil
 }
@@ -400,7 +400,7 @@ func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 				return nil
 			}
 			if p.Value != nil {
-				return fmt.Errorf("it gives its value %w", errTwice)
+				return twice{What: "its value"}
 			}
 			var err error
 			p.Value, err = readValue(r.Bytes())
@@ -408,7 +408,7 @@ func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 		})
 	p.unknown = r.Rest()
 	if err == nil && p.Value == nil {
-		err = fmt.Errorf("it has no value: %w", errMissing)
+		err = missing{What: "value"}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("a field.set: %w", err)
@@ -467,7 +467,7 @@ func (p Transition) AppendTo(w *wire.Writer) {
 }
 
 // errFieldOrder is a transition's fields not in strict name order.
-var errFieldOrder = errors.New("a transition gives each field once, in name order")
+var errFieldOrder = errors.New("a transition's fields out of strict name order")
 
 // ReadTransition reads transition at version 1. Its fields are in strict
 // name order, so a field named twice is refused, since one move says one
@@ -484,7 +484,7 @@ func ReadTransition(r *wire.Reader) (Versioned, error) {
 				return err
 			}
 			if n := len(p.Fields); n > 0 && p.Fields[n-1].Field.String() >= f.Field.String() {
-				return fmt.Errorf("its field %s follows %s: %w", f.Field, p.Fields[n-1].Field, errFieldOrder)
+				return fmt.Errorf("its field %s follows %s, and a transition gives each field once, in name order: %w", f.Field, p.Fields[n-1].Field, errFieldOrder)
 			}
 			p.Fields = append(p.Fields, f)
 			return nil
@@ -515,7 +515,7 @@ func readTransitionField(b []byte) (TransitionField, error) {
 			return nil
 		}
 		if f.Value != nil {
-			return fmt.Errorf("it gives its value %w", errTwice)
+			return twice{What: "its value"}
 		}
 		var err error
 		f.Value, err = readValue(r.Bytes())
@@ -523,7 +523,7 @@ func readTransitionField(b []byte) (TransitionField, error) {
 	})
 	f.unknown = r.Rest()
 	if err == nil && f.Value == nil {
-		err = fmt.Errorf("it has no value: %w", errMissing)
+		err = missing{What: "value"}
 	}
 	if err != nil {
 		return TransitionField{}, fmt.Errorf("a field: %w", err)
@@ -531,9 +531,13 @@ func readTransitionField(b []byte) (TransitionField, error) {
 	return f, nil
 }
 
-// errTwice is a field a message gives once, given again: a payload's name,
-// value, version or blob, a policy's owner role, role, member or threshold.
-var errTwice = errors.New("twice")
+// twice is What, a field a message gives once, given again: a payload's
+// name, value, version or blob, a policy's owner role, role, member or
+// threshold. It is one type wherever it is met, What saying which field
+// `[LAW:one-type-per-behavior]`, and comparable, so errors.Is names one.
+type twice struct{ What string }
+
+func (t twice) Error() string { return t.What + ", given twice" }
 
 // named is one name field of a payload: where it is read into, and what
 // a refusal calls it.
@@ -551,7 +555,7 @@ func readNamed(r *wire.Reader, names map[uint32]named, ids map[uint32]*[]EventID
 	err := r.Each(func(tag uint32, r *wire.Reader) error {
 		if n, ok := names[tag]; ok {
 			if seen[tag] {
-				return fmt.Errorf("it gives its %s %w", n.what, errTwice)
+				return twice{What: "its " + n.what}
 			}
 			seen[tag] = true
 			v, err := ParseName(string(r.Bytes()))
@@ -576,7 +580,7 @@ func readNamed(r *wire.Reader, names map[uint32]named, ids map[uint32]*[]EventID
 	}
 	for _, tag := range slices.Sorted(maps.Keys(names)) {
 		if !seen[tag] {
-			return fmt.Errorf("it names no %s: %w", names[tag].what, errMissing)
+			return missing{What: names[tag].what}
 		}
 	}
 	return nil
@@ -605,7 +609,7 @@ func ReadCommentAdd(r *wire.Reader) (Versioned, error) {
 	case err != nil:
 		return nil, fmt.Errorf("a comment.add: %w", err)
 	case !hasBody:
-		return nil, fmt.Errorf("a comment.add has no body: %w", errMissing)
+		return nil, fmt.Errorf("a comment.add: %w", missing{What: "body"})
 	}
 	return p, nil
 }
@@ -620,7 +624,7 @@ func (p WorkspaceApply) AppendTo(w *wire.Writer) {
 }
 
 // errBlobNotVersion is an apply whose blob names bytes other than its own.
-var errBlobNotVersion = errors.New("not git's id for the version it carries")
+var errBlobNotVersion = errors.New("a blob that is not git's id for the version it carries")
 
 // ReadWorkspaceApply reads workspace.apply at version 1: the bytes and a
 // blob that is git's id for them.
@@ -632,12 +636,12 @@ func ReadWorkspaceApply(r *wire.Reader) (Versioned, error) {
 		switch tag {
 		case 1:
 			if hasVersion {
-				return fmt.Errorf("it gives its version %w", errTwice)
+				return twice{What: "its version"}
 			}
 			p.version, hasVersion = r.Bytes(), true
 		case 2:
 			if hasBlob {
-				return fmt.Errorf("it gives its blob %w", errTwice)
+				return twice{What: "its blob"}
 			}
 			p.blob, err = readObjectID(r.Bytes(), "the version's blob")
 			hasBlob = true
@@ -648,11 +652,11 @@ func ReadWorkspaceApply(r *wire.Reader) (Versioned, error) {
 	switch {
 	case err != nil:
 	case !hasVersion:
-		err = fmt.Errorf("it carries no version: %w", errMissing)
+		err = missing{What: "version"}
 	case !hasBlob:
-		err = fmt.Errorf("it names no blob: %w", errMissing)
+		err = missing{What: "blob"}
 	case git.HashBlob(p.blob.Format(), p.version) != p.blob:
-		err = fmt.Errorf("its blob %s is %w", p.blob, errBlobNotVersion)
+		err = fmt.Errorf("its blob %s: %w", p.blob, errBlobNotVersion)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("a workspace.apply: %w", err)

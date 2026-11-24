@@ -38,9 +38,9 @@ func Folded(e fold.Env, seen World, c Compiled, minted []events.Event) (World, C
 			continue
 		}
 		if first {
-			r.Err, first = no.Err, false
+			r.err, first = no.err, false
 		}
-		operands[i] = Refused{Text: res.(Accepted).Text, Reason: r.Reason, Err: r.Err}
+		operands[i] = Refused{Text: res.(Accepted).Text, Reason: r.Reason, err: r.err}
 	}
 	c.Operands, c.Drafts, c.Changes = operands, nil, nil
 	return after, c, ext.Outcomes
@@ -72,31 +72,48 @@ func mintedBy(c Compiled) []int {
 // line for each, and false when it carried none.
 func Carried(w World, outcomes []fold.Outcome) (Refused, bool) {
 	var errs []error
-	var no Refused
+	var why string
 	for _, o := range outcomes {
 		switch o := o.(type) {
 		case fold.Applied:
 		case fold.CarriedFor:
 			errs = append(errs, w.carried(o.Why))
-			if no.Reason == "" {
-				no.Reason = fold.ReasonName(o.Why)
+			if why == "" {
+				why = fold.ReasonName(o.Why)
 			}
 		case fold.LeftFor:
 			// a kind this release mints and cannot read is the registry's
 			// bug, which the fold's tests own; the event is written as before
 		}
 	}
-	no.Err = errors.Join(errs...)
-	return no, len(errs) > 0
+	if len(errs) == 0 {
+		return Refused{}, false
+	}
+	return Refused{Reason: why, err: errors.Join(errs...)}, true
 }
+
+// CarriedEvent is an event the fold carried, and Why it did: the error of
+// a write the fold refused, which says the write and why.
+// [LAW:one-type-per-behavior] one type for every reason the fold carries
+// an event, the reason its value.
+type CarriedEvent struct {
+	Why  fold.Reason
+	line string
+}
+
+func (c CarriedEvent) Error() string { return c.line }
 
 // carried is the line of an event the fold carried for why: for a write
 // the policy refused, the write, the writer's standing and each capability
 // of its verb with what it missed, read from the world before the write.
 func (w World) carried(why fold.Reason) error {
+	return CarriedEvent{Why: why, line: w.carriedLine(why)}
+}
+
+func (w World) carriedLine(why fold.Reason) string {
 	u, ok := why.(fold.Unauthorized)
 	if !ok {
-		return fmt.Errorf("refused: %s; nothing written", fold.ReasonName(why))
+		return fmt.Sprintf("refused: %s; nothing written", fold.ReasonName(why))
 	}
 	write := fmt.Sprintf("%s %s", u.Intent.Verb, w.pathOf(u.Intent))
 	var lines []string
@@ -113,7 +130,7 @@ func (w World) carried(why fold.Reason) error {
 		}
 		lines = append(lines, fmt.Sprintf("  %s: %s", m.Capability, strings.Join(why, "; ")))
 	}
-	return errors.New(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 // pathOf is a write's path as its operand was typed: an item by its id,

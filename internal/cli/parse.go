@@ -170,7 +170,7 @@ func Parse(verbs Table, groups []Group, args []string) (Command, error) {
 			continue
 		}
 		if len(words) == 1 {
-			return nil, ParseFailure{Code: Usage, Err: fmt.Errorf("%s %w; the commands are %s", g.Word, errNoCommand, all)}
+			return nil, refuseParse(Usage, fmt.Errorf("%s: %w; the commands are %s", g.Word, errNoCommand, all))
 		}
 		return g.Table.parse(g.Word+" ", all, words[1:], flags)
 	}
@@ -206,7 +206,7 @@ func scan(args []string) (words []string, help bool, flags Flags, err error) {
 		}
 	}
 	if !help && unknown != "" {
-		return nil, false, Flags{}, ParseFailure{Code: Usage, Err: fmt.Errorf("%w %s; the flags are --help and --dry-run", errUnknownFlag, unknown)}
+		return nil, false, Flags{}, refuseParse(Usage, fmt.Errorf("%w %s; the flags are --help and --dry-run", errUnknownFlag, unknown))
 	}
 	return words, help, flags, nil
 }
@@ -216,12 +216,12 @@ func (t Table) parse(prefix, known string, words []string, flags Flags) (Command
 	for _, r := range t.rows {
 		if r.Name == words[0] {
 			if flags.DryRun && !r.DryRun {
-				return nil, ParseFailure{Code: Usage, Err: fmt.Errorf("%s%s %w", prefix, r.Name, errNoDryRun)}
+				return nil, refuseParse(Usage, fmt.Errorf("%s%s: %w; only a write takes it", prefix, r.Name, errNoDryRun))
 			}
 			return r.parse(prefix+r.Name, words[1:], flags)
 		}
 	}
-	return nil, ParseFailure{Code: UnknownVerb, Err: fmt.Errorf("%q %w %scommand; the commands are %s", words[0], errUnknownVerb, prefix, known)}
+	return nil, refuseParse(UnknownVerb, fmt.Errorf("%s%q: %w; the commands are %s", prefix, words[0], errUnknownVerb, known))
 }
 
 // parse checks the operands against the row's shape and makes its command.
@@ -229,7 +229,7 @@ func (r Row) parse(name string, operands []string, flags Flags) (Command, error)
 	switch o := r.Operands.(type) {
 	case TakesPaths:
 		if len(operands) == 0 {
-			return nil, ParseFailure{Code: Usage, Err: fmt.Errorf("%s %w", name, errNoPaths)}
+			return nil, refuseParse(Usage, fmt.Errorf("%s: %w; it takes one or more", name, errNoPaths))
 		}
 		paths := make([]PathText, len(operands))
 		for i, w := range operands {
@@ -238,7 +238,7 @@ func (r Row) parse(name string, operands []string, flags Flags) (Command, error)
 		return o.Make(paths, flags), nil
 	case TakesPairs:
 		if len(operands) == 0 || len(operands)%2 != 0 {
-			return nil, ParseFailure{Code: Usage, Err: fmt.Errorf("%s %w; got %d operands", name, errNotPairs, len(operands))}
+			return nil, refuseParse(Usage, fmt.Errorf("%s: %w; got %d operands", name, errNotPairs, len(operands)))
 		}
 		pairs := make([]Pair, len(operands)/2)
 		for i := range pairs {
@@ -247,7 +247,7 @@ func (r Row) parse(name string, operands []string, flags Flags) (Command, error)
 		return o.Make(pairs, flags), nil
 	case TakesNothing:
 		if len(operands) != 0 {
-			return nil, ParseFailure{Code: Usage, Err: fmt.Errorf("%s %w; got %d", name, errOperands, len(operands))}
+			return nil, refuseParse(Usage, fmt.Errorf("%s: %w; it takes none, got %d", name, errOperands, len(operands)))
 		}
 		return o.Make(), nil
 	}
@@ -269,23 +269,30 @@ func known(verbs Table, groups []Group) string {
 }
 
 // ParseFailure is an argv that is not a lit2 command line: class usage.
+// Its fields are unexported and refuseParse is its one constructor, so a
+// ParseFailure always holds the refusal that caused it.
+// [LAW:types-are-the-program] a failure with no cause is not representable
+// through the package's API.
 type ParseFailure struct {
-	Code ParseCode
-	Err  error
+	code  ParseCode
+	cause error
 }
 
-// The parse refusals, each wrapped in its ParseFailure's Err where it is
-// refused: a word that names no command, --dry-run on a command that writes nothing, a flag lit2 has
-// not, a group word with no command after it, and operands that are not
-// the shape the row takes.
+// refuseParse is the ParseFailure of code, caused by cause.
+func refuseParse(code ParseCode, cause error) ParseFailure {
+	return ParseFailure{code: code, cause: cause}
+}
+
+// The parse refusals, each the cause of its ParseFailure, wrapped where it
+// is refused with the words that were refused.
 var (
-	errUnknownVerb = errors.New("is not a lit2")
-	errNoDryRun    = errors.New("takes no --dry-run: only a write does")
+	errUnknownVerb = errors.New("unknown command")
+	errNoDryRun    = errors.New("unsupported --dry-run")
 	errUnknownFlag = errors.New("unknown flag")
-	errNoCommand   = errors.New("takes a command")
-	errNoPaths     = errors.New("takes one or more paths")
-	errNotPairs    = errors.New("takes path value pairs")
-	errOperands    = errors.New("takes no operands")
+	errNoCommand   = errors.New("missing command")
+	errNoPaths     = errors.New("missing paths")
+	errNotPairs    = errors.New("operands not in path value pairs")
+	errOperands    = errors.New("unexpected operands")
 )
 
 // ParseCode is why an argv is not a lit2 command line.
@@ -299,20 +306,20 @@ const (
 	Usage
 )
 
-func (f ParseFailure) Error() string { return f.Err.Error() }
+func (f ParseFailure) Error() string { return f.cause.Error() }
 
-func (f ParseFailure) Unwrap() error { return f.Err }
+func (f ParseFailure) Unwrap() error { return f.cause }
 
 // Class is usage for every parse failure.
 func (ParseFailure) Class() reason.Class { return reason.ClassUsage }
 
 // Reason is the code's wire name.
 func (f ParseFailure) Reason() string {
-	switch f.Code {
+	switch f.code {
 	case UnknownVerb:
 		return "unknown_verb"
 	case Usage:
 		return "usage"
 	}
-	panic(fmt.Sprintf("cli: %d is not a ParseCode", uint8(f.Code)))
+	panic(fmt.Sprintf("cli: %d is not a ParseCode", uint8(f.code)))
 }

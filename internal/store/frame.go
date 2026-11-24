@@ -49,7 +49,7 @@ const maxBody = 1 << 24
 
 // The two batches NewBatch refuses.
 var (
-	errEmptyBatch = errors.New("a batch holds at least one record")
+	errEmptyBatch = errors.New("a batch of no record")
 	errOverAFrame = errors.New("a batch over what one frame carries")
 )
 
@@ -61,7 +61,7 @@ func NewBatch(rs ...Record) (Batch, error) {
 	}
 	b := Batch{first: rs[0], rest: rs[1:]}
 	if n := b.bodySize(); n > maxBody {
-		return Batch{}, fmt.Errorf("%w: %d bytes, over %d", errOverAFrame, n, maxBody)
+		return Batch{}, fmt.Errorf("a batch of %d bytes, over the %d one frame carries: %w", n, maxBody, errOverAFrame)
 	}
 	return b, nil
 }

@@ -126,6 +126,13 @@ func (a Address) String() string {
 	return b.String()
 }
 
+// The two refusals of a path's shape before any step is read: no text at
+// all, and a step with no text, between two slashes or after a last one.
+var (
+	errEmptyPath = errors.New("an empty path")
+	errEmptyStep = errors.New("an empty step")
+)
+
 // Parse reads one path against the state and the schema:
 //
 //	path  := '/' steps? | node ('/' steps)?
@@ -140,10 +147,10 @@ func (a Address) String() string {
 func Parse(v evaluate.View, text string) (Address, Refusal) {
 	st, schema := v.State(), v.Schema()
 	if text == "" {
-		return Address{}, Syntax{Text: text, Why: errors.New("a path is / or names a home or an item")}
+		return Address{}, Syntax{Text: text, Why: fmt.Errorf("%w; a path is / or names a home or an item", errEmptyPath)}
 	}
 	if text != "/" && strings.HasSuffix(text, "/") || strings.Contains(text, "//") {
-		return Address{}, Syntax{Text: text, Why: errors.New("a path has no empty step and does not end in /")}
+		return Address{}, Syntax{Text: text, Why: fmt.Errorf("%w; a path has no // and does not end in /", errEmptyStep)}
 	}
 	head, steps, hasSteps := strings.Cut(text, "/")
 	var a Address

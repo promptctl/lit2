@@ -35,14 +35,16 @@ func TestReadReaderVersion(t *testing.T) {
 // versions it reads does not run.
 func TestReadReaderVersionRefusesWhatHasNoVersion(t *testing.T) {
 	reader(t, "v0.4.0") // the control: a stamp Go writes for a tagged build
-	for _, stamp := range []string{"", "(devel)", "not-a-version"} {
+	// why tells the unstamped build from a stamp that is no version, so the
+	// refusal of each is its own: either removed, the other's message shows
+	for stamp, why := range map[string]string{"": "without a version stamp", "(devel)": "without a version stamp", "not-a-version": `the build stamp "not-a-version" is not a version`} {
 		_, err := ReadReaderVersion(stamp)
 		if !errors.Is(err, errNoVersion) {
 			t.Errorf("ReadReaderVersion(%q) = %v; want errNoVersion", stamp, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), "go build ./cmd/lit2") {
-			t.Errorf("ReadReaderVersion(%q) names no build instruction: %v", stamp, err)
+		if !strings.Contains(err.Error(), why) || !strings.Contains(err.Error(), "go build ./cmd/lit2") {
+			t.Errorf("ReadReaderVersion(%q) = %v; want it to say %q and name the build instruction", stamp, err, why)
 		}
 	}
 }

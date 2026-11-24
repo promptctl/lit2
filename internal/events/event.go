@@ -74,17 +74,34 @@ func (id EventID) String() string { return hex.EncodeToString(id[:]) }
 // reads: its 64 lowercase hex digits and one newline.
 func (id EventID) FileText() []byte { return []byte(id.String() + "\n") }
 
-// The decoders' shared refusals: a field a message cannot be without is
-// absent, a fixed-length field is another length, and a header field is at
-// the zero no event carries. Each is one refusal wherever it is met.
-var (
-	errMissing   = errors.New("a field it cannot be without")
-	errSize      = errors.New("not its fixed length")
-	errZeroField = errors.New("a field no event leaves at zero")
+// The decoders' shared refusals, each one type wherever it is met, with
+// the field it is about as a value, so two refusals of one kind stay two
+// refusals `[LAW:one-type-per-behavior]`: a field a message cannot be
+// without is absent, a fixed-length field is another length, and a header
+// field is at the zero no event carries. Each is comparable, so errors.Is
+// names one refusal by its value.
+type (
+	// missing is a message with no What, a field it cannot be without.
+	missing struct{ What string }
+	// wrongSize is What, a fixed-length field, Got bytes long, not Want.
+	wrongSize struct {
+		What      string
+		Got, Want int
+	}
+	// zeroField is a header with What at zero, which no event leaves it.
+	zeroField struct{ What string }
 )
 
+func (m missing) Error() string { return "no " + m.What }
+
+func (s wrongSize) Error() string {
+	return fmt.Sprintf("%s of %d bytes, not %d", s.What, s.Got, s.Want)
+}
+
+func (z zeroField) Error() string { return "a zero " + z.What }
+
 // errNotAnEventID is a founding file's text that is no event id.
-var errNotAnEventID = errors.New("an event id file holds no event id, 64 lowercase hex digits")
+var errNotAnEventID = errors.New("an event id file's text that is no event id")
 
 // ReadEventIDFile reads a founding file: its 64 lowercase hex digits, and
 // the one line ending, LF or CRLF, or none, that a git checkout or an
@@ -96,11 +113,11 @@ func ReadEventIDFile(b []byte) (EventID, error) {
 		text, _ = bytes.CutSuffix(b, []byte("\n"))
 	}
 	if form := 2 * len(EventID{}); len(text) != form {
-		return EventID{}, fmt.Errorf("an event id file holds %d bytes before its line ending; its form is %d: %w", len(text), form, errSize)
+		return EventID{}, wrongSize{What: "an event id file's text before its line ending", Got: len(text), Want: form}
 	}
 	var id EventID
 	if n, err := hex.Decode(id[:], text); err != nil || n != len(id) || hex.EncodeToString(id[:]) != string(text) {
-		return EventID{}, errNotAnEventID
+		return EventID{}, fmt.Errorf("an event id is 64 lowercase hex digits: %w", errNotAnEventID)
 	}
 	return id, nil
 }
@@ -108,7 +125,7 @@ func ReadEventIDFile(b []byte) (EventID, error) {
 // ReadEventID reads an id's stored form.
 func ReadEventID(b []byte) (EventID, error) {
 	if len(b) != len(EventID{}) {
-		return EventID{}, fmt.Errorf("an event id is %d bytes, not %d: %w", len(EventID{}), len(b), errSize)
+		return EventID{}, wrongSize{What: "an event id", Got: len(b), Want: len(EventID{})}
 	}
 	return EventID(b), nil
 }
@@ -321,9 +338,9 @@ func readRecord(b []byte) (record, error) {
 	case err != nil:
 		return record{}, fmt.Errorf("the record: %w", err)
 	case !hasHeader:
-		return record{}, fmt.Errorf("the record has no header: %w", errMissing)
+		return record{}, fmt.Errorf("the record: %w", missing{What: "header"})
 	case !hasSig:
-		return record{}, fmt.Errorf("the record has no signature: %w", errMissing)
+		return record{}, fmt.Errorf("the record: %w", missing{What: "signature"})
 	}
 	sig, err := readSignature(rec.sigRaw)
 	if err != nil {
@@ -354,7 +371,7 @@ func readSignature(b []byte) (Signature, error) {
 	case err != nil:
 		return Signature{}, fmt.Errorf("the signature: %w", err)
 	case !hasSuite:
-		return Signature{}, fmt.Errorf("the signature names no suite: %w", errMissing)
+		return Signature{}, fmt.Errorf("the signature: %w", missing{What: "suite"})
 	}
 	return s, nil
 }
@@ -391,10 +408,10 @@ func bodyOf(k Kinds, h Header, rec record) Body {
 // sum types and a range Go lets a caller leave outside, and a Labeled agent a
 // label Go lets a caller leave empty.
 var (
-	errNotAnAbout = errors.New("not an About")
-	errNotAnAgent = errors.New("not an Agent")
-	errWidth      = fmt.Errorf("a segment is %d to %d digits", minWidth, fullWidth)
-	errEmptyLabel = errors.New("a Labeled agent with no label reads back as Unlabeled")
+	errNotAnAbout = errors.New("a type that is no About")
+	errNotAnAgent = errors.New("a type that is no Agent")
+	errWidth      = errors.New("a segment width outside an id's")
+	errEmptyLabel = errors.New("a Labeled agent with no label")
 )
 
 // wire is the header as Mint writes it, which readHeader reads.
@@ -432,7 +449,7 @@ func aboutWire(a About) []byte {
 	default:
 		// [LAW:no-silent-failure] an empty subject reads as the root, so a
 		// draft naming nothing would mint a signed event about the root
-		panic(fmt.Errorf("events: %T is %w", a, errNotAnAbout))
+		panic(fmt.Errorf("events: %T: %w", a, errNotAnAbout))
 	}
 	return w.Encoded()
 }
@@ -449,7 +466,7 @@ const (
 // a caller's bug.
 func widthWire(w int) uint64 {
 	if w < minWidth || w > fullWidth {
-		panic(fmt.Errorf("events: a segment width of %d; %w", w, errWidth))
+		panic(fmt.Errorf("events: a segment width of %d, not %d to %d: %w", w, minWidth, fullWidth, errWidth))
 	}
 	return uint64(w)
 }
@@ -464,14 +481,14 @@ func (a Attribution) wire() []byte {
 		// [LAW:single-enforcer] an empty label reads back as Unlabeled, so a
 		// zero Labeled, which Go lets a caller write, would sign another claim
 		if agent.label == "" {
-			panic(fmt.Errorf("events: %w", errEmptyLabel))
+			panic(fmt.Errorf("events: an empty label reads back as Unlabeled: %w", errEmptyLabel))
 		}
 		w.Bytes(3, []byte(agent.label))
 	case Unlabeled:
 	default:
 		// [LAW:no-silent-failure] no label reads back as Unlabeled, so a
 		// Context naming no agent would sign a claim it never made
-		panic(fmt.Errorf("events: %T is %w", a.Agent, errNotAnAgent))
+		panic(fmt.Errorf("events: %T: %w", a.Agent, errNotAnAgent))
 	}
 	return w.Encoded()
 }
@@ -514,7 +531,7 @@ var headerNames = [...]string{"kind", "schema version", "subject", "attribution"
 	"causal position", "recorded-at", "payload hash"}
 
 // errNotATime is a recorded-at outside the clock's range.
-var errNotATime = errors.New("which no clock past 1970 reads as a time")
+var errNotATime = errors.New("a recorded-at no clock past 1970 reads as a time")
 
 // readHeader reads a header's stored bytes. A header missing a field the
 // event cannot be without, or a root carrying an element name, is refused.
@@ -549,14 +566,14 @@ func readHeader(b []byte) (Header, error) {
 		case headerRecordedAt:
 			ns := r.Uvarint()
 			if ns == 0 || ns > math.MaxInt64 {
-				err = fmt.Errorf("the recorded-at is %d ns, %w", ns, errNotATime)
+				err = fmt.Errorf("the recorded-at is %d ns: %w", ns, errNotATime)
 			}
 			h.recordedAt = time.Unix(0, int64(ns)).UTC()
 		case headerPayloadHash:
 			c := r.Bytes()
 			copy(h.payload[:], c)
 			if len(c) != len(h.payload) {
-				err = fmt.Errorf("the payload hash is not 32 bytes: %w", errSize)
+				err = wrongSize{What: "the payload hash", Got: len(c), Want: len(h.payload)}
 			}
 		}
 		return err
@@ -566,25 +583,25 @@ func readHeader(b []byte) (Header, error) {
 	}
 	for i, name := range headerNames {
 		if !seen[i+1] {
-			return Header{}, fmt.Errorf("the header has no %s: %w", name, errMissing)
+			return Header{}, fmt.Errorf("the header: %w", missing{What: name})
 		}
 	}
 	switch {
 	case h.kind == "":
-		return Header{}, fmt.Errorf("the header's kind is empty: %w", errZeroField)
+		return Header{}, fmt.Errorf("the header: %w", zeroField{What: "kind"})
 	case h.schema == 0:
-		return Header{}, fmt.Errorf("the header's schema version is 0: %w", errZeroField)
+		return Header{}, fmt.Errorf("the header: %w", zeroField{What: "schema version"})
 	case h.policy == 0:
-		return Header{}, fmt.Errorf("the header's policy version is 0: %w", errZeroField)
+		return Header{}, fmt.Errorf("the header: %w", zeroField{What: "policy version"})
 	case h.position.n == 0:
-		return Header{}, fmt.Errorf("the header's causal position is 0: %w", errZeroField)
+		return Header{}, fmt.Errorf("the header: %w", zeroField{What: "causal position"})
 	}
 	return h, nil
 }
 
 // errRootNamesPart is a subject of the root that names an element or a
 // segment, which the root has none of.
-var errRootNamesPart = errors.New("the subject is the root, which has no elements and no segment, and names one")
+var errRootNamesPart = errors.New("a root subject naming an element or a segment, which the root has none of")
 
 // readAbout reads a subject's stored form: nothing, an item, an item and
 // an element, either with a segment width.
@@ -618,7 +635,7 @@ func readAbout(b []byte) (About, error) {
 		return nil, fmt.Errorf("the subject's item: %w", err)
 	}
 	if hasWidth && (width < minWidth || width > fullWidth) {
-		return nil, fmt.Errorf("the subject's segment width is %d; %w", width, errWidth)
+		return nil, fmt.Errorf("the subject's segment width is %d, not %d to %d: %w", width, minWidth, fullWidth, errWidth)
 	}
 	w := int(width)
 	if !hasElement {
@@ -641,7 +658,7 @@ func readAbout(b []byte) (About, error) {
 func idBits(b []byte) ([16]byte, error) {
 	var id [16]byte
 	if len(b) != len(id) {
-		return id, fmt.Errorf("an id is %d bytes; this one is %d: %w", len(id), len(b), errSize)
+		return id, wrongSize{What: "an id", Got: len(b), Want: len(id)}
 	}
 	copy(id[:], b)
 	return id, nil
@@ -671,9 +688,9 @@ func readAttribution(b []byte) (Attribution, error) {
 	case err != nil:
 		return Attribution{}, fmt.Errorf("the attribution: %w", err)
 	case !hasCheckout:
-		return Attribution{}, fmt.Errorf("the attribution has no 16-byte checkout id: %w", errMissing)
+		return Attribution{}, fmt.Errorf("the attribution: %w", missing{What: "16-byte checkout id"})
 	case !hasPrincipal:
-		return Attribution{}, fmt.Errorf("the attribution has no principal: %w", errMissing)
+		return Attribution{}, fmt.Errorf("the attribution: %w", missing{What: "principal"})
 	}
 	return a, nil
 }
@@ -709,7 +726,7 @@ func readPrincipal(b []byte) (PrincipalID, error) {
 	case err != nil:
 		return PrincipalID{}, fmt.Errorf("the principal: %w", err)
 	case !hasSuite:
-		return PrincipalID{}, fmt.Errorf("the principal names no suite: %w", errMissing)
+		return PrincipalID{}, fmt.Errorf("the principal: %w", missing{What: "suite"})
 	}
 	return p, nil
 }

@@ -44,7 +44,7 @@ const maxTag = 1<<29 - 1
 // The reader's refusals, one per way bytes are not a message of the subset,
 // and the writer's one precondition: a field number outside protobuf's.
 var (
-	errFieldNumber  = errors.New("not a field number")
+	errFieldNumber  = errors.New("a number that is no field number")
 	errKeyNotVarint = errors.New("a field key is not a varint")
 	errTornVarint   = errors.New("a varint cut short")
 	errLengthPast   = errors.New("a length runs past the message")
@@ -57,7 +57,7 @@ type Writer struct{ b []byte }
 
 func (w *Writer) key(tag uint32, t Type) {
 	if tag == 0 || tag > maxTag {
-		panic(fmt.Errorf("wire: %d is %w", tag, errFieldNumber))
+		panic(fmt.Errorf("wire: %d: %w", tag, errFieldNumber))
 	}
 	w.b = binary.AppendUvarint(w.b, uint64(tag)<<3|uint64(t))
 }
@@ -124,7 +124,7 @@ func (r *Reader) Next() (tag uint32, ok bool) {
 	r.at += n
 	num, t := k>>3, Type(k&7)
 	if num == 0 || num > maxTag {
-		return 0, r.fail(fmt.Errorf("%d is %w", num, errFieldNumber))
+		return 0, r.fail(fmt.Errorf("%d: %w", num, errFieldNumber))
 	}
 	var raw []byte
 	switch t {
@@ -144,7 +144,7 @@ func (r *Reader) Next() (tag uint32, ok bool) {
 		raw = r.b[r.at : r.at+int(size)]
 		r.at += int(size)
 	default:
-		return 0, r.fail(fmt.Errorf("field %d has wire type %d, %w", num, t, errWireType))
+		return 0, r.fail(fmt.Errorf("field %d has wire type %d: %w", num, t, errWireType))
 	}
 	r.current, r.read = field{tag: uint32(num), typ: t, raw: raw}, false
 	return uint32(num), true

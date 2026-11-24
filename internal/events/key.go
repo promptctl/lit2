@@ -76,10 +76,10 @@ func (k Key) FileText() []byte {
 // The key file's refusals, one per part of its form. None carries the
 // file's bytes.
 var (
-	errKeyFileLength  = errors.New("not the key file's length")
-	errKeyFileSuite   = errors.New("the key file does not start with its suite, ed25519")
-	errKeyFileNewline = errors.New("the key file does not end in a newline")
-	errKeyFileSeed    = errors.New("the key file's seed is not 32 bytes in unpadded base64url")
+	errKeyFileLength  = errors.New("a key file of another length")
+	errKeyFileSuite   = errors.New("a key file not starting with its suite")
+	errKeyFileNewline = errors.New("a key file not ending in a newline")
+	errKeyFileSeed    = errors.New("a key file seed that is not 32 bytes of unpadded base64url")
 )
 
 // ParseKeyFile reads the key file's form, exactly. No error carries the
@@ -90,7 +90,7 @@ func ParseKeyFile(b []byte) (Key, error) {
 	}
 	text, ok := bytes.CutPrefix(b, []byte(keyFile))
 	if !ok {
-		return Key{}, errKeyFileSuite
+		return Key{}, fmt.Errorf("the key file starts with its suite, ed25519: %w", errKeyFileSuite)
 	}
 	text, ok = bytes.CutSuffix(text, []byte("\n"))
 	if !ok {
@@ -154,9 +154,9 @@ func (p Phrase) String() string { return strings.Join(p.words[:], " ") }
 
 // The recovery phrase's refusals. None carries a word.
 var (
-	errPhraseLength = fmt.Errorf("a recovery phrase is %d words", phraseWords)
-	errNotAWord     = errors.New("not in the BIP-39 English list")
-	errChecksum     = errors.New("the recovery phrase's checksum does not hold: a word is wrong or out of place")
+	errPhraseLength = errors.New("a recovery phrase of another length")
+	errNotAWord     = errors.New("a word outside the BIP-39 English list")
+	errChecksum     = errors.New("a recovery phrase whose checksum does not hold")
 )
 
 // ParsePhrase reads a recovery phrase back into its key: 24 words of the
@@ -165,13 +165,13 @@ var (
 func ParsePhrase(s string) (Key, error) {
 	ws := strings.Fields(s)
 	if len(ws) != phraseWords {
-		return Key{}, fmt.Errorf("%w; this is %d", errPhraseLength, len(ws))
+		return Key{}, fmt.Errorf("a recovery phrase is %d words; this is %d: %w", phraseWords, len(ws), errPhraseLength)
 	}
 	var bits [33]byte
 	for i, w := range ws {
 		v, ok := englishIndex[w]
 		if !ok {
-			return Key{}, fmt.Errorf("word %d of the recovery phrase is %w", i+1, errNotAWord)
+			return Key{}, fmt.Errorf("word %d of the recovery phrase: %w", i+1, errNotAWord)
 		}
 		for j := range 11 {
 			if v>>(10-j)&1 == 1 {
@@ -183,7 +183,7 @@ func ParsePhrase(s string) (Key, error) {
 	k := Key{suite: SuiteEd25519}
 	copy(k.seed[:], bits[:32])
 	if sha256.Sum256(k.seed[:])[0] != bits[32] {
-		return Key{}, errChecksum
+		return Key{}, fmt.Errorf("a word is wrong or out of place: %w", errChecksum)
 	}
 	return k, nil
 }

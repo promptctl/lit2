@@ -86,8 +86,8 @@ type Minted struct {
 // entropy source that fails or repeats.
 var (
 	errNoClock        = errors.New("Mint under a Context with no clock reading")
-	errEntropyFails   = errors.New("the entropy source fails")
-	errEntropyRepeats = errors.New("the entropy source repeats")
+	errEntropyFails   = errors.New("a failing entropy source")
+	errEntropyRepeats = errors.New("a repeating entropy source")
 )
 
 // Mint signs ds as events at the causal positions after c's frontier,
@@ -122,7 +122,7 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 		if shared == fullWidth {
 			// [LAW:no-silent-failure] 128 random bits repeat only when the
 			// source does
-			return id, 0, fmt.Errorf("drawing an id: %s is already known, so %w", digits(id, fullWidth), errEntropyRepeats)
+			return id, 0, fmt.Errorf("drawing an id: %s is already known: %w", digits(id, fullWidth), errEntropyRepeats)
 		}
 		w := max(Width(c.Known.Fill(in)+fill[in]), shared+1)
 		mine, fill[in] = append(mine, id), fill[in]+1

@@ -58,14 +58,14 @@ func smallOrder(enc []byte) bool {
 }
 
 // errNotAByte is a stored byte wider than one.
-var errNotAByte = errors.New("does not fit a byte")
+var errNotAByte = errors.New("a number past a byte")
 
 // byteOf reads a varint that stores one byte. A wider value is refused: a
 // suite or format of 257 would otherwise read as the one a byte of 1 names.
 func byteOf(r *wire.Reader) (uint8, error) {
 	v := r.Uvarint()
 	if v > math.MaxUint8 {
-		return 0, fmt.Errorf("%d %w", v, errNotAByte)
+		return 0, fmt.Errorf("%d does not fit a byte: %w", v, errNotAByte)
 	}
 	return uint8(v), nil
 }
@@ -76,14 +76,14 @@ type Suites struct{ by map[SuiteID]Suite }
 
 // errRegisteredTwice is a table built at the root given one key twice: a
 // suite's id or a kind.
-var errRegisteredTwice = errors.New("given twice")
+var errRegisteredTwice = errors.New("a key the table is given twice")
 
 // NewSuites is the suites ss; two of one id is a build fault.
 func NewSuites(ss ...Suite) Suites {
 	by := map[SuiteID]Suite{}
 	for _, s := range ss {
 		if _, ok := by[s.ID()]; ok {
-			panic(fmt.Errorf("events: suite id %d is %w", s.ID(), errRegisteredTwice))
+			panic(fmt.Errorf("events: suite id %d: %w", s.ID(), errRegisteredTwice))
 		}
 		by[s.ID()] = s
 	}
@@ -158,16 +158,16 @@ func (p PrincipalID) String() string {
 // The refusals of a principal's text: no did:key, a did:key not in
 // base58btc, and one whose bytes are no Ed25519 public key.
 var (
-	errNotDIDKey     = errors.New("a principal is a did:key, did:key:z then base58btc")
-	errNotBase58     = errors.New("not base58btc")
-	errNotEd25519Key = errors.New("a principal's did:key is not an Ed25519 public key: 0xed01 then 32 bytes")
+	errNotDIDKey     = errors.New("a principal that is no did:key")
+	errNotBase58     = errors.New("a text that is not base58btc")
+	errNotEd25519Key = errors.New("a did:key that is no Ed25519 public key")
 )
 
 // ParsePrincipalID reads an Ed25519 did:key.
 func ParsePrincipalID(s string) (PrincipalID, error) {
 	enc, ok := strings.CutPrefix(s, didKey)
 	if !ok {
-		return PrincipalID{}, errNotDIDKey
+		return PrincipalID{}, fmt.Errorf("a principal is a did:key, did:key:z then base58btc: %w", errNotDIDKey)
 	}
 	b, err := unbase58(enc)
 	if err != nil {
@@ -175,7 +175,7 @@ func ParsePrincipalID(s string) (PrincipalID, error) {
 	}
 	key, ok := strings.CutPrefix(string(b), string(ed25519Codec))
 	if !ok || len(key) != ed25519.PublicKeySize {
-		return PrincipalID{}, errNotEd25519Key
+		return PrincipalID{}, fmt.Errorf("a principal's did:key is 0xed01 then 32 bytes: %w", errNotEd25519Key)
 	}
 	return PrincipalID{suite: SuiteEd25519, key: key}, nil
 }
@@ -228,7 +228,7 @@ func unbase58(s string) ([]byte, error) {
 	for i := range len(s) {
 		d := strings.IndexByte(base58Alphabet, s[i])
 		if d < 0 {
-			return nil, fmt.Errorf("character %d is %w", i+1, errNotBase58)
+			return nil, fmt.Errorf("character %d is no base58btc digit: %w", i+1, errNotBase58)
 		}
 		n.Mul(n, radix).Add(n, big.NewInt(int64(d)))
 	}

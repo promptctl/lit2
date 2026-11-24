@@ -57,15 +57,12 @@ type Publication struct {
 // not tile and no segment at all, which would publish an empty tree. Its
 // caller built every segment, so it read no prior publication.
 func NewPublication(ref Ref, from git.Was, log LogID, segs []Segment) (Publication, error) {
-	if len(segs) == 0 {
-		return Publication{}, fmt.Errorf("a publication of %s %w", ref.Name(), errNoSegment)
-	}
 	spans := make([]Span, len(segs))
 	for i, s := range segs {
 		spans[i] = span(s)
 	}
 	if err := tile(spans); err != nil {
-		return Publication{}, err
+		return Publication{}, fmt.Errorf("a publication of %s: %w", ref.Name(), err)
 	}
 	return Publication{ref: ref, from: from, log: log, segs: segs, prior: NoPrior{}}, nil
 }
@@ -74,22 +71,25 @@ func NewPublication(ref Ref, from git.Was, log LogID, segs []Segment) (Publicati
 // start where the stream before it ends, which is a gap, an overlap or a
 // late start, and one that holds no bytes.
 var (
-	errNoSegment        = errors.New("holds no segment")
-	errMisplacedSegment = errors.New("not where the stream before it ends")
-	errEmptySegment     = errors.New("holds no bytes")
+	errNoSegment        = errors.New("a publication of no segment")
+	errMisplacedSegment = errors.New("a segment not where the stream before it ends")
+	errEmptySegment     = errors.New("a segment of no bytes")
 )
 
-// tile refuses spans that do not tile a stream from 0, each holding bytes.
-// A publication sealed here and one read back from a commit are both
-// checked by it alone `[LAW:single-enforcer]`.
+// tile refuses spans that do not tile a stream from 0, one or more, each
+// holding bytes. A publication sealed here and one read back from a commit
+// are both checked by it alone `[LAW:single-enforcer]`.
 func tile(spans []Span) error {
+	if len(spans) == 0 {
+		return fmt.Errorf("no segment tiles the stream: %w", errNoSegment)
+	}
 	var at Offset
 	for i, sp := range spans {
 		if sp.From != at {
-			return fmt.Errorf("segment %d starts at %d, %w, at %d", i, sp.From, errMisplacedSegment, at)
+			return fmt.Errorf("segment %d starts at %d, not at %d, where the stream before it ends: %w", i, sp.From, at, errMisplacedSegment)
 		}
 		if sp.To <= sp.From {
-			return fmt.Errorf("segment %d at %d %w", i, sp.From, errEmptySegment)
+			return fmt.Errorf("segment %d at %d holds no bytes: %w", i, sp.From, errEmptySegment)
 		}
 		at = sp.To
 	}
