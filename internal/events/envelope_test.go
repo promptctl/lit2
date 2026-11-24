@@ -71,7 +71,8 @@ func TestAnEnvelopeThatLiesOrIsAmbiguousIsRefused(t *testing.T) {
 	lying.Bytes(envelopeCommitment, bytes.Repeat([]byte{1}, 32))
 	var both wire.Writer
 	both.Bytes(envelopePlain, p.Encoded())
-	both.Bytes(envelopeSealed, futureField(2, "tier"))
+	sealedForm := nested(t, Envelope{form: sealed{suite: SuiteEd25519, tier: "tier", epoch: 1}}.wire(), envelopeSealed)
+	both.Bytes(envelopeSealed, sealedForm)
 	commitment := SealPlain("the text").Commitment()
 	both.Bytes(envelopeCommitment, commitment[:])
 	// the control: a plaintext committed to its own text reads

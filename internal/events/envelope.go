@@ -155,88 +155,79 @@ func (e Envelope) wire() []byte {
 	return w.Encoded()
 }
 
+// envelopeFields is an envelope's fields: each form, held or not, and the
+// commitment.
+type envelopeFields struct {
+	plain      *plain
+	sealed     *sealed
+	commitment Commitment
+}
+
 // readEnvelope reads an envelope's wire message. One holding neither form
 // this binary knows is an unknownForm, its fields kept; one holding both,
 // or a plaintext whose commitment is not its text's, is refused.
-func readEnvelope(b []byte) (Envelope, error) {
-	var e Envelope
-	r := wire.NewReader(b)
-	seen, err := readOnce(r, map[uint32]part{envelopePlain: partPlaintext, envelopeSealed: partSealed, envelopeCommitment: partCommitment}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case envelopePlain:
-			p, err := readPlain(r.Bytes())
-			e.form = p
-			return err
-		case envelopeSealed:
-			s, err := readSealed(r.Bytes())
-			e.form = s
-			return err
-		case envelopeCommitment:
-			c := r.Bytes()
-			copy(e.commitment[:], c)
-			return sized(partCommitment, c, len(e.commitment))
-		}
-		return nil
-	})
-	if err != nil {
-		return Envelope{}, fmt.Errorf("an envelope: %w", err)
-	}
-	e.unknown = r.Rest()
+var readEnvelope = declare("an envelope", []field[envelopeFields]{
+	{envelopePlain, partPlaintext, optional, func(e *envelopeFields, r *wire.Reader) error {
+		p, err := readPlain(r.Bytes())
+		e.plain = &p
+		return err
+	}},
+	{envelopeSealed, partSealed, optional, func(e *envelopeFields, r *wire.Reader) error {
+		s, err := readSealed(r.Bytes())
+		e.sealed = &s
+		return err
+	}},
+	fixedField(envelopeCommitment, partCommitment, one, func(e *envelopeFields) []byte { return e.commitment[:] }),
+}, func(e *envelopeFields, u wire.Unknown) (Envelope, error) {
 	switch {
-	case seen[envelopePlain] && seen[envelopeSealed]:
+	case e.plain != nil && e.sealed != nil:
 		return Envelope{}, fmt.Errorf("an envelope is plain or sealed, and this one is both: %w", notOneForm{What: partEnvelope})
-	case !seen[envelopeCommitment]:
-		return Envelope{}, fmt.Errorf("an envelope: %w", missing{What: partCommitment})
-	case e.form == nil:
-		e.form = unknownForm{}
-	}
-	if p, ok := e.form.(plain); ok && plainCommitment(p.text) != e.commitment {
+	case e.plain != nil && plainCommitment(e.plain.text) != e.commitment:
 		return Envelope{}, errCommitmentNotText
+	case e.plain != nil:
+		return Envelope{form: *e.plain, commitment: e.commitment, unknown: u}, nil
+	case e.sealed != nil:
+		return Envelope{form: *e.sealed, commitment: e.commitment, unknown: u}, nil
 	}
-	return e, nil
-}
+	return Envelope{form: unknownForm{}, commitment: e.commitment, unknown: u}, nil
+}).read
 
-func readPlain(b []byte) (plain, error) {
-	var p plain
-	r := wire.NewReader(b)
-	_, err := readOnce(r, map[uint32]part{1: partText}, func(tag uint32, r *wire.Reader) error {
-		if tag == 1 {
-			p.text = bytes.Clone(r.Bytes())
-		}
+// readPlain reads a plaintext form: its text.
+var readPlain = declare("a plaintext form", []field[plain]{
+	{1, partText, one, func(p *plain, r *wire.Reader) error {
+		p.text = bytes.Clone(r.Bytes())
 		return nil
-	})
-	p.unknown = r.Rest()
-	if err != nil {
-		return plain{}, fmt.Errorf("a plaintext envelope: %w", err)
-	}
-	return p, nil
-}
+	}},
+}, func(p *plain, u wire.Unknown) (plain, error) {
+	p.unknown = u
+	return *p, nil
+}).read
 
-func readSealed(b []byte) (sealed, error) {
-	var s sealed
-	r := wire.NewReader(b)
-	_, err := readOnce(r, map[uint32]part{1: partSuite, 2: partTier, 3: partEpoch, 4: partNonce, 5: partCiphertext}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			suite, err := byteOf(r)
-			if err != nil {
-				return err
-			}
-			s.suite = SuiteID(suite)
-		case 2:
-			s.tier = Tier(r.Bytes())
-		case 3:
-			s.epoch = Epoch(r.Uvarint())
-		case 4:
-			s.nonce = bytes.Clone(r.Bytes())
-		case 5:
-			s.ciphertext = bytes.Clone(r.Bytes())
-		}
+// readSealed reads a sealed form: its suite, its tier and the tier key's
+// epoch, its nonce and its ciphertext.
+var readSealed = declare("a sealed form", []field[sealed]{
+	{1, partSuite, one, func(s *sealed, r *wire.Reader) error {
+		suite, err := byteOf(r)
+		s.suite = SuiteID(suite)
+		return err
+	}},
+	{2, partTier, one, func(s *sealed, r *wire.Reader) error {
+		s.tier = Tier(r.Bytes())
 		return nil
-	})
-	s.unknown = r.Rest()
-	if err != nil {
-		return sealed{}, fmt.Errorf("a sealed envelope: %w", err)
-	}
-	return s, nil
-}
+	}},
+	{3, partEpoch, one, func(s *sealed, r *wire.Reader) error {
+		s.epoch = Epoch(r.Uvarint())
+		return nil
+	}},
+	{4, partNonce, one, func(s *sealed, r *wire.Reader) error {
+		s.nonce = bytes.Clone(r.Bytes())
+		return nil
+	}},
+	{5, partCiphertext, one, func(s *sealed, r *wire.Reader) error {
+		s.ciphertext = bytes.Clone(r.Bytes())
+		return nil
+	}},
+}, func(s *sealed, u wire.Unknown) (sealed, error) {
+	s.unknown = u
+	return *s, nil
+}).read

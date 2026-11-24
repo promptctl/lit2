@@ -3,6 +3,11 @@ package events
 import (
 	"encoding/binary"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,11 +16,18 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// repeated is b with a copy of its first field tagged tag appended: the
-// field given twice, cut from b by protobuf's own key and length rule, so
-// the decoder under test is not the judge of where the field lies.
-func repeated(t *testing.T, b []byte, tag uint32) []byte {
+// span is one field of an encoded message: its tag, where its key starts,
+// where its value starts and where the field ends.
+type span struct {
+	tag               uint32
+	start, value, end int
+}
+
+// spans is b's fields, cut by protobuf's own key and length rule, so the
+// decoder under test is never the judge of where a field lies.
+func spans(t *testing.T, b []byte) []span {
 	t.Helper()
+	var out []span
 	for at := 0; at < len(b); {
 		start := at
 		key, n := binary.Uvarint(b[at:])
@@ -23,6 +35,7 @@ func repeated(t *testing.T, b []byte, tag uint32) []byte {
 			t.Fatalf("%x: a key at %d is no varint", b, at)
 		}
 		at += n
+		value := at
 		switch key & 7 {
 		case 0:
 			_, n = binary.Uvarint(b[at:])
@@ -35,190 +48,280 @@ func repeated(t *testing.T, b []byte, tag uint32) []byte {
 			if n <= 0 || size > uint64(len(b)-at-n) {
 				t.Fatalf("%x: a length at %d runs past the message", b, at)
 			}
+			value = at + n
 			at += n + int(size)
 		default:
 			t.Fatalf("%x: wire type %d at %d", b, key&7, start)
 		}
-		if uint32(key>>3) == tag {
-			return append(append([]byte(nil), b...), b[start:at]...)
+		out = append(out, span{tag: uint32(key >> 3), start: start, value: value, end: at})
+	}
+	return out
+}
+
+// held is how many times b holds the field tagged tag.
+func held(t *testing.T, b []byte, tag uint32) int {
+	t.Helper()
+	n := 0
+	for _, s := range spans(t, b) {
+		if s.tag == tag {
+			n++
+		}
+	}
+	return n
+}
+
+// firstOf is b's first field tagged tag.
+func firstOf(t *testing.T, b []byte, tag uint32) span {
+	t.Helper()
+	for _, s := range spans(t, b) {
+		if s.tag == tag {
+			return s
 		}
 	}
 	t.Fatalf("%x holds no field %d", b, tag)
-	return nil
+	return span{}
 }
 
-func message(fields func(*wire.Writer)) []byte {
-	var w wire.Writer
-	fields(&w)
-	return w.Encoded()
+// repeated is b with a copy of its first field tagged tag appended: the
+// field given twice.
+func repeated(t *testing.T, b []byte, tag uint32) []byte {
+	t.Helper()
+	f := firstOf(t, b, tag)
+	return append(append([]byte(nil), b...), b[f.start:f.end]...)
 }
 
-// payloadRead is a payload decoder over its bytes.
-func payloadRead(read func(*wire.Reader) (Versioned, error)) func([]byte) error {
-	return func(b []byte) error {
-		_, err := read(wire.NewReader(b))
-		return err
+// omitted is b without its fields tagged tag.
+func omitted(t *testing.T, b []byte, tag uint32) []byte {
+	t.Helper()
+	var out []byte
+	for _, s := range spans(t, b) {
+		if s.tag != tag {
+			out = append(out, b[s.start:s.end]...)
+		}
 	}
+	return out
 }
 
-// Every decoder refuses a field its message gives once when it is given
-// again, as that field given twice, and reads the message without the
-// repeat, the control, which differs from it in the repeat alone. Each
-// list, a proposal's members and an enrollment's roles, refuses one key
-// twice alike, and says which.
-func TestEveryDecoderRefusesAFieldGivenTwice(t *testing.T) {
+// nested is the value of b's first field tagged tag: a message an encoder
+// writes inside another.
+func nested(t *testing.T, b []byte, tag uint32) []byte {
+	t.Helper()
+	f := firstOf(t, b, tag)
+	return b[f.value:f.end]
+}
+
+// controls is each declared message as its writers encode it, by the
+// message's name: the oracle of how many times each field is held,
+// independent of the declaration. A field every control holds once is one
+// its writer always writes; one some control lacks, the writer may leave
+// out; one a control holds twice is a list. Each is an encoder's output,
+// or, for a record a rewrite erased, the record as the format says it is.
+func controls(t *testing.T) map[string][][]byte {
 	k := keyOf(1)
 	e := mint(t, context(1, Frontier{}, Known{}), k, 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0]
-	a := k.Principal()
-	owner, contributor := MustName("owner"), MustName("contributor")
-	sealedForm := message(func(w *wire.Writer) {
-		w.Uvarint(1, 1)
-		w.Bytes(2, []byte("tier"))
-		w.Uvarint(3, 1)
-		w.Bytes(4, []byte("nonce"))
-		w.Bytes(5, []byte("ciphertext"))
-	})
-	sealedEnvelope := message(func(w *wire.Writer) {
-		w.Bytes(envelopeSealed, sealedForm)
-		w.Bytes(envelopeCommitment, make([]byte, 32))
-	})
-	membership := message(func(w *wire.Writer) {
-		w.Bytes(1, a.wire())
-		w.Bytes(2, []byte("owner"))
-	})
-	field := TransitionField{Field: MustName("reason"), Value: Plain{Canonical: "x"}}.wire()
-	record, signature, header := []byte(recordOf(e.raw, e.Signature(), bodyWire(t, e))), signatureWire(e.Signature()), e.raw
-	subject := aboutWire(NewElement{Of: anItem, ID: anElement, Width: 4})
-	attribution := Attribution{Checkout: store.CheckoutID{1}, Principal: a, Agent: AgentFrom("x")}.wire()
-	objectID := objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob")
-	readObject := func(b []byte) error { _, err := readObjectID(b, "the blob"); return err }
+	a, b := keyOf(1).Principal(), keyOf(2).Principal()
+	owner, contributor, observer := MustName("owner"), MustName("contributor"), MustName("observer")
+	r := e.Body().(Readable)
+	record := recordWire(e.raw, signatureWire(e.Signature()), r.Salt, payloadWire(r.Payload))
+	sealedEnvelope := Envelope{
+		form:       sealed{suite: SuiteEd25519, tier: "tier", epoch: 1, nonce: []byte("nonce"), ciphertext: []byte("ciphertext")},
+		commitment: Commitment{9},
+	}.wire()
+	value := TransitionField{Field: MustName("reason"), Value: Plain{Canonical: "x"}}
+	over := []EventID{{1}, {2}}
+	enroll := payloadBytes(Enroll{Owner: owner, Roles: map[Name][]Capability{
+		contributor: {MustCapability("set own/*"), MustCapability("rm own/* (level=1)")},
+		observer:    nil,
+	}})
+	propose := func(th Threshold) []byte {
+		return payloadBytes(Propose{Base: Digest{3}, Members: map[PrincipalID]Name{a: owner, b: contributor}, Threshold: th})
+	}
+	return map[string][][]byte{
+		"the record":    {record, []byte(recordOf(e.raw, e.Signature(), nil))},
+		"the signature": {signatureWire(e.Signature())},
+		"the body":      {nested(t, record, recordBody)},
+		"the header":    {e.raw},
+		"the subject":   {aboutWire(NewElement{Of: anItem, ID: anElement, Width: 4}), aboutWire(Root{})},
+		"the attribution": {
+			Attribution{Checkout: store.CheckoutID{1}, Principal: a, Agent: AgentFrom("x")}.wire(),
+			Attribution{Checkout: store.CheckoutID{1}, Principal: a, Agent: Unlabeled{}}.wire(),
+		},
+		"the principal":     {a.wire()},
+		"an object id":      {objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob")},
+		"an envelope":       {SealPlain("x").wire(), sealedEnvelope},
+		"a plaintext form":  {nested(t, SealPlain("x").wire(), envelopePlain)},
+		"a sealed form":     {nested(t, sealedEnvelope, envelopeSealed)},
+		"a value":           {Plain{Canonical: "b"}.wire(), Prose{Body: text("a")}.wire()},
+		"a placement":       {PlacementWire(AtLevel{Level: mustLevel(1)}), PlacementWire(BelowParent{Parent: anItem})},
+		"an item.create":    {payloadBytes(ItemCreate{Place: BelowParent{Parent: anItem}})},
+		"a field.set":       {payloadBytes(FieldSet{Field: MustName("title"), Value: Plain{Canonical: "x"}, Over: over})},
+		"a member.add":      {payloadBytes(MemberAdd{Field: labels, Member: MustName("a")})},
+		"a member.rm":       {payloadBytes(MemberRm{Field: labels, Member: MustName("a"), Observed: over})},
+		"a transition":      {payloadBytes(Transition{From: MustName("plan"), To: MustName("done"), Over: over, Fields: []TransitionField{value, {Field: MustName("why"), Value: Plain{Canonical: "y"}}}})},
+		"a field":           {value.wire()},
+		"a comment.add":     {payloadBytes(CommentAdd{Body: text("c")})},
+		"a workspace.apply": {payloadBytes(NewWorkspaceApply(aVersion, git.SHA1, over))},
+		"a policy.enroll":   {enroll},
+		"a role":            {nested(t, enroll, 2)},
+		"a policy.propose":  {propose(Majority{})},
+		"a member":          {nested(t, propose(Majority{}), 2)},
+		"a threshold":       {nested(t, propose(Majority{}), 3), nested(t, propose(Fixed{N: 1}), 3)},
+		"a policy.approve":  {payloadBytes(Approve{Proposal: Digest{1}})},
+		"a policy.request":  {payloadBytes(Request{})},
+	}
+}
 
-	type decoder struct {
-		name string
-		read func([]byte) error
-		b    []byte
-	}
-	decoders := []decoder{
-		{"a record", func(b []byte) error { _, err := readRecord(b); return err }, record},
-		{"a signature", func(b []byte) error { _, err := readSignature(b); return err }, signature},
-		{"a header", func(b []byte) error { _, err := readHeader(b); return err }, header},
-		{"a subject", func(b []byte) error { _, err := readAbout(b); return err }, subject},
-		{"an attribution", func(b []byte) error { _, err := readAttribution(b); return err }, attribution},
-		{"a principal", func(b []byte) error { _, err := readPrincipal(b); return err }, a.wire()},
-		{"an object id", readObject, objectID},
-		{"a plaintext envelope", func(b []byte) error { _, err := readEnvelope(b); return err }, SealPlain("x").wire()},
-		{"a sealed envelope", func(b []byte) error { _, err := readEnvelope(b); return err }, sealedEnvelope},
-		{"a plaintext form", func(b []byte) error { _, err := readPlain(b); return err }, futureField(1, "x")},
-		{"a sealed form", func(b []byte) error { _, err := readSealed(b); return err }, sealedForm},
-		{"a plain value", func(b []byte) error { _, err := readValue(b); return err }, Plain{Canonical: "b"}.wire()},
-		{"a prose value", func(b []byte) error { _, err := readValue(b); return err }, Prose{Body: text("a")}.wire()},
-		{"a placement at a level", func(b []byte) error { _, err := ReadPlacement(b); return err }, PlacementWire(AtLevel{Level: mustLevel(1)})},
-		{"a placement below a parent", func(b []byte) error { _, err := ReadPlacement(b); return err }, PlacementWire(BelowParent{Parent: anItem})},
-		{"an item.create", payloadRead(ReadItemCreate), payloadBytes(ItemCreate{Place: BelowParent{Parent: anItem}})},
-		{"a field.set", payloadRead(ReadFieldSet), payloadBytes(FieldSet{Field: MustName("title"), Value: Plain{Canonical: "x"}})},
-		{"a member.add", payloadRead(ReadMemberAdd), payloadBytes(MemberAdd{Field: labels, Member: MustName("a")})},
-		{"a member.rm", payloadRead(ReadMemberRm), payloadBytes(MemberRm{Field: labels, Member: MustName("a")})},
-		{"a transition", payloadRead(ReadTransition), payloadBytes(Transition{From: MustName("plan"), To: MustName("done")})},
-		{"a transition's field", func(b []byte) error { _, err := readTransitionField(b); return err }, field},
-		{"a comment.add", payloadRead(ReadCommentAdd), payloadBytes(CommentAdd{Body: text("c")})},
-		{"a workspace.apply", payloadRead(ReadWorkspaceApply), payloadBytes(NewWorkspaceApply(aVersion, git.SHA1, nil))},
-		{"an enrollment", payloadRead(ReadEnroll), payloadBytes(Enroll{Owner: owner, Roles: map[Name][]Capability{contributor: nil}})},
-		{"a role", func(b []byte) error { _, _, err := readRole(b); return err }, futureField(1, "contributor")},
-		{"a proposal", payloadRead(ReadPropose), payloadBytes(Propose{Base: Digest{3}, Members: map[PrincipalID]Name{a: owner}, Threshold: Majority{}})},
-		{"a membership", func(b []byte) error { _, _, err := readMembership(b); return err }, membership},
-		{"a majority threshold", func(b []byte) error { _, err := readThreshold(b); return err }, message(func(w *wire.Writer) { w.Bytes(thresholdMajority, nil) })},
-		{"a fixed threshold", func(b []byte) error { _, err := readThreshold(b); return err }, message(func(w *wire.Writer) { w.Uvarint(thresholdFixed, 1) })},
-		{"an approval", payloadRead(ReadApprove), payloadBytes(Approve{Proposal: Digest{1}})},
-	}
-	byName := map[string]decoder{}
-	for _, d := range decoders {
-		if err := d.read(d.b); err != nil {
-			t.Fatalf("%s whole: %v; the control must read", d.name, err)
-		}
-		byName[d.name] = d
-	}
-	for _, c := range []struct {
-		decoder string
-		tag     uint32
-		want    part
-		says    string // what the refusal names beside the field, if anything
-	}{
-		{"a record", recordHeader, partHeader, ""},
-		{"a record", recordSignature, partSignature, ""},
-		{"a record", recordBody, partBody, ""},
-		{"a signature", 1, partSuite, ""},
-		{"a signature", 2, partSignatureBytes, ""},
-		{"a header", headerKind, partKind, ""},
-		{"a header", headerSchema, partSchema, ""},
-		{"a header", headerSubject, partSubject, ""},
-		{"a header", headerAttribution, partAttribution, ""},
-		{"a header", headerConfigRef, partConfigRef, ""},
-		{"a header", headerPolicy, partPolicy, ""},
-		{"a header", headerPosition, partPosition, ""},
-		{"a header", headerRecordedAt, partRecordedAt, ""},
-		{"a header", headerPayloadHash, partPayloadHash, ""},
-		{"a subject", subjectItem, partItem, ""},
-		{"a subject", subjectElement, partElement, ""},
-		{"a subject", subjectWidth, partWidth, ""},
-		{"an attribution", 1, partCheckout, ""},
-		{"an attribution", 2, partPrincipal, ""},
-		{"an attribution", 3, partAgent, ""},
-		{"a principal", 1, partSuite, ""},
-		{"a principal", 2, partKey, ""},
-		{"an object id", 1, partObjectFormat, ""},
-		{"an object id", 2, partObjectHash, ""},
-		{"a plaintext envelope", envelopePlain, partPlaintext, ""},
-		{"a plaintext envelope", envelopeCommitment, partCommitment, ""},
-		{"a sealed envelope", envelopeSealed, partSealed, ""},
-		{"a plaintext form", 1, partText, ""},
-		{"a sealed form", 1, partSuite, ""},
-		{"a sealed form", 2, partTier, ""},
-		{"a sealed form", 3, partEpoch, ""},
-		{"a sealed form", 4, partNonce, ""},
-		{"a sealed form", 5, partCiphertext, ""},
-		{"a plain value", valuePlain, partPlain, ""},
-		{"a prose value", valueProse, partProse, ""},
-		{"a placement at a level", placeAtLevel, partLevel, ""},
-		{"a placement below a parent", placeBelowParent, partParent, ""},
-		{"an item.create", 1, partPlacement, ""},
-		{"a field.set", 1, partField, ""},
-		{"a field.set", 2, partValue, ""},
-		{"a member.add", 1, partField, ""},
-		{"a member.add", 2, partMember, ""},
-		{"a member.rm", 1, partField, ""},
-		{"a member.rm", 2, partMember, ""},
-		{"a transition", 1, partFrom, ""},
-		{"a transition", 2, partTo, ""},
-		{"a transition's field", 1, partField, ""},
-		{"a transition's field", 2, partValue, ""},
-		{"a comment.add", 1, partCommentBody, ""},
-		{"a workspace.apply", 1, partVersion, ""},
-		{"a workspace.apply", 2, partBlob, ""},
-		{"an enrollment", 1, partOwnerRole, ""},
-		{"an enrollment", 2, partRole, "contributor"},
-		{"a role", 1, partRoleName, ""},
-		{"a proposal", 1, partBase, ""},
-		{"a proposal", 2, partMember, a.String()},
-		{"a proposal", 3, partThreshold, ""},
-		{"a membership", 1, partPrincipal, ""},
-		{"a membership", 2, partRole, ""},
-		{"a majority threshold", thresholdMajority, partMajority, ""},
-		{"a fixed threshold", thresholdFixed, partFixed, ""},
-		{"an approval", 1, partProposal, ""},
-	} {
-		d, ok := byName[c.decoder]
+// Every declared message is read by its declaration alone: each control
+// reads; a field its writers hold at most once is refused, given twice, as
+// that field given twice; a field its writers always write is refused,
+// left out, as that field missing; and the rows come from the declarations,
+// so a field added to one is held to both with no edit here. Where the
+// declaration says other than its writers do, a row fails: a field it calls
+// optional that every writer writes reads with the field left out, and a
+// list it calls singular refuses its own control.
+func TestEveryDecoderHoldsEachFieldToItsDeclaration(t *testing.T) {
+	cs := controls(t)
+	for _, d := range declarations {
+		ctl, ok := cs[d.name]
 		if !ok {
-			t.Fatalf("no decoder %q", c.decoder)
+			t.Errorf("%s is declared and has no control", d.name)
+			continue
 		}
-		err := d.read(repeated(t, d.b, c.tag))
+		for i, c := range ctl {
+			if err := d.read(c); err != nil {
+				t.Fatalf("%s's control %d reads with %v; the control must read", d.name, i, err)
+			}
+			for _, s := range spans(t, c) {
+				if !slices.ContainsFunc(d.fields, func(f shape) bool { return f.tag == s.tag }) {
+					t.Errorf("%s's writer writes field %d, which its declaration does not hold", d.name, s.tag)
+				}
+			}
+		}
+		for i := 1; i < len(d.fields); i++ {
+			if p, q := d.fields[i-1], d.fields[i]; p.tag > q.tag || p.what >= q.what {
+				t.Errorf("%s declares field %d as %s and field %d as %s; want the parts in its tags' order", d.name, p.tag, p.what, q.tag, q.what)
+			}
+		}
+		for _, f := range d.fields {
+			var holding []byte
+			always, list := true, false
+			for _, c := range ctl {
+				n := held(t, c, f.tag)
+				if n > 0 && holding == nil {
+					holding = c
+				}
+				always, list = always && n == 1, list || n > 1
+			}
+			switch {
+			case holding == nil:
+				t.Errorf("no control of %s holds its field %d, %s", d.name, f.tag, f.what)
+				continue
+			case list:
+				continue
+			}
+			if err := d.read(repeated(t, holding, f.tag)); !errors.Is(err, twice{What: f.what}) {
+				t.Errorf("%s giving field %d twice reads with %v; want its %s given twice", d.name, f.tag, err, f.what)
+			}
+			if !always {
+				continue
+			}
+			if err := d.read(omitted(t, holding, f.tag)); !errors.Is(err, missing{What: f.what}) {
+				t.Errorf("%s without field %d reads with %v; want no %s, which its writer always writes", d.name, f.tag, err, f.what)
+			}
+		}
+	}
+	for n := range cs {
+		if !slices.ContainsFunc(declarations, func(d declaration) bool { return d.name == n }) {
+			t.Errorf("a control names %s, which no declaration does", n)
+		}
+	}
+}
+
+// A list keyed by its elements, an enrollment's roles or a proposal's
+// members, refuses one key twice as its element given twice, and says
+// which; the list once is the control.
+func TestAListRefusesOneKeyTwice(t *testing.T) {
+	a := keyOf(1).Principal()
+	owner, contributor := MustName("owner"), MustName("contributor")
+	for _, c := range []struct {
+		name string
+		read func(*wire.Reader) (Versioned, error)
+		b    []byte
+		want part
+		says string
+	}{
+		{"an enrollment", ReadEnroll, payloadBytes(Enroll{Owner: owner, Roles: map[Name][]Capability{contributor: nil}}), partRole, "contributor"},
+		{"a proposal", ReadPropose, payloadBytes(Propose{Base: Digest{3}, Members: map[PrincipalID]Name{a: owner}, Threshold: Majority{}}), partMember, a.String()},
+	} {
+		if _, err := c.read(wire.NewReader(c.b)); err != nil {
+			t.Fatalf("%s whole: %v; the control must read", c.name, err)
+		}
+		_, err := c.read(wire.NewReader(repeated(t, c.b, 2)))
 		if !errors.Is(err, twice{What: c.want}) {
-			t.Errorf("%s giving field %d twice reads with %v; want its %s given twice", c.decoder, c.tag, err, c.want)
+			t.Errorf("%s listing one key twice reads with %v; want its %s given twice", c.name, err, c.want)
 			continue
 		}
 		if !strings.Contains(err.Error(), c.says) {
-			t.Errorf("%s giving field %d twice is refused as %q; want it to name %s", c.decoder, c.tag, err, c.says)
+			t.Errorf("%s listing one key twice is refused as %q; want it to name %s", c.name, err, c.says)
 		}
 	}
+}
+
+// No decoder reads a message but by a declaration: in the package's code,
+// only the generic decoder walks a message's fields, and only declare
+// builds a message, which it registers, so every decoder is one the
+// tests above hold to its declaration.
+func TestEveryDecoderReadsByADeclaration(t *testing.T) {
+	fset := token.NewFileSet()
+	paths, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	walked, built := 0, 0
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range f.Decls {
+			fn, _ := decl.(*ast.FuncDecl)
+			in := "a package variable"
+			if fn != nil {
+				in = fn.Name.Name
+			}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				switch n := n.(type) {
+				case *ast.CallExpr:
+					sel, ok := n.Fun.(*ast.SelectorExpr)
+					if ok && (sel.Sel.Name == "Each" || sel.Sel.Name == "Next" && len(n.Args) == 0) {
+						walked++
+						if in != "decode" {
+							t.Errorf("%s: %s walks a message's fields with %s, not by a declaration", fset.Position(n.Pos()), in, sel.Sel.Name)
+						}
+					}
+				case *ast.CompositeLit:
+					if x, ok := n.Type.(*ast.IndexListExpr); ok && isIdent(x.X, "message") {
+						built++
+						if in != "declare" {
+							t.Errorf("%s: %s builds a message declare does not register", fset.Position(n.Pos()), in)
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	if walked != 1 || built != 1 {
+		t.Errorf("the package walks fields %d times and builds a message %d times; want once each, in decode and declare", walked, built)
+	}
+}
+
+func isIdent(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
 }
 
 // A body giving its payload twice is not the body its writer signed, even

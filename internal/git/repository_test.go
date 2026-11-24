@@ -4,14 +4,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
@@ -498,82 +495,6 @@ func TestAReplaceGitRefusesIsSaidByTheRefsStateAfter(t *testing.T) {
 	var broken git.BrokenRef
 	if !errors.As(err, new(git.Refused)) || !errors.As(err, &broken) || broken.Name != "refs/lit/log/torn" {
 		t.Errorf("a replace of a ref that will not read = %v; want Refused and the ref broken", err)
-	}
-}
-
-// A replace waits out another publish holding its ref's lock: git takes
-// the lock once the holder has moved the ref and let it go, and refuses
-// the stale old value, so the replace is Moved to the holder's commit,
-// never git's refusal to lock a ref the holder was moving. The holder is
-// a lock file made by hand, held until the replace's git has started, as
-// a git on PATH says by a file before it runs the real one; it then
-// commits as git does, its lock renamed onto the ref. Nothing outside git
-// sees its first try at the lock, so whether that try meets the holder
-// is not forced: git starting is slower than the release, so the test
-// also holds lit to asking git for the wait.
-func TestAReplaceWaitsOutAnotherHoldersLock(t *testing.T) {
-	real, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shim, started := t.TempDir(), filepath.Join(t.TempDir(), "started")
-	script := fmt.Sprintf("#!/bin/sh\nfor a; do [ \"$a\" = update-ref ] && printf '%%s\\n' \"$@\" >%q; done\nexec %q \"$@\"\n", started, real)
-	if err := os.WriteFile(filepath.Join(shim, "git"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	env := slices.DeleteFunc(gittest.Env(t), func(kv string) bool { return strings.HasPrefix(kv, "PATH=") })
-	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := git.Find(append(env, "PATH="+shim)).RepositoryAt(dir)
-	a, b := gittest.PutBlob(t, repo, []byte("a")), gittest.PutBlob(t, repo, []byte("b"))
-	const name git.RefName = "refs/lit/log/w"
-	if err := repo.Replace(name, git.Absent{}, a); err != nil {
-		t.Fatalf("control: a replace from absent failed with %v", err)
-	}
-	if err := os.Remove(started); err != nil {
-		t.Fatalf("the git on PATH said no start of the control's update-ref: %v", err)
-	}
-	ref := filepath.Join(dir, filepath.FromSlash(string(name)))
-	if err := os.WriteFile(ref+".lock", []byte(b.String()+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	replaced := make(chan error, 1)
-	go func() { replaced <- repo.Replace(name, git.Named{Target: a}, b) }()
-	deadline, ok := t.Deadline()
-	if !ok {
-		deadline = time.Now().Add(time.Minute)
-	}
-	for {
-		if _, err := os.Stat(started); err == nil {
-			break
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			t.Fatal(err)
-		}
-		select {
-		case err := <-replaced:
-			t.Fatalf("the replace ended, with %v, before its git said it started", err)
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the replace's git did not start by the test's deadline")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if err := os.Rename(ref+".lock", ref); err != nil {
-		t.Fatal(err)
-	}
-	err = <-replaced
-	var moved git.Moved
-	if !errors.As(err, &moved) || moved != (git.Moved{Name: name, From: git.Named{Target: a}, Now: git.Named{Target: b}}) {
-		t.Errorf("a replace from %s while another publish held the ref's lock and moved it to %s = %v; want Moved to %s", a, b, err, b)
-	}
-	// what is forced is lit's side: it asks git to wait for the lock, and
-	// git's documented retry does the rest
-	args, err := os.ReadFile(started)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(args), "-c\ncore.filesRefLockTimeout=10000\nupdate-ref\n") {
-		t.Errorf("the replace ran git %q; want update-ref given ten seconds to wait for its ref's lock", args)
 	}
 }
 

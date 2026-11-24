@@ -7,9 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
-	"slices"
 	"time"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -295,86 +293,65 @@ type record struct {
 	hasBody        bool
 }
 
-func readRecord(b []byte) (record, error) {
-	var rec record
-	r := wire.NewReader(b)
-	seen, err := readOnce(r, map[uint32]part{recordHeader: partHeader, recordSignature: partSignature, recordBody: partBody}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case recordHeader:
-			rec.header = bytes.Clone(r.Bytes())
-		case recordSignature:
-			rec.sigRaw = bytes.Clone(r.Bytes())
-		case recordBody:
-			rec.body, rec.hasBody = bytes.Clone(r.Bytes()), true
-		}
+// readRecord reads a record's stored form: its header, its signature,
+// and its body unless a rewrite erased it.
+var readRecord = declare("the record", []field[record]{
+	{recordHeader, partHeader, one, func(rec *record, r *wire.Reader) error {
+		rec.header = bytes.Clone(r.Bytes())
 		return nil
-	})
-	switch {
-	case err != nil:
-		return record{}, fmt.Errorf("the record: %w", err)
-	case !seen[recordHeader]:
-		return record{}, fmt.Errorf("the record: %w", missing{What: partHeader})
-	case !seen[recordSignature]:
-		return record{}, fmt.Errorf("the record: %w", missing{What: partSignature})
-	}
-	sig, err := readSignature(rec.sigRaw)
-	if err != nil {
-		return record{}, err
-	}
-	rec.sig = sig
-	return rec, nil
+	}},
+	{recordSignature, partSignature, one, func(rec *record, r *wire.Reader) (err error) {
+		rec.sigRaw = bytes.Clone(r.Bytes())
+		rec.sig, err = readSignature(rec.sigRaw)
+		return err
+	}},
+	{recordBody, partBody, optional, func(rec *record, r *wire.Reader) error {
+		rec.body, rec.hasBody = bytes.Clone(r.Bytes()), true
+		return nil
+	}},
+}, whole).read
+
+// readSignature reads a signature's stored form: its suite and its bytes.
+var readSignature = declare("the signature", []field[Signature]{
+	{1, partSuite, one, func(s *Signature, r *wire.Reader) error {
+		suite, err := byteOf(r)
+		s.Suite = SuiteID(suite)
+		return err
+	}},
+	{2, partSignatureBytes, one, func(s *Signature, r *wire.Reader) error {
+		s.Bytes = bytes.Clone(r.Bytes())
+		return nil
+	}},
+}, whole).read
+
+// committed is a body's parts: the salt and the payload the header's hash
+// commits to.
+type committed struct {
+	salt    Salt
+	payload []byte
 }
 
-func readSignature(b []byte) (Signature, error) {
-	var s Signature
-	r := wire.NewReader(b)
-	seen, err := readOnce(r, map[uint32]part{1: partSuite, 2: partSignatureBytes}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			suite, err := byteOf(r)
-			if err != nil {
-				return err
-			}
-			s.Suite = SuiteID(suite)
-		case 2:
-			s.Bytes = bytes.Clone(r.Bytes())
-		}
+// readBody reads a body's stored form.
+var readBody = declare("the body", []field[committed]{
+	fixedField(1, partSalt, one, func(c *committed) []byte { return c.salt[:] }),
+	{2, partPayload, one, func(c *committed, r *wire.Reader) error {
+		c.payload = bytes.Clone(r.Bytes())
 		return nil
-	})
-	switch {
-	case err != nil:
-		return Signature{}, fmt.Errorf("the signature: %w", err)
-	case !seen[1]:
-		return Signature{}, fmt.Errorf("the signature: %w", missing{What: partSuite})
-	}
-	return s, nil
-}
+	}},
+}, whole).read
 
 // bodyOf is what this binary makes of rec's body under h.
 func bodyOf(k Kinds, h Header, rec record) Body {
 	if !rec.hasBody {
 		return Erased{}
 	}
-	var salt Salt
-	var payload []byte
-	r := wire.NewReader(rec.body)
-	seen, err := readOnce(r, map[uint32]part{1: partSalt, 2: partPayload}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			b := r.Bytes()
-			copy(salt[:], b)
-			return sized(partSalt, b, len(salt))
-		case 2:
-			payload = bytes.Clone(r.Bytes())
-		}
-		return nil
-	})
-	// a body that does not parse, gives a field twice, or whose hash is not
-	// the header's, is not the body the writer signed
-	if err != nil || !seen[1] || !seen[2] || payloadHash(salt, payload) != h.payload {
+	c, err := readBody(rec.body)
+	// a body that does not read, or whose hash is not the header's, is not
+	// the body the writer signed
+	if err != nil || payloadHash(c.salt, c.payload) != h.payload {
 		return Uncommitted{}
 	}
-	return k.read(h.kind, h.schema, salt, payload)
+	return k.read(h.kind, h.schema, c.salt, c.payload)
 }
 
 // The writers' preconditions: an About, an Agent and a segment width are
@@ -499,128 +476,122 @@ func recordWire(header, sig []byte, salt Salt, payload []byte) []byte {
 	return w.Encoded()
 }
 
-// headerParts is each header field by its tag.
-var headerParts = map[uint32]part{headerKind: partKind, headerSchema: partSchema, headerSubject: partSubject,
-	headerAttribution: partAttribution, headerConfigRef: partConfigRef, headerPolicy: partPolicy,
-	headerPosition: partPosition, headerRecordedAt: partRecordedAt, headerPayloadHash: partPayloadHash}
-
 // errNotATime is a recorded-at outside the clock's range.
 var errNotATime = errors.New("a recorded-at no clock past 1970 reads as a time")
 
 // readHeader reads a header's stored bytes. A header missing a field the
-// event cannot be without, or a root carrying an element name, is refused.
-func readHeader(b []byte) (Header, error) {
-	var h Header
-	r := wire.NewReader(b)
-	var err error
-	seen, err := readOnce(r, headerParts, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case headerKind:
-			h.kind = Kind(r.Bytes())
-		case headerSchema:
-			ver := r.Uvarint()
-			if ver > math.MaxUint32 {
-				err = fmt.Errorf("the schema version is %d, which no SchemaVersion (uint32) holds", ver)
-			}
-			h.schema = SchemaVersion(ver)
-		case headerSubject:
-			h.about, err = readAbout(r.Bytes())
-		case headerAttribution:
-			h.by, err = readAttribution(r.Bytes())
-		case headerConfigRef:
-			h.configRef, err = readObjectID(r.Bytes(), "the config-ref")
-		case headerPolicy:
-			h.policy = PolicyVersion(r.Uvarint())
-		case headerPosition:
-			h.position = CausalPosition{n: r.Uvarint()}
-		case headerRecordedAt:
-			ns := r.Uvarint()
-			if ns == 0 || ns > math.MaxInt64 {
-				err = fmt.Errorf("the recorded-at is %d ns: %w", ns, errNotATime)
-			}
-			h.recordedAt = time.Unix(0, int64(ns)).UTC()
-		case headerPayloadHash:
-			c := r.Bytes()
-			copy(h.payload[:], c)
-			err = sized(partPayloadHash, c, len(h.payload))
+// event cannot be without, or holding one at a zero no event carries, is
+// refused.
+var readHeader = declare("the header", []field[Header]{
+	{headerKind, partKind, one, func(h *Header, r *wire.Reader) error {
+		h.kind = Kind(r.Bytes())
+		return nil
+	}},
+	{headerSchema, partSchema, one, func(h *Header, r *wire.Reader) error {
+		ver := r.Uvarint()
+		h.schema = SchemaVersion(ver)
+		if ver > math.MaxUint32 {
+			return fmt.Errorf("the schema version is %d, which no SchemaVersion (uint32) holds", ver)
 		}
+		return nil
+	}},
+	{headerSubject, partSubject, one, func(h *Header, r *wire.Reader) (err error) {
+		h.about, err = readAbout(r.Bytes())
 		return err
-	})
-	if err != nil {
-		return Header{}, fmt.Errorf("the header: %w", err)
-	}
-	for _, tag := range slices.Sorted(maps.Keys(headerParts)) {
-		if !seen[tag] {
-			return Header{}, fmt.Errorf("the header: %w", missing{What: headerParts[tag]})
+	}},
+	{headerAttribution, partAttribution, one, func(h *Header, r *wire.Reader) (err error) {
+		h.by, err = readAttribution(r.Bytes())
+		return err
+	}},
+	{headerConfigRef, partConfigRef, one, func(h *Header, r *wire.Reader) (err error) {
+		h.configRef, err = readObjectID(r.Bytes(), "the config-ref")
+		return err
+	}},
+	{headerPolicy, partPolicy, one, func(h *Header, r *wire.Reader) error {
+		h.policy = PolicyVersion(r.Uvarint())
+		return nil
+	}},
+	{headerPosition, partPosition, one, func(h *Header, r *wire.Reader) error {
+		h.position = CausalPosition{n: r.Uvarint()}
+		return nil
+	}},
+	{headerRecordedAt, partRecordedAt, one, func(h *Header, r *wire.Reader) error {
+		ns := r.Uvarint()
+		h.recordedAt = time.Unix(0, int64(ns)).UTC()
+		if ns == 0 || ns > math.MaxInt64 {
+			return fmt.Errorf("the recorded-at is %d ns: %w", ns, errNotATime)
 		}
-	}
+		return nil
+	}},
+	fixedField(headerPayloadHash, partPayloadHash, one, func(h *Header) []byte { return h.payload[:] }),
+}, func(h *Header, _ wire.Unknown) (Header, error) {
 	switch {
 	case h.kind == "":
-		return Header{}, fmt.Errorf("the header: %w", zeroField{What: partKind})
+		return Header{}, zeroField{What: partKind}
 	case h.schema == 0:
-		return Header{}, fmt.Errorf("the header: %w", zeroField{What: partSchema})
+		return Header{}, zeroField{What: partSchema}
 	case h.policy == 0:
-		return Header{}, fmt.Errorf("the header: %w", zeroField{What: partPolicy})
+		return Header{}, zeroField{What: partPolicy}
 	case h.position.n == 0:
-		return Header{}, fmt.Errorf("the header: %w", zeroField{What: partPosition})
+		return Header{}, zeroField{What: partPosition}
 	}
-	return h, nil
-}
+	return *h, nil
+}).read
 
 // errRootNamesPart is a subject of the root that names an element or a
 // segment, which the root has none of.
 var errRootNamesPart = errors.New("a root subject naming an element or a segment, which the root has none of")
 
+// subject is a subject's fields as stored, each held or not.
+type subject struct {
+	item, element *[]byte
+	width         *uint64
+}
+
 // readAbout reads a subject's stored form: nothing, an item, an item and
 // an element, either with a segment width.
-func readAbout(b []byte) (About, error) {
-	var item, element []byte
-	var width uint64
-	r := wire.NewReader(b)
-	seen, err := readOnce(r, map[uint32]part{subjectItem: partItem, subjectElement: partElement, subjectWidth: partWidth}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case subjectItem:
-			item = r.Bytes()
-		case subjectElement:
-			element = r.Bytes()
-		case subjectWidth:
-			width = r.Uvarint()
-		}
+var readAbout = declare("the subject", []field[subject]{
+	{subjectItem, partItem, optional, func(s *subject, r *wire.Reader) error {
+		s.item = new(r.Bytes())
 		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("the subject: %w", err)
-	}
-	hasItem, hasElement, hasWidth := seen[subjectItem], seen[subjectElement], seen[subjectWidth]
-	if !hasItem {
-		if hasElement || hasWidth {
+	}},
+	{subjectElement, partElement, optional, func(s *subject, r *wire.Reader) error {
+		s.element = new(r.Bytes())
+		return nil
+	}},
+	{subjectWidth, partWidth, optional, func(s *subject, r *wire.Reader) error {
+		s.width = new(r.Uvarint())
+		return nil
+	}},
+}, func(s *subject, _ wire.Unknown) (About, error) {
+	if s.item == nil {
+		if s.element != nil || s.width != nil {
 			return nil, errRootNamesPart
 		}
 		return Root{}, nil
 	}
-	of, err := idBits(partItem, item)
+	of, err := idBits(partItem, *s.item)
 	if err != nil {
-		return nil, fmt.Errorf("the subject's item: %w", err)
+		return nil, fmt.Errorf("its item: %w", err)
 	}
-	if hasWidth && (width < minWidth || width > fullWidth) {
-		return nil, fmt.Errorf("the subject's segment width is %d, not %d to %d: %w", width, minWidth, fullWidth, errWidth)
+	if s.width != nil && (*s.width < minWidth || *s.width > fullWidth) {
+		return nil, fmt.Errorf("its segment width is %d, not %d to %d: %w", *s.width, minWidth, fullWidth, errWidth)
 	}
-	w := int(width)
-	if !hasElement {
-		if hasWidth {
-			return NewItem{ID: ItemID{b: of}, Width: w}, nil
+	if s.element == nil {
+		if s.width != nil {
+			return NewItem{ID: ItemID{b: of}, Width: int(*s.width)}, nil
 		}
 		return Item{ID: ItemID{b: of}}, nil
 	}
-	el, err := idBits(partElement, element)
+	el, err := idBits(partElement, *s.element)
 	if err != nil {
-		return nil, fmt.Errorf("the subject's element: %w", err)
+		return nil, fmt.Errorf("its element: %w", err)
 	}
-	if hasWidth {
-		return NewElement{Of: ItemID{b: of}, ID: ElementID{b: el}, Width: w}, nil
+	if s.width != nil {
+		return NewElement{Of: ItemID{b: of}, ID: ElementID{b: el}, Width: int(*s.width)}, nil
 	}
 	return Element{Of: ItemID{b: of}, ID: ElementID{b: el}}, nil
-}
+}).read
 
 // idBits reads an id's stored 16 bytes, the field what.
 func idBits(what part, b []byte) ([16]byte, error) {
@@ -632,34 +603,28 @@ func idBits(what part, b []byte) ([16]byte, error) {
 	return id, nil
 }
 
-// readAttribution reads an attribution's stored form.
-func readAttribution(b []byte) (Attribution, error) {
-	a := Attribution{Agent: Unlabeled{}}
-	r := wire.NewReader(b)
-	var err error
-	seen, err := readOnce(r, map[uint32]part{1: partCheckout, 2: partPrincipal, 3: partAgent}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			c := r.Bytes()
-			copy(a.Checkout[:], c)
-			err = sized(partCheckout, c, len(a.Checkout))
-		case 2:
-			a.Principal, err = readPrincipal(r.Bytes())
-		case 3:
-			a.Agent = AgentFrom(string(r.Bytes()))
-		}
-		return err
-	})
-	switch {
-	case err != nil:
-		return Attribution{}, fmt.Errorf("the attribution: %w", err)
-	case !seen[1]:
-		return Attribution{}, fmt.Errorf("the attribution: %w", missing{What: partCheckout})
-	case !seen[2]:
-		return Attribution{}, fmt.Errorf("the attribution: %w", missing{What: partPrincipal})
-	}
-	return a, nil
+// attribution is an attribution's fields: the agent is its label, which
+// none is when the agent is unlabeled.
+type attribution struct {
+	Attribution
+	label string
 }
+
+// readAttribution reads an attribution's stored form.
+var readAttribution = declare("the attribution", []field[attribution]{
+	fixedField(1, partCheckout, one, func(a *attribution) []byte { return a.Checkout[:] }),
+	{2, partPrincipal, one, func(a *attribution, r *wire.Reader) (err error) {
+		a.Principal, err = readPrincipal(r.Bytes())
+		return err
+	}},
+	{3, partAgent, optional, func(a *attribution, r *wire.Reader) error {
+		a.label = string(r.Bytes())
+		return nil
+	}},
+}, func(a *attribution, _ wire.Unknown) (Attribution, error) {
+	a.Agent = AgentFrom(a.label)
+	return a.Attribution, nil
+}).read
 
 // Wire is the principal as it is stored: its suite and its key.
 // readPrincipal reads it.
@@ -670,55 +635,42 @@ func (p PrincipalID) wire() []byte {
 	return w.Encoded()
 }
 
-// readPrincipal reads a principal's stored form.
-func readPrincipal(b []byte) (PrincipalID, error) {
-	var p PrincipalID
-	r := wire.NewReader(b)
-	seen, err := readOnce(r, map[uint32]part{1: partSuite, 2: partKey}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			suite, err := byteOf(r)
-			if err != nil {
-				return err
-			}
-			p.suite = SuiteID(suite)
-		case 2:
-			p.key = string(r.Bytes())
-		}
+// readPrincipal reads a principal's stored form: its suite and its key.
+var readPrincipal = declare("the principal", []field[PrincipalID]{
+	{1, partSuite, one, func(p *PrincipalID, r *wire.Reader) error {
+		suite, err := byteOf(r)
+		p.suite = SuiteID(suite)
+		return err
+	}},
+	{2, partKey, one, func(p *PrincipalID, r *wire.Reader) error {
+		p.key = string(r.Bytes())
 		return nil
-	})
-	switch {
-	case err != nil:
-		return PrincipalID{}, fmt.Errorf("the principal: %w", err)
-	case !seen[1]:
-		return PrincipalID{}, fmt.Errorf("the principal: %w", missing{What: partSuite})
-	}
-	return p, nil
+	}},
+}, whole).read
+
+// objectID is an object id's fields, as stored.
+type objectID struct {
+	format git.ObjectFormat
+	sum    []byte
 }
+
+// objectIDs reads what objectIDWire writes.
+var objectIDs = declare("an object id", []field[objectID]{
+	{1, partObjectFormat, one, func(o *objectID, r *wire.Reader) error {
+		f, err := byteOf(r)
+		o.format = git.ObjectFormat(f)
+		return err
+	}},
+	{2, partObjectHash, one, func(o *objectID, r *wire.Reader) error {
+		o.sum = r.Bytes()
+		return nil
+	}},
+}, func(o *objectID, _ wire.Unknown) (git.ObjectID, error) { return git.ObjectIDFrom(o.format, o.sum) })
 
 // readObjectID reads what objectIDWire writes; what names the field in a
 // refusal.
 func readObjectID(b []byte, what string) (git.ObjectID, error) {
-	var format git.ObjectFormat
-	var sum []byte
-	r := wire.NewReader(b)
-	_, err := readOnce(r, map[uint32]part{1: partObjectFormat, 2: partObjectHash}, func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			f, err := byteOf(r)
-			if err != nil {
-				return err
-			}
-			format = git.ObjectFormat(f)
-		case 2:
-			sum = r.Bytes()
-		}
-		return nil
-	})
-	if err != nil {
-		return git.ObjectID{}, fmt.Errorf("%s: %w", what, err)
-	}
-	id, err := git.ObjectIDFrom(format, sum)
+	id, err := objectIDs.read(b)
 	if err != nil {
 		return git.ObjectID{}, fmt.Errorf("%s: %w", what, err)
 	}
