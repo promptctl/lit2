@@ -7,16 +7,16 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 )
 
 // Disk is Files on disk over one directory, every file it makes in one
-// mode. Each call opens the directory's base as an os.Root and walks its
-// elements by the directory step, then reaches a file by the file step:
-// those two steps are the one enforcer of what a name may be on disk
-// `[LAW:single-enforcer]`.
+// mode. Each call opens the directory's base as an os.Root, enters each of
+// its elements by the step, then opens a file by the same step: it is the
+// one enforcer of what an entry may be on disk `[LAW:single-enforcer]`.
 type Disk struct {
 	dir  Dir
 	mode fs.FileMode
@@ -34,34 +34,41 @@ func At(d Dir) Disk { return AtMode(d, readable) }
 // through this same port.
 func AtMode(d Dir, mode fs.FileMode) Disk { return Disk{dir: d, mode: mode} }
 
-// open is d's directory, each element entered by the directory step from
-// its base. An element that does not exist is fs.ErrNotExist.
-func (d Dir) open() (*os.Root, error) {
-	return d.walk(func(*os.Root, Name) error { return nil })
-}
+// intent is what walking a Dir does about each directory on its way: an
+// opening finds it there, and a creating makes it where it is missing.
+type intent uint8
 
-// create is d's directory, its base made when missing, as the git dirs
-// and the work tree a base names are lit2's or git's own, and each
-// missing element made inside its parent before it is entered.
-func (d Dir) create() (*os.Root, error) {
-	if err := d.valid(); err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(d.base, 0o755); err != nil {
-		return nil, err
-	}
-	return d.walk(func(parent *os.Root, e Name) error {
-		if err := parent.Mkdir(e.s, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+const (
+	opening intent = iota + 1
+	creating
+)
+
+// made is what i does about the directory mkdir would make: nothing, to
+// open it, and, to create it, mkdir, the directory being there already
+// no failure.
+func (i intent) made(mkdir func() error) error {
+	switch i {
+	case opening:
+		return nil
+	case creating:
+		if err := mkdir(); err != nil && !errors.Is(err, fs.ErrExist) {
 			return err
 		}
 		return nil
-	})
+	}
+	panic(fmt.Sprintf("files: %d is no intent", i))
 }
 
-// walk opens d's base and enters each element in turn, after before has
-// prepared it in its parent.
-func (d Dir) walk(before func(parent *os.Root, e Name) error) (*os.Root, error) {
+// walk is d's directory, opened from its base, each element entered in
+// turn by the step, after do has made it in its parent if do creates. The
+// base is made by os.MkdirAll, as the git dirs and the work tree a base
+// names are lit2's or git's own. An element missing to an opening is
+// fs.ErrNotExist.
+func (d Dir) walk(do intent) (*os.Root, error) {
 	if err := d.valid(); err != nil {
+		return nil, err
+	}
+	if err := do.made(func() error { return os.MkdirAll(d.base, 0o755) }); err != nil {
 		return nil, err
 	}
 	r, err := os.OpenRoot(d.base)
@@ -69,7 +76,11 @@ func (d Dir) walk(before func(parent *os.Root, e Name) error) (*os.Root, error) 
 		return nil, err
 	}
 	for i, e := range d.elems {
-		next, err := d.enter(r, e, i, before)
+		var next *os.Root
+		err := do.made(func() error { return r.Mkdir(e.s, 0o755) })
+		if err == nil {
+			next, err = step(r, e.s, d.upTo(i+1), directory)
+		}
 		if err = errors.Join(err, r.Close()); err != nil {
 			if next != nil {
 				err = errors.Join(err, next.Close())
@@ -81,69 +92,111 @@ func (d Dir) walk(before func(parent *os.Root, e Name) error) (*os.Root, error) 
 	return r, nil
 }
 
-// enter is the directory step: element i of d, e, in parent, entered only
-// when it is a directory itself, and the directory opened is the one seen.
-// A symlink, dangling or not, or anything else not a directory is
-// NotTheDirectory.
-func (d Dir) enter(parent *os.Root, e Name, i int, before func(*os.Root, Name) error) (*os.Root, error) {
-	if err := before(parent, e); err != nil {
-		return nil, err
-	}
-	at, err := parent.Lstat(e.s)
+// Make makes d where it is missing, its base by os.MkdirAll and each
+// element inside its parent, and checks each element by the step every
+// Files call takes, holding nothing open. It is for a writer that is
+// handed a path, as git is: lit's repository is written by git
+// processes, which take a path and no descriptor, so its directory is
+// checked, then named by its path `[LAW:single-enforcer]`.
+func (d Dir) Make() error {
+	r, err := d.walk(creating)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	refused := NotTheDirectory{Path: d.upTo(i + 1)}
-	if !at.IsDir() {
-		return nil, refused
-	}
-	r, err := parent.OpenRoot(e.s)
-	if err != nil {
-		return nil, err
-	}
-	opened, err := r.Stat(".")
-	if err != nil {
-		return nil, errors.Join(err, r.Close())
-	}
-	if !os.SameFile(opened, at) {
-		return nil, errors.Join(refused, r.Close())
-	}
-	return r, nil
+	return r.Close()
 }
 
-// file is the file step: n in r opened with flag, only when it is a
-// regular file and the file opened is the one seen. O_NONBLOCK is added
-// so that no open, of a FIFO swapped in after the look, waits. Anything
-// but a regular file is NotAFile; a missing one is NotFound.
-func (o Disk) file(r *os.Root, n Name, flag int) (*os.File, error) {
-	at, err := r.Lstat(n.s)
-	if err != nil {
-		return nil, missing(n, err)
-	}
-	if err := o.regular(n, at); err != nil {
-		return nil, err
-	}
-	f, err := r.OpenFile(n.s, flag|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, missing(n, err)
-	}
-	opened, err := f.Stat()
-	if err != nil {
-		return nil, errors.Join(err, f.Close())
-	}
-	if !os.SameFile(opened, at) {
-		return nil, errors.Join(NotAFile{Path: o.dir.PathOf(n), Mode: opened.Mode()}, f.Close())
-	}
-	return f, nil
+// kind is a kind of entry the step reaches: the type its mode must be, and
+// its refusal, an R, of an entry that is not one.
+type kind[R error] struct {
+	is     func(fs.FileMode) bool
+	refuse func(path string, m fs.FileMode) R
 }
 
-// regular is nil for a regular file at n, seen without following it, and
-// NotAFile for anything else.
-func (o Disk) regular(n Name, at fs.FileInfo) error {
-	if !at.Mode().IsRegular() {
-		return NotAFile{Path: o.dir.PathOf(n), Mode: at.Mode()}
+// The two kinds of entry: a directory, and a regular file.
+var (
+	aDirectory = kind[NotTheDirectory]{
+		is:     fs.FileMode.IsDir,
+		refuse: func(path string, _ fs.FileMode) NotTheDirectory { return NotTheDirectory{Path: path} },
 	}
-	return nil
+	aFile = kind[NotAFile]{
+		is:     fs.FileMode.IsRegular,
+		refuse: func(path string, m fs.FileMode) NotAFile { return NotAFile{Path: path, Mode: m} },
+	}
+)
+
+// refusal is k's refusal of the entry at path, of mode m, and whether k
+// refuses it.
+func (k kind[R]) refusal(path string, m fs.FileMode) (R, bool) {
+	return k.refuse(path, m), !k.is(m)
+}
+
+// entry is how the step opens one kind of entry, a T, and sees what it
+// opened.
+type entry[T io.Closer, R error] struct {
+	kind[R]
+	open func(parent *os.Root, name string) (T, error)
+	stat func(T) (fs.FileInfo, error)
+}
+
+// directory is a directory, entered as an os.Root.
+var directory = entry[*os.Root, NotTheDirectory]{
+	kind: aDirectory,
+	open: (*os.Root).OpenRoot,
+	stat: func(r *os.Root) (fs.FileInfo, error) { return r.Stat(".") },
+}
+
+// file is a regular file, opened with flag and O_NONBLOCK, so that no open
+// of a FIFO swapped in after the look waits on its other end.
+func file(flag int) entry[*os.File, NotAFile] {
+	return entry[*os.File, NotAFile]{
+		kind: aFile,
+		open: func(parent *os.Root, name string) (*os.File, error) {
+			return parent.OpenFile(name, flag|syscall.O_NONBLOCK, 0)
+		},
+		stat: (*os.File).Stat,
+	}
+}
+
+// betweenLookAndOpen runs between the step's look at an entry and its
+// open, given the entry's path: nothing, but in files' own tests, a swap
+// of the entry, the race the step's checks of what it opened close.
+//
+// [LAW:no-shared-mutable-globals] exception: a seam only files' own test
+// build sets, one test at a time.
+var betweenLookAndOpen = func(string) {}
+
+// step is the one way an entry of a Dir is reached, a directory entered
+// or a file opened: the entry name in parent, at path, looked at without
+// following it and refused unless it is k's kind, so a symlink, wherever
+// it points, or anything else is never opened; then opened, and what was
+// opened refused unless it is k's kind and the very entry looked at. The
+// check of the opened kind holds where a swap reuses the looked-at
+// entry's inode number, which SameFile alone would take for the same
+// entry `[LAW:single-enforcer]`.
+func step[T io.Closer, R error](parent *os.Root, name, path string, k entry[T, R]) (T, error) {
+	var none T
+	at, err := parent.Lstat(name)
+	if err != nil {
+		return none, err
+	}
+	if r, refused := k.refusal(path, at.Mode()); refused {
+		return none, r
+	}
+	betweenLookAndOpen(path)
+	h, err := k.open(parent, name)
+	if err != nil {
+		return none, err
+	}
+	opened, err := k.stat(h)
+	if err != nil {
+		return none, errors.Join(err, h.Close())
+	}
+	r, refused := k.refusal(path, opened.Mode())
+	if refused || !os.SameFile(opened, at) {
+		return none, errors.Join(r, h.Close())
+	}
+	return h, nil
 }
 
 // missing is err as NotFound when it says the file, or a directory on its
@@ -155,20 +208,20 @@ func missing(n Name, err error) error {
 	return err
 }
 
-// with runs do on n's file, opened by the file step with flag in the
+// with runs do on n's file, opened by the step with flag in the
 // directory, and closes both.
 func (o Disk) with(n Name, flag int, do func(*os.File) error) (err error) {
 	if err := n.valid(); err != nil {
 		return err
 	}
-	r, err := o.dir.open()
+	r, err := o.dir.walk(opening)
 	if err != nil {
 		return missing(n, err)
 	}
 	defer func() { err = errors.Join(err, r.Close()) }()
-	f, err := o.file(r, n, flag)
+	f, err := step(r, n.s, o.dir.PathOf(n), file(flag))
 	if err != nil {
-		return err
+		return missing(n, err)
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
 	return do(f)
@@ -193,9 +246,17 @@ func (o Disk) Append(n Name, b []byte) (end uint64, err error) {
 
 func (o Disk) ReadAt(n Name, off, size uint64) (b []byte, err error) {
 	err = o.with(n, os.O_RDONLY, func(f *os.File) error {
-		// a section past math.MaxInt64 ends there, so any size reads to
-		// the end of the file
+		// no offset or size past math.MaxInt64, which a section reader
+		// cannot hold, names a byte of a file
 		b, err = io.ReadAll(io.NewSectionReader(f, int64(min(off, math.MaxInt64)), int64(min(size, math.MaxInt64))))
+		return err
+	})
+	return b, err
+}
+
+func (o Disk) ReadAll(n Name) (b []byte, err error) {
+	err = o.with(n, os.O_RDONLY, func(f *os.File) error {
+		b, err = io.ReadAll(f)
 		return err
 	})
 	return b, err
@@ -216,7 +277,7 @@ func (o Disk) CreateOnce(n Name, b []byte) (made Made, err error) {
 	if err := n.valid(); err != nil {
 		return 0, err
 	}
-	r, err := o.dir.create()
+	r, err := o.dir.walk(creating)
 	if err != nil {
 		return 0, err
 	}
@@ -232,8 +293,8 @@ func (o Disk) CreateOnce(n Name, b []byte) (made Made, err error) {
 		if err != nil {
 			return 0, err
 		}
-		if err := o.regular(n, at); err != nil {
-			return 0, err
+		if r, refused := aFile.refusal(o.dir.PathOf(n), at.Mode()); refused {
+			return 0, r
 		}
 		return Existing, nil
 	}
@@ -281,30 +342,42 @@ func (o Disk) temp(r *os.Root, n Name, b []byte) (string, error) {
 	}
 }
 
-func (o Disk) List() (ns []Name, err error) {
-	r, err := o.dir.open()
+func (o Disk) List() (l Listing, err error) {
+	l = Listing{Names: []Name{}, Refused: []Refused{}}
+	r, err := o.dir.walk(opening)
 	if errors.Is(err, fs.ErrNotExist) {
-		return []Name{}, nil // nothing is created by a read: no directory yet holds no file
+		return l, nil // nothing is created by a read: no directory yet holds no file
 	}
 	if err != nil {
-		return nil, err
+		return Listing{}, err
 	}
 	defer func() { err = errors.Join(err, r.Close()) }()
 	d, err := r.Open(".")
 	if err != nil {
-		return nil, err
+		return Listing{}, err
 	}
 	defer func() { err = errors.Join(err, d.Close()) }()
 	entries, err := d.ReadDir(-1)
 	if err != nil {
-		return nil, err
+		return Listing{}, err
 	}
-	ns = []Name{}
 	for _, e := range entries {
-		if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), tempPrefix) {
-			ns = append(ns, Name{s: e.Name()})
+		if strings.HasPrefix(e.Name(), tempPrefix) {
+			continue // a create-once's temporary file, which no Name can be
 		}
+		path := filepath.Join(o.dir.Path(), e.Name())
+		n, err := NameOf(e.Name())
+		if err != nil {
+			l.Refused = append(l.Refused, Refused{Name: e.Name(), Why: fmt.Errorf("%s: %w", path, err)})
+			continue
+		}
+		// the entry's type as the directory holds it, not following a link
+		if r, refused := aFile.refusal(path, e.Type()); refused {
+			l.Refused = append(l.Refused, Refused{Name: e.Name(), Why: r})
+			continue
+		}
+		l.Names = append(l.Names, n)
 	}
-	slices.SortFunc(ns, func(a, b Name) int { return strings.Compare(a.s, b.s) })
-	return ns, nil
+	slices.SortFunc(l.Names, func(a, b Name) int { return strings.Compare(a.s, b.s) })
+	return l, nil
 }

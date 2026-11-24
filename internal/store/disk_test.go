@@ -355,3 +355,69 @@ func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 		t.Errorf("the ref is %v, readable as %v; want readable as git's object file, %v", ref.Mode().Perm(), got, want)
 	}
 }
+
+// An entry of the logs' directory that is no log's file, a link, a
+// directory or a name no file has, is one unreadable log each, said by its
+// name and why, hiding no other.
+func TestAnEntryOfTheLogsThatIsNoFileIsAnUnreadableLog(t *testing.T) {
+	c := gittest.Clone(t)
+	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(9)), store.DefaultSegmentBound)
+	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "a")...)
+	logs := store.LogDir(c).Path()
+	if err := os.Symlink(store.LogName(ida).String(), filepath.Join(logs, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(logs, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logs, `back\slash`), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h, err := s.Heads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]func(error) bool{
+		`back\slash`: func(err error) bool { return errors.Is(err, files.ErrNotAName) },
+		"dir": func(err error) bool {
+			var n files.NotAFile
+			return errors.As(err, &n) && n.Mode.IsDir()
+		},
+		"link": func(err error) bool {
+			var n files.NotAFile
+			return errors.As(err, &n) && n.Mode.Type() == fs.ModeSymlink
+		},
+	}
+	if len(h.Unreadable) != len(want) {
+		t.Errorf("the heads' unreadable are %+v; want the link, the directory and the backslash", h.Unreadable)
+	}
+	for _, u := range h.Unreadable {
+		if is, ok := want[u.Name]; !ok || !is(u.Why) {
+			t.Errorf("%s is unreadable for %v; want each of the link, the directory and the backslash unreadable for what it is", u.Name, u.Why)
+		}
+	}
+	if len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: ida}) || h.LogsRead != 4 {
+		t.Errorf("the heads are %+v; want a's stream, read from its log, beside them, and 4 logs read", h)
+	}
+}
+
+// A store directory that is a link is not the clone's: lit's repository's
+// first write is refused, as the logs are, and nothing is written where
+// the link points.
+func TestAStoreDirThatIsALinkIsRefusedForTheRepository(t *testing.T) {
+	c := gittest.Clone(t)
+	at, elsewhere := store.StoreDir(c).Path(), t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, at); err != nil {
+		t.Fatal(err)
+	}
+	objects, _ := store.RepositoryOf(store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(10)))
+	if _, err := objects.PutBlobs([][]byte{[]byte("x")}); !errors.As(err, new(files.NotTheDirectory)) {
+		t.Errorf("the repository's first write through a linked store directory failed with %v; want NotTheDirectory", err)
+	}
+	if es, err := os.ReadDir(elsewhere); err != nil || len(es) != 0 {
+		t.Errorf("the link's target holds %v, %v; want nothing", es, err)
+	}
+}

@@ -37,8 +37,7 @@ func enrolledOnly(t *testing.T) session {
 // pins names e the founding of the session's clone.
 func (s session) pins(e events.EventID) {
 	s.t.Helper()
-	shared, _ := s.twin.Process.IdentityFiles(git.Checkout{})
-	if _, err := pin(shared, e); err != nil {
+	if _, err := pin(s.twin.Process.Pin(git.Checkout{}), e); err != nil {
 		s.t.Fatal(err)
 	}
 }

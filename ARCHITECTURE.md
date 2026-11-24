@@ -160,7 +160,9 @@ The decisions the layout needed and the design documents did not make.
   turn, and must be the real directory at its name, never a symlink; a
   file's name is one path element, and the file must be a regular file. So
   no port reaches another's files. Only the store opens `log/`. `repo/` is
-  git's, opened by its path, and on no port.
+  git's, opened by its path, and on no port: git takes paths, so before
+  each write the directories `repo/` is in are checked by the ports' own
+  step, then named by their path.
 - **D12 Command log** `$XDG_STATE_HOME/lit/commands/<UTC date>.jsonl`
   (`~/.local/state` when unset): one line per invocation in one `O_APPEND`
   write, per machine; every write removes day files older than 30 days.

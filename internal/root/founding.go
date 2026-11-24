@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
@@ -14,11 +13,11 @@ import (
 )
 
 // A store's founding is named by the clone, never by the events, which any
-// writer can mint to sort first (§3.17): the pin, in the clone's shared dir
-// beside its key, seeds every fold of its store, and is written once, by
-// the init that founds the store or adopts the committed FoundingFile. No
-// command moves it: a clone joins another store only when a person removes
-// the pin.
+// writer can mint to sort first (§3.17): the pin, in the clone's shared
+// dir, seeds every fold of its store, and is written once, by the init
+// that founds the store or adopts the committed FoundingFile. No command
+// moves it: a clone joins another store only when a person removes the
+// pin.
 var (
 	pinFile      = files.MustName("founding")
 	foundingFile = files.MustName("founding")
@@ -31,16 +30,21 @@ func FoundingFile() files.Name { return foundingFile }
 // message names it.
 func foundingPath() string { return verbs.LitPath(foundingFile) }
 
-// pinPath is the pin's path in c, as a failure names it: in the shared
-// dir, beside the principal's key.
-func pinPath(c git.Checkout) string {
-	return command.DirOf(command.PrincipalFile{}, c).PathOf(pinFile)
-}
+// pinDir is the directory of c's pin: the clone's shared dir, which every
+// worktree of the clone reads, so one pin seeds every fold of its store.
+// It is the pin's own, whatever directory the principal's key is in.
+func pinDir(c git.Checkout) files.Dir { return c.Shared() }
 
-// pinned is the founding the clone's pin names, NoFounding before init
-// writes one.
-func pinned(shared files.Files) (fold.Founding, error) {
-	id, err := read(shared, pinFile, events.ReadEventIDFile)
+// pinFiles is the files of c's pin on disk, a port of its own.
+func pinFiles(c git.Checkout) files.Files { return files.At(pinDir(c)) }
+
+// pinPath is the pin's path in c, as a failure names it.
+func pinPath(c git.Checkout) string { return pinDir(c).PathOf(pinFile) }
+
+// pinned is the founding the clone's pin, in pins, names, NoFounding
+// before init writes one.
+func pinned(pins files.Files) (fold.Founding, error) {
+	id, err := read(pins, pinFile, events.ReadEventIDFile)
 	var none files.NotFound
 	switch {
 	case errors.As(err, &none):
@@ -53,11 +57,11 @@ func pinned(shared files.Files) (fold.Founding, error) {
 
 // pin names e the clone's founding unless a pin exists, and reads it
 // back, so a race to pin seeds every fold with the winner's.
-func pin(shared files.Files, e events.EventID) (fold.FoundedBy, error) {
-	if _, err := shared.CreateOnce(pinFile, e.FileText()); err != nil {
+func pin(pins files.Files, e events.EventID) (fold.FoundedBy, error) {
+	if _, err := pins.CreateOnce(pinFile, e.FileText()); err != nil {
 		return fold.FoundedBy{}, storeFailure{err: fmt.Errorf("writing the founding pin: %w", err)}
 	}
-	f, err := pinned(shared)
+	f, err := pinned(pins)
 	if err != nil {
 		return fold.FoundedBy{}, err
 	}
@@ -70,8 +74,8 @@ func pin(shared files.Files, e events.EventID) (fold.FoundedBy, error) {
 
 // adopt pins the founding FoundingFile in tree names, when the clone pins
 // none: a clone adopts the committed founding once.
-func adopt(shared, tree files.Files) error {
-	f, err := pinned(shared)
+func adopt(pins, tree files.Files) error {
+	f, err := pinned(pins)
 	if err != nil {
 		return err
 	}
@@ -83,7 +87,7 @@ func adopt(shared, tree files.Files) error {
 		return err
 	}
 	if n, names := named.(fold.FoundedBy); names {
-		_, err = pin(shared, n.Enrollment)
+		_, err = pin(pins, n.Enrollment)
 	}
 	return err
 }

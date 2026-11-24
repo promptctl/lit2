@@ -57,6 +57,7 @@ func Main(args []string) int {
 		Reader:        reader,
 		Commands:      commandLog(),
 		IdentityFiles: identityFiles,
+		Pin:           pinFiles,
 		In:            os.Stdin,
 		Out:           os.Stdout,
 		Err:           os.Stderr,

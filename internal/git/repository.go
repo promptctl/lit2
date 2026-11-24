@@ -19,6 +19,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 	none "github.com/go-git/go-git/v5/storage/memory"
+
+	"github.com/promptctl/lit2/internal/files"
 )
 
 // Repository is lit's own object database on disk: a bare git repository
@@ -31,14 +33,17 @@ import (
 // nothing.
 type Repository struct{ repo }
 
-// RepositoryAt is lit's repository at dir, which need not exist yet,
-// written by g.
-func (g *Git) RepositoryAt(dir string) Repository {
-	return Repository{repo{b: &onDisk{g: g, dir: dir}}}
+// RepositoryAt is lit's repository, name in the directory in, neither of
+// which need exist yet, written by g.
+func (g *Git) RepositoryAt(in files.Dir, name files.Name) Repository {
+	return Repository{repo{b: &onDisk{g: g, in: in, dir: in.PathOf(name)}}}
 }
 
 type onDisk struct {
-	g   *Git
+	g *Git
+	// in is the directory the repository is in, checked before every
+	// write, and dir the repository's path in it
+	in  files.Dir
 	dir string
 	// mu guards db, the go-git storage every read shares, opened once the
 	// repository exists, and packs, when its pack directory last changed as
@@ -75,11 +80,7 @@ func (d *onDisk) create() error {
 	if err != nil || exists {
 		return err
 	}
-	parent := filepath.Dir(d.dir)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.MkdirTemp(parent, ".repo-")
+	tmp, err := os.MkdirTemp(d.in.Path(), ".repo-")
 	if err != nil {
 		return err
 	}
@@ -264,7 +265,7 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 	if err := d.writable(); err != nil {
 		return nil, err
 	}
-	tmp, err := os.MkdirTemp(filepath.Dir(d.dir), ".objects-")
+	tmp, err := os.MkdirTemp(d.in.Path(), ".objects-")
 	if err != nil {
 		return nil, err
 	}
@@ -300,13 +301,26 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 	return ids, nil
 }
 
-// writable creates the repository if it is not yet, under a git that
-// keeps it durable.
+// writable creates the repository if it is not yet, where a write may
+// go, under a git that keeps it durable.
 func (d *onDisk) writable() error {
-	if err := d.g.durable(); err != nil {
+	if err := d.writer(); err != nil {
 		return err
 	}
 	return d.create()
+}
+
+// writer is nil when a git may write the repository: one that keeps it
+// durable, and the directory it is in made where missing and each element
+// of it the directory itself, so a symlinked store/ is refused as it is
+// for the logs. git is handed paths, not descriptors, so the directory is
+// checked, then named by its path: the files port's own check, in the one
+// place every write starts `[LAW:single-enforcer]`.
+func (d *onDisk) writer() error {
+	if err := d.g.durable(); err != nil {
+		return err
+	}
+	return d.in.Make()
 }
 
 // list is every ref under prefix, each name read by go-git on its own, so
@@ -437,7 +451,7 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	default:
 		panic(fmt.Sprintf("git: %T is not what a ref was", from))
 	}
-	if err := d.g.durable(); err != nil {
+	if err := d.writer(); err != nil {
 		return err
 	}
 	_, err := d.git(d.dir, nil, "update-ref", string(name), to.String(), old)

@@ -15,8 +15,7 @@ import (
 // FoundingFile names.
 func (s session) founding() (pin, named fold.Founding) {
 	s.t.Helper()
-	shared, _ := s.twin.Process.IdentityFiles(git.Checkout{})
-	return must(pinned(shared)), must(foundingFileIn(s.twin.Process.WorkTree(git.Checkout{})))
+	return must(pinned(s.twin.Process.Pin(git.Checkout{}))), must(foundingFileIn(s.twin.Process.WorkTree(git.Checkout{})))
 }
 
 func TestInitFoundsTheStoreAndNamesItsFoundingToCommit(t *testing.T) {

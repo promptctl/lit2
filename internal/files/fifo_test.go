@@ -3,6 +3,7 @@
 package files_test
 
 import (
+	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -32,5 +33,38 @@ func TestAFIFOAtANameIsRefusedAtOnce(t *testing.T) {
 		notAFile(t, "Size of a FIFO", errs[1])
 	case <-time.After(10 * time.Second):
 		t.Fatal("a read of a FIFO at a name had not returned after 10s; want it refused at once")
+	}
+}
+
+// A file swapped for a FIFO after its look is refused, and its open
+// returns at once: O_NONBLOCK keeps it from waiting on a writer that never
+// comes.
+func TestAFileSwappedForAFIFOIsRefusedAtOnce(t *testing.T) {
+	base := t.TempDir()
+	at := filepath.Join(base, dir.String(), a.String())
+	mkdir(t, filepath.Dir(at))
+	write(t, at, "a")
+	files.BetweenLookAndOpen(t, func(p string) {
+		if p != at {
+			return
+		}
+		if err := os.Remove(at); err != nil {
+			t.Error(err)
+		}
+		if err := syscall.Mkfifo(at, 0o644); err != nil {
+			t.Error(err)
+		}
+	})
+	f := files.At(files.DirAt(base, dir))
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.ReadAt(a, 0, 100)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		notAFile(t, "ReadAt of a file swapped for a FIFO", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("a read of a file swapped for a FIFO had not returned after 10s; want it refused at once")
 	}
 }

@@ -28,8 +28,7 @@ func three(t *testing.T, twin Twin, seed byte) {
 		t.Fatal(err)
 	}
 	create := events.CreateItem{Payload: events.ItemCreate{Place: events.AtLevel{Level: level}}}
-	shared, _ := twin.Process.IdentityFiles(git.Checkout{})
-	founding, err := pinned(shared)
+	founding, err := pinned(twin.Process.Pin(git.Checkout{}))
 	if err != nil {
 		t.Fatal(err)
 	}

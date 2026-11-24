@@ -124,7 +124,7 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 	tree, code := files.NewMemory(), &git.CodeMemory{}
 	// the twin is minted: its identity files hold its id and key, so init
 	// finds them there
-	shared, private := files.NewMemory(), files.NewMemory()
+	shared, private, pins := files.NewMemory(), files.NewMemory(), files.NewMemory()
 	if _, err := private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()); err != nil {
 		panic(err)
 	}
@@ -146,6 +146,7 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 			Reader:        twinReader(),
 			Commands:      commands,
 			IdentityFiles: func(git.Checkout) (files.Files, files.Files) { return shared, private },
+			Pin:           func(git.Checkout) files.Files { return pins },
 			In:            strings.NewReader(""),
 			Out:           out,
 			Err:           errOut,

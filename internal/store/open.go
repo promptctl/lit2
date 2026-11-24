@@ -30,7 +30,7 @@ type Ports struct {
 // ports.
 func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader) Ports {
 	l := locate(at)
-	repo := g.RepositoryAt(l.repo)
+	repo := g.RepositoryAt(l.store, repoDir)
 	return Ports{files: files.At(l.logs), objects: repo, refs: repo, entropy: entropy}
 }
 
@@ -50,9 +50,17 @@ type Store struct {
 	bound SegmentBound
 }
 
+// ErrNoPorts is a Ports neither DiskPorts nor MemoryPorts made, which
+// holds no store.
+var ErrNoPorts = errors.New("no store's ports: Ports are made by DiskPorts or MemoryPorts")
+
 // Open is the store over p for the checkout me, sealing segments within
-// bound. It performs no I/O.
+// bound. It performs no I/O. Ports no constructor made are a bug, so they
+// panic `[LAW:parse-dont-validate]`.
 func Open(me CheckoutID, p Ports, bound SegmentBound) *Store {
+	if p.files == nil {
+		panic(fmt.Errorf("store: opening a store: %w", ErrNoPorts))
+	}
 	return &Store{me: me, ports: p, bound: bound}
 }
 
@@ -142,8 +150,9 @@ func (logFile) source()   {}
 func (published) source() {}
 
 // Unreadable is a ref or a log that is not a stream: a ref name ParseRef
-// refuses, a ref naming objects that are missing or not lit's, or a log whose header does not read. Name is the ref name or the log's
-// name.
+// refuses, a ref naming objects that are missing or not lit's, a log
+// whose header does not read, or an entry of the logs' directory that is
+// no file of it. Name is the ref name, or the log's or entry's name.
 type Unreadable struct {
 	Name string
 	Why  error
@@ -173,10 +182,15 @@ func (s *Store) Heads() (Heads, error) {
 	if err != nil {
 		return Heads{}, err
 	}
-	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs)}
+	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs.Names) + len(logs.Refused)}
 	unreadable := func(name string, why error) { h.Unreadable = append(h.Unreadable, Unreadable{Name: name, Why: why}) }
+	// an entry of the logs' directory that is no file is a log that will
+	// not read, said as one whose header will not
+	for _, r := range logs.Refused {
+		unreadable(r.Name, r)
+	}
 	local := map[Ref]bool{}
-	for _, n := range logs {
+	for _, n := range logs.Names {
 		st, err := s.logStream(n)
 		if err != nil {
 			unreadable(n.String(), err)

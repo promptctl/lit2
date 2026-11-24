@@ -10,7 +10,13 @@ import (
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
+	"github.com/promptctl/lit2/internal/panics"
 )
+
+// Ports no constructor made are no store: opening one is a bug.
+func TestOpeningNoPortsIsABug(t *testing.T) {
+	panics.With(t, ErrNoPorts, func() { Open(CheckoutID{0xa}, Ports{}, DefaultSegmentBound) })
+}
 
 func TestACheckoutIDHasOneSpelling(t *testing.T) {
 	const s = "7a1e0f7b112d4c889e015a6b3c2f4099"

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"math"
 
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
@@ -16,8 +15,7 @@ import (
 
 // identityFiles is c's two identity directories on disk, each a port of
 // its own, each file 0600: the principal's key is a secret, and the
-// checkout id is no one else's. The shared one also holds the founding
-// pin, which decides the store every fold of the clone reads.
+// checkout id is no one else's.
 func identityFiles(c git.Checkout) (shared, private files.Files) {
 	return files.AtMode(command.DirOf(command.PrincipalFile{}, c), identityMode), files.AtMode(command.DirOf(command.IDFile{}, c), identityMode)
 }
@@ -84,9 +82,9 @@ func readIdentity(shared, private files.Files) command.Identity {
 	return command.Minted{Checkout: id, Key: key}
 }
 
-// read parses the whole file n in fs, read in one call to its end.
+// read parses the whole file n in fs.
 func read[T any](fs files.Files, n files.Name, parse func([]byte) (T, error)) (T, error) {
-	b, err := fs.ReadAt(n, 0, math.MaxUint64)
+	b, err := fs.ReadAll(n)
 	if err != nil {
 		var none T
 		return none, err

@@ -61,8 +61,13 @@ func (n Name) valid() error {
 	return nil
 }
 
-// ErrNoDir is a Dir no constructor made: no base, or no directory in it.
-var ErrNoDir = errors.New("no directory: a Dir is made by DirAt")
+// ErrNoDir is the zero Dir, which names no directory.
+var ErrNoDir = errors.New("the zero Dir, which names no directory: a Dir is made by DirAt")
+
+// ErrNotABase is a base given DirAt that is not an absolute path. A base
+// is a directory lit2 or git knows, so one that is empty or relative to
+// whatever the working directory is is a bug.
+var ErrNotABase = errors.New("not an absolute path to start a Dir from")
 
 // Dir is a directory a Files is over: a base lit2 or git knows, trusted,
 // and the elements under it, each a directory checked in turn from the
@@ -73,8 +78,14 @@ type Dir struct {
 	elems []Name
 }
 
-// DirAt is the directory first in base.
-func DirAt(base string, first Name) Dir { return Dir{base: base, elems: []Name{first}} }
+// DirAt is the directory first in base, which must be absolute; a base
+// that is not is a bug, so it panics `[LAW:parse-dont-validate]`.
+func DirAt(base string, first Name) Dir {
+	if !filepath.IsAbs(base) {
+		panic(fmt.Errorf("files: DirAt(%q): %w", base, ErrNotABase))
+	}
+	return Dir{base: base, elems: []Name{first}}
+}
 
 // Sub is the directory n in d.
 func (d Dir) Sub(n Name) Dir {
@@ -96,10 +107,11 @@ func (d Dir) upTo(i int) string {
 	return filepath.Join(parts...)
 }
 
-// valid refuses a Dir no constructor made, and one with a zero element.
+// valid refuses the zero Dir, the one Dir DirAt never makes, and one with
+// a zero element.
 func (d Dir) valid() error {
-	if d.base == "" || len(d.elems) == 0 {
-		return fmt.Errorf("base %q, %d elements: %w", d.base, len(d.elems), ErrNoDir)
+	if d.base == "" {
+		return ErrNoDir
 	}
 	for _, e := range d.elems {
 		if err := e.valid(); err != nil {
@@ -128,11 +140,34 @@ type Files interface {
 	CreateOnce(n Name, b []byte) (Made, error)
 	// ReadAt reads up to size bytes at off, fewer at the end of the file.
 	ReadAt(n Name, off, size uint64) ([]byte, error)
+	// ReadAll reads the whole file, in one open to its end.
+	ReadAll(n Name) ([]byte, error)
 	Size(n Name) (uint64, error)
-	// List is the files of the directory, sorted; a missing directory
-	// holds none.
-	List() ([]Name, error)
+	// List is the files of the directory, sorted, and every other entry in
+	// it but a create-once's temporary files, each refused; a missing
+	// directory holds none.
+	List() (Listing, error)
 }
+
+// Listing is a directory's entries: its files, sorted, and each entry that
+// is no file of the port, refused, so an entry that should have been a
+// file is said, never dropped `[LAW:no-silent-failure]`.
+type Listing struct {
+	Names   []Name
+	Refused []Refused
+}
+
+// Refused is an entry of a directory that is no file of the port: its
+// name as the directory holds it, and why, a NotAFile, or its path and
+// NameOf's refusal of the name, ErrNotAName.
+type Refused struct {
+	Name string
+	Why  error
+}
+
+func (r Refused) Error() string { return r.Why.Error() }
+
+func (r Refused) Unwrap() error { return r.Why }
 
 // Made is the outcome of a create-once: the file was created, or found
 // there already.

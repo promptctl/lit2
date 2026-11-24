@@ -166,7 +166,7 @@ func (o opened) judged(drafts []events.Draft, ref git.ObjectID, said string) cli
 // appends the frame and names the enrollment in FoundingFile, then says
 // said. The pin comes first: a frame that loses the race to pin is never
 // written, since every replica would carry it `[LAW:single-enforcer]`.
-func (o opened) found(shared, tree files.Files, drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
+func (o opened) found(pins, tree files.Files, drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
 	m, err := o.mint(drafts, ref)
 	if err != nil {
 		return failed(err)
@@ -176,7 +176,7 @@ func (o opened) found(shared, tree files.Files, drafts []events.Draft, ref git.O
 	if refused {
 		return out
 	}
-	won, err := pin(shared, founding.Enrollment)
+	won, err := pin(pins, founding.Enrollment)
 	if err != nil {
 		return failed(err)
 	}
@@ -265,7 +265,8 @@ func (r body) init() cli.Outcome {
 		return cli.Failed{Failure: storeFailure{err: opening.(command.Unopened).Why}}
 	}
 	tree := r.p.WorkTree(in.Checkout)
-	if err := adopt(shared, tree); err != nil {
+	pins := r.p.Pin(in.Checkout)
+	if err := adopt(pins, tree); err != nil {
 		return failed(err)
 	}
 	o, err := r.openAs(so, in.Checkout, minted)
@@ -332,7 +333,7 @@ func (r body) init() cli.Outcome {
 		ref = git.HashBlob(in.Checkout.Format, assets.DefaultWorkspace.Bytes())
 	}
 	if founds {
-		return o.found(shared, tree, drafts, ref, said)
+		return o.found(pins, tree, drafts, ref, said)
 	}
 	return o.judged(drafts, ref, said)
 }

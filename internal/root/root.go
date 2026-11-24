@@ -52,10 +52,13 @@ type Process struct {
 	Reader   config.ReaderVersion
 	Commands command.Sink
 	// IdentityFiles is a checkout's two identity directories, which admin
-	// init mints into: the clone's shared one also holds its founding pin.
+	// init mints into.
 	IdentityFiles func(git.Checkout) (shared, private files.Files)
-	In            io.Reader
-	Out, Err      io.Writer
+	// Pin is the files of a checkout's clone's founding pin, which admin
+	// init writes once and every fold of the clone is seeded by.
+	Pin      func(git.Checkout) files.Files
+	In       io.Reader
+	Out, Err io.Writer
 }
 
 // Run runs one invocation: it mints the trace id, records the store's

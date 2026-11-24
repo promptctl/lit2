@@ -93,9 +93,10 @@ func (OnDisk) file()         {}
 func (NoFile) file()         {}
 func (UnreadableFile) file() {}
 
-// The work tree's .lit directory and the workspace file in it. A path of
-// either, in the work tree or in the code repository's tree, is derived
-// from these, never written out `[LAW:one-source-of-truth]`.
+// The work tree's .lit directory and the workspace file in it. lit2's own
+// code derives a path of either, in the work tree or in the code
+// repository's tree, from these, and never writes one out
+// `[LAW:one-source-of-truth]`.
 var (
 	litDir        = files.MustName(".lit")
 	workspaceFile = files.MustName("workspace.toml")
