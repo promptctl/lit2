@@ -77,8 +77,12 @@ func TestWorkThatPanicsBeforeAskingIsUnparsed(t *testing.T) {
 	e := Record(&FixedClock{At: t0}, noGit, inv, func(time.Time, Recorder) cli.Outcome {
 		panic("the parse broke")
 	})
-	if e.Command.Name != cli.Unparsed || cli.ExitCode(e.Outcome) != 70 {
-		t.Errorf("a panic before asked recorded %#v, exit %d; want unparsed, exit 70", e.Command, cli.ExitCode(e.Outcome))
+	failed, ok := e.Outcome.(cli.Failed)
+	if !ok {
+		t.Fatalf("a panic before asked ended %#v; want Failed", e.Outcome)
+	}
+	if _, internal := failed.Failure.(Internal); !internal || e.Command.Name != cli.Unparsed || cli.ExitCode(e.Outcome) != 70 {
+		t.Errorf("a panic before asked recorded %#v as %#v, exit %d; want unparsed, Internal, exit 70", e.Command, failed.Failure, cli.ExitCode(e.Outcome))
 	}
 }
 

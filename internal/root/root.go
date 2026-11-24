@@ -139,6 +139,7 @@ func written(_ int, err error) cli.Outcome {
 type output struct{ err error }
 
 func (o output) Error() string     { return "writing the answer to stdout: " + o.err.Error() }
+func (o output) Unwrap() error     { return o.err }
 func (output) Class() reason.Class { return reason.ClassEnvironment }
 func (output) Reason() string      { return "output" }
 
@@ -166,5 +167,8 @@ func logFailure(err error) string {
 // notBuilt ends a row whose body is not in this binary yet (D14). Once the
 // last body is bound it is unused, and the lint forces its deletion.
 func notBuilt(verb string) cli.Outcome {
-	return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("lit2 %s is not built in this binary", verb)}}
+	return cli.Failed{Failure: command.Internal{Err: fmt.Errorf("lit2 %s %w", verb, errNotBuilt)}}
 }
+
+// errNotBuilt is a row whose body this binary does not hold.
+var errNotBuilt = errors.New("is not built in this binary")

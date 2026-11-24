@@ -2,6 +2,7 @@ package events
 
 import (
 	"bytes"
+	"errors"
 	"math/rand/v2"
 	"reflect"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/lit2/internal/events/wire"
+	"github.com/promptctl/lit2/internal/panics"
 	"github.com/promptctl/lit2/internal/store"
 )
 
@@ -118,6 +120,8 @@ func TestAChangedHeaderPrincipalOrSuiteFailsTheSignature(t *testing.T) {
 			if v := suites.Check(d.Header().Attribution().Principal, d.SignedBytes(), d.Signature()); v == Valid {
 				t.Errorf("header byte %d changed, the signature still holds", i)
 			}
+		default:
+			t.Fatalf("header byte %d changed decodes as %#v, neither an event nor malformed", i, d)
 		}
 	}
 	if v := suites.Check(keyOf(2).Principal(), e.SignedBytes(), e.Signature()); v != Invalid {
@@ -129,7 +133,25 @@ func TestAChangedHeaderPrincipalOrSuiteFailsTheSignature(t *testing.T) {
 	if v := NewSuites().Check(k.Principal(), e.SignedBytes(), e.Signature()); v != UnknownSuite {
 		t.Errorf("with no suites the check is %s; want unknown_suite", v)
 	}
+	// a second suite that accepts what Ed25519 accepts: a signature claiming
+	// it under an Ed25519 principal is invalid, since a signature's suite is
+	// its principal's, and the twin's own principal is the control that holds
+	both := NewSuites(Ed25519(), twin{})
+	claimed := Signature{Suite: twin{}.ID(), Bytes: e.Signature().Bytes}
+	if v := both.Check(PrincipalID{suite: twin{}.ID(), key: k.Principal().key}, e.SignedBytes(), claimed); v != Valid {
+		t.Fatalf("the twin suite's own principal checks %s; the control must be valid", v)
+	}
+	if v := both.Check(k.Principal(), e.SignedBytes(), claimed); v != Invalid {
+		t.Errorf("a signature of another suite under an Ed25519 principal checks %s; want invalid", v)
+	}
 }
+
+// twin is a second suite that verifies as Ed25519 does, so only the suite a
+// signature names sets it apart.
+type twin struct{}
+
+func (twin) ID() SuiteID                          { return SuiteEd25519 + 1 }
+func (twin) Verify(key, message, sig []byte) bool { return Ed25519().Verify(key, message, sig) }
 
 func TestANewerRecordKeepsTheFieldsThisBinaryDoesNotKnow(t *testing.T) {
 	k := keyOf(1)
@@ -250,27 +272,55 @@ func TestARewrittenPayloadKeepsTheSignatureTheIDAndTheName(t *testing.T) {
 func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 	k := keyOf(1)
 	e := mint(t, context(1, Frontier{}, Known{}), k, 1, Act{About: Root{}, Payload: note{Text: text("x")}}).Events[0]
-	for name, header := range map[string][]byte{
-		"no config-ref":                edited(e.raw, headerConfigRef, none),
-		"no policy version":            edited(e.raw, headerPolicy, none),
-		"no causal position":           edited(e.raw, headerPosition, none),
-		"no payload hash":              edited(e.raw, headerPayloadHash, none),
-		"policy version 0":             edited(e.raw, headerPolicy, func(w *wire.Writer) { w.Uvarint(headerPolicy, 0) }),
-		"causal position 0":            edited(e.raw, headerPosition, func(w *wire.Writer) { w.Uvarint(headerPosition, 0) }),
-		"recorded-at 0":                edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 0) }),
-		"recorded-at past int64":       edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 1<<63) }),
-		"a root that names an element": edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(2, "abc")) }),
-		"a subject that is no item id": edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(1, "not an id")) }),
-		"bytes that are no message":    {0xff, 0xff},
+	// the control: the minted header, re-signed, decodes as its event
+	decoded(t, here, recordOf(e.raw, k.Signer().Sign(signed(e.raw)), bodyWire(t, e)))
+	noMessage := []byte{0xff, 0xff}
+	for name, c := range map[string]struct {
+		header []byte
+		want   error
+	}{
+		"no config-ref":                {edited(e.raw, headerConfigRef, none), errMissing},
+		"no policy version":            {edited(e.raw, headerPolicy, none), errMissing},
+		"no causal position":           {edited(e.raw, headerPosition, none), errMissing},
+		"no payload hash":              {edited(e.raw, headerPayloadHash, none), errMissing},
+		"policy version 0":             {edited(e.raw, headerPolicy, func(w *wire.Writer) { w.Uvarint(headerPolicy, 0) }), errZeroField},
+		"causal position 0":            {edited(e.raw, headerPosition, func(w *wire.Writer) { w.Uvarint(headerPosition, 0) }), errZeroField},
+		"recorded-at 0":                {edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 0) }), errNotATime},
+		"recorded-at past int64":       {edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 1<<63) }), errNotATime},
+		"a root that names an element": {edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(2, "abc")) }), errRootNamesPart},
+		"a subject that is no item id": {edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(1, "not an id")) }), errSize},
+		"bytes that are no message":    {noMessage, wireRefusal(t, noMessage)},
 	} {
-		got := Decode(here, recordOf(header, k.Signer().Sign(signed(header)), bodyWire(t, e)))
+		if _, err := readHeader(c.header); !errors.Is(err, c.want) {
+			t.Errorf("a header with %s reads with %v; want %v", name, err, c.want)
+		}
+		got := Decode(here, recordOf(c.header, k.Signer().Sign(signed(c.header)), bodyWire(t, e)))
 		if d, ok := got.(Malformed); !ok || d.Why == "" {
 			t.Errorf("a header with %s decodes as %#v; want it malformed, and why", name, got)
 		}
 	}
-	if _, ok := Decode(here, store.Record(futureField(recordHeader, string(e.raw)))).(Malformed); !ok {
+	unsigned := futureField(recordHeader, string(e.raw))
+	if _, err := readRecord(unsigned); !errors.Is(err, errMissing) {
+		t.Errorf("a record with no signature reads with %v; want errMissing", err)
+	}
+	if _, ok := Decode(here, store.Record(unsigned)).(Malformed); !ok {
 		t.Error("a record with no signature decodes; want it malformed")
 	}
+}
+
+// wireRefusal is the refusal the wire reader itself gives for b, the
+// independent judge of bytes that are no message: the sentinel at the end
+// of its error's chain, which a decoder over b must pass through.
+func wireRefusal(t *testing.T, b []byte) error {
+	t.Helper()
+	err := wire.NewReader(b).Each(func(uint32, *wire.Reader) error { return nil })
+	if err == nil {
+		t.Fatalf("the wire reader reads %x; want it refused", b)
+	}
+	for errors.Unwrap(err) != nil {
+		err = errors.Unwrap(err)
+	}
+	return err
 }
 
 func TestARecordWithNewerRecordAndSignatureFieldsDecodesAsItsEvent(t *testing.T) {
@@ -296,27 +346,30 @@ func TestARecordWithNewerRecordAndSignatureFieldsDecodesAsItsEvent(t *testing.T)
 
 func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
 	at := context(1, Frontier{}, Known{})
+	act := Act{About: Root{}, Payload: note{Text: text("x")}}
+	// the control: each case below differs from it in the one respect named
+	mint(t, at, keyOf(1), 1, act)
+	mint(t, at, keyOf(1), 1, Act{About: NewItem{ID: anItem, Width: minWidth}, Payload: act.Payload})
 	noClock := at
 	noClock.Now = time.Time{}
 	noAgent := at
 	noAgent.Agent = nil
+	noPolicy := at
+	noPolicy.Policy = 0
 	for name, tc := range map[string]struct {
-		c Context
-		d Draft
+		c    Context
+		d    Draft
+		want error
 	}{
-		"an act about nothing":       {at, Act{Payload: note{Text: text("x")}}},
-		"a payload's unset envelope": {at, Act{About: Root{}, Payload: note{}}},
-		"no clock reading":           {noClock, Act{About: Root{}, Payload: note{Text: text("x")}}},
-		"no agent":                   {noAgent, Act{About: Root{}, Payload: note{Text: text("x")}}},
-		"a two-digit segment":        {at, Act{About: NewItem{ID: anItem, Width: 2}, Payload: note{Text: text("x")}}},
+		"an act about nothing":       {at, Act{Payload: act.Payload}, errNotAnAbout},
+		"a payload's unset envelope": {at, Act{About: Root{}, Payload: note{}}, errNoForm},
+		"no clock reading":           {noClock, act, errNoClock},
+		"no agent":                   {noAgent, act, errNotAnAgent},
+		"a two-digit segment":        {at, Act{About: NewItem{ID: anItem, Width: 2}, Payload: act.Payload}, errWidth},
+		"no policy version":          {noPolicy, act, errZeroField},
 	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("Mint with %s did not panic", name)
-				}
-			}()
-			_, _ = Mint(tc.c, NewDrafts(tc.d), keyOf(1).Signer(), entropy(1))
-		}()
+		t.Run(name, func(t *testing.T) {
+			panics.With(t, tc.want, func() { _, _ = Mint(tc.c, NewDrafts(tc.d), keyOf(1).Signer(), entropy(1)) })
+		})
 	}
 }

@@ -2,6 +2,7 @@ package events
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -69,15 +70,21 @@ func TestAnEnvelopeThatLiesOrIsAmbiguousIsRefused(t *testing.T) {
 	lying.Bytes(envelopePlain, p.Encoded())
 	lying.Bytes(envelopeCommitment, bytes.Repeat([]byte{1}, 32))
 	both := append(SealPlain("a").wire(), lying.Encoded()...)
-	for name, b := range map[string][]byte{
-		"a plaintext whose commitment is not its text's": lying.Encoded(),
-		"two forms":           both,
-		"no commitment":       futureField(envelopePlain, string(p.Encoded())),
-		"a short commitment":  futureField(envelopeCommitment, "short"),
-		"bytes that are none": {0xff},
+	// the control: a plaintext committed to its own text reads
+	envelopeOf(t, SealPlain("the text").wire())
+	none := []byte{0xff}
+	for name, c := range map[string]struct {
+		b    []byte
+		want error
+	}{
+		"a plaintext whose commitment is not its text's": {lying.Encoded(), errCommitmentNotText},
+		"two forms":           {both, errForms},
+		"no commitment":       {futureField(envelopePlain, string(p.Encoded())), errMissing},
+		"a short commitment":  {futureField(envelopeCommitment, "short"), errSize},
+		"bytes that are none": {none, wireRefusal(t, none)},
 	} {
-		if e, err := readEnvelope(b); err == nil {
-			t.Errorf("%s reads as %#v; want it refused", name, e)
+		if e, err := readEnvelope(c.b); !errors.Is(err, c.want) {
+			t.Errorf("%s reads as %#v, %v; want %v", name, e, err, c.want)
 		}
 	}
 }

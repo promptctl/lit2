@@ -1,6 +1,7 @@
 package gittest
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,24 @@ func Git(t testing.TB, dir string, args ...string) string {
 func Ask(t testing.TB, dir string, args ...string) (string, error) {
 	t.Helper()
 	return ask(t, dir, "", args...)
+}
+
+// Exit is the status git exits with running args in dir: 0 when it
+// succeeds, else the status it refuses with. It fails t when git does not
+// run, so a refusal a test names by its status is git's, never a git that
+// never started.
+func Exit(t testing.TB, dir string, args ...string) int {
+	t.Helper()
+	_, err := Ask(t, dir, args...)
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit):
+		return exit.ExitCode()
+	}
+	t.Fatal(err)
+	return 0
 }
 
 // GitIn is Git with stdin given.

@@ -140,10 +140,13 @@ func (d *onDisk) created() (bool, error) {
 		err = errors.New("its HEAD is no file")
 	}
 	if err != nil {
-		return false, fmt.Errorf("%s is no git repository: %w", d.dir, err)
+		return false, fmt.Errorf("%s is %w: %w", d.dir, errNoRepository, err)
 	}
 	return true, nil
 }
+
+// errNoRepository is a directory at the repository's path that is not one.
+var errNoRepository = errors.New("no git repository")
 
 // reader is what reads of lit's repository ask of go-git: an object by
 // id, and a ref by name.
@@ -220,7 +223,7 @@ func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
 	}
 	k, ok := kinds[o.Type()]
 	if !ok {
-		return nil, "", NotLit{ID: id, Why: fmt.Sprintf("a %s, which lit never writes", o.Type())}
+		return nil, "", NotLit{ID: id, Why: fmt.Errorf("%w: a %s, which lit never writes", ErrWrongKind, o.Type())}
 	}
 	return o, k, nil
 }

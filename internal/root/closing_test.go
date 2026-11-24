@@ -28,9 +28,10 @@ func TestAContributorClosesAnotherMembersTicketByMovingIt(t *testing.T) {
 	feature := filed(t, s.ok("add", "unfiled/children", "{title: f}"))
 	story := func() string { return filed(t, s.ok("add", feature+"/children", "{title: s}")) }
 	obsolete, wontfix, dup, superseded := story(), story(), story(), story()
-	if r := joiner.lit("set", obsolete+"/description", "mine now"); r.status == 0 || !strings.Contains(r.err, "role contributor") {
-		t.Fatalf("the contributor's write of the owner's description: status %d, stderr %q; want it refused, as set own/* allows", r.status, r.err)
+	if r := joiner.refused("unauthorized", "set", obsolete+"/description", "mine now"); !strings.Contains(r.err, "role contributor") {
+		t.Fatalf("the contributor's write of the owner's description: stderr %q; want it refused naming the role, as set own/* allows", r.err)
 	}
+	s.ok("set", obsolete+"/description", "the owner's") // the control: the owner may
 	joiner.ok("set", obsolete+"/status", `{column: obsolete, reason: "the board replaced it"}`)
 	joiner.ok("set", wontfix+"/status", `{column: wontfix, reason: "not needed"}`)
 	joiner.ok("set", dup+"/status", "{column: dup, of: "+obsolete+"}")

@@ -2,10 +2,12 @@ package wire_test
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
+	"github.com/promptctl/lit2/internal/panics"
 )
 
 // message is a decoder that knows tags 1 (a varint) and 2 (a list of
@@ -84,25 +86,32 @@ func TestTheBytesAreProtobufs(t *testing.T) {
 }
 
 func TestTornOrForeignBytesStopTheReader(t *testing.T) {
-	for name, b := range map[string][]byte{
-		"a key cut short":           {0x80},
-		"a varint cut short":        {0x08, 0x96},
-		"a length past the message": {0x12, 0x07, 't'},
-		"field number 0":            {0x00, 0x01},
-		"an I64 field":              {0x09, 1, 2, 3, 4, 5, 6, 7, 8},
-		"an I32 field":              {0x0d, 1, 2, 3, 4},
-		"a group":                   {0x0b, 0x0c},
-		"a tag past protobuf's":     {0x80, 0x80, 0x80, 0x80, 0x10, 0x00},
+	// the control: field 1 = 150, whole, reads
+	if m, err := decode([]byte{0x08, 0x96, 0x01}); err != nil || m.n != 150 {
+		t.Fatalf("a whole message decodes as %+v, %v; the control must read", m, err)
+	}
+	for name, c := range map[string]struct {
+		b    []byte
+		want error
+	}{
+		"a key cut short":           {[]byte{0x80}, wire.ErrKeyNotVarint},
+		"a varint cut short":        {[]byte{0x08, 0x96}, wire.ErrTornVarint},
+		"a length past the message": {[]byte{0x12, 0x07, 't'}, wire.ErrLengthPast},
+		"field number 0":            {[]byte{0x00, 0x01}, wire.ErrFieldNumber},
+		"an I64 field":              {[]byte{0x09, 1, 2, 3, 4, 5, 6, 7, 8}, wire.ErrWireType},
+		"an I32 field":              {[]byte{0x0d, 1, 2, 3, 4}, wire.ErrWireType},
+		"a group":                   {[]byte{0x0b, 0x0c}, wire.ErrWireType},
+		"a tag past protobuf's":     {[]byte{0x80, 0x80, 0x80, 0x80, 0x10, 0x00}, wire.ErrFieldNumber},
 	} {
-		if m, err := decode(b); err == nil {
-			t.Errorf("%s decodes as %+v; want the reader stopped", name, m)
+		if m, err := decode(c.b); !errors.Is(err, c.want) {
+			t.Errorf("%s decodes as %+v, %v; want the reader stopped with %v", name, m, err, c.want)
 		}
 	}
 	// a field read as the wire type it is not
 	var w wire.Writer
 	w.Bytes(1, []byte("not a number"))
-	if m, err := decode(w.Encoded()); err == nil {
-		t.Errorf("a LEN read as a varint decodes as %+v; want the reader stopped", m)
+	if m, err := decode(w.Encoded()); !errors.Is(err, wire.ErrReadAsOther) {
+		t.Errorf("a LEN read as a varint decodes as %+v, %v; want the reader stopped", m, err)
 	}
 }
 
@@ -116,21 +125,18 @@ func TestAReaderStopsAtItsFirstError(t *testing.T) {
 		t.Fatalf("the first field is %d, %v", tag, ok)
 	}
 	r.Uvarint()
-	if tag, ok := r.Next(); ok || r.Err() == nil {
-		t.Errorf("after an error the reader moved on to field %d; want it stopped", tag)
+	if tag, ok := r.Next(); ok || !errors.Is(r.Err(), wire.ErrReadAsOther) {
+		t.Errorf("after an error the reader moved on to field %d, %v; want it stopped", tag, r.Err())
 	}
 }
 
 func TestAFieldNumberOutsideProtobufsPanics(t *testing.T) {
+	var control wire.Writer
+	control.Uvarint(1<<29-1, 1) // protobuf's largest field number is the control that writes
 	for _, tag := range []uint32{0, 1 << 29} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("writing field %d did not panic", tag)
-				}
-			}()
+		panics.With(t, wire.ErrFieldNumber, func() {
 			var w wire.Writer
 			w.Uvarint(tag, 1)
-		}()
+		})
 	}
 }

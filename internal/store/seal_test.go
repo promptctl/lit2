@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"testing"
@@ -66,13 +67,39 @@ func TestSealingFromAPriorPublicationEqualsSealingFromScratch(t *testing.T) {
 		if fmt.Sprint(spans(incremental)) != fmt.Sprint(spans(scratch)) {
 			t.Fatalf("trial %d, bound %d then %d, cut %d: incremental %v, scratch %v", trial, was, bound, cut, spans(incremental), spans(scratch))
 		}
+		// every non-empty random log starts with a whole frame, so it seals
+		// to segments, and sealing from scratch stores the log's own bytes
+		var sealed []byte
 		for i, s := range scratch {
-			if f, ok := incremental[i].(Fresh); ok && !bytes.Equal(f.Bytes, s.(Fresh).Bytes) {
+			f, ok := s.(Fresh)
+			if !ok {
+				t.Fatalf("trial %d: sealing from scratch made segment %d %#v; want it Fresh", trial, i, s)
+			}
+			sealed = append(sealed, f.Bytes...)
+		}
+		if !bytes.HasPrefix(log, sealed) {
+			t.Fatalf("trial %d: a log of %d bytes sealed to segments holding %d other bytes; want a prefix of the log", trial, len(log), len(sealed))
+		}
+		// an empty log seals to nothing, which no publication holds; any
+		// other seals to segments that tile it
+		_, err := NewPublication(WriterRef{}, git.Absent{}, LogID{}, scratch)
+		if len(log) == 0 && !errors.Is(err, errNoSegment) || len(log) > 0 && err != nil {
+			t.Fatalf("trial %d: the %d segments sealed from %d bytes make a publication refused with %v", trial, len(scratch), len(log), err)
+		}
+		for i, s := range incremental {
+			want := scratch[i].(Fresh).Bytes
+			var got []byte
+			switch s := s.(type) {
+			case Kept:
+				got = log[s.Span.From:s.Span.To]
+			case Fresh:
+				got = s.Bytes
+			default:
+				t.Fatalf("trial %d: segment %d is %T", trial, i, s)
+			}
+			if !bytes.Equal(got, want) {
 				t.Fatalf("trial %d: segment %d holds other bytes when sealed from a prior publication", trial, i)
 			}
-		}
-		if _, err := NewPublication(WriterRef{}, git.Absent{}, LogID{}, scratch); len(scratch) > 0 && err != nil {
-			t.Fatalf("trial %d: the sealed segments do not tile the stream: %v", trial, err)
 		}
 	}
 }
@@ -104,24 +131,22 @@ func TestASegmentStaysWithinItsBoundUnlessOneFrameIsLarger(t *testing.T) {
 }
 
 func TestAPublicationHasNoGapAndNoOverlap(t *testing.T) {
-	for name, segs := range map[string][]Segment{
-		"a gap":            {Fresh{Start: 0, Bytes: []byte("ab")}, Fresh{Start: 3, Bytes: []byte("c")}},
-		"an overlap":       {Kept{Span: Span{From: 0, To: 4}}, Fresh{Start: 2, Bytes: []byte("c")}},
-		"a late start":     {Fresh{Start: 1, Bytes: []byte("a")}},
-		"an empty segment": {Fresh{Start: 0, Bytes: nil}},
-	} {
-		if _, err := NewPublication(InboxRef{}, git.Absent{}, LogID{}, segs); err == nil {
-			t.Errorf("%s: NewPublication accepted %v", name, segs)
-		}
-	}
+	// the control: segments that tile, Kept then Fresh
 	if _, err := NewPublication(InboxRef{}, git.Absent{}, LogID{}, []Segment{Kept{Span: Span{From: 0, To: 2}}, Fresh{Start: 2, Bytes: []byte("c")}}); err != nil {
-		t.Errorf("a tiling publication was refused: %v", err)
+		t.Fatalf("a tiling publication was refused: %v", err)
 	}
-}
-
-// A zero Published, as an error path holds one, formats without failing.
-func TestAZeroPublishedFormats(t *testing.T) {
-	if got := fmt.Sprintf("%+v", Published{}); got == "" {
-		t.Errorf("a zero Published formats as nothing")
+	for name, c := range map[string]struct {
+		segs []Segment
+		want error
+	}{
+		"a gap":            {[]Segment{Fresh{Start: 0, Bytes: []byte("ab")}, Fresh{Start: 3, Bytes: []byte("c")}}, errMisplacedSegment},
+		"an overlap":       {[]Segment{Kept{Span: Span{From: 0, To: 4}}, Fresh{Start: 2, Bytes: []byte("c")}}, errMisplacedSegment},
+		"a late start":     {[]Segment{Fresh{Start: 1, Bytes: []byte("a")}}, errMisplacedSegment},
+		"an empty segment": {[]Segment{Fresh{Start: 0, Bytes: []byte("a")}, Fresh{Start: 1, Bytes: nil}}, errEmptySegment},
+		"no segment":       {[]Segment{}, errNoSegment},
+	} {
+		if _, err := NewPublication(InboxRef{}, git.Absent{}, LogID{}, c.segs); !errors.Is(err, c.want) {
+			t.Errorf("%s: NewPublication(%v) = %v; want %v", name, c.segs, err, c.want)
+		}
 	}
 }

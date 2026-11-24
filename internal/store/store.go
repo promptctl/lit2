@@ -21,6 +21,13 @@ import (
 // CheckoutID is the 128-bit token naming one writing checkout.
 type CheckoutID [16]byte
 
+// The refusals of a checkout id and of its file: text that is not an id,
+// and a file not in the id file's form.
+var (
+	errNotACheckoutID = errors.New("not a checkout id, 32 lowercase hex digits")
+	errNotIDFileForm  = errors.New("not the checkout id file's form")
+)
+
 // ParseCheckoutID reads a checkout id written as 32 lowercase hex digits,
 // the one form String writes, so an id has one spelling.
 // Its error names the length, never the text, which is not known to be an
@@ -28,7 +35,7 @@ type CheckoutID [16]byte
 func ParseCheckoutID(s string) (CheckoutID, error) {
 	id, ok := token(s)
 	if !ok {
-		return CheckoutID{}, fmt.Errorf("%d bytes that are not a checkout id, 32 lowercase hex digits", len(s))
+		return CheckoutID{}, fmt.Errorf("%d bytes that are %w", len(s), errNotACheckoutID)
 	}
 	return id, nil
 }
@@ -41,11 +48,11 @@ func (id CheckoutID) String() string { return hex.EncodeToString(id[:]) }
 // refuses by length first, and no error carries the file's bytes.
 func ReadCheckoutIDFile(b []byte) (CheckoutID, error) {
 	if form := 2*len(CheckoutID{}) + 1; len(b) != form {
-		return CheckoutID{}, fmt.Errorf("checkout id file holds %d bytes; its form is %d", len(b), form)
+		return CheckoutID{}, fmt.Errorf("%w: it holds %d bytes; its form is %d", errNotIDFileForm, len(b), form)
 	}
 	text, ok := bytes.CutSuffix(b, []byte("\n"))
 	if !ok {
-		return CheckoutID{}, errors.New("checkout id file does not end in a newline")
+		return CheckoutID{}, fmt.Errorf("%w: it does not end in a newline", errNotIDFileForm)
 	}
 	return ParseCheckoutID(string(text))
 }

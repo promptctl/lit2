@@ -1,6 +1,7 @@
 package field
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -53,10 +54,17 @@ func ParseLiteral(text string) (Literal, error) {
 	return v, nil
 }
 
+// errNotAValue is a text the literal grammar could not read; errKeyTwice,
+// among them, is an object naming a key twice.
+var (
+	errNotAValue = errors.New("is not a value")
+	errKeyTwice  = errors.New("is given twice")
+)
+
 // notValue is a text the grammar could not read, and how to give it as
 // plain text instead.
 func notValue(text string, why error) error {
-	return fmt.Errorf(`%q is not a value: %w; a text that opens with %c is given quoted, "…", with "" for a quote`, text, why, text[0])
+	return fmt.Errorf(`%q %w: %w; a text that opens with %c is given quoted, "…", with "" for a quote`, text, errNotAValue, why, text[0])
 }
 
 // reader is a cursor over a literal's text.
@@ -101,7 +109,7 @@ func (r *reader) value() (Literal, error) {
 			}
 			r.i++
 			if seen[key] {
-				return fmt.Errorf("the key %s is given twice", key)
+				return fmt.Errorf("the key %s %w", key, errKeyTwice)
 			}
 			seen[key] = true
 			v, err := r.value()

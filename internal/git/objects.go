@@ -2,6 +2,7 @@ package git
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -54,14 +55,22 @@ type ObjectID struct {
 // length in lowercase hex digits.
 func ParseObjectID(f ObjectFormat, s string) (ObjectID, error) {
 	b, err := hex.DecodeString(s)
-	if err == nil && hex.EncodeToString(b) == s {
-		var id ObjectID
-		if id, err = ObjectIDFrom(f, b); err == nil {
-			return id, nil
-		}
+	if err != nil || hex.EncodeToString(b) != s {
+		return ObjectID{}, fmt.Errorf("%q is not a %s object id: it is not lowercase hex", s, f)
 	}
-	return ObjectID{}, fmt.Errorf("%q is not a %s object id", s, f)
+	id, err := ObjectIDFrom(f, b)
+	if err != nil {
+		return ObjectID{}, fmt.Errorf("%q is not a %s object id: %w", s, f, err)
+	}
+	return id, nil
 }
+
+// errNoFormat is a format that is neither of git's, so no sum is an id of
+// it; errSumSize is a sum not the length its format's ids are.
+var (
+	errNoFormat = errors.New("no object format")
+	errSumSize  = errors.New("a sum not of its format's length")
+)
 
 // ObjectIDFrom reads an object id held as its format and its sum, the
 // form Sum gives: the sum is the format's length in bytes.
@@ -69,10 +78,10 @@ func ObjectIDFrom(f ObjectFormat, sum []byte) (ObjectID, error) {
 	switch f {
 	case SHA1, SHA256:
 	default:
-		return ObjectID{}, fmt.Errorf("a sum cannot be read as an id of %s", f)
+		return ObjectID{}, fmt.Errorf("a sum cannot be read as an id of %s: %w", f, errNoFormat)
 	}
 	if len(sum) != f.size() {
-		return ObjectID{}, fmt.Errorf("a %d-byte sum is not a %s object id", len(sum), f)
+		return ObjectID{}, fmt.Errorf("a %d-byte sum is not a %s object id: %w", len(sum), f, errSumSize)
 	}
 	id := ObjectID{format: f}
 	copy(id.sum[:], sum)
@@ -207,6 +216,15 @@ func (Absent) was() {}
 // `[LAW:single-enforcer]`. gittest holds it to git itself.
 var name = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
+// ErrNotAName is a name the name grammar refuses, as a tree entry's name
+// or as a refname, which is refs/ and names: one refusal for the one
+// grammar.
+var ErrNotAName = errors.New("a name is letters, digits, _ and -")
+
+// ErrDuplicateEntry is a tree given two entries of one name, which git
+// fsck refuses.
+var ErrDuplicateEntry = errors.New("two tree entries share a name")
+
 // parseRefName refuses a name that is not refs/ and one or more names.
 func parseRefName(n RefName) error {
 	parts := strings.Split(string(n), "/")
@@ -215,7 +233,7 @@ func parseRefName(n RefName) error {
 		ok = ok && name.MatchString(p)
 	}
 	if !ok {
-		return fmt.Errorf("%q is not a refname lit writes: refs/ and names of letters, digits, _ and -", n)
+		return fmt.Errorf("%q is not a refname lit writes, refs/ and names: %w", n, ErrNotAName)
 	}
 	return nil
 }
@@ -255,13 +273,23 @@ func (m MissingObject) Error() string {
 }
 
 // NotLit is an object the repository holds that lit did not write: of
-// another kind than asked for, or of a shape lit's encoding never makes.
+// another kind than asked for, ErrWrongKind, or of a shape lit's encoding
+// never makes, errForeignShape.
 type NotLit struct {
 	ID  ObjectID
-	Why string
+	Why error
 }
 
-func (n NotLit) Error() string { return fmt.Sprintf("object %s is %s", n.ID, n.Why) }
+func (n NotLit) Error() string { return fmt.Sprintf("object %s is %v", n.ID, n.Why) }
+
+func (n NotLit) Unwrap() error { return n.Why }
+
+// ErrWrongKind is an object of another kind than the one asked for.
+var ErrWrongKind = errors.New("of another kind")
+
+// errForeignShape is a tree or commit of a shape lit's encoding never
+// writes.
+var errForeignShape = errors.New("of a shape lit never writes")
 
 // ForeignFormat is an id of another format than the repository it is asked
 // of, the zero id's included: it names nothing there, so it is refused,

@@ -1,7 +1,7 @@
 package events
 
 import (
-	"strings"
+	"errors"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -23,19 +23,25 @@ func TestACapabilityReadsBackAsItsText(t *testing.T) {
 }
 
 func TestATextThatIsNoCapabilityIsRefusedSayingWhy(t *testing.T) {
-	for text, why := range map[string]string{
-		"get */*":            "verb is set, add or rm",
-		"set /policy":        "subject is",
-		"set own":            "a subject, then / and a field glob",
-		"set own/":           "a subject, then / and a field glob",
-		"set own/a//b":       "empty step",
-		"rm own/* (level=9)": "1 to 5",
-		"rm own/* (stage=x)": "level=N",
-		"rm own/* (level=1":  "in parentheses",
+	// the controls, each the refused text with the one respect mended
+	for _, text := range []string{"set */*", "set own/*", "set own/a/b", "rm own/* (level=1)"} {
+		if _, err := ParseCapability(text); err != nil {
+			t.Fatalf("%s: %v; the control must read", text, err)
+		}
+	}
+	for text, want := range map[string]error{
+		"get */*":            errVerb,
+		"set /policy":        errBinding,
+		"set own":            errPath,
+		"set own/":           errPath,
+		"set own/a//b":       errEmptyStep,
+		"rm own/* (level=9)": ErrNotALevel,
+		"rm own/* (level=x)": ErrNotALevel,
+		"rm own/* (stage=x)": errCondition,
+		"rm own/* (level=1":  errConditions,
 	} {
-		_, err := ParseCapability(text)
-		if err == nil || !strings.Contains(err.Error(), why) {
-			t.Errorf("%s: %v, want a refusal saying %q", text, err, why)
+		if _, err := ParseCapability(text); !errors.Is(err, want) {
+			t.Errorf("%s: %v, want %v", text, err, want)
 		}
 	}
 }
@@ -66,31 +72,32 @@ func TestAPolicyThatLocksItsWorkspaceOutIsNoPolicy(t *testing.T) {
 	owner, contributor := MustName("owner"), MustName("contributor")
 	a, b := keyOf(1).Principal(), keyOf(2).Principal()
 	roles := map[Name][]Capability{contributor: {MustCapability("set own/*")}}
-	for why, try := range map[string]func() error{
-		"no member holds the owner role": func() error {
-			_, err := NewPolicy(1, owner, roles, map[PrincipalID]Name{a: contributor}, Majority{})
+	// the control: the policy each refusal below differs from in one respect
+	p, err := NewPolicy(1, owner, roles, map[PrincipalID]Name{a: owner, b: contributor}, Fixed{N: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for want, try := range map[error]func() error{
+		errNoOwner: func() error {
+			_, err := NewPolicy(1, owner, roles, map[PrincipalID]Name{a: contributor, b: contributor}, Fixed{N: 1})
 			return err
 		},
-		"not a role this policy declares": func() error {
-			_, err := NewPolicy(1, owner, roles, map[PrincipalID]Name{a: owner, b: MustName("editor")}, Majority{})
+		errUndeclaredRole: func() error {
+			_, err := NewPolicy(1, owner, roles, map[PrincipalID]Name{a: owner, b: MustName("editor")}, Fixed{N: 1})
 			return err
 		},
-		"is the owner role": func() error {
-			_, err := NewPolicy(1, owner, map[Name][]Capability{owner: nil}, map[PrincipalID]Name{a: owner}, Majority{})
+		errOwnerRoleListed: func() error {
+			_, err := NewPolicy(1, owner, map[Name][]Capability{contributor: roles[contributor], owner: nil}, map[PrincipalID]Name{a: owner, b: contributor}, Fixed{N: 1})
 			return err
 		},
-		"more than the 1 owners": func() error {
+		errThresholdOverOwners: func() error {
 			_, err := NewPolicy(1, owner, roles, map[PrincipalID]Name{a: owner, b: contributor}, Fixed{N: 2})
 			return err
 		},
 	} {
-		if err := try(); err == nil || !strings.Contains(err.Error(), why) {
-			t.Errorf("%v, want a refusal saying %q", err, why)
+		if err := try(); !errors.Is(err, want) {
+			t.Errorf("%v, want %v", err, want)
 		}
-	}
-	p, err := NewPolicy(1, owner, roles, map[PrincipalID]Name{a: owner, b: contributor}, Fixed{N: 1})
-	if err != nil {
-		t.Fatal(err)
 	}
 	if got := p.Owners(); len(got) != 1 || got[0] != a {
 		t.Errorf("owners are %v, want only %s", got, a)
@@ -141,8 +148,11 @@ func TestThePolicyPayloadsReadBackAsWritten(t *testing.T) {
 
 func TestAnEnrollmentListingTheOwnerRoleIsRefused(t *testing.T) {
 	owner := MustName("owner")
+	if _, err := ReadEnroll(wire.NewReader(payloadBytes(Enroll{Owner: owner, Roles: map[Name][]Capability{MustName("other"): nil}}))); err != nil {
+		t.Fatalf("an enrollment listing another role: %v; the control must read", err)
+	}
 	_, err := ReadEnroll(wire.NewReader(payloadBytes(Enroll{Owner: owner, Roles: map[Name][]Capability{owner: nil}})))
-	if err == nil || !strings.Contains(err.Error(), "is the owner role") {
+	if !errors.Is(err, errOwnerRoleListed) {
 		t.Errorf("%v, want the owner role refused as a listed role", err)
 	}
 }
@@ -153,10 +163,10 @@ func TestAnApprovalNamesItsProposalByAUniquePrefix(t *testing.T) {
 	if d, err := ParseDigestPrefix(one.String()[:12], []Digest{one, two}); err != nil || d != one {
 		t.Errorf("%s, %v, want %s", d, err, one)
 	}
-	if _, err := ParseDigestPrefix("", []Digest{one}); err == nil {
-		t.Error("an empty prefix names a proposal")
+	if _, err := ParseDigestPrefix("", []Digest{one}); !errors.Is(err, errEmptyDigestPrefix) {
+		t.Errorf("an empty prefix names a proposal: %v", err)
 	}
-	if _, err := ParseDigestPrefix("zz", []Digest{one, two}); err == nil || !strings.Contains(err.Error(), "no pending") {
+	if _, err := ParseDigestPrefix("zz", []Digest{one, two}); !errors.Is(err, errNoPendingProposal) {
 		t.Errorf("%v, want no pending proposal", err)
 	}
 }

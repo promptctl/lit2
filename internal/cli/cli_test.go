@@ -65,8 +65,8 @@ func TestABareLit2IsAGetOfTheRoot(t *testing.T) {
 			t.Errorf("Parse(%q) = %#v, %v; want get /", args, got, err)
 		}
 	}
-	if _, err := parse("--dry-run"); err == nil {
-		t.Error("lit2 --dry-run parsed; a get takes no --dry-run")
+	if _, err := parse("--dry-run"); !errors.Is(err, errNoDryRun) {
+		t.Errorf("lit2 --dry-run = %v; want errNoDryRun: a get takes no --dry-run", err)
 	}
 }
 
@@ -83,27 +83,31 @@ func TestDoubleDashEndsFlagsAndDashIsAValue(t *testing.T) {
 
 func TestNotALit2CommandLine(t *testing.T) {
 	for _, tc := range []struct {
-		args []string
-		want ParseCode
+		args, control []string
+		code          ParseCode
+		want          error
 	}{
-		{[]string{"frobnicate"}, UnknownVerb},
-		{[]string{"admin", "frobnicate"}, UnknownVerb},
-		{[]string{"get"}, Usage},
-		{[]string{"set", "x/status"}, Usage},
-		{[]string{"add", "x/labels", "a", "x/labels"}, Usage},
-		{[]string{"admin"}, Usage},
-		{[]string{"config"}, Usage},
-		{[]string{"config", "frobnicate"}, UnknownVerb},
-		{[]string{"config", "commit", "--dry-run"}, Usage},
-		{[]string{"admin", "init", "extra"}, Usage},
-		{[]string{"get", "x", "--frob"}, Usage},
-		{[]string{"get", "x", "--dry-run"}, Usage},
-		{[]string{"admin", "init", "--dry-run"}, Usage},
+		{[]string{"frobnicate"}, []string{"get", "x"}, UnknownVerb, errUnknownVerb},
+		{[]string{"admin", "frobnicate"}, []string{"admin", "init"}, UnknownVerb, errUnknownVerb},
+		{[]string{"get"}, []string{"get", "x"}, Usage, errNoPaths},
+		{[]string{"set", "x/status"}, []string{"set", "x/status", "v"}, Usage, errNotPairs},
+		{[]string{"add", "x/labels", "a", "x/labels"}, []string{"add", "x/labels", "a"}, Usage, errNotPairs},
+		{[]string{"admin"}, []string{"admin", "init"}, Usage, errNoCommand},
+		{[]string{"config"}, []string{"config", "commit"}, Usage, errNoCommand},
+		{[]string{"config", "frobnicate"}, []string{"config", "commit"}, UnknownVerb, errUnknownVerb},
+		{[]string{"config", "commit", "--dry-run"}, []string{"config", "commit"}, Usage, errNoDryRun},
+		{[]string{"admin", "init", "extra"}, []string{"admin", "init"}, Usage, errOperands},
+		{[]string{"get", "x", "--frob"}, []string{"get", "x"}, Usage, errUnknownFlag},
+		{[]string{"get", "x", "--dry-run"}, []string{"get", "x"}, Usage, errNoDryRun},
+		{[]string{"admin", "init", "--dry-run"}, []string{"admin", "init"}, Usage, errNoDryRun},
 	} {
+		if _, err := parse(tc.control...); err != nil {
+			t.Errorf("control Parse(%q): %v", tc.control, err)
+		}
 		_, err := parse(tc.args...)
 		var f ParseFailure
-		if !errors.As(err, &f) || f.Code != tc.want || f.Class() != reason.ClassUsage {
-			t.Errorf("Parse(%q) failed with %#v; want a usage-class failure with code %d", tc.args, err, tc.want)
+		if !errors.As(err, &f) || f.Code != tc.code || f.Class() != reason.ClassUsage || !errors.Is(err, tc.want) {
+			t.Errorf("Parse(%q) failed with %v (code %d); want a usage-class failure with code %d, %v", tc.args, err, f.Code, tc.code, tc.want)
 		}
 	}
 }

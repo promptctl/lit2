@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/root"
@@ -69,7 +70,7 @@ func TestScenario15AccessControlFromTheFirstEvent(t *testing.T) {
 	// 3. the contributor's rm of the epic is refused at the write, naming
 	// the capability it needed, and nothing is written
 	out, errOut, status, event = lit(joiner, "rm", epic)
-	if status == 0 || !strings.Contains(errOut, "rm own/* (level=1)") || len(event.Store.Appends) != 0 {
+	if failed, ok := event.Outcome.(cli.Failed); status == 0 || !ok || failed.Failure.Reason() != "unauthorized" || !strings.Contains(errOut, "rm own/* (level=1)") || len(event.Store.Appends) != 0 {
 		t.Errorf("the contributor's rm %s: status %d, out %q, stderr %q", epic, status, out, errOut)
 	}
 	if v := event.Policy.Verdicts; len(v) != 1 || !carriedUnauthorized(v[0].Outcome) {

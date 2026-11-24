@@ -6,7 +6,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/field"
 )
 
@@ -20,7 +19,7 @@ func TestFindIsTheOnePlaceRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, _ := events.ParseLevel(2)
+	two := level(t, 2)
 	tbl := s.Table()
 	if r, err := tbl.Find(field.Leaf{}, "points"); err != nil || r.(FieldRow).Decl.Origin != field.Declared {
 		t.Errorf("points at a leaf = %v, %v; want level 1's declared field", r, err)
@@ -58,7 +57,7 @@ func TestPlacesNameOnlyDeclaredHomes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, _ := events.ParseLevel(2)
+	two := level(t, 2)
 	want := []field.Place{field.Root{}, field.Home{Level: two}, field.Node{Level: two}, field.Leaf{}, field.Comment{}, field.MemberEntry{}}
 	if got := s.Table().Places(); !slices.Equal(got, want) {
 		t.Errorf("places = %#v, want %#v", got, want)

@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -104,11 +105,11 @@ func TestAThousandAppendsAndAPublishLeaveTheCodeRepositoryAsItWasAndPassFsck(t *
 
 // TestAppendingProcess is the child of the two-process test: with
 // LIT2_STORE_ROOT set it appends LIT2_APPENDS records to the log there and
-// exits; run directly, it has no store to append to and does nothing.
+// exits; run directly, it has no store to append to and skips.
 func TestAppendingProcess(t *testing.T) {
 	root := os.Getenv("LIT2_STORE_ROOT")
 	if root == "" {
-		return
+		t.Skip("the child of TestTwoProcessesAppendingToOneLogLoseNoRecord, run only by it with LIT2_STORE_ROOT set")
 	}
 	var n int
 	if _, err := fmt.Sscan(os.Getenv("LIT2_APPENDS"), &n); err != nil {
@@ -121,10 +122,18 @@ func TestAppendingProcess(t *testing.T) {
 
 func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
+	// the children end by the test's own deadline, so a hung child fails
+	// this test rather than the whole binary's timeout
+	ctx := t.Context()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 	var wg sync.WaitGroup
 	for _, prefix := range []string{"first", "second"} {
 		wg.Go(func() {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestAppendingProcess$", "-test.count=1")
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAppendingProcess$", "-test.count=1")
 			cmd.Env = append(os.Environ(), "LIT2_STORE_ROOT="+root, "LIT2_APPENDS=100", "LIT2_PREFIX="+prefix)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Errorf("the %s appender: %v\n%s", prefix, err, out)
@@ -204,21 +213,31 @@ func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 	}
 }
 
-// Whoever can read a clone's objects reads its logs and refs
-// too: the store's files are 0644, as git makes the objects.
+// Whoever can read a clone's objects reads its logs and refs too: who may
+// read each is who may read an object file git made in the store's
+// repository.
 func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	c := gittest.Clone(t)
 	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(5)), store.DefaultSegmentBound)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "event")...)
-	storetest.PublishOwn(t, s)
+	out := storetest.PublishOwn(t, s)
 	root := filepath.Join(c.SharedDir(), "store")
+	object, err := os.Stat(filepath.Join(root, "repo", "objects", out.Commit.String()[:2], out.Commit.String()[2:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const read = 0o444
+	want := object.Mode().Perm() & read
+	if want == 0 {
+		t.Fatalf("git made the commit's object file %v, readable by no one", object.Mode().Perm())
+	}
 	for _, p := range []string{string(store.LogPath(ida)), "repo/" + string(store.WriterRef{Checkout: ida}.Name())} {
 		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(p)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o644 {
-			t.Errorf("%s is %v; want -rw-r--r--", p, info.Mode().Perm())
+		if got := info.Mode().Perm() & read; got != want {
+			t.Errorf("%s is %v, readable as %v; want readable as git's object file, %v", p, info.Mode().Perm(), got, want)
 		}
 	}
 }

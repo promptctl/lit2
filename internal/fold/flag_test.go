@@ -37,7 +37,8 @@ func TestANewKindTouchesNothing(t *testing.T) {
 		return fold.PathWrite{Verb: events.Add, At: fold.OfItem{ID: f.At.(fold.OnItem).ID}, Field: []string{flags.String()}}
 	}, readFlag))...), env.Suites(), 1))
 	w, id := item(t)
-	w.mint(a, w.state(), events.Act{About: events.Item{ID: id}, Payload: flag{Flag: name("blocked")}})
+	before := w.state()
+	minted := w.mint(a, before, events.Act{About: events.Item{ID: id}, Payload: flag{Flag: name("blocked")}})
 	s := fold.Replay(withFlags, w.founding, w.scans()).State
 	got := found(t, s, id).Facts.Members(flags)
 	if len(got) != 1 || got[0].Name != name("blocked") || len(s.Integrity().Unapplied) != 0 {
@@ -46,5 +47,16 @@ func TestANewKindTouchesNothing(t *testing.T) {
 	// the first facts alone read it as a kind they do not know
 	if un := w.state().Integrity().Unapplied; len(un) != 1 || un[0].Why != (fold.Unread{Why: events.UnknownKind{}}) {
 		t.Errorf("without its row test.flag is %#v; want Unread{UnknownKind}", un)
+	}
+	// a caller's own minted event, readable to it, extends a registry that
+	// has no row for its kind as a kind it does not know; the registry
+	// that has the row applies it
+	if out := fold.Extend(env, before, minted).Outcomes; len(out) != 1 || out[0] != (fold.LeftFor{Why: fold.Unread{Why: events.UnknownKind{}}}) {
+		t.Errorf("extending the first facts with test.flag is %#v; want it left unread as an unknown kind", out)
+	}
+	if out := fold.Extend(withFlags, before, minted).Outcomes; len(out) != 1 {
+		t.Fatalf("extending with test.flag's row is %#v", out)
+	} else if _, ok := out[0].(fold.Applied); !ok {
+		t.Errorf("extending with test.flag's row is %#v; want it applied", out[0])
 	}
 }

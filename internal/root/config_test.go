@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
@@ -88,7 +89,8 @@ func TestWithNoEnrollmentEveryVerbIsRefusedNamingAdminInit(t *testing.T) {
 	s := freshSession(t)
 	for _, args := range [][]string{{}, {"get", "/"}, {"add", "unfiled/children", "{title: a}"}, {"config", "commit"}, {"config", "status"}} {
 		r := s.lit(args...)
-		if r.status != 78 || reasonOf(r.event) != "policy" || !strings.Contains(r.err, "lit2 admin init") || appends(r.event) != 0 {
+		var none unenrolled
+		if r.status != 78 || !errors.As(failure(t, r.event), &none) || !strings.Contains(r.err, "lit2 admin init") || appends(r.event) != 0 {
 			t.Errorf("lit2 %q with no enrollment: status %d, stderr %q; want refused as the environment's, naming admin init", args, r.status, r.err)
 		}
 	}
@@ -103,7 +105,7 @@ func TestWithNoVersionEveryVerbIsRefusedNamingConfigCommit(t *testing.T) {
 	s := enrolledOnly(t)
 	for _, args := range [][]string{{}, {"get", "/"}, {"add", "unfiled/children", "{title: a}"}} {
 		r := s.lit(args...)
-		if r.status != 78 || reasonOf(r.event) != "workspace" || !strings.Contains(r.err, "lit2 config commit") || r.event.Config != nil {
+		if r.status != 78 || !errors.Is(failure(t, r.event), errNoVersionInForce) || !strings.Contains(r.err, "lit2 config commit") || r.event.Config != nil {
 			t.Errorf("lit2 %q with no version: status %d, stderr %q, config %+v; want refused as the environment's, naming config commit", args, r.status, r.err, r.event.Config)
 		}
 	}
@@ -156,10 +158,11 @@ func TestInitAppliesTheFileThereOrRefusesIt(t *testing.T) {
 	bad := freshSession(t)
 	bad.file([]byte("prefix = \n"))
 	r := bad.lit("admin", "init")
-	if r.status != 1 || reasonOf(r.event) != "workspace" || appends(r.event) != 0 {
+	var refused verbs.VersionRefused
+	if r.status != 1 || !errors.As(failure(t, r.event), &refused) || appends(r.event) != 0 {
 		t.Errorf("init over a file that does not parse: status %d, stderr %q, %d appends; want refused, nothing applied", r.status, r.err, appends(r.event))
 	}
-	if r := bad.lit("get", "/"); reasonOf(r.event) != "policy" {
+	if r := bad.lit("get", "/"); !errors.As(failure(t, r.event), new(unenrolled)) {
 		t.Errorf("after a refused init get / is %q; want no enrollment, the founding written whole or not at all", r.err)
 	}
 }
@@ -172,22 +175,22 @@ func TestConfigCommitAppliesOnlyWhatHEADHolds(t *testing.T) {
 	s.ok("admin", "init")
 	next := append(assets.DefaultWorkspace.Bytes(), "# the next version\n"...)
 	s.file(nil)
-	if r := s.refused("workspace", "config", "commit"); !strings.Contains(r.err, "there is no .lit/workspace.toml") {
+	if r := s.refused("workspace", "config", "commit"); !errors.Is(failure(t, r.event), errNothingToApply) || !strings.Contains(r.err, "there is no .lit/workspace.toml") {
 		t.Errorf("no file: %q", r.err)
 	}
 	s.file(next)
-	if r := s.refused("workspace", "config", "commit"); !strings.Contains(r.err, "git add .lit/workspace.toml") {
+	if r := s.refused("workspace", "config", "commit"); !errors.Is(failure(t, r.event), errNotInHead) || !strings.Contains(r.err, "git add .lit/workspace.toml") {
 		t.Errorf("a file HEAD does not hold: %q", r.err)
 	}
 	code := s.twin.Code
 	s.twin.Process.Code = func(git.Checkout) git.Code { return symlinked{Code: code} }
-	if r := s.refused("workspace", "config", "commit"); !strings.Contains(r.err, "HEAD holds .lit/workspace.toml as mode 120000, not a file") {
+	if r := s.refused("workspace", "config", "commit"); !errors.Is(failure(t, r.event), errNotAFileInHead) || !strings.Contains(r.err, "HEAD holds .lit/workspace.toml as mode 120000") {
 		t.Errorf("a path HEAD holds as a symlink: %q", r.err)
 	}
 	s.twin.Process.Code = func(git.Checkout) git.Code { return code }
 	s.commit(next)
 	s.file(append(next, "# edited\n"...))
-	if r := s.refused("workspace", "config", "commit"); !strings.Contains(r.err, "git commit .lit/workspace.toml") {
+	if r := s.refused("workspace", "config", "commit"); !errors.Is(failure(t, r.event), errDiffersFromHead) || !strings.Contains(r.err, "git commit .lit/workspace.toml") {
 		t.Errorf("a file changed since HEAD: %q", r.err)
 	}
 	s.file(next)
@@ -214,7 +217,7 @@ func TestAVersionThatStrandsTicketsIsRefusedWithTheAliasLine(t *testing.T) {
 	s.ok("set", story+"/status", "plan")
 	s.file(noPlan)
 	s.commit(noPlan)
-	if r := s.refused("workspace", "config", "commit"); !strings.Contains(r.err, `aliases = ["plan"]`) {
+	if r := s.refused("workspace", "config", "commit"); !errors.As(failure(t, r.event), new(verbs.VersionRefused)) || !strings.Contains(r.err, `aliases = ["plan"]`) {
 		t.Errorf("a version stranding plan: %q; want the aliases line", r.err)
 	}
 	s.file(aliased)
@@ -262,8 +265,10 @@ func TestASecondReplicaRunsTheModelFromTheEventsAlone(t *testing.T) {
 		t.Errorf("the replica reads %s as\n%s\nwant\n%s", feature, got, want)
 	}
 	// the default's third level's home, which this version does not declare
-	if r := replica.lit("get", "unassigned"); r.status == 0 {
-		t.Errorf("the replica reads a home only the default declares: %q", r.out)
+	replica.ok("get", "unfiled") // the control: a home this version declares
+	var syntax address.Syntax
+	if r := replica.refused("syntax", "get", "unassigned"); !errors.As(failure(t, r.event), &syntax) || syntax.Text != "unassigned" {
+		t.Errorf("the replica reads a home only the default declares as %v; want unassigned no path, being no home", failure(t, r.event))
 	}
 	if got := replica.ok("get", "/workspace"); !strings.Contains(got, blob(noPlan).String()[:7]+" in force · .lit/workspace.toml is absent") {
 		t.Errorf("the replica's board says %q", got)
@@ -291,7 +296,7 @@ func TestAnIDUnderAFormerPrefixStillResolves(t *testing.T) {
 	if got := s.ok("get", "unfiled/children"); !strings.Contains(got, "zzz-"+seg) {
 		t.Errorf("the feature renders as %q; want it under zzz", got)
 	}
-	if r := s.lit("get", "qqq-"+seg+"/title"); r.status == 0 || !strings.Contains(r.err, "another project's") {
+	if r := s.lit("get", "qqq-"+seg+"/title"); r.status == 0 || !errors.Is(failure(t, r.event), events.ErrForeignPrefix) {
 		t.Errorf("an id under a prefix no version declared: status %d, %q", r.status, r.err)
 	}
 }
@@ -335,7 +340,7 @@ func TestAVersionInForceThisReleaseCannotReadRefusesConfigCommit(t *testing.T) {
 	s.twin.Process.Reader = older
 	s.file(noPlan)
 	s.commit(noPlan)
-	if r := s.lit("config", "commit"); r.status != 78 || reasonOf(r.event) != "workspace" || !strings.Contains(r.err, "does not read under this release") || appends(r.event) != 0 {
+	if r := s.lit("config", "commit"); r.status != 78 || !errors.As(failure(t, r.event), new(verbs.Unreadable)) || !strings.Contains(r.err, "does not read under this release") || appends(r.event) != 0 {
 		t.Errorf("config commit under an unreadable version: status %d, stderr %q, %d appends", r.status, r.err, appends(r.event))
 	}
 }
@@ -349,8 +354,10 @@ func (symlinked) AtHead(string) (git.HeadBlob, error) { return git.NotAFile{Mode
 type unreadableHistory struct{ git.Code }
 
 func (unreadableHistory) EverAt(string, git.ObjectID) (bool, error) {
-	return false, errors.New("the history is gone")
+	return false, errHistoryGone
 }
+
+var errHistoryGone = errors.New("the history is gone")
 
 // TestConfigStatusSaysTheLineWhenTheHistoryDoesNotRead: only the history
 // half is refused.
@@ -360,7 +367,7 @@ func TestConfigStatusSaysTheLineWhenTheHistoryDoesNotRead(t *testing.T) {
 	s.twin.Process.Code = func(git.Checkout) git.Code { return unreadableHistory{Code: code} }
 	r := s.lit("config", "status")
 	def := blob(assets.DefaultWorkspace.Bytes()).String()
-	if r.status != 78 || reasonOf(r.event) != "workspace" || r.out != def[:7]+" in force · .lit/workspace.toml matches\n" || !strings.Contains(r.err, "the history is gone") {
+	if r.status != 78 || !errors.Is(failure(t, r.event), errHistoryGone) || r.out != def[:7]+" in force · .lit/workspace.toml matches\n" {
 		t.Errorf("config status with no history: status %d, out %q, stderr %q", r.status, r.out, r.err)
 	}
 }
@@ -385,7 +392,7 @@ func TestConfigCommitByAContributorIsRefusedNamingSetWorkspace(t *testing.T) {
 	joiner.file(next)
 	joiner.commit(next)
 	r := joiner.lit("config", "commit")
-	if r.status == 0 || !strings.Contains(r.err, "set /workspace refused: role contributor") || appends(r.event) != 0 {
+	if r.status == 0 || reasonOf(r.event) != "unauthorized" || !strings.Contains(r.err, "set /workspace refused: role contributor") || appends(r.event) != 0 {
 		t.Errorf("a contributor's config commit: status %d, stderr %q, %d appends; want refused naming set /workspace", r.status, r.err, appends(r.event))
 	}
 	if v := r.event.Policy.Verdicts; len(v) != 1 {

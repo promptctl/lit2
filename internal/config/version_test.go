@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -33,13 +34,14 @@ func TestReadReaderVersion(t *testing.T) {
 // TestReadReaderVersionRefusesWhatHasNoVersion: a build that cannot say which
 // versions it reads does not run.
 func TestReadReaderVersionRefusesWhatHasNoVersion(t *testing.T) {
+	reader(t, "v0.4.0") // the control: a stamp Go writes for a tagged build
 	for _, stamp := range []string{"", "(devel)", "not-a-version"} {
 		_, err := ReadReaderVersion(stamp)
-		if err == nil {
-			t.Errorf("ReadReaderVersion(%q) read a version from nothing", stamp)
+		if !errors.Is(err, errNoVersion) {
+			t.Errorf("ReadReaderVersion(%q) = %v; want errNoVersion", stamp, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), "build") {
+		if !strings.Contains(err.Error(), "go build ./cmd/lit2") {
 			t.Errorf("ReadReaderVersion(%q) names no build instruction: %v", stamp, err)
 		}
 	}

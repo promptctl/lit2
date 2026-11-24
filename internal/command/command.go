@@ -118,6 +118,8 @@ type Internal struct {
 
 func (i Internal) Error() string { return i.Err.Error() }
 
+func (i Internal) Unwrap() error { return i.Err }
+
 // Class is internal.
 func (Internal) Class() reason.Class { return reason.ClassInternal }
 

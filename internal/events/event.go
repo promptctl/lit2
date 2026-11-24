@@ -74,6 +74,18 @@ func (id EventID) String() string { return hex.EncodeToString(id[:]) }
 // reads: its 64 lowercase hex digits and one newline.
 func (id EventID) FileText() []byte { return []byte(id.String() + "\n") }
 
+// The decoders' shared refusals: a field a message cannot be without is
+// absent, a fixed-length field is another length, and a header field is at
+// the zero no event carries. Each is one refusal wherever it is met.
+var (
+	errMissing   = errors.New("a field it cannot be without")
+	errSize      = errors.New("not its fixed length")
+	errZeroField = errors.New("a field no event leaves at zero")
+)
+
+// errNotAnEventID is a founding file's text that is no event id.
+var errNotAnEventID = errors.New("an event id file holds no event id, 64 lowercase hex digits")
+
 // ReadEventIDFile reads a founding file: its 64 lowercase hex digits, and
 // the one line ending, LF or CRLF, or none, that a git checkout or an
 // editor leaves on a committed file. It is FileText's inverse, and no
@@ -84,11 +96,11 @@ func ReadEventIDFile(b []byte) (EventID, error) {
 		text, _ = bytes.CutSuffix(b, []byte("\n"))
 	}
 	if form := 2 * len(EventID{}); len(text) != form {
-		return EventID{}, fmt.Errorf("an event id file holds %d bytes before its line ending; its form is %d", len(text), form)
+		return EventID{}, fmt.Errorf("an event id file holds %d bytes before its line ending; its form is %d: %w", len(text), form, errSize)
 	}
 	var id EventID
 	if n, err := hex.Decode(id[:], text); err != nil || n != len(id) || hex.EncodeToString(id[:]) != string(text) {
-		return EventID{}, errors.New("an event id file holds no event id, 64 lowercase hex digits")
+		return EventID{}, errNotAnEventID
 	}
 	return id, nil
 }
@@ -96,7 +108,7 @@ func ReadEventIDFile(b []byte) (EventID, error) {
 // ReadEventID reads an id's stored form.
 func ReadEventID(b []byte) (EventID, error) {
 	if len(b) != len(EventID{}) {
-		return EventID{}, fmt.Errorf("an event id is %d bytes, not %d", len(EventID{}), len(b))
+		return EventID{}, fmt.Errorf("an event id is %d bytes, not %d: %w", len(EventID{}), len(b), errSize)
 	}
 	return EventID(b), nil
 }
@@ -309,9 +321,9 @@ func readRecord(b []byte) (record, error) {
 	case err != nil:
 		return record{}, fmt.Errorf("the record: %w", err)
 	case !hasHeader:
-		return record{}, errors.New("the record has no header")
+		return record{}, fmt.Errorf("the record has no header: %w", errMissing)
 	case !hasSig:
-		return record{}, errors.New("the record has no signature")
+		return record{}, fmt.Errorf("the record has no signature: %w", errMissing)
 	}
 	sig, err := readSignature(rec.sigRaw)
 	if err != nil {
@@ -342,7 +354,7 @@ func readSignature(b []byte) (Signature, error) {
 	case err != nil:
 		return Signature{}, fmt.Errorf("the signature: %w", err)
 	case !hasSuite:
-		return Signature{}, errors.New("the signature names no suite")
+		return Signature{}, fmt.Errorf("the signature names no suite: %w", errMissing)
 	}
 	return s, nil
 }
@@ -374,6 +386,16 @@ func bodyOf(k Kinds, h Header, rec record) Body {
 	}
 	return k.read(h.kind, h.schema, salt, payload)
 }
+
+// The writers' preconditions: an About, an Agent and a segment width are
+// sum types and a range Go lets a caller leave outside, and a Labeled agent a
+// label Go lets a caller leave empty.
+var (
+	errNotAnAbout = errors.New("not an About")
+	errNotAnAgent = errors.New("not an Agent")
+	errWidth      = fmt.Errorf("a segment is %d to %d digits", minWidth, fullWidth)
+	errEmptyLabel = errors.New("a Labeled agent with no label reads back as Unlabeled")
+)
 
 // wire is the header as Mint writes it, which readHeader reads.
 func (h Header) wire() []byte {
@@ -410,7 +432,7 @@ func aboutWire(a About) []byte {
 	default:
 		// [LAW:no-silent-failure] an empty subject reads as the root, so a
 		// draft naming nothing would mint a signed event about the root
-		panic(fmt.Sprintf("events: %T is not an About", a))
+		panic(fmt.Errorf("events: %T is %w", a, errNotAnAbout))
 	}
 	return w.Encoded()
 }
@@ -427,7 +449,7 @@ const (
 // a caller's bug.
 func widthWire(w int) uint64 {
 	if w < minWidth || w > fullWidth {
-		panic(fmt.Sprintf("events: a segment width of %d; a segment is %d to %d digits", w, minWidth, fullWidth))
+		panic(fmt.Errorf("events: a segment width of %d; %w", w, errWidth))
 	}
 	return uint64(w)
 }
@@ -442,14 +464,14 @@ func (a Attribution) wire() []byte {
 		// [LAW:single-enforcer] an empty label reads back as Unlabeled, so a
 		// zero Labeled, which Go lets a caller write, would sign another claim
 		if agent.label == "" {
-			panic("events: a Labeled agent with no label reads back as Unlabeled")
+			panic(fmt.Errorf("events: %w", errEmptyLabel))
 		}
 		w.Bytes(3, []byte(agent.label))
 	case Unlabeled:
 	default:
 		// [LAW:no-silent-failure] no label reads back as Unlabeled, so a
 		// Context naming no agent would sign a claim it never made
-		panic(fmt.Sprintf("events: %T is not an Agent", a.Agent))
+		panic(fmt.Errorf("events: %T is %w", a.Agent, errNotAnAgent))
 	}
 	return w.Encoded()
 }
@@ -491,6 +513,9 @@ func recordWire(header, sig []byte, salt Salt, payload []byte) []byte {
 var headerNames = [...]string{"kind", "schema version", "subject", "attribution", "config-ref", "policy version",
 	"causal position", "recorded-at", "payload hash"}
 
+// errNotATime is a recorded-at outside the clock's range.
+var errNotATime = errors.New("which no clock past 1970 reads as a time")
+
 // readHeader reads a header's stored bytes. A header missing a field the
 // event cannot be without, or a root carrying an element name, is refused.
 func readHeader(b []byte) (Header, error) {
@@ -524,14 +549,14 @@ func readHeader(b []byte) (Header, error) {
 		case headerRecordedAt:
 			ns := r.Uvarint()
 			if ns == 0 || ns > math.MaxInt64 {
-				err = fmt.Errorf("the recorded-at is %d ns, which no clock past 1970 reads as a time", ns)
+				err = fmt.Errorf("the recorded-at is %d ns, %w", ns, errNotATime)
 			}
 			h.recordedAt = time.Unix(0, int64(ns)).UTC()
 		case headerPayloadHash:
 			c := r.Bytes()
 			copy(h.payload[:], c)
 			if len(c) != len(h.payload) {
-				err = errors.New("the payload hash is not 32 bytes")
+				err = fmt.Errorf("the payload hash is not 32 bytes: %w", errSize)
 			}
 		}
 		return err
@@ -541,21 +566,25 @@ func readHeader(b []byte) (Header, error) {
 	}
 	for i, name := range headerNames {
 		if !seen[i+1] {
-			return Header{}, fmt.Errorf("the header has no %s", name)
+			return Header{}, fmt.Errorf("the header has no %s: %w", name, errMissing)
 		}
 	}
 	switch {
 	case h.kind == "":
-		return Header{}, errors.New("the header's kind is empty")
+		return Header{}, fmt.Errorf("the header's kind is empty: %w", errZeroField)
 	case h.schema == 0:
-		return Header{}, errors.New("the header's schema version is 0")
+		return Header{}, fmt.Errorf("the header's schema version is 0: %w", errZeroField)
 	case h.policy == 0:
-		return Header{}, errors.New("the header's policy version is 0")
+		return Header{}, fmt.Errorf("the header's policy version is 0: %w", errZeroField)
 	case h.position.n == 0:
-		return Header{}, errors.New("the header's causal position is 0")
+		return Header{}, fmt.Errorf("the header's causal position is 0: %w", errZeroField)
 	}
 	return h, nil
 }
+
+// errRootNamesPart is a subject of the root that names an element or a
+// segment, which the root has none of.
+var errRootNamesPart = errors.New("the subject is the root, which has no elements and no segment, and names one")
 
 // readAbout reads a subject's stored form: nothing, an item, an item and
 // an element, either with a segment width.
@@ -580,7 +609,7 @@ func readAbout(b []byte) (About, error) {
 	}
 	if !hasItem {
 		if hasElement || hasWidth {
-			return nil, errors.New("the subject is the root, which has no elements and no segment, and names one")
+			return nil, errRootNamesPart
 		}
 		return Root{}, nil
 	}
@@ -589,7 +618,7 @@ func readAbout(b []byte) (About, error) {
 		return nil, fmt.Errorf("the subject's item: %w", err)
 	}
 	if hasWidth && (width < minWidth || width > fullWidth) {
-		return nil, fmt.Errorf("the subject's segment width is %d; a segment is %d to %d digits", width, minWidth, fullWidth)
+		return nil, fmt.Errorf("the subject's segment width is %d; %w", width, errWidth)
 	}
 	w := int(width)
 	if !hasElement {
@@ -612,7 +641,7 @@ func readAbout(b []byte) (About, error) {
 func idBits(b []byte) ([16]byte, error) {
 	var id [16]byte
 	if len(b) != len(id) {
-		return id, fmt.Errorf("an id is %d bytes; this one is %d", len(id), len(b))
+		return id, fmt.Errorf("an id is %d bytes; this one is %d: %w", len(id), len(b), errSize)
 	}
 	copy(id[:], b)
 	return id, nil
@@ -642,9 +671,9 @@ func readAttribution(b []byte) (Attribution, error) {
 	case err != nil:
 		return Attribution{}, fmt.Errorf("the attribution: %w", err)
 	case !hasCheckout:
-		return Attribution{}, errors.New("the attribution has no 16-byte checkout id")
+		return Attribution{}, fmt.Errorf("the attribution has no 16-byte checkout id: %w", errMissing)
 	case !hasPrincipal:
-		return Attribution{}, errors.New("the attribution has no principal")
+		return Attribution{}, fmt.Errorf("the attribution has no principal: %w", errMissing)
 	}
 	return a, nil
 }
@@ -680,7 +709,7 @@ func readPrincipal(b []byte) (PrincipalID, error) {
 	case err != nil:
 		return PrincipalID{}, fmt.Errorf("the principal: %w", err)
 	case !hasSuite:
-		return PrincipalID{}, errors.New("the principal names no suite")
+		return PrincipalID{}, fmt.Errorf("the principal names no suite: %w", errMissing)
 	}
 	return p, nil
 }

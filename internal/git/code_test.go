@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,15 +100,21 @@ func TestASymlinkAtThePathIsNoFile(t *testing.T) {
 // damaged repository, git's error, never a branch with no commit.
 func TestAHeadNamingAMissingObjectIsAnError(t *testing.T) {
 	repo := gittest.NewRepo(t)
+	// the control: the same repository, its HEAD naming a commit it holds,
+	// reads
+	repo.Commit(t, map[string][]byte{"f": nil})
+	if got, err := repo.AtHead("f"); err != nil {
+		t.Fatalf("AtHead over a whole HEAD = %#v, %v", got, err)
+	}
 	const missing = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 	if err := os.WriteFile(filepath.Join(repo.Dir, ".git", "refs", "heads", "main"), []byte(missing+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := repo.AtHead("f"); err == nil || !strings.Contains(err.Error(), missing) {
-		t.Errorf("AtHead over a missing HEAD = %#v, %v; want an error naming %s", got, err, missing)
+	if got, err := repo.AtHead("f"); !errors.Is(err, git.ErrHeadMissing) || !strings.Contains(err.Error(), missing) {
+		t.Errorf("AtHead over a missing HEAD = %#v, %v; want ErrHeadMissing, naming %s", got, err, missing)
 	}
-	if ever, err := repo.EverAt("f", git.HashBlob(git.SHA1, nil)); err == nil {
-		t.Errorf("EverAt over a missing HEAD = %v, nil; want an error", ever)
+	if ever, err := repo.EverAt("f", git.HashBlob(git.SHA1, nil)); !errors.Is(err, git.ErrHeadMissing) {
+		t.Errorf("EverAt over a missing HEAD = %v, %v; want ErrHeadMissing", ever, err)
 	}
 }
 
@@ -147,7 +154,7 @@ func TestAShallowCloneSaysWhatItCannotKnow(t *testing.T) {
 	if ever, err := code.EverAt(path, git.HashBlob(git.SHA1, two)); err != nil || !ever {
 		t.Errorf("EverAt(HEAD's blob) in a shallow clone = %v, %v; want true", ever, err)
 	}
-	if ever, err := code.EverAt(path, git.HashBlob(git.SHA1, one)); err == nil || !strings.Contains(err.Error(), "shallow") {
-		t.Errorf("EverAt(a blob past the boundary) = %v, %v; want a refusal naming the shallow clone", ever, err)
+	if ever, err := code.EverAt(path, git.HashBlob(git.SHA1, one)); !errors.Is(err, git.ErrShallow) {
+		t.Errorf("EverAt(a blob past the boundary) = %v, %v; want ErrShallow", ever, err)
 	}
 }

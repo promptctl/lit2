@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/reason"
 )
 
 // run runs one invocation on a fresh twin and returns its status and the
@@ -25,6 +26,16 @@ func run(t *testing.T, twin Twin, args ...string) (int, command.Event) {
 		t.Errorf("lit2 %q exited %d but its event records %d", args, status, got)
 	}
 	return status, e
+}
+
+// failure is the failure e records, failing t when e records none.
+func failure(t *testing.T, e command.Event) reason.Failure {
+	t.Helper()
+	failed, ok := e.Outcome.(cli.Failed)
+	if !ok {
+		t.Fatalf("the run ended %#v; want it failed", e.Outcome)
+	}
+	return failed.Failure
 }
 
 func reasonOf(e command.Event) string {
@@ -64,7 +75,7 @@ func TestAnUnknownVerbIsUsage(t *testing.T) {
 func TestARowWithNoBodyIsInternal(t *testing.T) {
 	twin := NewTwin()
 	status, e := run(t, twin, "admin", "sync")
-	if status != 70 || reasonOf(e) != "internal" || !strings.Contains(twin.Err.String(), "lit2 admin sync is not built in this binary") {
+	if status != 70 || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(twin.Err.String(), "lit2 admin sync is not built in this binary") {
 		t.Errorf("lit2 admin sync: status %d, stderr %q", status, twin.Err)
 	}
 	if e.Command.Name != "admin sync" {
@@ -80,7 +91,8 @@ func TestAnAnswerStdoutRefusesIsTheEnvironments(t *testing.T) {
 	twin := NewTwin()
 	twin.Process.Out = refusing{fmt.Errorf("write /dev/stdout: %w", syscall.ENOSPC)}
 	status, e := run(t, twin, "--help")
-	if status != 78 || reasonOf(e) != "output" || !strings.Contains(twin.Err.String(), "no space left") {
+	var out output
+	if status != 78 || !errors.As(failure(t, e), &out) || !errors.Is(out, syscall.ENOSPC) || !strings.Contains(twin.Err.String(), "no space left") {
 		t.Errorf("--help into a full stdout: status %d, stderr %q", status, twin.Err)
 	}
 }

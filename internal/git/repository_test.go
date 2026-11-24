@@ -57,8 +57,10 @@ func TestTheNameGrammarIsASubsetOfGits(t *testing.T) {
 	}
 	for _, n := range gittest.Refused() {
 		if strings.HasPrefix(string(n), "refs/") && !strings.ContainsRune(string(n), 0) {
-			if _, err := gittest.Ask(t, repo, "check-ref-format", string(n)); err == nil {
-				t.Errorf("lit refuses %q as the audit found git does; git check-ref-format takes it", n)
+			// check-ref-format refuses a name with status 1; the names taken
+			// above are its control
+			if code := gittest.Exit(t, repo, "check-ref-format", string(n)); code != 1 {
+				t.Errorf("lit refuses %q as the audit found git does; git check-ref-format exits %d on it, not 1", n, code)
 			}
 		}
 	}
@@ -158,8 +160,8 @@ func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
 	_, errLocate := g.Locate(t.TempDir())
 	_, errPut := gittest.Put(g.RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil)
 	for _, err := range []error{errLocate, errPut} {
-		if err == nil || !strings.Contains(err.Error(), "git is not in an absolute directory on PATH") {
-			t.Errorf("a spawn with no git failed with %v; want the one error naming PATH", err)
+		if !errors.Is(err, git.ErrNoGit) {
+			t.Errorf("a spawn with no git failed with %v; want ErrNoGit", err)
 		}
 	}
 	spawns := g.Spawns()
@@ -167,10 +169,11 @@ func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
 		t.Fatalf("with no git the record is %+v; want both attempts", spawns)
 	}
 	for _, s := range spawns {
-		if u, ok := s.Ended.(git.Unstarted); !ok || !strings.Contains(u.Why, "PATH") {
-			t.Errorf("an attempt with no git is recorded as %+v; want it never started, naming PATH", s)
+		if s.Ended != (git.Unstarted{Why: git.ErrNoGit.Error()}) {
+			t.Errorf("an attempt with no git is recorded as %+v; want it never started, for ErrNoGit", s)
 		}
 	}
+	putsWithGit(t)
 }
 
 // A Git that Find never made is a git missing from PATH, the same loud
@@ -180,12 +183,22 @@ func TestAZeroGitIsAMissingOne(t *testing.T) {
 	_, errLocate := g.Locate(t.TempDir())
 	_, errPut := gittest.Put(g.RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil)
 	for _, err := range []error{errLocate, errPut} {
-		if err == nil || !strings.Contains(err.Error(), "git is not in an absolute directory on PATH") {
-			t.Errorf("a spawn of a zero Git failed with %v; want the one error naming PATH", err)
+		if !errors.Is(err, git.ErrNoGit) {
+			t.Errorf("a spawn of a zero Git failed with %v; want ErrNoGit", err)
 		}
 	}
 	if spawns := g.Spawns(); spawns == nil || len(spawns) != 2 {
 		t.Errorf("a zero Git's record is %#v; want both attempts", spawns)
+	}
+	putsWithGit(t)
+}
+
+// putsWithGit is the control of a git missing: the same put, by a git Find
+// finds on PATH, is stored.
+func putsWithGit(t *testing.T) {
+	t.Helper()
+	if _, err := gittest.Put(gittest.Runner(t).RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil); err != nil {
+		t.Errorf("a put by a git on PATH failed with %v", err)
 	}
 }
 
@@ -195,8 +208,8 @@ func TestAZeroGitIsAMissingOne(t *testing.T) {
 func TestEverySpawnIsRecorded(t *testing.T) {
 	g := gittest.Runner(t)
 	dir := gittest.Physical(t)
-	if _, err := g.Locate(dir); err == nil {
-		t.Fatal("Locate outside a repository succeeded")
+	if _, err := g.Locate(dir); err != (git.NotFound{Dir: dir}) {
+		t.Fatalf("Locate outside a repository = %v; want NotFound", err)
 	}
 	refused := g.Spawns()
 	if len(refused) != 1 || refused[0].Ended != (git.Exited{Code: 128}) || !strings.Contains(refused[0].Stderr, "not a git repository") || !slices.Contains(refused[0].Args, "rev-parse") {
@@ -266,8 +279,13 @@ func TestATagIsNotLit(t *testing.T) {
 		t.Fatal(err)
 	}
 	tag := gittest.ID(t, gittest.GitIn(t, dir, "object "+blob.String()+"\ntype blob\ntag t\ntagger t <t@t> 0 +0000\n\nt\n", "mktag"))
-	if _, err := repo.Commit(tag); !errors.As(err, new(git.NotLit)) {
-		t.Errorf("reading a tag as a commit failed with %v; want NotLit", err)
+	if _, err := repo.Commit(tag); !errors.As(err, new(git.NotLit)) || !errors.Is(err, git.ErrWrongKind) {
+		t.Errorf("reading a tag as a commit failed with %v; want NotLit, ErrWrongKind", err)
+	}
+	// the control: a commit lit wrote, in the same repository, reads
+	commit := gittest.PutCommit(t, repo, git.Commit{Tree: gittest.PutTree(t, repo, nil), Message: "m\n"})
+	if _, err := repo.Commit(commit); err != nil {
+		t.Errorf("reading a commit lit wrote failed with %v", err)
 	}
 }
 
@@ -388,8 +406,10 @@ func TestTheCallersGitVariablesNeverRedirectAWrite(t *testing.T) {
 	if _, err := gittest.Ask(t, dir, "cat-file", "-e", id.String()); err != nil {
 		t.Errorf("the blob is not in lit's repository: %v", err)
 	}
-	if _, err := gittest.Ask(t, elsewhere, "cat-file", "-e", id.String()); err == nil {
-		t.Errorf("the blob was written into the repository the caller's GIT_ variables name")
+	// cat-file -e says an object is absent with status 1; in lit's
+	// repository above, the same question is the control
+	if code := gittest.Exit(t, elsewhere, "cat-file", "-e", id.String()); code != 1 {
+		t.Errorf("cat-file -e of the blob in the repository the caller's GIT_ variables name exits %d; want 1, absent", code)
 	}
 }
 
@@ -448,9 +468,13 @@ func TestADirectoryThatIsNoRepositoryIsRefused(t *testing.T) {
 	_, errList := repo.List("refs/lit/")
 	_, errRead := repo.Blob(gittest.ID(t, "ce013625030ba8dba906f756967f9e9ca394464a"))
 	for _, err := range []error{errPut, errList, errRead} {
-		if err == nil || !strings.Contains(err.Error(), dir+" is no git repository") {
-			t.Errorf("using a directory that is no repository failed with %v; want its refusal, naming it", err)
+		if !errors.Is(err, git.ErrNoRepository) || !strings.Contains(err.Error(), dir) {
+			t.Errorf("using a directory that is no repository failed with %v; want ErrNoRepository, naming it", err)
 		}
+	}
+	// the control: the same put where no directory stands is stored
+	if _, err := gittest.Put(gittest.Runner(t).RepositoryAt(filepath.Join(filepath.Dir(dir), "fresh")), []byte("x")); err != nil {
+		t.Errorf("a put where no directory stands failed with %v", err)
 	}
 }
 
@@ -477,16 +501,24 @@ func TestAnObjectLitDidNotWriteIsRefused(t *testing.T) {
 	}
 	foreign := gittest.GitIn(t, dir, "m\n", "commit-tree", tree.String())
 	child := gittest.GitIn(t, dir, "m\n", "commit-tree", "-p", lit.String(), tree.String())
+	// the controls: the commit and tree lit wrote read, so each refusal
+	// below is its object's shape
+	if _, err := repo.Commit(lit); err != nil {
+		t.Errorf("Commit(%s), lit's own, failed with %v", lit, err)
+	}
+	if _, err := repo.Tree(tree); err != nil {
+		t.Errorf("Tree(%s), lit's own, failed with %v", tree, err)
+	}
 	for _, c := range []string{foreign, child} {
-		if got, err := repo.Commit(gittest.ID(t, c)); err == nil {
-			t.Errorf("Commit(%s) read a commit lit did not write as %+v", c, got)
+		if got, err := repo.Commit(gittest.ID(t, c)); !errors.Is(err, git.ErrForeignShape) || !errors.As(err, new(git.NotLit)) {
+			t.Errorf("Commit(%s) = %+v, %v; want NotLit, ErrForeignShape", c, got, err)
 		}
 	}
 	exec := gittest.GitIn(t, dir, "100755 blob "+blob.String()+"\ta\x00", "mktree", "-z")
 	twice := gittest.GitIn(t, dir, "100644 blob "+blob.String()+"\ta\x00100644 blob "+blob.String()+"\ta\x00", "mktree", "-z")
 	for _, tr := range []string{exec, twice} {
-		if got, err := repo.Tree(gittest.ID(t, tr)); err == nil {
-			t.Errorf("Tree(%s) read a tree lit did not write as %v", tr, got)
+		if got, err := repo.Tree(gittest.ID(t, tr)); !errors.Is(err, git.ErrForeignShape) || !errors.As(err, new(git.NotLit)) {
+			t.Errorf("Tree(%s) = %v, %v; want NotLit, ErrForeignShape", tr, got, err)
 		}
 	}
 }
@@ -501,9 +533,11 @@ func TestTwoIDsOfOneSumInTwoFormatsDiffer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	short, err := git.ParseObjectID(git.SHA256, sum)
-	if sha1 == sha256 || err == nil || short == sha1 {
-		t.Errorf("a sha1 id and a sha256 id compare equal, or a sha1 sum reads as a sha256 id")
+	if sha1 == sha256 {
+		t.Errorf("a sha1 id and a sha256 id of one sum compare equal")
+	}
+	if short, err := git.ParseObjectID(git.SHA256, sum); !errors.Is(err, git.ErrSumSize) {
+		t.Errorf("a sha1 sum read as a sha256 id = %v, %v; want ErrSumSize", short, err)
 	}
 	if got := hex.EncodeToString(sha1.Sum()); got != sum {
 		t.Errorf("a sha1 id's sum is %s; want %s", got, sum)
@@ -516,14 +550,19 @@ func TestTwoIDsOfOneSumInTwoFormatsDiffer(t *testing.T) {
 			t.Errorf("ObjectIDFrom(%v, Sum) = %v, %v; want %v", id.Format(), back, err, id)
 		}
 	}
-	for name, read := range map[string]func() (git.ObjectID, error){
-		"a sha1 sum as sha256": func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA256, sha1.Sum()) },
-		"a sha256 sum as sha1": func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA1, sha256.Sum()) },
-		"no format":            func() (git.ObjectID, error) { return git.ObjectIDFrom(0, sha1.Sum()) },
-		"an empty sum":         func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA1, nil) },
+	// the round trips above are the control: each sum read in its own
+	// format is an id
+	for name, c := range map[string]struct {
+		read func() (git.ObjectID, error)
+		want error
+	}{
+		"a sha1 sum as sha256": {func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA256, sha1.Sum()) }, git.ErrSumSize},
+		"a sha256 sum as sha1": {func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA1, sha256.Sum()) }, git.ErrSumSize},
+		"no format":            {func() (git.ObjectID, error) { return git.ObjectIDFrom(0, sha1.Sum()) }, git.ErrNoFormat},
+		"an empty sum":         {func() (git.ObjectID, error) { return git.ObjectIDFrom(git.SHA1, nil) }, git.ErrSumSize},
 	} {
-		if id, err := read(); err == nil {
-			t.Errorf("%s reads as %v; want it refused", name, id)
+		if id, err := c.read(); !errors.Is(err, c.want) {
+			t.Errorf("%s reads as %v, %v; want %v", name, id, err, c.want)
 		}
 	}
 }
@@ -533,7 +572,11 @@ func TestTheZeroIDPrintsAsNoIDAndNoFormatReadsOne(t *testing.T) {
 	if got := fmt.Sprintf("%v %+v", git.ObjectID{}, git.ObjectID{}.Format()); got != "(no object id) no format (0)" {
 		t.Errorf("the zero id prints as %q", got)
 	}
-	if _, err := git.ParseObjectID(0, "ce013625030ba8dba906f756967f9e9ca394464a"); err == nil {
-		t.Errorf("an id read in no format was taken")
+	const sum = "ce013625030ba8dba906f756967f9e9ca394464a"
+	if _, err := git.ParseObjectID(git.SHA1, sum); err != nil {
+		t.Errorf("the id read in its format failed with %v", err)
+	}
+	if id, err := git.ParseObjectID(0, sum); !errors.Is(err, git.ErrNoFormat) {
+		t.Errorf("an id read in no format = %v, %v; want ErrNoFormat", id, err)
 	}
 }

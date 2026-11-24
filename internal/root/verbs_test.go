@@ -62,7 +62,7 @@ func (s session) refused(reason string, args ...string) said {
 	s.t.Helper()
 	r := s.lit(args...)
 	if r.status != 1 || reasonOf(r.event) != reason {
-		s.t.Fatalf("lit2 %q: status %d, stderr %q; want refused as %s", args, r.status, r.err, reason)
+		s.t.Fatalf("lit2 %q: status %d, reason %q, stderr %q; want refused as %s", args, r.status, reasonOf(r.event), r.err, reason)
 	}
 	if r.out != "" {
 		s.t.Errorf("lit2 %q was refused and printed %q", args, r.out)

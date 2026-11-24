@@ -110,9 +110,9 @@ func (b *book) mint(w store.CheckoutID, seen fold.State, ds []events.Draft) []ev
 // and is the echo.
 func (b *book) as(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops ...verbs.Operand) string {
 	b.t.Helper()
-	c, minted, reason := b.run(w, seen, verb, ops)
-	if reason != "" {
-		b.t.Fatalf("%s %+v refused: %s", verb, ops, reason)
+	c, minted, no, refused := b.run(w, seen, verb, ops)
+	if refused {
+		b.t.Fatalf("%s %+v refused: %s: %v", verb, ops, no.Reason, no.Err)
 	}
 	if minted == nil {
 		return ""
@@ -121,15 +121,15 @@ func (b *book) as(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops ...v
 }
 
 // run is a command as root runs it: compiled, minted and gated. A refused
-// command leaves the book as it was and is its reason and error.
-func (b *book) run(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops []verbs.Operand) (verbs.Compiled, []events.Event, string) {
+// command leaves the book as it was and is its refusal.
+func (b *book) run(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops []verbs.Operand) (verbs.Compiled, []events.Event, verbs.Refused, bool) {
 	b.t.Helper()
 	c := verbs.Compile(b.world(seen), verb, ops, func() (string, error) { return "", nil })
 	if no, refused := c.Refusal(); refused {
-		return c, nil, no.Reason + ": " + no.Err.Error()
+		return c, nil, no, true
 	}
 	if len(c.Drafts) == 0 {
-		return c, nil, ""
+		return c, nil, verbs.Refused{}, false
 	}
 	before := b.st
 	minted := b.mint(w, seen, c.Drafts)
@@ -140,9 +140,9 @@ func (b *book) run(w store.CheckoutID, seen fold.State, verb verbs.Verb, ops []v
 		if len(c.Drafts) != 0 {
 			b.t.Errorf("%s %+v was refused and drafted %d", verb, ops, len(c.Drafts))
 		}
-		return c, nil, no.Reason + ": " + no.Err.Error()
+		return c, nil, no, true
 	}
-	return c, minted, ""
+	return c, minted, verbs.Refused{}, false
 }
 
 // do runs verb on ops as one, having read everything.
@@ -154,19 +154,29 @@ func (b *book) do(verb verbs.Verb, ops ...verbs.Operand) string {
 // refused is the reason verb on ops is refused, failing t when it is not.
 func (b *book) refused(verb verbs.Verb, ops ...verbs.Operand) string {
 	b.t.Helper()
-	reason, _, _ := strings.Cut(b.refusal(verb, ops...), ": ")
-	return reason
+	return b.refusal(verb, ops...).Reason
 }
 
-// refusal is the reason and error verb on ops is refused with, failing t
-// when it is not.
-func (b *book) refusal(verb verbs.Verb, ops ...verbs.Operand) string {
+// refusal is the refusal verb on ops is refused with, failing t when it is
+// not.
+func (b *book) refusal(verb verbs.Verb, ops ...verbs.Operand) verbs.Refused {
 	b.t.Helper()
-	_, _, reason := b.run(one, b.st, verb, ops)
-	if reason == "" {
+	_, _, no, refused := b.run(one, b.st, verb, ops)
+	if !refused {
 		b.t.Fatalf("%s %+v was not refused", verb, ops)
 	}
-	return reason
+	return no
+}
+
+// refusedAs is the message of the refusal verb on ops is refused with,
+// failing t unless it is refused for reason.
+func (b *book) refusedAs(reason string, verb verbs.Verb, ops ...verbs.Operand) string {
+	b.t.Helper()
+	no := b.refusal(verb, ops...)
+	if no.Reason != reason {
+		b.t.Fatalf("%s %+v is refused as %s: %v; want %s", verb, ops, no.Reason, no.Err, reason)
+	}
+	return no.Err.Error()
 }
 
 func (b *book) get(path string) string {

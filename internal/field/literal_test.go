@@ -1,6 +1,7 @@
 package field
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -38,12 +39,25 @@ func TestALiteralReadsAsTheGrammarSays(t *testing.T) {
 }
 
 func TestALiteralTheGrammarDoesNotSayIsRefused(t *testing.T) {
-	for _, text := range []string{
-		`[a,,b]`, `[,]`, `[a`, `{title a}`, `{title: a`, `"open`, `"a" b`, `[a] b`,
-		`{level: 1, level: 2}`, // a key is given once
+	for _, c := range []struct {
+		text, control string
+		want          error
+	}{
+		{`[a,,b]`, `[a,b]`, errNotAValue},
+		{`[,]`, `[]`, errNotAValue},
+		{`[a`, `[a]`, errNotAValue},
+		{`{title a}`, `{title: a}`, errNotAValue},
+		{`{title: a`, `{title: a}`, errNotAValue},
+		{`"open`, `"open"`, errNotAValue},
+		{`"a" b`, `"a b"`, errNotAValue},
+		{`[a] b`, `[a b]`, errNotAValue},
+		{`{level: 1, level: 2}`, `{level: 1, title: 2}`, errKeyTwice}, // a key is given once
 	} {
-		if got, err := ParseLiteral(text); err == nil {
-			t.Errorf("ParseLiteral(%q) = %#v; want it refused", text, got)
+		if _, err := ParseLiteral(c.control); err != nil {
+			t.Errorf("control ParseLiteral(%q): %v", c.control, err)
+		}
+		if got, err := ParseLiteral(c.text); !errors.Is(err, c.want) {
+			t.Errorf("ParseLiteral(%q) = %#v, %v; want %v", c.text, got, err, c.want)
 		}
 	}
 }
@@ -62,22 +76,32 @@ func TestTheEngineKindsReadTheirOwnValues(t *testing.T) {
 			t.Errorf("%s.Parse(%q) = %q, %v; want %q", c.k.Name(), c.in, got, err, c.want)
 		}
 	}
+	// the controls are the reads above; each refusal differs from one in
+	// what its kind does not read
 	for _, c := range []struct {
-		k  Kind
-		in string
+		k    Kind
+		in   string
+		want error
 	}{
-		{Column{}, "Not A Name"}, {Level{}, "6"}, {Level{}, "x"}, {ItemRef{}, "a b"}, {ItemRef{}, ""},
+		{Column{}, "Not A Name", events.ErrNotAName}, {Level{}, "6", events.ErrNotALevel}, {Level{}, "x", events.ErrNotALevel},
+		{ItemRef{}, "a b", errNotAnItem}, {ItemRef{}, "", errNotAnItem},
 	} {
-		if _, err := c.k.Parse(c.in); err == nil {
-			t.Errorf("%s.Parse(%q) reads", c.k.Name(), c.in)
+		if _, err := c.k.Parse(c.in); !errors.Is(err, c.want) {
+			t.Errorf("%s.Parse(%q) = %v; want %v", c.k.Name(), c.in, err, c.want)
 		}
 	}
 }
 
 func TestAFieldExistsWhereItsPlacesSay(t *testing.T) {
-	two, _ := events.ParseLevel(2)
-	three, _ := events.ParseLevel(3)
-	one, _ := events.ParseLevel(1)
+	level := func(n int) events.Level {
+		t.Helper()
+		l, err := events.ParseLevel(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	one, two, three := level(1), level(2), level(3)
 	b := Builtins(Enum{})
 	for _, c := range []struct {
 		path Path
@@ -102,14 +126,14 @@ func TestAFieldExistsWhereItsPlacesSay(t *testing.T) {
 
 func TestOnlySettableFieldsAreWrittenAndOnlyOneOrASetIsKeyed(t *testing.T) {
 	b := Builtins(Enum{})
-	for path, want := range map[Path]bool{"title": true, "labels": true, "deleted": true, "level": false, "parent": false, "pr/verdict": false} {
-		if got := Writable(b[path]) == nil; got != want {
-			t.Errorf("%s writable %v; want %v", path, got, want)
+	for path, want := range map[Path]Unwritable{"title": nil, "labels": nil, "deleted": nil, "level": DerivedField{}, "parent": DerivedField{}, "pr/verdict": DerivedField{}, "status/reason": TransitionWritten{}} {
+		if got := Writable(b[path]); got != want {
+			t.Errorf("%s writable: %v; want %v", path, got, want)
 		}
 	}
-	for path, want := range map[Path]bool{"title": true, "labels": true, "status": true, "comments": false, "children": false} {
-		if got := Keyable(b[path]) == nil; got != want {
-			t.Errorf("%s keyable %v; want %v", path, got, want)
+	for path, want := range map[Path]error{"title": nil, "labels": nil, "status": nil, "comments": NotKeyable{Multi: Elements}, "children": NotKeyable{Multi: Children}} {
+		if got := Keyable(b[path]); got != want {
+			t.Errorf("%s keyable: %v; want %v", path, got, want)
 		}
 	}
 }

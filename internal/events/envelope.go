@@ -98,6 +98,16 @@ func (Text) opened()       {}
 func (Locked) opened()     {}
 func (Unopenable) opened() {}
 
+// The envelope's refusals: a form no Envelope a caller can build holds, which
+// only the zero Envelope has; a message holding not exactly one of a sum's
+// forms, which every reader of a sum refuses alike; and a plaintext committed
+// to another text.
+var (
+	errNoForm            = errors.New("not an envelope's form")
+	errForms             = errors.New("not exactly one of its forms")
+	errCommitmentNotText = errors.New("a plaintext envelope's commitment is not its text's")
+)
+
 // Open reads e with k's keys.
 func Open(e Envelope, k Keyring) Opened {
 	switch f := e.form.(type) {
@@ -108,7 +118,7 @@ func Open(e Envelope, k Keyring) Opened {
 	case unknownForm:
 		return Unopenable{}
 	}
-	panic(fmt.Sprintf("events: %T is not an envelope's form", e.form))
+	panic(fmt.Errorf("events: %T is %w", e.form, errNoForm))
 }
 
 // The envelope's wire fields: envelope = 1:plain{1:text} | 2:sealed{1:suite
@@ -141,7 +151,7 @@ func (e Envelope) wire() []byte {
 	default:
 		// [LAW:no-silent-failure] the zero Envelope would read back as a
 		// newer binary's form, hiding a payload field never set
-		panic(fmt.Sprintf("events: %T is not an envelope's form", e.form))
+		panic(fmt.Errorf("events: %T is %w", e.form, errNoForm))
 	}
 	w.Bytes(envelopeCommitment, e.commitment[:])
 	w.Keep(e.unknown)
@@ -168,7 +178,7 @@ func readEnvelope(b []byte) (Envelope, error) {
 		case envelopeCommitment:
 			c := r.Bytes()
 			if len(c) != len(e.commitment) {
-				return fmt.Errorf("an envelope's commitment is %d bytes, not %d", len(c), len(e.commitment))
+				return fmt.Errorf("an envelope's commitment is %d bytes, not %d: %w", len(c), len(e.commitment), errSize)
 			}
 			copy(e.commitment[:], c)
 			committed = true
@@ -181,14 +191,14 @@ func readEnvelope(b []byte) (Envelope, error) {
 	e.unknown = r.Rest()
 	switch {
 	case forms > 1:
-		return Envelope{}, errors.New("an envelope holds two forms")
+		return Envelope{}, fmt.Errorf("an envelope holds two forms: %w", errForms)
 	case !committed:
-		return Envelope{}, errors.New("an envelope has no commitment")
+		return Envelope{}, fmt.Errorf("an envelope has no commitment: %w", errMissing)
 	case forms == 0:
 		e.form = unknownForm{}
 	}
 	if p, ok := e.form.(plain); ok && plainCommitment(p.text) != e.commitment {
-		return Envelope{}, errors.New("a plaintext envelope's commitment is not its text's")
+		return Envelope{}, errCommitmentNotText
 	}
 	return e, nil
 }

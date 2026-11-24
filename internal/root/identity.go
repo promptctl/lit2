@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
@@ -16,8 +17,15 @@ import (
 // secret, and the checkout id is no one else's. The shared one also holds
 // the founding pin, which decides the store every fold of the clone reads.
 func identityFiles(c git.Checkout) (shared, private store.Files) {
-	return store.FilesAtMode(command.DirOf(command.PrincipalFile{}, c), 0o600), store.FilesAtMode(command.DirOf(command.IDFile{}, c), 0o600)
+	return store.FilesAtMode(command.DirOf(command.PrincipalFile{}, c), identityMode), store.FilesAtMode(command.DirOf(command.IDFile{}, c), identityMode)
 }
+
+// identityMode is the mode of both identity files, on disk and in the twin.
+const identityMode fs.FileMode = 0o600
+
+// errIdentityUnreadable is a mint refused because an identity file already
+// there does not parse: the mint never writes over it.
+var errIdentityUnreadable = errors.New("an identity file does not read")
 
 // MintIdentity creates the checkout id in private and the principal's key
 // in shared, each once, then reads both back, so a worktree that loses a
@@ -46,7 +54,7 @@ func MintIdentity(shared, private store.Files, entropy io.Reader) (command.Minte
 	case command.Unminted:
 		return command.Minted{}, command.Fresh{}, fmt.Errorf("the identity files created are not there: %d missing", len(got.Files()))
 	case command.Unreadable:
-		return command.Minted{}, command.Fresh{}, fmt.Errorf("an identity file does not read: %w", got.Err)
+		return command.Minted{}, command.Fresh{}, fmt.Errorf("%w: %w", errIdentityUnreadable, got.Err)
 	}
 	panic("root: readIdentity answered no Identity")
 }

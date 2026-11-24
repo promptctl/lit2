@@ -1,6 +1,7 @@
 package field
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -106,13 +107,16 @@ const segment = `[a-z][a-z0-9_-]*`
 // operator with its values, which are the rest of the text.
 var atomGrammar = regexp.MustCompile(`(?s)^(!?)(` + segment + `(?:/` + segment + `)*)(?:(!=|=|~)(.*))?$`)
 
+// errNotAnAtom is a text the atom grammar does not say.
+var errNotAnAtom = errors.New("is not an atom")
+
 // ParseAtom reads an atom from its source. It refuses what the grammar does
 // not say and a regular expression that does not compile; whether the path is
 // declared and the value fits its kind is the config's to say.
 func ParseAtom(s string) (Atom, error) {
 	m := atomGrammar.FindStringSubmatch(s)
 	if m == nil {
-		return Atom{}, fmt.Errorf("%q is not an atom: p, !p, p=v, p!=v or p~re", s)
+		return Atom{}, fmt.Errorf("%q %w: p, !p, p=v, p!=v or p~re", s, errNotAnAtom)
 	}
 	neg, path, opWord, rest := m[1], Path(m[2]), m[3], m[4]
 	if opWord == "" {
@@ -122,25 +126,25 @@ func ParseAtom(s string) (Atom, error) {
 		return Atom{path: path, op: Absent{}, src: s}, nil
 	}
 	if neg != "" && opWord == "=" {
-		return Atom{}, fmt.Errorf("%q is not an atom: ! negates a path alone, so write %s!=%s", s, path, rest)
+		return Atom{}, fmt.Errorf("%q %w: ! negates a path alone, so write %s!=%s", s, errNotAnAtom, path, rest)
 	}
 	if neg != "" {
-		return Atom{}, fmt.Errorf("%q is not an atom: ! negates a path alone", s)
+		return Atom{}, fmt.Errorf("%q %w: ! negates a path alone", s, errNotAnAtom)
 	}
 	if opWord == "~" {
 		pattern, err := only(rest)
 		if err != nil {
-			return Atom{}, fmt.Errorf("%q is not an atom: %w", s, err)
+			return Atom{}, fmt.Errorf("%q %w: %w", s, errNotAnAtom, err)
 		}
 		re, err := regexp.Compile(pattern)
 		if err != nil {
-			return Atom{}, fmt.Errorf("%q is not an atom: %q is not a regular expression: %w", s, pattern, err)
+			return Atom{}, fmt.Errorf("%q %w: %q %w: %w", s, errNotAnAtom, pattern, errNotARegexp, err)
 		}
 		return Atom{path: path, op: Matches{Re: re}, src: s}, nil
 	}
 	values, err := list(rest)
 	if err != nil {
-		return Atom{}, fmt.Errorf("%q is not an atom: %w", s, err)
+		return Atom{}, fmt.Errorf("%q %w: %w", s, errNotAnAtom, err)
 	}
 	if opWord == "=" {
 		return Atom{path: path, op: Equals{Values: values}, src: s}, nil

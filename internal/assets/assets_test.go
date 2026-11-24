@@ -18,10 +18,13 @@ func TestDeclaredAndEmbeddedAreEqual(t *testing.T) {
 		}
 	}
 	err := fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && !named[path] {
+		if err != nil {
+			return err // the walk stops, and the test with it
+		}
+		if !d.IsDir() && !named[path] {
 			t.Errorf("%s is embedded and no Asset names it", path)
 		}
-		return err
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)

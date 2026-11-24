@@ -3,9 +3,12 @@ package command
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -77,8 +80,11 @@ func TestAWriteRemovesDayFilesOlderThan30Days(t *testing.T) {
 		"2026-11-11.jsonl": true, // the day the event was written
 	} {
 		_, err := os.Stat(filepath.Join(dir, name))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("stat %s: %v", name, err)
+		}
 		if exists := err == nil; exists != kept {
-			t.Errorf("%s exists: %v; want %v (%v)", name, exists, kept, err)
+			t.Errorf("%s exists: %v; want %v", name, exists, kept)
 		}
 	}
 }
@@ -89,7 +95,10 @@ func TestALogUnderARegularFileFailsToWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := Event{Invocation: inv, Command: cli.Summary{Name: "help"}, Started: t0.Add(time.Hour), Outcome: cli.Done{}}
-	if err := NewLog(filepath.Join(file, "commands")).Write(e); err == nil {
-		t.Error("a log directory under a regular file was written")
+	if err := NewLog(filepath.Join(filepath.Dir(file), "commands")).Write(e); err != nil {
+		t.Fatalf("control: a log beside the regular file: %v", err)
+	}
+	if err := NewLog(filepath.Join(file, "commands")).Write(e); !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("a log directory under a regular file = %v; want ENOTDIR, the OS refusing a directory there", err)
 	}
 }

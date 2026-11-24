@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/events/wire"
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/panics"
 	"github.com/promptctl/lit2/internal/store"
 )
 
@@ -242,6 +243,8 @@ func decoded(t testing.TB, ks Kinds, r store.Record) Event {
 		return d
 	case Malformed:
 		t.Fatalf("a record decodes Malformed: %s", d.Why)
+	default:
+		t.Fatalf("a record decodes as %#v, neither an event nor malformed", d)
 	}
 	panic("unreachable")
 }
@@ -256,4 +259,14 @@ func words(r *rand.Rand, n int) string {
 		ws[i] = english[r.IntN(len(english))]
 	}
 	return strings.Join(ws, " ")
+}
+
+// A row whose decoders do not reach its kind's version, and two rows of one
+// kind, are build faults; a row of one decoder for a version-1 kind and two
+// kinds' rows are the controls.
+func TestARowOrATableThatDisagreesWithItsKindsPanics(t *testing.T) {
+	NewKinds(Row[note](readNote), Row[made](readMade))
+	panics.With(t, errRowVersion, func() { Row[note]() })
+	panics.With(t, errRowVersion, func() { Row[note](readNote, readNote) })
+	panics.With(t, errRegisteredTwice, func() { NewKinds(Row[note](readNote), Row[note](readNote)) })
 }

@@ -1,6 +1,7 @@
 package address_test
 
 import (
+	"bytes"
 	"errors"
 	"slices"
 	"testing"
@@ -67,11 +68,11 @@ func TestEveryPathFormNamesItsNode(t *testing.T) {
 			t.Errorf("%s = %s at %#v; want %s at %#v", c.text, a, a.Place, c.canon, c.place)
 		}
 	}
-	if a, _ := parse(s, schema, seg+"/comments/"+note.Segment().String()); a.Node != (address.Element{Of: feature.ID, ID: note.ID, Rendered: "lit-" + seg + "/comments/" + note.Segment().String()}) {
-		t.Errorf("a comment's path names %#v; want the comment, a node", a.Node)
+	if a, r := parse(s, schema, seg+"/comments/"+note.Segment().String()); r != nil || a.Node != (address.Element{Of: feature.ID, ID: note.ID, Rendered: "lit-" + seg + "/comments/" + note.Segment().String()}) {
+		t.Errorf("a comment's path names %#v, %v; want the comment, a node", a.Node, r)
 	}
-	if a, _ := parse(s, schema, seg+"/ready"); !isCheck(a) {
-		t.Errorf("%s/ready = %#v; want the check row", seg, a.Target)
+	if a, r := parse(s, schema, seg+"/ready"); r != nil || !isCheck(a) {
+		t.Errorf("%s/ready = %#v, %v; want the check row", seg, a.Target, r)
 	}
 }
 
@@ -82,6 +83,20 @@ func isCheck(a address.Address) bool {
 	}
 	_, ok = f.Row.(config.CheckRow)
 	return ok
+}
+
+// TestAPrincipalNotAMemberNamesNoMember: /members/<did> names a member, so
+// the owner's did:key resolves and a principal the policy does not hold
+// names nothing.
+func TestAPrincipalNotAMemberNamesNoMember(t *testing.T) {
+	stranger := must(events.NewKey(bytes.NewReader(bytes.Repeat([]byte{2}, 32)))).Principal().String()
+	if _, r := parse(founded, schema, "/members/"+key.Principal().String()); r != nil {
+		t.Fatalf("control: the owner's /members entry is refused: %v", r)
+	}
+	var none address.NotFound
+	if _, r := parse(founded, schema, "/members/"+stranger); !errors.As(r, &none) || none.ID != stranger {
+		t.Errorf("a stranger's /members entry is %v; want it not found, naming the stranger", r)
+	}
 }
 
 // TestAPathThatNamesNothingSaysWhy: each refusal carries its own reason,
@@ -187,7 +202,9 @@ func TestADeclaredFieldIsAddressable(t *testing.T) {
 	if _, err := row.Decl.Kind.Parse("5"); err != nil {
 		t.Errorf("points takes 5: %v", err)
 	}
-	if _, err := row.Decl.Kind.Parse("13"); err == nil {
-		t.Error("points takes 13")
+	// what the enum refuses is the field package's to test; here the row
+	// carries the kind the version declares
+	if e, ok := row.Decl.Kind.(field.Enum); !ok || !slices.Equal(e.Values(), []string{"1", "2", "3", "5", "8"}) {
+		t.Errorf("points is %#v; want the enum 1, 2, 3, 5, 8 the version declares", row.Decl.Kind)
 	}
 }

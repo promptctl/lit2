@@ -98,11 +98,15 @@ func (g *Git) durable() error {
 // floor is the oldest git that honors core.fsync.
 var floor = [2]int{2, 36}
 
+// errBelowFloor is a git older than floor, or one whose version cannot be
+// read as one at it.
+var errBelowFloor = errors.New("git is below lit2's floor")
+
 // atFloor refuses a git whose git version says it is older than floor.
 func atFloor(version string) error {
 	var v [2]int
 	if _, err := fmt.Sscanf(version, "git version %d.%d", &v[0], &v[1]); err != nil || v[0] < floor[0] || v[0] == floor[0] && v[1] < floor[1] {
-		return fmt.Errorf("lit2 needs git %d.%d or later to keep its repository durable; %q is what git says it is", floor[0], floor[1], strings.TrimSpace(version))
+		return fmt.Errorf("%w: lit2 needs git %d.%d or later to keep its repository durable; %q is what git says it is", errBelowFloor, floor[0], floor[1], strings.TrimSpace(version))
 	}
 	return nil
 }

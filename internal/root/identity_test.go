@@ -1,10 +1,11 @@
 package root
 
 import (
+	"errors"
+	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
@@ -53,7 +54,8 @@ func TestTheIdentityFilesOnDiskAreASecrets(t *testing.T) {
 }
 
 func inMemory(*testing.T) clone {
-	return clone{shared: store.NewMemoryFiles(), worktree: [2]store.Files{store.NewMemoryFiles(), store.NewMemoryFiles()}}
+	files := func() store.Files { return store.NewMemoryFilesMode(identityMode) }
+	return clone{shared: files(), worktree: [2]store.Files{files(), files()}}
 }
 
 func entropy(seed byte) *rand.ChaCha8 { return rand.NewChaCha8([32]byte{'i', 'd', seed}) }
@@ -67,24 +69,56 @@ func TestIdentity(t *testing.T) {
 func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 	t.Run("two worktrees minting at once sign with one key", func(t *testing.T) {
 		c := fresh(t)
+		// The window that could make two keys is the first minter's, between
+		// drawing its key and that key landing in the shared dir. The first
+		// is held there while the second mints whole, so the second's key
+		// lands first; only a create-once that refuses an existing file, and
+		// a mint that signs with what the file then holds, keep one key.
+		// [LAW:no-ambient-temporal-coupling] the interleaving is forced by a
+		// gate, not hoped for from two goroutines' timing.
+		held := heldAtKeyCreate(c.shared)
 		var got [2]command.Minted
 		var made [2]command.Fresh
-		var wg sync.WaitGroup
-		for i := range 2 {
-			wg.Go(func() {
-				m, f, err := MintIdentity(c.shared, c.worktree[i], entropy(byte(i)))
-				if err != nil {
-					t.Error(err)
-				}
-				got[i], made[i] = m, f
-			})
+		first := make(chan error, 1)
+		go func() {
+			var err error
+			got[0], made[0], err = MintIdentity(held, c.worktree[0], entropy(0))
+			first <- err
+		}()
+		<-held.reached
+		var err error
+		if got[1], made[1], err = MintIdentity(c.shared, c.worktree[1], entropy(1)); err != nil {
+			t.Fatalf("the second mint: %v", err)
 		}
-		wg.Wait()
+		close(held.release)
+		if err := <-first; err != nil {
+			t.Fatalf("the first mint: %v", err)
+		}
 		if got[0].Key.Principal() != got[1].Key.Principal() || got[0].Checkout == got[1].Checkout {
 			t.Errorf("two worktrees minted %v and %v; want one principal and two checkout ids", got[0], got[1])
 		}
-		if (made[0].Key == store.Created) == (made[1].Key == store.Created) || made[0].Checkout != store.Created || made[1].Checkout != store.Created {
-			t.Errorf("the two mints made %+v and %+v; want one key created, and each its own checkout id", made[0], made[1])
+		if made[0] != (command.Fresh{Checkout: store.Created, Key: store.Existing}) || made[1] != (command.Fresh{Checkout: store.Created, Key: store.Created}) {
+			t.Errorf("the held mint made %+v and the other %+v; want the other's key created, the held one's found, and each its own checkout id", made[0], made[1])
+		}
+	})
+	t.Run("the identity files are a secret's, -rw-------", func(t *testing.T) {
+		c := fresh(t)
+		if _, _, err := MintIdentity(c.shared, c.worktree[0], entropy(1)); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []struct {
+			fs   store.Files
+			file command.File
+		}{{c.shared, command.PrincipalFile{}}, {c.worktree[0], command.IDFile{}}} {
+			moded, ok := f.fs.(interface {
+				Mode(store.Path) (fs.FileMode, error)
+			})
+			if !ok {
+				t.Fatalf("%T says no file's mode", f.fs)
+			}
+			if mode, err := moded.Mode(command.NameOf(f.file)); err != nil || mode != 0o600 {
+				t.Errorf("%s is %v, %v; want -rw-------", command.NameOf(f.file), mode, err)
+			}
 		}
 	})
 	t.Run("a second mint returns the first identity", func(t *testing.T) {
@@ -116,11 +150,31 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 		if _, err := damaged.shared.CreateOnce(command.NameOf(command.PrincipalFile{}), []byte("ed25519 cut short\n")); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := MintIdentity(damaged.shared, damaged.worktree[0], entropy(1)); err == nil {
-			t.Error("minting over a damaged key file succeeded; want it refused")
+		if _, _, err := MintIdentity(damaged.shared, damaged.worktree[0], entropy(1)); !errors.Is(err, errIdentityUnreadable) {
+			t.Errorf("minting over a damaged key file = %v; want errIdentityUnreadable", err)
 		}
 		if got, ok := readIdentity(damaged.shared, damaged.worktree[0]).(command.Unreadable); !ok || got.File != (command.PrincipalFile{}) {
 			t.Errorf("a damaged key file reads as %#v; want it unreadable", got)
 		}
 	})
+}
+
+// heldFiles is a Files that holds the one CreateOnce of the key file before
+// it reaches the files beneath: it says so on reached, then waits for
+// release.
+type heldFiles struct {
+	store.Files
+	reached, release chan struct{}
+}
+
+func heldAtKeyCreate(fs store.Files) heldFiles {
+	return heldFiles{Files: fs, reached: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (h heldFiles) CreateOnce(p store.Path, b []byte) (store.Made, error) {
+	if p == command.NameOf(command.PrincipalFile{}) {
+		close(h.reached)
+		<-h.release
+	}
+	return h.Files.CreateOnce(p, b)
 }
