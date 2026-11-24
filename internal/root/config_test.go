@@ -11,9 +11,9 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
-	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/verbs"
 )
 
@@ -37,8 +37,7 @@ func enrolledOnly(t *testing.T) session {
 // pins names e the founding of the session's clone.
 func (s session) pins(e events.EventID) {
 	s.t.Helper()
-	shared, _ := s.twin.Process.IdentityFiles(git.Checkout{})
-	if _, err := pin(shared, e); err != nil {
+	if _, err := pin(s.twin.Process.Pin(git.Checkout{}), e); err != nil {
 		s.t.Fatal(err)
 	}
 }
@@ -47,18 +46,18 @@ func (s session) pins(e events.EventID) {
 // nil.
 func (s session) file(b []byte) {
 	s.t.Helper()
-	tree := store.NewMemoryFiles()
+	tree := files.NewMemory()
 	if b != nil {
-		if _, err := tree.CreateOnce(verbs.WorkspaceFile, b); err != nil {
+		if _, err := tree.CreateOnce(verbs.WorkspaceFile(), b); err != nil {
 			s.t.Fatal(err)
 		}
 	}
-	s.twin.Process.WorkTree = func(git.Checkout) store.Files { return tree }
+	s.twin.Process.WorkTree = func(git.Checkout) files.Files { return tree }
 }
 
 // commit commits b as the file in HEAD.
 func (s session) commit(b []byte) {
-	s.twin.Code.Commit(map[string][]byte{verbs.WorkspaceFile: b})
+	s.twin.Code.Commit(map[string][]byte{verbs.WorkspacePath(): b})
 }
 
 func blob(b []byte) git.ObjectID { return git.HashBlob(git.SHA1, b) }
@@ -125,7 +124,7 @@ func TestInitAppliesTheDefaultAsVersionOne(t *testing.T) {
 	if r.status != 0 || !strings.Contains(r.out, enrolled+"workspace "+blob(def).String()+" applied as version one\n") || appends(r.event) != 1 {
 		t.Fatalf("admin init: status %d, out %q, %d appends; want the enrollment and version one in one frame", r.status, r.out, appends(r.event))
 	}
-	if got := must(read(s.twin.Tree, verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })); string(got) != string(def) {
+	if got := must(read(s.twin.Tree, verbs.WorkspaceFile(), func(b []byte) ([]byte, error) { return b, nil })); string(got) != string(def) {
 		t.Errorf("init wrote %q; want the default profile", got)
 	}
 	if got := s.ok("get", "/workspace"); !strings.Contains(got, blob(def).String()[:7]+" in force · .lit/workspace.toml matches") {

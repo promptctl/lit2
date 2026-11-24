@@ -4,20 +4,29 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 )
 
+// repositoryAt is lit's repository at path, it and the directory it is in
+// checked from the directory above.
+func repositoryAt(g *git.Git, path string) git.Repository {
+	in := filepath.Dir(path)
+	return g.RepositoryAt(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))).Sub(files.MustName(filepath.Base(path))))
+}
+
 func TestObjectsContract(t *testing.T) {
 	t.Run("repository", func(t *testing.T) {
 		gittest.Objects(t, func(t *testing.T) git.Objects {
-			return gittest.Runner(t).RepositoryAt(filepath.Join(t.TempDir(), "repo"))
+			return repositoryAt(gittest.Runner(t), filepath.Join(t.TempDir(), "repo"))
 		})
 	})
 	t.Run("memory", func(t *testing.T) {
@@ -28,7 +37,7 @@ func TestObjectsContract(t *testing.T) {
 func TestRefsContract(t *testing.T) {
 	t.Run("repository", func(t *testing.T) {
 		gittest.Refs(t, func(t *testing.T) gittest.Repository {
-			return gittest.Runner(t).RepositoryAt(filepath.Join(t.TempDir(), "repo"))
+			return repositoryAt(gittest.Runner(t), filepath.Join(t.TempDir(), "repo"))
 		})
 	})
 	t.Run("memory", func(t *testing.T) {
@@ -161,7 +170,7 @@ func TestLocateWithNoGitIsNotFoundAndARefusalIsGits(t *testing.T) {
 // fsyncs every object and ref it writes, and runs no gc or maintenance.
 func TestLitsRepositoryIsCreatedPinned(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	if _, err := gittest.Put(gittest.Runner(t).RepositoryAt(dir), nil); err != nil {
+	if _, err := gittest.Put(repositoryAt(gittest.Runner(t), dir), nil); err != nil {
 		t.Fatal(err)
 	}
 	for k, want := range map[string]string{"core.fsync": "objects,reference", "core.fsyncMethod": "fsync", "gc.auto": "0", "maintenance.auto": "false", "extensions.objectFormat": "", "core.repositoryFormatVersion": "0"} {
@@ -180,7 +189,7 @@ func TestLitsRepositoryIsCreatedPinned(t *testing.T) {
 func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
 	g := git.Find([]string{"PATH=" + t.TempDir() + "::relative"})
 	_, errLocate := g.Locate(t.TempDir())
-	_, errPut := gittest.Put(g.RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil)
+	_, errPut := gittest.Put(repositoryAt(g, filepath.Join(t.TempDir(), "repo")), nil)
 	for _, err := range []error{errLocate, errPut} {
 		if !errors.Is(err, git.ErrNoGit) {
 			t.Errorf("a spawn with no git failed with %v; want ErrNoGit", err)
@@ -205,7 +214,7 @@ func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
 func TestAZeroGitIsAMissingOne(t *testing.T) {
 	g := &git.Git{}
 	_, errLocate := g.Locate(t.TempDir())
-	_, errPut := gittest.Put(g.RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil)
+	_, errPut := gittest.Put(repositoryAt(g, filepath.Join(t.TempDir(), "repo")), nil)
 	for _, err := range []error{errLocate, errPut} {
 		if !errors.Is(err, git.ErrNoGit) {
 			t.Errorf("a spawn of a zero Git failed with %v; want ErrNoGit", err)
@@ -221,7 +230,7 @@ func TestAZeroGitIsAMissingOne(t *testing.T) {
 // finds on PATH, is stored.
 func putsWithGit(t *testing.T) {
 	t.Helper()
-	if _, err := gittest.Put(gittest.Runner(t).RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil); err != nil {
+	if _, err := gittest.Put(repositoryAt(gittest.Runner(t), filepath.Join(t.TempDir(), "repo")), nil); err != nil {
 		t.Errorf("a put by a git on PATH failed with %v", err)
 	}
 }
@@ -239,7 +248,7 @@ func TestEverySpawnIsRecorded(t *testing.T) {
 	if len(refused) != 1 || refused[0].Ended != (git.Exited{Code: 128}) || !strings.Contains(refused[0].Stderr, "not a git repository") || !slices.Contains(refused[0].Args, "rev-parse") {
 		t.Errorf("the refused Locate is recorded as %+v; want rev-parse, exit 128 and git's stderr", refused)
 	}
-	repo := g.RepositoryAt(filepath.Join(dir, "repo"))
+	repo := repositoryAt(g, filepath.Join(dir, "repo"))
 	id, err := gittest.Put(repo, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +277,7 @@ func TestLocateReadsTheObjectFormatAsGitDoes(t *testing.T) {
 
 func TestRepositoryListsPackedAndLooseRefs(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := gittest.Runner(t).RepositoryAt(dir)
+	repo := repositoryAt(gittest.Runner(t), dir)
 	blob, err := gittest.Put(repo, []byte("hello\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -297,7 +306,7 @@ func TestRepositoryListsPackedAndLooseRefs(t *testing.T) {
 // every object lit did not write, never a failure of another kind.
 func TestATagIsNotLit(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := gittest.Runner(t).RepositoryAt(dir)
+	repo := repositoryAt(gittest.Runner(t), dir)
 	blob, err := gittest.Put(repo, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +328,7 @@ func TestATagIsNotLit(t *testing.T) {
 // too.
 func TestABrokenRefIsListedAndLeftByARead(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := gittest.Runner(t).RepositoryAt(dir)
+	repo := repositoryAt(gittest.Runner(t), dir)
 	blob, err := gittest.Put(repo, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +366,7 @@ func TestABrokenRefIsListedAndLeftByARead(t *testing.T) {
 // repack brings them, are read, with no other step between.
 func TestAPackArrivingAfterTheFirstReadIsRead(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := gittest.Runner(t).RepositoryAt(dir)
+	repo := repositoryAt(gittest.Runner(t), dir)
 	first, err := gittest.Put(repo, []byte("first"))
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +397,7 @@ func TestAPackArrivingAfterTheFirstReadIsRead(t *testing.T) {
 // that is, and the version check before it runs once per Git.
 func TestAWriteIsOneSpawnPerKind(t *testing.T) {
 	g := gittest.Runner(t)
-	repo := g.RepositoryAt(filepath.Join(gittest.Physical(t), "repo"))
+	repo := repositoryAt(g, filepath.Join(gittest.Physical(t), "repo"))
 	if _, err := gittest.Put(repo, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +432,7 @@ func TestTheCallersGitVariablesNeverRedirectAWrite(t *testing.T) {
 	gittest.Git(t, root, "init", "-q", "--bare", elsewhere)
 	dir := filepath.Join(root, "repo")
 	g := gittest.Runner(t, "GIT_DIR="+elsewhere, "GIT_OBJECT_DIRECTORY="+filepath.Join(elsewhere, "objects"), "GIT_INDEX_FILE="+filepath.Join(elsewhere, "index"))
-	id, err := gittest.Put(g.RepositoryAt(dir), []byte("mine"))
+	id, err := gittest.Put(repositoryAt(g, dir), []byte("mine"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +451,7 @@ func TestTheCallersGitVariablesNeverRedirectAWrite(t *testing.T) {
 // as it was; nor is a dotfile, a name git never reads as a ref.
 func TestALockFileIsNoRef(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := gittest.Runner(t).RepositoryAt(dir)
+	repo := repositoryAt(gittest.Runner(t), dir)
 	blob, err := gittest.Put(repo, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -469,7 +478,7 @@ func TestALockFileIsNoRef(t *testing.T) {
 // beside git's.
 func TestAReplaceGitRefusesIsSaidByTheRefsStateAfter(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := gittest.Runner(t).RepositoryAt(dir)
+	repo := repositoryAt(gittest.Runner(t), dir)
 	blob, err := gittest.Put(repo, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -501,7 +510,7 @@ func TestAReplaceGitRefusesIsSaidByTheRefsStateAfter(t *testing.T) {
 func TestReadingCreatesNoRepository(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
 	g := gittest.Runner(t)
-	repo := g.RepositoryAt(dir)
+	repo := repositoryAt(g, dir)
 	if _, err := repo.Blob(gittest.ID(t, "ce013625030ba8dba906f756967f9e9ca394464a")); !errors.As(err, new(git.MissingObject)) {
 		t.Errorf("reading an absent repository failed with %v; want MissingObject", err)
 	}
@@ -523,7 +532,7 @@ func TestADirectoryThatIsNoRepositoryIsRefused(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	repo := gittest.Runner(t).RepositoryAt(dir)
+	repo := repositoryAt(gittest.Runner(t), dir)
 	_, errPut := gittest.Put(repo, []byte("x"))
 	_, errList := repo.List("refs/lit/")
 	_, errRead := repo.Blob(gittest.ID(t, "ce013625030ba8dba906f756967f9e9ca394464a"))
@@ -533,7 +542,7 @@ func TestADirectoryThatIsNoRepositoryIsRefused(t *testing.T) {
 		}
 	}
 	// the control: the same put where no directory stands is stored
-	if _, err := gittest.Put(gittest.Runner(t).RepositoryAt(filepath.Join(filepath.Dir(dir), "fresh")), []byte("x")); err != nil {
+	if _, err := gittest.Put(repositoryAt(gittest.Runner(t), filepath.Join(filepath.Dir(dir), "fresh")), []byte("x")); err != nil {
 		t.Errorf("a put where no directory stands failed with %v", err)
 	}
 }
@@ -543,7 +552,7 @@ func TestADirectoryThatIsNoRepositoryIsRefused(t *testing.T) {
 // a tree with an executable entry.
 func TestAnObjectLitDidNotWriteIsRefused(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
-	repo := gittest.Runner(t).RepositoryAt(dir)
+	repo := repositoryAt(gittest.Runner(t), dir)
 	blob, err := gittest.Put(repo, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -639,4 +648,70 @@ func TestTheZeroIDPrintsAsNoIDAndNoFormatReadsOne(t *testing.T) {
 	if id, err := git.ParseObjectID(0, sum); !errors.Is(err, git.ErrNoFormat) {
 		t.Errorf("an id read in no format = %v, %v; want ErrNoFormat", id, err)
 	}
+}
+
+// held is every file under dir with its size and modification time, so a
+// test sees whether anything was written there.
+func held(t *testing.T, dir string) []string {
+	t.Helper()
+	var held []string
+	err := filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := e.Info()
+		if err != nil {
+			return err
+		}
+		held = append(held, fmt.Sprintf("%s %d %v", p, info.Size(), info.ModTime()))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held
+}
+
+// A repository directory that is a link is not lit's repository, wherever
+// it points: every read and write through it is refused, and nothing is
+// written where it points.
+func TestARepositoryDirThatIsALinkIsRefused(t *testing.T) {
+	t.Run("a link to another bare repository", func(t *testing.T) {
+		g := gittest.Runner(t)
+		other := filepath.Join(gittest.Physical(t), "other")
+		if _, err := gittest.Put(repositoryAt(g, other), []byte("theirs")); err != nil {
+			t.Fatal(err)
+		}
+		before := held(t, other)
+		at := filepath.Join(gittest.Physical(t), "repo")
+		if err := os.Symlink(other, at); err != nil {
+			t.Fatal(err)
+		}
+		repo := repositoryAt(g, at)
+		if l, err := repo.List("refs/"); !errors.As(err, new(files.NotTheDirectory)) {
+			t.Errorf("a list through the link = %+v, %v; want NotTheDirectory", l, err)
+		}
+		if _, err := gittest.Put(repo, []byte("mine")); !errors.As(err, new(files.NotTheDirectory)) {
+			t.Errorf("a write through the link failed with %v; want NotTheDirectory", err)
+		}
+		if after := held(t, other); !slices.Equal(after, before) {
+			t.Errorf("the repository the link points to holds %v; want %v, as it was", after, before)
+		}
+	})
+	t.Run("a link to nothing", func(t *testing.T) {
+		nothing := filepath.Join(gittest.Physical(t), "nothing")
+		at := filepath.Join(gittest.Physical(t), "repo")
+		if err := os.Symlink(nothing, at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := gittest.Put(repositoryAt(gittest.Runner(t), at), []byte("mine")); !errors.As(err, new(files.NotTheDirectory)) {
+			t.Errorf("the first write through a link to nothing failed with %v; want NotTheDirectory", err)
+		}
+		if _, err := os.Lstat(nothing); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the link's target is there after the write: %v; want nothing made", err)
+		}
+		if info, err := os.Lstat(at); err != nil || info.Mode().Type() != fs.ModeSymlink {
+			t.Errorf("the link is %v, %v after the write; want it still the link, never renamed over", info, err)
+		}
+	})
 }

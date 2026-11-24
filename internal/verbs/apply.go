@@ -2,12 +2,14 @@ package verbs
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/promptctl/lit2/internal/address"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
@@ -91,8 +93,27 @@ func (OnDisk) file()         {}
 func (NoFile) file()         {}
 func (UnreadableFile) file() {}
 
-// WorkspaceFile is the file's path in the work tree.
-const WorkspaceFile = ".lit/workspace.toml"
+// The work tree's .lit directory and the workspace file in it. lit2's own
+// code derives a path of either, in the work tree or in the code
+// repository's tree, from these, and never writes one out
+// `[LAW:one-source-of-truth]`.
+var (
+	litDir        = files.MustName(".lit")
+	workspaceFile = files.MustName("workspace.toml")
+)
+
+// LitDir is the work tree's .lit directory's name.
+func LitDir() files.Name { return litDir }
+
+// WorkspaceFile is the workspace file's name in .lit.
+func WorkspaceFile() files.Name { return workspaceFile }
+
+// LitPath is the path of the file n in .lit from the work tree's root,
+// slash-separated, as git's tree and every message name it.
+func LitPath(n files.Name) string { return path.Join(litDir.String(), n.String()) }
+
+// WorkspacePath is the workspace file's LitPath.
+func WorkspacePath() string { return LitPath(workspaceFile) }
 
 // workspace is the root's workspace row: its one line.
 func workspace(w World, _ address.Node) ([]string, error) {
@@ -108,7 +129,7 @@ func Workspace(st fold.State, f File) string {
 	if !ok {
 		return "no version in force: lit2 config commit applies one"
 	}
-	parts := []string{short(in.Active.Blob) + " in force", WorkspaceFile + " " + fileState(in.Active.Blob, f)}
+	parts := []string{short(in.Active.Blob) + " in force", WorkspacePath() + " " + fileState(in.Active.Blob, f)}
 	for _, c := range in.Contending {
 		parts = append(parts, fmt.Sprintf("contended by %s, by %s: lit2 config commit resolves", short(c.Blob), writer(c.Stamp.By)))
 	}

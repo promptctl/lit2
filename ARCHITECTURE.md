@@ -18,7 +18,11 @@ directory under `internal/`, and a unit's subdirectories belong to it. A unit
 imports only units below it in this block `[LAW:one-way-deps]`; `root` and
 `command` sit beside the stack of architecture.md §6, importing from it with
 nothing in it importing them, and `architecture` and `scenarios` are test
-only. The rows from `cli` to `git` are §6's drawing, in its order.
+only. The rows from `cli` to `git` are §6's drawing, in its order; `files`,
+below them, is the files of one directory: the identity files, the
+founding pin, the work tree's `.lit` and the store's logs are each read and
+written through a port of it, while the command log and lit's repository,
+which git writes, are not.
 
 ```layers
 architecture
@@ -36,6 +40,7 @@ fold
 events
 store
 git
+files
 reason
 assets
 panics
@@ -149,6 +154,17 @@ The decisions the layout needed and the design documents did not make.
   `<git-dir>/lit/checkout/`: `id`, 32 lowercase hex digits and a newline,
   which git deletes with the worktree. Per work tree, `.lit/workspace.toml`,
   committed with the code, which only init writes, and only when absent.
+  Each of these directories, and the store's `log/`, is read and written
+  through its own `files` port over a base git or the work tree names:
+  every element of the port's directory is checked from that base, in
+  turn, and must be the real directory at its name, never a symlink; a
+  file's name is one path element, and the file must be a regular file. So
+  no port reaches another's files. Only the store opens `log/`. `repo/` is
+  git's, and on no port: git takes paths, so every read and every write
+  of it, by git or go-git, first has the ports' own step check each
+  element from the common dir, `repo/` itself among them, then names
+  `repo/` by its path. A `repo/` that is a symlink, dangling or not, is
+  refused, never read through or created over.
 - **D12 Command log** `$XDG_STATE_HOME/lit/commands/<UTC date>.jsonl`
   (`~/.local/state` when unset): one line per invocation in one `O_APPEND`
   write, per machine; every write removes day files older than 30 days.

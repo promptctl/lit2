@@ -59,8 +59,7 @@ func (r body) open() (opened, error) {
 // openAs folds o, the store of c minted as id, seeded with the founding
 // its clone pinned.
 func (r body) openAs(o command.Opened, c git.Checkout, id command.Minted) (opened, error) {
-	shared, _ := r.p.IdentityFiles(c)
-	founding, err := pinned(shared)
+	founding, err := pinned(r.p.Pin(c))
 	if err != nil {
 		return opened{}, err
 	}
@@ -131,7 +130,7 @@ func (storeFailure) Reason() string      { return "store" }
 type unenrolled struct{}
 
 func (unenrolled) Error() string {
-	return "this clone names no founding enrollment, so no policy says who may write: lit2 admin init founds the store, or adopts the one " + string(FoundingFile) + " names"
+	return "this clone names no founding enrollment, so no policy says who may write: lit2 admin init founds the store, or adopts the one " + foundingPath() + " names"
 }
 func (unenrolled) Class() reason.Class { return reason.ClassEnvironment }
 func (unenrolled) Reason() string      { return "policy" }

@@ -6,27 +6,40 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"path"
 	"strconv"
 	"strings"
+
+	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/git"
 )
 
-// The store's layout under its root, <git-common-dir>/lit/store/ (D11):
-// log/<checkout-id> per writing checkout and repo/ for lit's repository.
-// The layout is the one builder of a Path.
-const (
-	logDir Path = "log"
-	// repoDir is lit's repository's directory, a bare repository git keeps.
-	repoDir = "repo"
+// The store's layout under <git-common-dir>/lit/store/ (D11): log/, a
+// log per writing checkout named by its id, and repo/ for lit's
+// repository, a bare repository git keeps and opens by its path, so it is
+// on no files port. Its one spelling is here.
+var (
+	storeDir = files.MustName("store")
+	logDir   = files.MustName("log")
+	repoDir  = files.MustName("repo")
 )
 
-// LogPath is the log of the checkout id names.
-func LogPath(id CheckoutID) Path { return Path(path.Join(string(logDir), id.String())) }
-
-// logOwner is the checkout whose log p is.
-func logOwner(p Path) (CheckoutID, error) {
-	return ParseCheckoutID(path.Base(string(p)))
+// location is where the store of at's clone lives: its logs' directory
+// and lit's repository's, each element of both checked from the common
+// dir.
+type location struct {
+	logs, repo files.Dir
 }
+
+func locate(at git.Checkout) location {
+	store := at.Shared().Sub(storeDir)
+	return location{logs: store.Sub(logDir), repo: store.Sub(repoDir)}
+}
+
+// LogName is the log of the checkout id names, in the logs' directory.
+func LogName(id CheckoutID) files.Name { return files.MustName(id.String()) }
+
+// logOwner is the checkout whose log n is.
+func logOwner(n files.Name) (CheckoutID, error) { return ParseCheckoutID(n.String()) }
 
 // The log header: magic, format version, the LogID, CRC-32C over the three.
 // Stream offsets count from after it.

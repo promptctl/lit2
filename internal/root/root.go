@@ -20,10 +20,10 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
-	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/verbs"
 )
 
@@ -38,9 +38,10 @@ type Process struct {
 	// Open opens a minted checkout's store: how Store was opened, and how
 	// admin init opens the store of the checkout it has just minted.
 	Open func(git.Checkout, command.Minted) command.Opening
-	// WorkTree is a checkout's work tree, read for .lit/workspace.toml and
-	// .lit/founding and written only by init, creating them.
-	WorkTree func(git.Checkout) store.Files
+	// WorkTree is the files of a checkout's work tree's .lit directory,
+	// read for workspace.toml and founding and written only by init,
+	// creating them.
+	WorkTree func(git.Checkout) files.Files
 	// Code is a checkout's code repository, read for the blob HEAD holds
 	// at a path and its history.
 	Code func(git.Checkout) git.Code
@@ -51,10 +52,13 @@ type Process struct {
 	Reader   config.ReaderVersion
 	Commands command.Sink
 	// IdentityFiles is a checkout's two identity directories, which admin
-	// init mints into: the clone's shared one also holds its founding pin.
-	IdentityFiles func(git.Checkout) (shared, private store.Files)
-	In            io.Reader
-	Out, Err      io.Writer
+	// init mints into.
+	IdentityFiles func(git.Checkout) (shared, private files.Files)
+	// Pin is the files of a checkout's clone's founding pin, which admin
+	// init writes once and every fold of the clone is seeded by.
+	Pin      func(git.Checkout) files.Files
+	In       io.Reader
+	Out, Err io.Writer
 }
 
 // Run runs one invocation: it mints the trace id, records the store's

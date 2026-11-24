@@ -6,7 +6,8 @@
 // the background sync process (§3.13, §3.16, §5 steps 1, 6 and 9).
 // Its root is <git-common-dir>/lit/store/ (D11). One Store type runs over
 // three ports, each with an adapter on disk and a twin in memory: Files
-// for the log, and lit's repository's Objects and Refs.
+// over its logs' directory, which only the store opens, and lit's
+// repository's Objects and Refs.
 // It also holds the checkout id, the 128-bit token writer refs and claims
 // key on (§3.14).
 package store

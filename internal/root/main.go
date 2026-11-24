@@ -17,8 +17,10 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/verbs"
 )
 
 // Main is production: it reads the world into a Process, once, and runs the
@@ -48,18 +50,25 @@ func Main(args []string) int {
 		Place:         place,
 		Store:         opening(place, open),
 		Open:          open,
-		WorkTree:      func(c git.Checkout) store.Files { return store.FilesAt(c.WorkTree) },
+		WorkTree:      workTree,
 		Code:          g.CodeAt,
 		Git:           g.Spawns,
 		Fold:          foldEnv(runtime.GOMAXPROCS(0)),
 		Reader:        reader,
 		Commands:      commandLog(),
 		IdentityFiles: identityFiles,
+		Pin:           pinFiles,
 		In:            os.Stdin,
 		Out:           os.Stdout,
 		Err:           os.Stderr,
 	}, args)
 }
+
+// workTree is the files of c's .lit directory on disk, the real
+// directory at that name in the work tree: a .lit that is a symlink,
+// wherever it points, is refused, so nothing a work tree commits writes
+// into the store or anywhere else.
+func workTree(c git.Checkout) files.Files { return files.At(files.DirAt(c.WorkTree, verbs.LitDir())) }
 
 type systemClock struct{}
 

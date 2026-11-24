@@ -8,6 +8,7 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
@@ -27,8 +28,7 @@ func three(t *testing.T, twin Twin, seed byte) {
 		t.Fatal(err)
 	}
 	create := events.CreateItem{Payload: events.ItemCreate{Place: events.AtLevel{Level: level}}}
-	shared, _ := twin.Process.IdentityFiles(git.Checkout{})
-	founding, err := pinned(shared)
+	founding, err := pinned(twin.Process.Pin(git.Checkout{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +81,8 @@ func TestEveryOpenFoldsEveryRecord(t *testing.T) {
 func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 	twin := NewFreshTwin()
 	repo := git.NewMemory()
-	files := store.NewMemoryFiles()
-	ports := store.Ports{Files: files, Objects: repo, Refs: repo, Entropy: rand.NewChaCha8([32]byte{5})}
+	logs := files.NewMemory()
+	ports := store.MemoryPorts(logs, repo, repo, rand.NewChaCha8([32]byte{5}))
 	opened := command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound)}
 	twin.Process.Store, twin.Process.Open = opened, func(git.Checkout, command.Minted) command.Opening { return opened }
 	if status := Run(twin.Process, []string{"admin", "init"}); status != 0 {
@@ -91,7 +91,7 @@ func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 	twin.Commands.Events = nil
 	three(t, twin, 1)
 	// a write that died part way, then one that finished after it
-	if _, err := files.Append(store.LogPath(twinID), []byte("half a frame")); err != nil {
+	if _, err := logs.Append(store.LogName(twinID), []byte("half a frame")); err != nil {
 		t.Fatal(err)
 	}
 	three(t, twin, 2)

@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
@@ -157,7 +158,7 @@ func TestAVerbsLineSaysWhetherTheStoreTookAnAppend(t *testing.T) {
 	for _, tc := range []struct {
 		appends []store.Appended
 		want    bool
-	}{{nil, false}, {[]store.Appended{{Records: 1, Log: store.Created}}, true}} {
+	}{{nil, false}, {[]store.Appended{{Records: 1, Log: files.Created}}, true}} {
 		m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "set"}, Started: t0, Store: StoreFacts{Appends: tc.appends}, Verbs: &VerbsFacts{}, Outcome: cli.Done{}})
 		v, _ := m["verbs"].(map[string]any)
 		if v["written"] != tc.want {

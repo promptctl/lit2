@@ -14,8 +14,9 @@ package git
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
+
+	"github.com/promptctl/lit2/internal/files"
 )
 
 // Checkout is one git checkout: its work tree, its private git dir, the
@@ -27,14 +28,20 @@ type Checkout struct {
 	Format                      ObjectFormat
 }
 
-// PrivateDir is the root of what lit2 keeps for this checkout alone,
-// <git-dir>/lit/checkout, which git deletes with the worktree (D11).
-func (c Checkout) PrivateDir() string { return filepath.Join(c.GitDir, "lit", "checkout") }
+// lit's directory in a git dir, and the private one beneath it.
+var (
+	litDir      = files.MustName("lit")
+	checkoutDir = files.MustName("checkout")
+)
 
-// SharedDir is the root of what lit2 keeps once per clone,
+// Private is the directory of what lit2 keeps for this checkout alone,
+// <git-dir>/lit/checkout, which git deletes with the worktree (D11).
+func (c Checkout) Private() files.Dir { return files.DirAt(c.GitDir, litDir).Sub(checkoutDir) }
+
+// Shared is the directory of what lit2 keeps once per clone,
 // <git-common-dir>/lit, holding store/, principal and founding, the pin
 // naming the enrollment that founded the store (D11, §3.17).
-func (c Checkout) SharedDir() string { return filepath.Join(c.CommonDir, "lit") }
+func (c Checkout) Shared() files.Dir { return files.DirAt(c.CommonDir, litDir) }
 
 // NotFound is git finding no repository at or above a directory.
 type NotFound struct{ Dir string }

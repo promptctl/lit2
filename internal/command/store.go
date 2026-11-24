@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/store"
 )
@@ -29,7 +30,7 @@ type StoreFacts struct {
 
 // Fresh is what admin init did to each identity file: created it, or
 // found it there already.
-type Fresh struct{ Checkout, Key store.Made }
+type Fresh struct{ Checkout, Key files.Made }
 
 // Opening is the store an invocation's checkout opened, once, or why it has
 // none.
@@ -180,11 +181,11 @@ func reads(rs []store.Scanned) *readLine {
 	return l
 }
 
-func created(o store.Made) bool {
+func created(o files.Made) bool {
 	switch o {
-	case store.Created:
+	case files.Created:
 		return true
-	case store.Existing:
+	case files.Existing:
 		return false
 	}
 	panic(fmt.Sprintf("command: %d is not a Made", uint8(o)))

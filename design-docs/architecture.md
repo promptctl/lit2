@@ -474,7 +474,9 @@ the project's workspace file. Nearest wins per field.
 A writer's events are one append-only **log** under the common dir, one
 record per event in the order minted. A command appends to it and touches
 nothing else in the store; a crash mid-append loses at most the record being
-written. Sync first squashes this checkout's unpublished events by the rule
+written. The logs' directory is reached only through the store, by a
+port over that one directory whose names have one path element, so no
+other file lit2 keeps can name a log. Sync first squashes this checkout's unpublished events by the rule
 of §3.13, which changes nothing already published and so is not a rewrite,
 then seals the log into **segment** blobs of bounded size and
 publishes one commit per writer: its tree holds the writer's segments. The ref
