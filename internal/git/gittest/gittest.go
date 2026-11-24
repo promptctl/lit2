@@ -5,6 +5,7 @@ package gittest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -34,6 +35,26 @@ func Put(db git.Objects, b []byte) (git.ObjectID, error) {
 func PutBlob(t testing.TB, db git.Objects, b []byte) git.ObjectID {
 	t.Helper()
 	id, err := Put(db, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// PutTree stores the tree es in db, failing the test on an error.
+func PutTree(t testing.TB, db git.Objects, es []git.Entry) git.ObjectID {
+	t.Helper()
+	id, _, err := db.PutTree(es)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// PutCommit stores the commit c in db, failing the test on an error.
+func PutCommit(t testing.TB, db git.Objects, c git.Commit) git.ObjectID {
+	t.Helper()
+	id, _, err := db.PutCommit(c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,31 +163,44 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 	t.Run("a tree git would refuse is refused", func(t *testing.T) {
 		db := fresh(t)
 		blob := PutBlob(t, db, []byte("x"))
-		for _, es := range [][]git.Entry{{{Name: "a", Blob: blob}, {Name: "a", Blob: blob}}} {
-			if _, _, err := db.PutTree(es); err == nil {
-				t.Errorf("PutTree(%v) stored a tree", es)
-			}
+		// the control: one entry of a name the grammar takes is stored, so
+		// each refusal below is its name's
+		PutTree(t, db, []git.Entry{{Name: "a", Blob: blob}})
+		twice := []git.Entry{{Name: "a", Blob: blob}, {Name: "a", Blob: blob}}
+		if _, _, err := db.PutTree(twice); !errors.Is(err, git.ErrDuplicateEntry) {
+			t.Errorf("PutTree(%v) = %v; want ErrDuplicateEntry", twice, err)
 		}
 		for _, n := range RefusedEntries() {
-			if _, _, err := db.PutTree([]git.Entry{{Name: n, Blob: blob}}); err == nil {
-				t.Errorf("PutTree(%q) stored a tree", n)
+			if _, _, err := db.PutTree([]git.Entry{{Name: n, Blob: blob}}); !errors.Is(err, git.ErrNotAName) {
+				t.Errorf("PutTree(%q) = %v; want ErrNotAName", n, err)
 			}
 		}
 	})
 	t.Run("an object of one kind is never read or named as another", func(t *testing.T) {
 		db := fresh(t)
 		blob := PutBlob(t, db, []byte("x"))
-		tree, _, _ := db.PutTree([]git.Entry{{Name: "a", Blob: blob}})
-		commit, _, _ := db.PutCommit(git.Commit{Tree: tree, Message: "m\n"})
-		_, errBlob := db.Blob(tree)
-		_, errSize := db.BlobSize(commit)
-		_, errTree := db.Tree(blob)
-		_, errCommit := db.Commit(tree)
+		// putting the tree over the blob and the commit over the tree is
+		// the control of the last two cases, each object named as its own kind
+		tree := PutTree(t, db, []git.Entry{{Name: "a", Blob: blob}})
+		commit := PutCommit(t, db, git.Commit{Tree: tree, Message: "m\n"})
+		for name, read := range map[string]struct{ own, other func() error }{
+			"Blob":     {func() error { _, err := db.Blob(blob); return err }, func() error { _, err := db.Blob(tree); return err }},
+			"BlobSize": {func() error { _, err := db.BlobSize(blob); return err }, func() error { _, err := db.BlobSize(commit); return err }},
+			"Tree":     {func() error { _, err := db.Tree(tree); return err }, func() error { _, err := db.Tree(blob); return err }},
+			"Commit":   {func() error { _, err := db.Commit(commit); return err }, func() error { _, err := db.Commit(tree); return err }},
+		} {
+			if err := read.own(); err != nil {
+				t.Errorf("%s of its own kind failed with %v", name, err)
+			}
+			if err := read.other(); !errors.Is(err, git.ErrWrongKind) || !errors.As(err, new(git.NotLit)) {
+				t.Errorf("%s of another kind failed with %v; want NotLit, ErrWrongKind", name, err)
+			}
+		}
 		_, _, errEntry := db.PutTree([]git.Entry{{Name: "a", Blob: tree}})
 		_, _, errOver := db.PutCommit(git.Commit{Tree: blob})
-		for i, err := range []error{errBlob, errSize, errTree, errCommit, errEntry, errOver} {
-			if err == nil || errors.As(err, new(git.MissingObject)) {
-				t.Errorf("case %d: an object of the wrong kind was taken with %v", i, err)
+		for i, err := range []error{errEntry, errOver} {
+			if !errors.Is(err, git.ErrWrongKind) {
+				t.Errorf("case %d: naming an object of the wrong kind failed with %v; want ErrWrongKind", i, err)
 			}
 		}
 		_, _, errAbsent := db.PutTree([]git.Entry{{Name: "a", Blob: ID(t, helloBlob)}})
@@ -179,7 +213,7 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 	})
 	t.Run("a commit is a pure function of its tree and message", func(t *testing.T) {
 		db := fresh(t)
-		tree, _, _ := db.PutTree(nil)
+		tree := PutTree(t, db, nil)
 		c := git.Commit{Tree: tree, Message: "lit-log v1 x\n"}
 		id, stored, err := db.PutCommit(c)
 		if err != nil || stored != git.New || id != ID(t, litCommit) {
@@ -192,8 +226,7 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 		if got, err := db.Commit(id); err != nil || got != c {
 			t.Errorf("Commit(%s) = %+v, %v; want %+v", id, got, err, c)
 		}
-		other, _, _ := db.PutCommit(git.Commit{Tree: tree, Message: "lit-log v1 y\n"})
-		if other == id {
+		if other := PutCommit(t, db, git.Commit{Tree: tree, Message: "lit-log v1 y\n"}); other == id {
 			t.Errorf("two messages made one commit %s", id)
 		}
 	})
@@ -211,7 +244,7 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 			_, _, errPutTree := db.PutTree([]git.Entry{{Name: "a", Blob: foreign}})
 			_, _, errPutCommit := db.PutCommit(git.Commit{Tree: foreign})
 			for _, err := range []error{errBlob, errSize, errTree, errCommit, errPutTree, errPutCommit} {
-				if !errors.As(err, new(git.ForeignFormat)) || err.Error() == "" {
+				if !errors.As(err, new(git.ForeignFormat)) {
 					t.Errorf("the %s id %s was taken with %v; want ForeignFormat", foreign.Format(), foreign, err)
 				}
 			}
@@ -280,13 +313,23 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 		if err := refs.Replace(name, git.Absent{}, a); err != nil {
 			t.Fatal(err)
 		}
-		for _, stale := range []git.Was{git.Absent{}, git.Named{Target: b}} {
-			if err := refs.Replace(name, stale, b); err == nil {
-				t.Errorf("Replace(%s) from %v, while it names %s, = nil; want a refusal", name, stale, a)
+		for _, c := range []struct {
+			name git.RefName
+			from git.Was
+			now  git.Was
+		}{
+			{name, git.Absent{}, git.Named{Target: a}},
+			{name, git.Named{Target: b}, git.Named{Target: a}},
+			{"refs/lit/log/v", git.Named{Target: a}, git.Absent{}},
+		} {
+			var moved git.Moved
+			err := refs.Replace(c.name, c.from, b)
+			if !errors.As(err, &moved) || moved != (git.Moved{Name: c.name, From: c.from, Now: c.now}) {
+				t.Errorf("Replace(%s) from %v, while it is %v, = %v; want Moved from %v, now %v", c.name, c.from, c.now, err, c.from, c.now)
 			}
-		}
-		if err := refs.Replace("refs/lit/log/v", git.Named{Target: a}, b); err == nil {
-			t.Errorf("Replace of an absent ref from %s = nil; want a refusal", a)
+			if err != nil && err.Error() != fmt.Sprintf("%s is %s, not %s", c.name, said(c.now), said(c.from)) {
+				t.Errorf("Replace(%s) from %v, while it is %v, says %q; want each state in words", c.name, c.from, c.now, err)
+			}
 		}
 		if heads := list(t, refs, "refs/lit/"); !slices.Equal(heads, []git.RefHead{{Name: name, Target: a}}) {
 			t.Errorf("after refused replaces the refs are %v; want %s at %s alone", heads, name, a)
@@ -296,17 +339,23 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 		refs := fresh(t)
 		a, _ := objects(t, refs)
 		for _, name := range Refused() {
-			if err := refs.Replace(name, git.Absent{}, a); err == nil {
-				t.Errorf("Replace(%q) = nil; want a refusal", name)
+			if err := refs.Replace(name, git.Absent{}, a); !errors.Is(err, git.ErrNotAName) {
+				t.Errorf("Replace(%q) = %v; want ErrNotAName", name, err)
 			}
 		}
 		for _, prefix := range []git.RefName{"refs/../", "lit/", "refs/lit/*", "refs/lit//"} {
-			if heads, err := refs.List(prefix); err == nil {
-				t.Errorf("List(%q) = %v; want a refusal", prefix, heads)
+			if heads, err := refs.List(prefix); !errors.Is(err, git.ErrNotAName) {
+				t.Errorf("List(%q) = %v, %v; want ErrNotAName", prefix, heads, err)
 			}
 		}
-		if heads := list(t, refs, "refs/"); len(heads) != 0 {
-			t.Errorf("after refused replaces the refs are %v", heads)
+		// the control: a name the grammar takes is replaced, and a prefix
+		// it takes lists it, alone among every name above
+		const taken git.RefName = "refs/lit/log/w"
+		if err := refs.Replace(taken, git.Absent{}, a); err != nil {
+			t.Fatalf("Replace(%s) = %v", taken, err)
+		}
+		if heads := list(t, refs, "refs/"); !slices.Equal(heads, []git.RefHead{{Name: taken, Target: a}}) {
+			t.Errorf("after refused replaces and %s the refs are %v; want %s alone", taken, heads, taken)
 		}
 	})
 	t.Run("a list is sorted and holds only what its prefix names, as git for-each-ref matches it", func(t *testing.T) {
@@ -330,17 +379,30 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 	t.Run("a ref cannot be the directory of another, nor have one as its directory", func(t *testing.T) {
 		refs := fresh(t)
 		a, _ := objects(t, refs)
-		if err := refs.Replace("refs/lit/a", git.Absent{}, a); err != nil {
-			t.Fatal(err)
+		for _, name := range []git.RefName{"refs/lit/a", "refs/lit/b/c"} {
+			if err := refs.Replace(name, git.Absent{}, a); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err := refs.Replace("refs/lit/a/b", git.Absent{}, a); err == nil {
-			t.Errorf("refs/lit/a/b was taken beside refs/lit/a")
-		}
-		if err := refs.Replace("refs/lit/b/c", git.Absent{}, a); err != nil {
-			t.Fatal(err)
-		}
-		if err := refs.Replace("refs/lit/b", git.Absent{}, a); err == nil {
-			t.Errorf("refs/lit/b was taken beside refs/lit/b/c")
+		// On disk this refusal is git's own, with no identity lit can read,
+		// so each refused call is paired with the same call in the same
+		// state, its name alone changed so no ref is its directory or under
+		// it, which is taken.
+		// [LAW:verifiable-goals] exception: git's refusal, with no identity lit can read; proven by its minimal pair
+		for _, c := range []struct{ refused, taken git.RefName }{
+			{"refs/lit/a/b", "refs/lit/d/b"},
+			{"refs/lit/b", "refs/lit/e"},
+		} {
+			before := list(t, refs, "refs/")
+			if err := refs.Replace(c.refused, git.Absent{}, a); err == nil {
+				t.Errorf("%s was taken beside a ref it is the directory of, or under", c.refused)
+			}
+			if after := list(t, refs, "refs/"); !slices.Equal(after, before) {
+				t.Errorf("the refused Replace(%s) changed the refs from %v to %v", c.refused, before, after)
+			}
+			if err := refs.Replace(c.taken, git.Absent{}, a); err != nil {
+				t.Errorf("Replace(%s), %s with only its name changed, = %v", c.taken, c.refused, err)
+			}
 		}
 	})
 	t.Run("a target the repository does not hold is missing", func(t *testing.T) {
@@ -360,4 +422,13 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 			}
 		}
 	})
+}
+
+// said is how a refusal reads a ref's state: the object it names, or
+// "absent".
+func said(w git.Was) string {
+	if n, ok := w.(git.Named); ok {
+		return n.Target.String()
+	}
+	return "absent"
 }

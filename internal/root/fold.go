@@ -103,7 +103,7 @@ func (o opened) mint(drafts []events.Draft, ref git.ObjectID) (events.Minted, er
 		Frontier: o.folded.State.Frontier(), Known: o.folded.State.Known(), Now: o.now}
 	m, err := events.Mint(ctx, events.NewDrafts(drafts[0], drafts[1:]...), o.id.Key.Signer(), o.p.Entropy)
 	if err != nil {
-		return events.Minted{}, command.Internal{Err: fmt.Errorf("minting: %w", err)}
+		return events.Minted{}, command.Broke(fmt.Errorf("minting: %w", err))
 	}
 	return m, nil
 }

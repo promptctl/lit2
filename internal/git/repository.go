@@ -140,10 +140,13 @@ func (d *onDisk) created() (bool, error) {
 		err = errors.New("its HEAD is no file")
 	}
 	if err != nil {
-		return false, fmt.Errorf("%s is no git repository: %w", d.dir, err)
+		return false, fmt.Errorf("%s: %w: %w", d.dir, errNoRepository, err)
 	}
 	return true, nil
 }
+
+// errNoRepository is a directory at the repository's path that is not one.
+var errNoRepository = errors.New("no git repository")
 
 // reader is what reads of lit's repository ask of go-git: an object by
 // id, and a ref by name.
@@ -220,7 +223,7 @@ func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
 	}
 	k, ok := kinds[o.Type()]
 	if !ok {
-		return nil, "", NotLit{ID: id, Why: fmt.Sprintf("a %s, which lit never writes", o.Type())}
+		return nil, "", NotLit{ID: id, Why: fmt.Errorf("a %s, which lit never writes: %w", o.Type(), ErrWrongKind)}
 	}
 	return o, k, nil
 }
@@ -438,7 +441,38 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 		return err
 	}
 	_, err := d.git(d.dir, nil, "update-ref", string(name), to.String(), old)
+	if err == nil {
+		return nil
+	}
+	// git refuses a stale old value as it refuses everything else, so the
+	// ref's state as read after the refusal, not git's words, says whether
+	// it moved: a ref still what from says was git's own failure, Refused
+	now, rerr := d.was(name)
+	if rerr != nil {
+		return errors.Join(err, rerr)
+	}
+	if now != from {
+		return Moved{Name: name, From: from, Now: now}
+	}
 	return err
+}
+
+// was is what the ref name names now, as go-git reads it.
+func (d *onDisk) was(name RefName) (Was, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s, err := d.storage()
+	if err != nil {
+		return nil, err
+	}
+	h, err := d.ref(s, name)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return Absent{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return Named{Target: h.Target}, nil
 }
 
 // refPath is the file of the loose ref name.

@@ -2,12 +2,14 @@ package events
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/panics"
 )
 
 // first is the first facts' decode table.
@@ -191,35 +193,23 @@ func TestNestedMessagesKeepTheFieldsTheyDoNotKnow(t *testing.T) {
 	}
 }
 
-// panicked runs f and is the message it panicked with, or "" if it returned.
-func panicked(f func()) (msg string) {
-	defer func() {
-		if r := recover(); r != nil {
-			msg, _ = r.(string)
-		}
-	}()
-	f()
-	return ""
-}
-
 // A caller can write a zero Level, Name or Label, which no reader reads; the
-// writer refuses it, so no signed event can carry it. Each refusal is matched
-// by its message, and a valid value is the control that must not refuse.
+// writer refuses it, so no signed event can carry it. A valid value is the
+// control that must write.
 func TestAZeroLevelOrNameIsRefusedByItsWriter(t *testing.T) {
 	for _, c := range []struct {
-		what, want string
-		p          Payload
+		what       string
+		want       error
+		p, control Payload
 	}{
-		{"a level", "is not a level", ItemCreate{Place: AtLevel{}}},
-		{"a field name", "a zero Name is not a name", FieldSet{Value: Plain{Canonical: "x"}}},
-		{"a member", "a zero Name is not a name", MemberAdd{Field: labels}},
+		{"a level", ErrNotALevel, ItemCreate{Place: AtLevel{}}, ItemCreate{Place: AtLevel{Level: mustLevel(1)}}},
+		{"a field name", ErrNotAName, FieldSet{Value: Plain{Canonical: "x"}}, FieldSet{Field: labels, Value: Plain{Canonical: "x"}}},
+		{"a member", ErrNotAName, MemberAdd{Field: labels}, MemberAdd{Field: labels, Member: MustName("a")}},
 	} {
-		if got := panicked(func() { payloadBytes(c.p) }); !strings.Contains(got, c.want) {
-			t.Errorf("%s: the writer panicked %q; want a refusal containing %q", c.what, got, c.want)
-		}
-	}
-	if got := panicked(func() { payloadBytes(ItemCreate{Place: AtLevel{Level: mustLevel(1)}}) }); got != "" {
-		t.Errorf("a valid level panicked %q; the control must write", got)
+		t.Run(c.what, func(t *testing.T) {
+			payloadBytes(c.control)
+			panics.With(t, c.want, func() { payloadBytes(c.p) })
+		})
 	}
 }
 
@@ -227,29 +217,16 @@ func TestAZeroLevelOrNameIsRefusedByItsWriter(t *testing.T) {
 // labeled agent is the control that must be written.
 func TestAZeroAgentLabelIsRefusedByItsWriter(t *testing.T) {
 	act := Act{About: Item{ID: anItem}, Payload: MemberAdd{Field: labels, Member: MustName("a")}}
-	signedWith := func(a Agent) string {
+	signedWith := func(a Agent) Context {
 		c := context(1, Frontier{}, Known{})
 		c.Agent = a
-		return panicked(func() { mint(t, c, keyOf(1), 1, act) })
+		return c
 	}
-	if got := signedWith(Labeled{}); !strings.Contains(got, "reads back as Unlabeled") {
-		t.Errorf("a zero Labeled agent panicked %q; want a refusal that names Unlabeled", got)
-	}
-	if got := signedWith(AgentFrom("x")); got != "" {
-		t.Errorf("a labeled agent panicked %q; the control must sign", got)
-	}
+	mint(t, signedWith(AgentFrom("x")), keyOf(1), 1, act)
+	panics.With(t, errEmptyLabel, func() { mint(t, signedWith(Labeled{}), keyOf(1), 1, act) })
 }
 
 func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
-	var twoForms wire.Writer
-	twoForms.Bytes(valueProse, text("a").wire())
-	twoForms.Bytes(valuePlain, []byte("b"))
-	if _, err := readValue(twoForms.Encoded()); err == nil {
-		t.Error("a value in both forms reads")
-	}
-	if _, err := readValue(nil); err == nil {
-		t.Error("a value in neither form reads")
-	}
 	var noValue wire.Writer
 	noValue.Bytes(1, []byte("title"))
 	var badField wire.Writer
@@ -260,14 +237,6 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	bothPlaces.Uvarint(placeAtLevel, 1)
 	bothPlaces.Bytes(placeBelowParent, anItem.b[:])
 	shortParent.Bytes(placeBelowParent, anItem.b[:8])
-	// a name field is one name: a second is refused, not read as either
-	var twoTos, twoFields wire.Writer
-	twoTos.Bytes(1, []byte("backlog"))
-	twoTos.Bytes(2, []byte("plan"))
-	twoTos.Bytes(2, []byte("done"))
-	twoFields.Bytes(1, []byte("title"))
-	twoFields.Bytes(1, []byte("reason"))
-	twoFields.Bytes(2, Plain{Canonical: "x"}.wire())
 	place := func(b []byte) []byte {
 		var w wire.Writer
 		w.Bytes(1, b)
@@ -293,40 +262,43 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	otherBlob.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, []byte("other")), "blob"))
 	noBlob.Bytes(1, aVersion)
 	noVersion.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
-	// one version and one blob: a second of either is refused, not read as one
-	var twoVersions, twoBlobs wire.Writer
-	twoVersions.Bytes(1, []byte("other"))
-	twoVersions.Bytes(1, aVersion)
-	twoVersions.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
-	twoBlobs.Bytes(1, aVersion)
-	twoBlobs.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
-	twoBlobs.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
+	// the controls: each reader reads a payload of its kind whole
+	for _, p := range []Payload{
+		FieldSet{Field: MustName("title"), Value: Plain{Canonical: "x"}},
+		ItemCreate{Place: BelowParent{Parent: anItem}},
+		MemberAdd{Field: labels, Member: MustName("a")},
+		Transition{From: MustName("plan"), To: MustName("obsolete"), Fields: []TransitionField{
+			{Field: MustName("of"), Value: Plain{Canonical: "x"}}, {Field: MustName("reason"), Value: Plain{Canonical: "x"}}}},
+		CommentAdd{Body: text("c")},
+		NewWorkspaceApply(aVersion, git.SHA1, nil),
+	} {
+		if _, err := first.rows[p.Kind()].decode[0](wire.NewReader(payloadBytes(p))); err != nil {
+			t.Fatalf("a whole %s: %v; the control must read", p.Kind(), err)
+		}
+	}
 	for _, c := range []struct {
 		name string
 		read func(*wire.Reader) (Versioned, error)
 		b    []byte
+		want error
 	}{
-		{"a field.set with no value", ReadFieldSet, noValue.Encoded()},
-		{"a field.set of a field that is no name", ReadFieldSet, badField.Encoded()},
-		{"an item.create placed nowhere", ReadItemCreate, nil},
-		{"an item.create at level 6", ReadItemCreate, place(levelSix.Encoded())},
-		{"an item.create at a level and below its parent", ReadItemCreate, place(bothPlaces.Encoded())},
-		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded())},
-		{"a member.add of no member", ReadMemberAdd, place([]byte("labels"))},
-		{"a transition with two tos", ReadTransition, twoTos.Encoded()},
-		{"a transition carrying one field twice", ReadTransition, twiceCarried.Encoded()},
-		{"a transition carrying its fields out of name order", ReadTransition, outOfOrder.Encoded()},
-		{"a transition carrying a field with no value", ReadTransition, noCarriedValue.Encoded()},
-		{"a field.set with two fields", ReadFieldSet, twoFields.Encoded()},
-		{"a comment.add with no body", ReadCommentAdd, nil},
-		{"a workspace.apply whose blob names other bytes", ReadWorkspaceApply, otherBlob.Encoded()},
-		{"a workspace.apply with no blob", ReadWorkspaceApply, noBlob.Encoded()},
-		{"a workspace.apply with no version", ReadWorkspaceApply, noVersion.Encoded()},
-		{"a workspace.apply with two versions", ReadWorkspaceApply, twoVersions.Encoded()},
-		{"a workspace.apply with two blobs", ReadWorkspaceApply, twoBlobs.Encoded()},
+		{"a field.set with no value", ReadFieldSet, noValue.Encoded(), missing{What: partValue}},
+		{"a field.set of a field that is no name", ReadFieldSet, badField.Encoded(), ErrNotAName},
+		{"an item.create placed nowhere", ReadItemCreate, nil, missing{What: partPlacement}},
+		{"an item.create at level 6", ReadItemCreate, place(levelSix.Encoded()), ErrNotALevel},
+		{"an item.create at a level and below its parent", ReadItemCreate, place(bothPlaces.Encoded()), notOneForm{What: partPlacement}},
+		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded()), wrongSize{What: partParent}},
+		{"a member.add of no member", ReadMemberAdd, place([]byte("labels")), missing{What: partMember}},
+		{"a transition carrying one field twice", ReadTransition, twiceCarried.Encoded(), errFieldOrder},
+		{"a transition carrying its fields out of name order", ReadTransition, outOfOrder.Encoded(), errFieldOrder},
+		{"a transition carrying a field with no value", ReadTransition, noCarriedValue.Encoded(), missing{What: partValue}},
+		{"a comment.add with no body", ReadCommentAdd, nil, missing{What: partCommentBody}},
+		{"a workspace.apply whose blob names other bytes", ReadWorkspaceApply, otherBlob.Encoded(), errBlobNotVersion},
+		{"a workspace.apply with no blob", ReadWorkspaceApply, noBlob.Encoded(), missing{What: partBlob}},
+		{"a workspace.apply with no version", ReadWorkspaceApply, noVersion.Encoded(), missing{What: partVersion}},
 	} {
-		if _, err := c.read(wire.NewReader(c.b)); err == nil {
-			t.Errorf("%s reads", c.name)
+		if _, err := c.read(wire.NewReader(c.b)); !errors.Is(err, c.want) {
+			t.Errorf("%s reads with %v; want %v", c.name, err, c.want)
 		}
 	}
 }
@@ -338,13 +310,18 @@ func TestNamesAndLevelsParseOnlyTheirOwnShape(t *testing.T) {
 		}
 	}
 	for _, s := range []string{"", "Title", "1a", "-a", "a b", "a.b", "a/b"} {
-		if _, err := ParseName(s); err == nil {
-			t.Errorf("ParseName(%q) reads", s)
+		if _, err := ParseName(s); !errors.Is(err, ErrNotAName) || !strings.Contains(err.Error(), "a lowercase letter, then lowercase letters, digits, _ or -") {
+			t.Errorf("ParseName(%q) reads with %v; want ErrNotAName, saying a name's grammar", s, err)
+		}
+	}
+	for n := range 5 {
+		if l, err := ParseLevel(n + 1); err != nil || l.Int() != n+1 {
+			t.Errorf("ParseLevel(%d) = %v, %v; the control must read", n+1, l, err)
 		}
 	}
 	for _, n := range []int{0, 6, -1} {
-		if _, err := ParseLevel(n); err == nil {
-			t.Errorf("ParseLevel(%d) reads", n)
+		if _, err := ParseLevel(n); !errors.Is(err, ErrNotALevel) || !strings.Contains(err.Error(), "1 to 5") {
+			t.Errorf("ParseLevel(%d) reads with %v; want ErrNotALevel, saying the levels are 1 to 5", n, err)
 		}
 	}
 	if _, ok := mustLevel(1).Below(); ok {

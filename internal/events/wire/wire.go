@@ -41,12 +41,23 @@ type Unknown struct{ fields []field }
 // maxTag is protobuf's largest field number.
 const maxTag = 1<<29 - 1
 
+// The reader's refusals, one per way bytes are not a message of the subset,
+// and the writer's one precondition: a field number outside protobuf's.
+var (
+	errFieldNumber  = errors.New("a number that is no field number")
+	errKeyNotVarint = errors.New("a field key is not a varint")
+	errTornVarint   = errors.New("a varint cut short")
+	errLengthPast   = errors.New("a length runs past the message")
+	errWireType     = errors.New("a wire type that is not VARINT or LEN")
+	errReadAsOther  = errors.New("a field read as the wire type it is not")
+)
+
 // Writer encodes one message, field by field.
 type Writer struct{ b []byte }
 
 func (w *Writer) key(tag uint32, t Type) {
 	if tag == 0 || tag > maxTag {
-		panic(fmt.Sprintf("wire: %d is not a field number", tag))
+		panic(fmt.Errorf("wire: %d: %w", tag, errFieldNumber))
 	}
 	w.b = binary.AppendUvarint(w.b, uint64(tag)<<3|uint64(t))
 }
@@ -108,32 +119,32 @@ func (r *Reader) Next() (tag uint32, ok bool) {
 	}
 	k, n := binary.Uvarint(r.b[r.at:])
 	if n <= 0 {
-		return 0, r.fail(errors.New("a field key is not a varint"))
+		return 0, r.fail(errKeyNotVarint)
 	}
 	r.at += n
 	num, t := k>>3, Type(k&7)
 	if num == 0 || num > maxTag {
-		return 0, r.fail(fmt.Errorf("%d is not a field number", num))
+		return 0, r.fail(fmt.Errorf("%d: %w", num, errFieldNumber))
 	}
 	var raw []byte
 	switch t {
 	case Varint:
 		_, n := binary.Uvarint(r.b[r.at:])
 		if n <= 0 {
-			return 0, r.fail(fmt.Errorf("field %d is not a varint", num))
+			return 0, r.fail(fmt.Errorf("field %d is not a varint: %w", num, errTornVarint))
 		}
 		raw = r.b[r.at : r.at+n]
 		r.at += n
 	case Len:
 		size, n := binary.Uvarint(r.b[r.at:])
 		if n <= 0 || size > uint64(len(r.b)-r.at-n) {
-			return 0, r.fail(fmt.Errorf("field %d's length runs past the message", num))
+			return 0, r.fail(fmt.Errorf("field %d: %w", num, errLengthPast))
 		}
 		r.at += n
 		raw = r.b[r.at : r.at+int(size)]
 		r.at += int(size)
 	default:
-		return 0, r.fail(fmt.Errorf("field %d has wire type %d, which is not VARINT or LEN", num, t))
+		return 0, r.fail(fmt.Errorf("field %d has wire type %d: %w", num, t, errWireType))
 	}
 	r.current, r.read = field{tag: uint32(num), typ: t, raw: raw}, false
 	return uint32(num), true
@@ -150,7 +161,7 @@ func (r *Reader) fail(err error) bool {
 // wire type is the reader's error.
 func (r *Reader) Uvarint() uint64 {
 	if r.current.typ != Varint {
-		r.fail(fmt.Errorf("field %d is not a varint", r.current.tag))
+		r.fail(fmt.Errorf("field %d is not a varint: %w", r.current.tag, errReadAsOther))
 		return 0
 	}
 	r.read = true
@@ -162,7 +173,7 @@ func (r *Reader) Uvarint() uint64 {
 // type is the reader's error. The bytes alias the message.
 func (r *Reader) Bytes() []byte {
 	if r.current.typ != Len {
-		r.fail(fmt.Errorf("field %d is not length-delimited", r.current.tag))
+		r.fail(fmt.Errorf("field %d is not length-delimited: %w", r.current.tag, errReadAsOther))
 		return nil
 	}
 	r.read = true

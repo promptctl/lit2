@@ -1,6 +1,7 @@
 package events
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -44,6 +45,9 @@ type KindRow struct {
 	decode  []func(*wire.Reader) (Versioned, error)
 }
 
+// errRowVersion is a row whose decoders do not reach its kind's version.
+var errRowVersion = errors.New("a row whose decoders do not reach its kind's version")
+
 // Row is P's row: decode[i] reads version i+1, so the last reads P's own
 // version. The row's kind is P's, so the two cannot disagree
 // `[LAW:one-source-of-truth]`; a row whose decoders do not reach P's
@@ -51,7 +55,7 @@ type KindRow struct {
 func Row[P Payload](decode ...func(*wire.Reader) (Versioned, error)) KindRow {
 	var p P
 	if int(p.Schema()) != len(decode) {
-		panic(fmt.Sprintf("events: %s is at version %d with %d decoders", p.Kind(), p.Schema(), len(decode)))
+		panic(fmt.Errorf("events: %s is at version %d with %d decoders: %w", p.Kind(), p.Schema(), len(decode), errRowVersion))
 	}
 	return KindRow{kind: p.Kind(), current: p.Schema(), decode: decode}
 }
@@ -68,7 +72,7 @@ func NewKinds(rows ...KindRow) Kinds {
 	by := map[Kind]KindRow{}
 	for _, r := range rows {
 		if _, ok := by[r.kind]; ok {
-			panic(fmt.Sprintf("events: two rows of kind %s", r.kind))
+			panic(fmt.Errorf("events: kind %s: %w", r.kind, errRegisteredTwice))
 		}
 		by[r.kind] = r
 	}

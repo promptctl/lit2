@@ -8,6 +8,7 @@
 package address
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -125,6 +126,18 @@ func (a Address) String() string {
 	return b.String()
 }
 
+// The two refusals of a path's shape before any step is read: no text at
+// all, and a step with no text, between two slashes or after a last one.
+var (
+	errEmptyPath = errors.New("an empty path")
+	errEmptyStep = errors.New("an empty step")
+	errSegments  = errors.New("a name of more than one segment")
+)
+
+// errPrefixedElement is an element named by an id under a prefix: an
+// element's id is its item's, so it is written bare.
+var errPrefixedElement = errors.New("an element id under a prefix")
+
 // Parse reads one path against the state and the schema:
 //
 //	path  := '/' steps? | node ('/' steps)?
@@ -139,10 +152,10 @@ func (a Address) String() string {
 func Parse(v evaluate.View, text string) (Address, Refusal) {
 	st, schema := v.State(), v.Schema()
 	if text == "" {
-		return Address{}, Syntax{Text: text, Why: "a path is / or names a home or an item"}
+		return Address{}, Syntax{Text: text, Why: fmt.Errorf("%w; a path is / or names a home or an item", errEmptyPath)}
 	}
 	if text != "/" && strings.HasSuffix(text, "/") || strings.Contains(text, "//") {
-		return Address{}, Syntax{Text: text, Why: "a path has no empty step and does not end in /"}
+		return Address{}, Syntax{Text: text, Why: fmt.Errorf("%w; a path has no // and does not end in /", errEmptyStep)}
 	}
 	head, steps, hasSteps := strings.Cut(text, "/")
 	var a Address
@@ -174,7 +187,7 @@ func node(st fold.State, schema config.Schema, known events.Prefixes, head strin
 	}
 	short, err := events.ParseShortID(head, known)
 	if err != nil {
-		return nil, nil, fold.Item{}, Syntax{Text: head, Why: err.Error() + ", nor a home"}
+		return nil, nil, fold.Item{}, Syntax{Text: head, Why: fmt.Errorf("%w, nor a home", err)}
 	}
 	id, err := Resolve(st, short)
 	if err != nil {
@@ -228,7 +241,7 @@ func keyed(st fold.State, t config.Table, a Address, it fold.Item, path field.Pa
 	case field.Set:
 		n, err := events.ParseName(key)
 		if err != nil {
-			return Address{}, Syntax{Text: key, Why: fmt.Sprintf("a member of %s is a name: %v", path, err)}
+			return Address{}, Syntax{Text: key, Why: fmt.Errorf("a member of %s is a name: %w", path, err)}
 		}
 		if deeper {
 			return Address{}, NoElement{Path: path + "/" + field.Path(key), Holds: "a name"}
@@ -236,9 +249,15 @@ func keyed(st fold.State, t config.Table, a Address, it fold.Item, path field.Pa
 		a.Target = Member{Path: path, Decl: row.Decl, Name: n}
 		return a, nil
 	case field.Elements:
+		if strings.Contains(key, ".") {
+			return Address{}, Syntax{Text: key, Why: fmt.Errorf("an element of %s is named by its id or its one segment, not %w", path, errSegments)}
+		}
+		if strings.Contains(key, "-") {
+			return Address{}, Syntax{Text: key, Why: fmt.Errorf("an element of %s is named by its bare id or its one segment: %w", path, errPrefixedElement)}
+		}
 		short, err := events.ParseShortID(key, events.Prefixes{})
-		if err != nil || strings.Contains(key, ".") {
-			return Address{}, Syntax{Text: key, Why: fmt.Sprintf("an element of %s is named by its id or its one segment", path)}
+		if err != nil {
+			return Address{}, Syntax{Text: key, Why: fmt.Errorf("an element of %s is named by its id or its one segment: %w", path, err)}
 		}
 		id, seg, err := resolveElement(it, events.MustName(string(path)), short)
 		if err != nil {
@@ -252,7 +271,7 @@ func keyed(st fold.State, t config.Table, a Address, it fold.Item, path field.Pa
 	case field.Principals:
 		id, err := events.ParsePrincipalID(key)
 		if err != nil {
-			return Address{}, Syntax{Text: key, Why: fmt.Sprintf("a member of %s is named by its principal: %v", path, err)}
+			return Address{}, Syntax{Text: key, Why: fmt.Errorf("a member of %s is named by its principal: %w", path, err)}
 		}
 		if !member(st, id) {
 			return Address{}, NotFound{ID: key}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
@@ -56,9 +57,12 @@ func TestTwoAppliesOverOneParentContendUntilOneNamesBoth(t *testing.T) {
 // TestAdmitRefusesAVersionThatDoesNotParse as the version's, nothing
 // drafted.
 func TestAdmitRefusesAVersionThatDoesNotParse(t *testing.T) {
+	if _, err := verbs.Admit(fold.State{}, []byte(profile("")), git.SHA1, running); err != nil {
+		t.Fatalf("control: the profile is refused: %v", err)
+	}
 	_, err := verbs.Admit(fold.State{}, []byte("prefix = [\n"), git.SHA1, running)
 	var refused verbs.VersionRefused
-	if !errors.As(err, &refused) || refused.Reason() != "workspace" {
-		t.Errorf("a version that does not parse is admitted with %v; want VersionRefused", err)
+	if !errors.As(err, &refused) || len(refused.Refused.Refusals) != 1 || refused.Refused.Refusals[0].Reason != config.ReasonSyntax {
+		t.Errorf("a version that does not parse is admitted with %v; want VersionRefused, its one fault syntax", err)
 	}
 }

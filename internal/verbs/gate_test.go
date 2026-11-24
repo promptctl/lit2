@@ -25,12 +25,12 @@ func story(t *testing.T, b *book) (feature, story string) {
 func TestAMoveUnderTheDefaultProfile(t *testing.T) {
 	b := newBook(t, string(assets.DefaultWorkspace.Bytes()))
 	feature, s := story(t, b)
-	if got := b.refusal(verbs.Set, op(s+"/status", "impl")); got != "edge: "+s+"/status backlog → impl: impl is entered only from plan; nothing written" {
+	if got := b.refusedAs("edge", verbs.Set, op(s+"/status", "impl")); got != s+"/status backlog → impl: impl is entered only from plan; nothing written" {
 		t.Errorf("a move off the graph is refused as %q", got)
 	}
-	got := b.refusal(verbs.Set, op(s+"/status", "plan"))
+	got := b.refusedAs("gate", verbs.Set, op(s+"/status", "plan"))
 	for _, want := range []string{
-		"gate: " + s + "/status backlog → plan refused by backlog/exit; nothing written\n",
+		s + "/status backlog → plan refused by backlog/exit; nothing written\n",
 		"  error    backlog/exit  description (ready)  found (none)\n",
 		"  error    backlog/exit  labels=ready (ready)  found (none) on " + s + " and its ancestors",
 	} {
@@ -46,10 +46,10 @@ func TestAMoveUnderTheDefaultProfile(t *testing.T) {
 	if echo := b.do(verbs.Set, op(s+"/status", "plan")); echo != s+"/status backlog → plan\n  requirements: 5 evaluated · 5 met · 0 unmet (warning) · 0 unmet (error)\n" {
 		t.Errorf("a groomed story's move echoes %q", echo)
 	}
-	if got := b.refusal(verbs.Set, op(s+"/status", "impl")); !strings.Contains(got, "refused by impl/entry") || !strings.Contains(got, "plan/verdict=pass  found (none)") {
+	if got := b.refusedAs("gate", verbs.Set, op(s+"/status", "impl")); !strings.Contains(got, "refused by impl/entry") || !strings.Contains(got, "plan/verdict=pass  found (none)") {
 		t.Errorf("a move into impl with no plan verdict is refused as %q", got)
 	}
-	if got := b.refusal(verbs.Set, op(s+"/status", "wontfix")); !strings.Contains(got, s+"/status plan → wontfix refused by wontfix/entry") {
+	if got := b.refusedAs("gate", verbs.Set, op(s+"/status", "wontfix")); !strings.Contains(got, s+"/status plan → wontfix refused by wontfix/entry") {
 		t.Errorf("closing with no reason is refused as %q", got)
 	}
 	if echo := b.do(verbs.Set, op(s+"/status", `{column: wontfix, reason: "not needed"}`)); !strings.Contains(echo, s+"/status plan → wontfix\n  requirements: 1 evaluated · 1 met · 0 unmet (warning) · 0 unmet (error)\n"+s+"/status/reason (unset) → \"not needed\"\n") {
@@ -76,7 +76,7 @@ func TestAnUnmetWarningPrintsAndTheMoveLands(t *testing.T) {
 func TestAFilingIsAnArrivalInTheInitialColumn(t *testing.T) {
 	b := newBook(t, strings.Replace(profile(""), "[columns.backlog]\n", "[columns.backlog]\nentry = [{ test = \"description\", severity = \"error\" }]\n", 1))
 	feature := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
-	if got := b.refusal(verbs.Add, op(feature+"/children", "{title: s}")); !strings.HasPrefix(got, "gate: (new 1) filed into backlog refused by backlog/entry") {
+	if got := b.refusedAs("gate", verbs.Add, op(feature+"/children", "{title: s}")); !strings.HasPrefix(got, "(new 1) filed into backlog refused by backlog/entry") {
 		t.Errorf("a story filed with no description is refused as %q; want it named as no store holds it", got)
 	}
 	if echo := b.do(verbs.Add, op(feature+"/children", "{title: s, description: d}")); !strings.Contains(echo, "requirements: 1 evaluated · 1 met") {
@@ -91,7 +91,7 @@ func TestANegativeAncestorsTestNamesTheAncestorThatBrokeIt(t *testing.T) {
 	b := newBook(t, string(assets.DefaultWorkspace.Bytes()))
 	feature, s := story(t, b)
 	b.do(verbs.Add, op(feature+"/labels", "needs-design"))
-	got := b.refusal(verbs.Set, op(s+"/status", "plan"))
+	got := b.refusedAs("gate", verbs.Set, op(s+"/status", "plan"))
 	if want := "labels!=needs-design (ready)  found needs-design on " + feature + "\n"; !strings.Contains(got+"\n", want) {
 		t.Errorf("a story under a needs-design feature is refused as %q; want it to hold %q", got, want)
 	}
@@ -103,7 +103,7 @@ func TestANegativeAncestorsTestNamesTheAncestorThatBrokeIt(t *testing.T) {
 func TestATemplatesStatusTheGateRefusesIsTheTemplates(t *testing.T) {
 	b := newBook(t, strings.Replace(profile(""), "name = \"story\"\n", "name = \"story\"\n[levels.1.template]\nstatus = \"done\"\n", 1))
 	feature := filed(t, b.do(verbs.Add, op("unfiled/children", "{title: f}")))
-	if got := b.refusal(verbs.Add, op(feature+"/children", "{title: s}")); !strings.HasPrefix(got, "template: level story's template sets status: (new 1)/status backlog → done: done is entered only from plan") {
+	if got := b.refusedAs("template", verbs.Add, op(feature+"/children", "{title: s}")); !strings.HasPrefix(got, "level story's template sets status: (new 1)/status backlog → done: done is entered only from plan") {
 		t.Errorf("a template's move off the graph is refused as %q", got)
 	}
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,16 +21,25 @@ type ReaderVersion struct {
 	Modified bool
 }
 
+// The two builds that say no version they read: one Go stamped no version,
+// and one whose stamp is not a version. Each refusal names buildVersioned,
+// the build that would.
+var (
+	errUnstamped   = errors.New("an unstamped build")
+	errNotAVersion = errors.New("a build stamp that is no version")
+)
+
+const buildVersioned = "build from a git checkout with `go build ./cmd/lit2`, or install a tagged version with `go install github.com/promptctl/lit2/cmd/lit2@<version>`"
+
 // ReadReaderVersion parses the main module's version as Go stamps it. Go
 // stamps `(devel)` when a build has no version, which lit2 refuses to run.
 func ReadReaderVersion(stamp string) (ReaderVersion, error) {
-	const instruction = "build from a git checkout with `go build ./cmd/lit2`, or install a tagged version with `go install github.com/promptctl/lit2/cmd/lit2@<version>`"
 	if stamp == "" || stamp == "(devel)" {
-		return ReaderVersion{}, fmt.Errorf("this build has no version, so it cannot say which workspace versions it reads: %s", instruction)
+		return ReaderVersion{}, fmt.Errorf("%w: it was built without a version stamp, so it cannot say which workspace versions it reads; %s", errUnstamped, buildVersioned)
 	}
 	v, modified := strings.CutSuffix(stamp, "+dirty")
 	if !semver.IsValid(v) {
-		return ReaderVersion{}, fmt.Errorf("the build stamp %q is not a version: %s", stamp, instruction)
+		return ReaderVersion{}, fmt.Errorf("%w: the build stamp %q is not a version, so it cannot say which workspace versions it reads; %s", errNotAVersion, stamp, buildVersioned)
 	}
 	return ReaderVersion{v: v, Modified: modified}, nil
 }

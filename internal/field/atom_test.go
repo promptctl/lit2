@@ -1,6 +1,7 @@
 package field
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -33,25 +34,32 @@ func TestParseAtomForms(t *testing.T) {
 	}
 }
 
-// TestParseAtomRefusals: a form the grammar does not admit is refused, and the
-// refusal names no value it could not read.
+// TestParseAtomRefusals: a form the grammar does not admit is refused as no
+// atom, and a regular expression that does not compile as no regular
+// expression; each beside a control the grammar reads.
 func TestParseAtomRefusals(t *testing.T) {
-	for _, in := range []string{
-		"",
-		"!p=v",
-		"Path",
-		"p=",
-		"p=has space",
-		"p~[unclosed",
-		"p!=",
-		"p=a,",
-		"p=\"open",
-		"p=\"a\"b",
-		"p<3",
-		"p=a\nb",
+	for _, c := range []struct {
+		in, control string
+		want        error
+	}{
+		{"", "p", errNotAnAtom},
+		{"!p=v", "p!=v", errNotAnAtom},
+		{"Path", "path", errNotAnAtom},
+		{"p=", "p=v", errNotAnAtom},
+		{"p=has space", `p="has space"`, errNotAnAtom},
+		{"p~[unclosed", "p~[closed]", errNotARegexp},
+		{"p!=", "p!=v", errNotAnAtom},
+		{"p=a,", "p=a,b", errNotAnAtom},
+		{"p=\"open", `p="open"`, errNotAnAtom},
+		{"p=\"a\"b", `p="a",b`, errNotAnAtom},
+		{"p<3", "p=3", errNotAnAtom},
+		{"p=a\nb", "p=\"a\nb\"", errNotAnAtom},
 	} {
-		if _, err := ParseAtom(in); err == nil {
-			t.Errorf("ParseAtom(%q) parsed; the grammar refuses it", in)
+		if _, err := ParseAtom(c.control); err != nil {
+			t.Errorf("control ParseAtom(%q): %v", c.control, err)
+		}
+		if _, err := ParseAtom(c.in); !errors.Is(err, c.want) {
+			t.Errorf("ParseAtom(%q) = %v; want %v", c.in, err, c.want)
 		}
 	}
 }

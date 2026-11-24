@@ -1,6 +1,7 @@
 package address_test
 
 import (
+	"bytes"
 	"errors"
 	"slices"
 	"testing"
@@ -67,11 +68,11 @@ func TestEveryPathFormNamesItsNode(t *testing.T) {
 			t.Errorf("%s = %s at %#v; want %s at %#v", c.text, a, a.Place, c.canon, c.place)
 		}
 	}
-	if a, _ := parse(s, schema, seg+"/comments/"+note.Segment().String()); a.Node != (address.Element{Of: feature.ID, ID: note.ID, Rendered: "lit-" + seg + "/comments/" + note.Segment().String()}) {
-		t.Errorf("a comment's path names %#v; want the comment, a node", a.Node)
+	if a, r := parse(s, schema, seg+"/comments/"+note.Segment().String()); r != nil || a.Node != (address.Element{Of: feature.ID, ID: note.ID, Rendered: "lit-" + seg + "/comments/" + note.Segment().String()}) {
+		t.Errorf("a comment's path names %#v, %v; want the comment, a node", a.Node, r)
 	}
-	if a, _ := parse(s, schema, seg+"/ready"); !isCheck(a) {
-		t.Errorf("%s/ready = %#v; want the check row", seg, a.Target)
+	if a, r := parse(s, schema, seg+"/ready"); r != nil || !isCheck(a) {
+		t.Errorf("%s/ready = %#v, %v; want the check row", seg, a.Target, r)
 	}
 }
 
@@ -84,6 +85,20 @@ func isCheck(a address.Address) bool {
 	return ok
 }
 
+// TestAPrincipalNotAMemberNamesNoMember: /members/<did> names a member, so
+// the owner's did:key resolves and a principal the policy does not hold
+// names nothing.
+func TestAPrincipalNotAMemberNamesNoMember(t *testing.T) {
+	stranger := must(events.NewKey(bytes.NewReader(bytes.Repeat([]byte{2}, 32)))).Principal().String()
+	if _, r := parse(founded, schema, "/members/"+key.Principal().String()); r != nil {
+		t.Fatalf("control: the owner's /members entry is refused: %v", r)
+	}
+	var none address.NotFound
+	if _, r := parse(founded, schema, "/members/"+stranger); !errors.As(r, &none) || none.ID != stranger {
+		t.Errorf("a stranger's /members entry is %v; want it not found, naming the stranger", r)
+	}
+}
+
 // TestAPathThatNamesNothingSaysWhy: each refusal carries its own reason,
 // and an unknown field lists the rows the place has, which are the rows
 // help prints there.
@@ -92,37 +107,70 @@ func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
 	s, ev := mint(t, s, s, 0xa, top(2), [16]byte{0x10})
 	seg := made(ev).Segment().String()
 	s, ec := mint(t, s, s, 0xa, comment(made(ev).ID), [16]byte{0x30})
-	note := seg + "/comments/" + made2(ec).Segment().String()
-	for text, reason := range map[string]string{
-		"":                      "syntax",
-		seg + "/":               "syntax",
-		seg + "/title/":         "syntax",
-		seg + "/labels/":        "syntax",
-		"Not An Id":             "syntax",
-		"zzz":                   "not_found",
-		seg + "/nope":           "unknown_field",
-		seg + "/status":         "not_on_level",
-		"/title":                "not_on_level",
-		seg + "/title/x":        "names_no_element",
-		seg + "/children/x":     "names_no_element",
-		seg + "/comments/zzz":   "not_found",
-		seg + "/labels/Not A":   "syntax",
-		seg + "/ready/x":        "names_no_element",
-		seg + "/labels/ready/x": "names_no_element",
-		"unfiled/description":   "not_on_level",
-		note + "/":              "syntax",
-		note + "/nope":          "unknown_field",
-		note + "/title":         "not_on_level",
-		note + "/body/x":        "names_no_element",
-		"/pr/verdict":           "not_on_level",
-		note + "/pr/verdict":    "not_on_level",
-		seg + "/status/x":       "not_on_level",
-		seg + "//title":         "syntax",
-		note + "//body":         "syntax",
+	noteSeg := made2(ec).Segment().String()
+	note := seg + "/comments/" + noteSeg
+	// the shape refusals, each beside a control that differs only in the
+	// refused step, so a removed refusal or broken setup fails its row
+	for _, tc := range []struct {
+		text, control string
+		want          error
+	}{
+		{"", "/", address.ErrEmptyPath},
+		{seg + "/", seg, address.ErrEmptyStep},
+		{seg + "/title/", seg + "/title", address.ErrEmptyStep},
+		{seg + "/labels/", seg + "/labels", address.ErrEmptyStep},
+		{note + "/", note, address.ErrEmptyStep},
+		{seg + "//title", seg + "/title", address.ErrEmptyStep},
+		{note + "//body", note + "/body", address.ErrEmptyStep},
+		{seg + "/comments/Not.A", note, address.ErrSegments},
+		{note + "." + noteSeg, note, address.ErrSegments},
+		{seg + "/comments/zzz-" + noteSeg, note, address.ErrPrefixedElement},
+	} {
+		if _, r := parse(s, schema, tc.control); r != nil {
+			t.Errorf("control %q refused: %v", tc.control, r)
+		}
+		_, r := parse(s, schema, tc.text)
+		var syntax address.Syntax
+		if !errors.As(r, &syntax) || !errors.Is(r, tc.want) || r.Reason() != "syntax" {
+			t.Errorf("%q refused with %v; want a syntax refusal, %v", tc.text, r, tc.want)
+		}
+	}
+	// every other refusal, identified by its type and then its wire reason;
+	// seg/title is the control every row's setup shares
+	if _, r := parse(s, schema, seg+"/title"); r != nil {
+		t.Fatalf("control %s/title refused: %v", seg, r)
+	}
+	syntax := func() any { return new(address.Syntax) }
+	notFound := func() any { return new(address.NotFound) }
+	unknownField := func() any { return new(address.UnknownField) }
+	notOnLevel := func() any { return new(address.NotOnLevel) }
+	noElement := func() any { return new(address.NoElement) }
+	for text, want := range map[string]struct {
+		as     func() any
+		reason string
+	}{
+		"Not An Id":             {syntax, "syntax"},
+		"zzz":                   {notFound, "not_found"},
+		seg + "/nope":           {unknownField, "unknown_field"},
+		seg + "/status":         {notOnLevel, "not_on_level"},
+		"/title":                {notOnLevel, "not_on_level"},
+		seg + "/title/x":        {noElement, "names_no_element"},
+		seg + "/children/x":     {noElement, "names_no_element"},
+		seg + "/comments/zzz":   {notFound, "not_found"},
+		seg + "/labels/Not A":   {syntax, "syntax"},
+		seg + "/ready/x":        {noElement, "names_no_element"},
+		seg + "/labels/ready/x": {noElement, "names_no_element"},
+		"unfiled/description":   {notOnLevel, "not_on_level"},
+		note + "/nope":          {unknownField, "unknown_field"},
+		note + "/title":         {notOnLevel, "not_on_level"},
+		note + "/body/x":        {noElement, "names_no_element"},
+		"/pr/verdict":           {notOnLevel, "not_on_level"},
+		note + "/pr/verdict":    {notOnLevel, "not_on_level"},
+		seg + "/status/x":       {notOnLevel, "not_on_level"},
 	} {
 		_, r := parse(s, schema, text)
-		if r == nil || r.Reason() != reason {
-			t.Errorf("%q refused with %v; want %s", text, r, reason)
+		if target := want.as(); !errors.As(r, target) || r.Reason() != want.reason {
+			t.Errorf("%q refused with %v; want %T, %s", text, r, target, want.reason)
 		}
 	}
 	_, r := parse(s, schema, seg+"/nope")
@@ -167,7 +215,8 @@ func TestAnItemTheFoldCannotPlaceIsUnplaced(t *testing.T) {
 	forged := events.CreateItem{Payload: events.ItemCreate{Place: events.BelowParent{Parent: ghost}}}
 	s, ec := mint(t, s, s, 0xa, forged, [16]byte{0x20})
 	_, r := parse(s, schema, made(ec).ID.String())
-	if r == nil || r.Reason() != "unplaced" {
+	var unplaced address.Unplaced
+	if !errors.As(r, &unplaced) || r.Reason() != "unplaced" {
 		t.Errorf("an orphan = %v; want unplaced", r)
 	}
 }
@@ -187,7 +236,9 @@ func TestADeclaredFieldIsAddressable(t *testing.T) {
 	if _, err := row.Decl.Kind.Parse("5"); err != nil {
 		t.Errorf("points takes 5: %v", err)
 	}
-	if _, err := row.Decl.Kind.Parse("13"); err == nil {
-		t.Error("points takes 13")
+	// the row carries the enum the version declares, so its kind refuses a
+	// value the declaration leaves out; 5, above, is the control
+	if _, err := row.Decl.Kind.Parse("13"); !errors.Is(err, field.ErrNotOneOf) {
+		t.Errorf("points takes 13: %v; want field.ErrNotOneOf, the version declares 1, 2, 3, 5, 8", err)
 	}
 }

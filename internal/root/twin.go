@@ -123,7 +123,7 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 	tree, code := store.NewMemoryFiles(), &git.CodeMemory{}
 	// the twin is minted: its identity files hold its id and key, so init
 	// finds them there
-	shared, private := store.NewMemoryFiles(), store.NewMemoryFiles()
+	shared, private := store.NewMemoryFilesMode(identityMode), store.NewMemoryFilesMode(identityMode)
 	if _, err := private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()); err != nil {
 		panic(err)
 	}
@@ -168,7 +168,7 @@ func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 	out := body{p: t.Process, now: t.Process.Clock.Now(), rec: rec}.verb(func(v inForce) cli.Outcome {
 		c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
 		if no, refused := c.Refusal(); refused {
-			forged = no.Err
+			forged = no.Err()
 			return cli.Done{}
 		}
 		m, err := v.mint(c.Drafts, v.ref)

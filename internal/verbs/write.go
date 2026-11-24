@@ -209,7 +209,7 @@ func Compile(w World, verb Verb, operands []Operand, stdin func() (string, error
 	for i, ks := range claims {
 		for _, k := range ks {
 			if seen[k] {
-				c.Operands[i] = Refused{Text: operands[i].Path, Reason: "twice", Err: k.twice(operands[i].Path)}
+				c.Operands[i] = Refused{Text: operands[i].Path, Reason: "twice", err: k.twice(operands[i].Path)}
 				break
 			}
 			seen[k] = true
@@ -272,13 +272,18 @@ type Accepted struct {
 }
 
 // Refused is an operand that did not: why, and for an address, the
-// detail that names its paths. A value's text is never in it.
+// detail that names its paths. A value's text is never in it. Its error is
+// unexported: every refusal this package makes sets it, and the zero a
+// false Refusal returns beside its false holds none.
 type Refused struct {
 	Text   string
 	Reason string
-	Err    error
+	err    error
 	Detail string
 }
+
+// Err is the refusal's error, the command's when it is the first.
+func (r Refused) Err() error { return r.err }
 
 func (Accepted) result() {}
 func (Refused) result()  {}
@@ -287,7 +292,7 @@ func (Refused) result()  {}
 // the twice pass reads. A refused operand overwrites nothing.
 func (c *Compiled) operand(w World, verb Verb, n int, op Operand, stdin func() (string, error), created *int) (Result, []claim) {
 	no := func(r *refusal) (Result, []claim) {
-		return Refused{Text: op.Path, Reason: r.reason, Err: r.err, Detail: r.detail}, nil
+		return Refused{Text: op.Path, Reason: r.reason, err: r.err, Detail: r.detail}, nil
 	}
 	x, r := expand(w, verb, op, stdin, created)
 	if r != nil {

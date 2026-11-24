@@ -110,13 +110,22 @@ func (NoCheckout) place()  {}
 func (Unlocatable) place() {}
 
 // Internal is lit2 failing: an error that answers no class, a panic, a row
-// whose body is not built. Stack is the panic's stack, empty otherwise.
+// whose body is not built. Outside this package it is built from its
+// cause by Broke.
 type Internal struct {
-	Err   error
-	Stack []byte
+	err   error
+	stack []byte
 }
 
-func (i Internal) Error() string { return i.Err.Error() }
+// Broke is lit2 failing with err.
+func Broke(err error) Internal { return Internal{err: err} }
+
+func (i Internal) Error() string { return i.err.Error() }
+
+func (i Internal) Unwrap() error { return i.err }
+
+// Stack is the panic's stack, empty otherwise.
+func (i Internal) Stack() []byte { return i.stack }
 
 // Class is internal.
 func (Internal) Class() reason.Class { return reason.ClassInternal }
@@ -158,7 +167,7 @@ func Record(c Clock, spawns func() []git.Spawn, inv Invocation, work func(now ti
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {
 	defer func() {
 		if r := recover(); r != nil {
-			outcome = cli.Failed{Failure: Internal{Err: fmt.Errorf("panic: %v", r), Stack: debug.Stack()}}
+			outcome = cli.Failed{Failure: Internal{err: fmt.Errorf("panic: %v", r), stack: debug.Stack()}}
 		}
 	}()
 	return work()

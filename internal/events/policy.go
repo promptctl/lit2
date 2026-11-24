@@ -144,13 +144,13 @@ type Capability struct {
 // segment. The subject matches items and homes, never the root, so no
 // capability reaches a root path: those are the owner role's alone.
 func ParseCapability(text string) (Capability, error) {
-	fail := func(why string) (Capability, error) {
-		return Capability{}, fmt.Errorf("%q is not a capability: %s", text, why)
+	fail := func(why error) (Capability, error) {
+		return Capability{}, fmt.Errorf("%q is not a capability: %w", text, why)
 	}
 	body, atoms, hasAtoms := strings.Cut(text, " (")
 	verbText, path, ok := strings.Cut(body, " ")
 	if !ok {
-		return fail("a capability is a verb, a subject and a field glob, as `set own/*`")
+		return fail(fmt.Errorf("a capability is a verb, a subject and a field glob, as `set own/*`: %w", errNoPath))
 	}
 	var c Capability
 	switch verbText {
@@ -161,11 +161,11 @@ func ParseCapability(text string) (Capability, error) {
 	case "rm":
 		c.Verb = Rm
 	default:
-		return fail("its verb is set, add or rm")
+		return fail(fmt.Errorf("its verb is set, add or rm: %w", errVerb))
 	}
 	subject, glob, ok := strings.Cut(path, "/")
 	if !ok || glob == "" {
-		return fail("its path is a subject, then / and a field glob")
+		return fail(fmt.Errorf("its path is a subject, then / and a field glob: %w", errPath))
 	}
 	switch subject {
 	case "*":
@@ -177,7 +177,7 @@ func ParseCapability(text string) (Capability, error) {
 	case "own-or-assignee":
 		c.Binding = OwnOrAssignee
 	default:
-		return fail("its subject is *, own, assignee or own-or-assignee")
+		return fail(fmt.Errorf("its subject is *, own, assignee or own-or-assignee: %w", errBinding))
 	}
 	steps := strings.Split(glob, "/")
 	for i, s := range steps {
@@ -187,7 +187,7 @@ func ParseCapability(text string) (Capability, error) {
 		case s == "*":
 			c.Field.Steps = append(c.Field.Steps, AnyOne{})
 		case s == "":
-			return fail("its glob has an empty step")
+			return fail(fmt.Errorf("its glob: %w", errEmptyStep))
 		default:
 			c.Field.Steps = append(c.Field.Steps, Literal{Segment: s})
 		}
@@ -197,7 +197,7 @@ func ParseCapability(text string) (Capability, error) {
 	}
 	inner, closed := strings.CutSuffix(atoms, ")")
 	if !closed || inner == "" {
-		return fail("its conditions are atoms in parentheses, as (level=1)")
+		return fail(fmt.Errorf("its conditions are atoms in parentheses, as (level=1): %w", errConditions))
 	}
 	for _, a := range strings.Split(inner, " ") {
 		op, n := Eq, ""
@@ -206,20 +206,34 @@ func ParseCapability(text string) (Capability, error) {
 		} else if v, ok := strings.CutPrefix(a, "level="); ok {
 			n = v
 		} else {
-			return fail(fmt.Sprintf("%q is not a condition: level=N or level!=N", a))
+			return fail(fmt.Errorf("%q is not a condition, level=N or level!=N: %w", a, errCondition))
 		}
 		i, err := strconv.Atoi(n)
 		if err != nil {
-			return fail(fmt.Sprintf("%q: a level is a number", a))
+			// [LAW:one-type-per-behavior] a level that is no number is a
+			// condition outside the grammar, not a number outside the levels
+			return fail(fmt.Errorf("%q is not a condition: its level is a number, 1 to 5: %w", a, errCondition))
 		}
 		l, err := ParseLevel(i)
 		if err != nil {
-			return fail(err.Error())
+			return fail(err)
 		}
 		c.Where = append(c.Where, LevelIs{Op: op, Level: l})
 	}
 	return c, nil
 }
+
+// The capability grammar's refusals, one per part of it; the grammar each
+// part keeps is said where it is refused.
+var (
+	errNoPath     = errors.New("a capability with no path after its verb")
+	errVerb       = errors.New("a verb outside a capability's")
+	errPath       = errors.New("a path with no subject or no field glob")
+	errBinding    = errors.New("a subject outside a capability's")
+	errEmptyStep  = errors.New("a glob with an empty step")
+	errConditions = errors.New("conditions outside parentheses, or none in them")
+	errCondition  = errors.New("a condition outside a capability's")
+)
 
 // MustCapability is text, which the caller's own table holds as a
 // capability; one that is not is the caller's bug, so it panics.
@@ -304,12 +318,15 @@ func ParseThreshold(s string) (Threshold, error) {
 	return fixedOf(n)
 }
 
+// errThresholdRange is a number of owners outside a byte's 1 to 255.
+var errThresholdRange = errors.New("a number of owners outside a threshold's range")
+
 // fixedOf is the threshold of n owners, from 1 to 255: the one judge the
 // text and the wire readers share, so no two spellings read as one
 // threshold `[LAW:single-enforcer]`.
 func fixedOf(n uint64) (Threshold, error) {
 	if n < 1 || n > 255 {
-		return nil, fmt.Errorf("%d is not a threshold: a number of owners is from 1 to 255", n)
+		return nil, fmt.Errorf("%d is not a threshold, a number of owners from 1 to 255: %w", n, errThresholdRange)
 	}
 	return Fixed{N: uint8(n)}, nil
 }
@@ -328,13 +345,22 @@ type Policy struct {
 	threshold Threshold
 }
 
+// The refusals of a policy that locks its workspace out. errOwnerRoleListed
+// is one refusal wherever it is met, as NewPolicy and ReadEnroll meet it.
+var (
+	errOwnerRoleListed     = errors.New("a listed owner role")
+	errUndeclaredRole      = errors.New("a role the policy does not declare")
+	errNoOwner             = errors.New("a policy with no owner")
+	errThresholdOverOwners = errors.New("a threshold beyond the owners")
+)
+
 // NewPolicy is the policy at version v, the one judge of a policy: at
 // least one member holds the owner role, every member's role is the owner
 // or one of roles, roles never names the owner, and a fixed threshold is
 // within the owners.
 func NewPolicy(v PolicyVersion, owner Name, roles map[Name][]Capability, members map[PrincipalID]Name, t Threshold) (Policy, error) {
 	if _, ok := roles[owner]; ok {
-		return Policy{}, fmt.Errorf("the role %s is the owner role, which grants every path and lists none", owner)
+		return Policy{}, fmt.Errorf("the role %s is the owner role, which grants every path and lists none: %w", owner, errOwnerRoleListed)
 	}
 	owners := 0
 	for _, p := range slices.SortedFunc(maps.Keys(members), ComparePrincipals) {
@@ -344,14 +370,14 @@ func NewPolicy(v PolicyVersion, owner Name, roles map[Name][]Capability, members
 			continue
 		}
 		if _, ok := roles[r]; !ok {
-			return Policy{}, fmt.Errorf("%s's role %s is not a role this policy declares", p, r)
+			return Policy{}, fmt.Errorf("%s's role %s is not a role this policy declares: %w", p, r, errUndeclaredRole)
 		}
 	}
 	if owners == 0 {
-		return Policy{}, fmt.Errorf("no member holds the owner role %s", owner)
+		return Policy{}, fmt.Errorf("no member holds the owner role %s: %w", owner, errNoOwner)
 	}
 	if f, ok := t.(Fixed); ok && (f.N == 0 || int(f.N) > owners) {
-		return Policy{}, fmt.Errorf("a threshold of %d owners is more than the %d owners there are", f.N, owners)
+		return Policy{}, fmt.Errorf("a threshold of %d owners is more than the %d owners there are: %w", f.N, owners, errThresholdOverOwners)
 	}
 	return Policy{version: v, owner: owner, roles: maps.Clone(roles), members: maps.Clone(members), threshold: t}, nil
 }
@@ -528,70 +554,54 @@ func (p Enroll) AppendTo(w *wire.Writer) {
 	w.Keep(p.unknown)
 }
 
-// ReadEnroll reads policy.enroll at version 1: an owner role, and roles
-// that never name it.
-func ReadEnroll(r *wire.Reader) (Versioned, error) {
-	p := Enroll{Roles: map[Name][]Capability{}}
-	var hasOwner bool
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case 1:
-			if hasOwner {
-				return errors.New("it gives its owner role twice")
-			}
-			n, err := ParseName(string(r.Bytes()))
-			p.Owner, hasOwner = n, true
-			return err
-		case 2:
-			name, caps, err := readRole(r.Bytes())
-			if err != nil {
-				return err
-			}
-			if _, ok := p.Roles[name]; ok {
-				return fmt.Errorf("it declares the role %s twice", name)
-			}
-			p.Roles[name] = caps
-		}
-		return nil
-	})
-	p.unknown = r.Rest()
-	_, ownerListed := p.Roles[p.Owner]
-	switch {
-	case err != nil:
-	case !hasOwner:
-		err = errors.New("it names no owner role")
-	case ownerListed:
-		err = fmt.Errorf("the role %s is the owner role, which grants every path and lists none", p.Owner)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("a policy.enroll: %w", err)
-	}
-	return p, nil
+// enrollment is an enrollment's fields: its owner role and its roles, in
+// stored order.
+type enrollment struct {
+	owner Name
+	roles []role
 }
 
-func readRole(b []byte) (Name, []Capability, error) {
-	var name Name
-	var caps []Capability
-	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
-		var err error
-		switch tag {
-		case 1:
-			name, err = ParseName(string(r.Bytes()))
-		case 2:
-			var c Capability
-			c, err = ParseCapability(string(r.Bytes()))
-			caps = append(caps, c)
-		}
+// enrollments is policy.enroll at version 1: an owner role, and roles that
+// never name it, each once.
+var enrollments = declare("a policy.enroll", []field[enrollment]{
+	nameField(1, partOwnerRole, one, func(e *enrollment) *Name { return &e.owner }),
+	{2, partRole, many, func(e *enrollment, r *wire.Reader) error {
+		ro, err := readRole(r.Bytes())
+		e.roles = append(e.roles, ro)
 		return err
-	})
-	if err == nil && name.s == "" {
-		err = errors.New("a role has no name")
+	}},
+}, func(e *enrollment, u wire.Unknown) (Versioned, error) {
+	p := Enroll{Owner: e.owner, Roles: map[Name][]Capability{}, unknown: u}
+	for _, ro := range e.roles {
+		switch _, ok := p.Roles[ro.name]; {
+		case ok:
+			return nil, fmt.Errorf("the role %s: %w", ro.name, twice{What: partRole})
+		case ro.name == p.Owner:
+			return nil, fmt.Errorf("the role %s is the owner role, which grants every path and lists none: %w", p.Owner, errOwnerRoleListed)
+		}
+		p.Roles[ro.name] = ro.caps
 	}
-	if err != nil {
-		return Name{}, nil, fmt.Errorf("a role: %w", err)
-	}
-	return name, caps, nil
+	return p, nil
+})
+
+// ReadEnroll reads policy.enroll at version 1.
+func ReadEnroll(r *wire.Reader) (Versioned, error) { return enrollments.decode(r) }
+
+// role is one role an enrollment declares: its name and what it grants.
+type role struct {
+	name Name
+	caps []Capability
 }
+
+// readRole reads a role's stored form.
+var readRole = declare("a role", []field[role]{
+	nameField(1, partRoleName, one, func(ro *role) *Name { return &ro.name }),
+	{2, partCapability, many, func(ro *role, r *wire.Reader) error {
+		c, err := ParseCapability(string(r.Bytes()))
+		ro.caps = append(ro.caps, c)
+		return err
+	}},
+}, whole).read
 
 // policy.propose = 1:base 2:member{1:principal 2:role} (repeated, in
 // principal order) 3:threshold · unknown….
@@ -632,103 +642,71 @@ func writeChange(w *wire.Writer, members map[PrincipalID]Name, threshold Thresho
 	w.Bytes(3, t.Encoded())
 }
 
+// proposal is a proposal's fields: its base, its members in stored order
+// and its threshold.
+type proposal struct {
+	base      Digest
+	members   []membership
+	threshold Threshold
+}
+
+// proposals is policy.propose at version 1: a base, members each named
+// once, and a threshold.
+var proposals = declare("a policy.propose", []field[proposal]{
+	fixedField(1, partBase, one, func(p *proposal) []byte { return p.base[:] }),
+	{2, partMember, many, func(p *proposal, r *wire.Reader) error {
+		m, err := readMembership(r.Bytes())
+		p.members = append(p.members, m)
+		return err
+	}},
+	{3, partThreshold, one, func(p *proposal, r *wire.Reader) (err error) {
+		p.threshold, err = readThreshold(r.Bytes())
+		return err
+	}},
+}, func(p *proposal, u wire.Unknown) (Versioned, error) {
+	out := Propose{Base: p.base, Members: map[PrincipalID]Name{}, Threshold: p.threshold, unknown: u}
+	for _, m := range p.members {
+		if _, ok := out.Members[m.who]; ok {
+			return nil, fmt.Errorf("the member %s: %w", m.who, twice{What: partMember})
+		}
+		out.Members[m.who] = m.role
+	}
+	return out, nil
+})
+
 // ReadPropose reads policy.propose at version 1.
-func ReadPropose(r *wire.Reader) (Versioned, error) {
-	p := Propose{Members: map[PrincipalID]Name{}}
-	var hasBase bool
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
-		var err error
-		switch tag {
-		case 1:
-			b := r.Bytes()
-			if hasBase || len(b) != len(p.Base) {
-				return errors.New("it names one base policy's 32-byte digest")
-			}
-			copy(p.Base[:], b)
-			hasBase = true
-		case 2:
-			var who PrincipalID
-			var role Name
-			if who, role, err = readMembership(r.Bytes()); err == nil {
-				if _, ok := p.Members[who]; ok {
-					return fmt.Errorf("it names the member %s twice", who)
-				}
-				p.Members[who] = role
-			}
-		case 3:
-			if p.Threshold != nil {
-				return errors.New("it gives its threshold twice")
-			}
-			p.Threshold, err = readThreshold(r.Bytes())
-		}
-		return err
-	})
-	p.unknown = r.Rest()
-	switch {
-	case err != nil:
-	case !hasBase:
-		err = errors.New("it names no base policy")
-	case p.Threshold == nil:
-		err = errors.New("it gives no threshold")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("a policy.propose: %w", err)
-	}
-	return p, nil
+func ReadPropose(r *wire.Reader) (Versioned, error) { return proposals.decode(r) }
+
+// membership is one member a proposal names: the principal and its role.
+type membership struct {
+	who  PrincipalID
+	role Name
 }
 
-func readMembership(b []byte) (PrincipalID, Name, error) {
-	var who PrincipalID
-	var role Name
-	var hasWho bool
-	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
-		var err error
-		switch tag {
-		case 1:
-			who, err = readPrincipal(r.Bytes())
-			hasWho = true
-		case 2:
-			role, err = ParseName(string(r.Bytes()))
-		}
+// readMembership reads a member's stored form.
+var readMembership = declare("a member", []field[membership]{
+	{1, partPrincipal, one, func(m *membership, r *wire.Reader) (err error) {
+		m.who, err = readPrincipal(r.Bytes())
 		return err
-	})
-	switch {
-	case err != nil:
-	case !hasWho:
-		err = errors.New("it names no principal")
-	case role.s == "":
-		err = errors.New("it names no role")
-	}
-	if err != nil {
-		return PrincipalID{}, Name{}, fmt.Errorf("a member: %w", err)
-	}
-	return who, role, nil
-}
+	}},
+	nameField(2, partRole, one, func(m *membership) *Name { return &m.role }),
+}, whole).read
 
-func readThreshold(b []byte) (Threshold, error) {
-	var made []Threshold
-	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
-		switch tag {
-		case thresholdMajority:
-			r.Bytes()
-			made = append(made, Majority{})
-		case thresholdFixed:
-			f, err := fixedOf(r.Uvarint())
-			if err != nil {
-				return err
-			}
-			made = append(made, f)
-		}
-		return nil
-	})
-	switch {
-	case err != nil:
-		return nil, fmt.Errorf("a threshold: %w", err)
-	case len(made) != 1:
-		return nil, fmt.Errorf("a threshold is a majority or a number; this one is %d of them", len(made))
-	}
-	return made[0], nil
-}
+// readThreshold reads a threshold's stored form: one of a majority, which
+// carries nothing, and a fixed number. The fold activates a policy by it,
+// so one in a form this binary does not know is a payload it cannot read:
+// refused, and its event Unread (INV:preserve-unknown), never a policy
+// with no threshold.
+var readThreshold = declare("a threshold", []field[Threshold]{
+	{thresholdMajority, partMajority, alternative, func(th *Threshold, r *wire.Reader) error {
+		*th = Majority{}
+		return sized(partMajority, r.Bytes(), 0)
+	}},
+	{thresholdFixed, partFixed, alternative, func(th *Threshold, r *wire.Reader) (err error) {
+		*th, err = fixedOf(r.Uvarint())
+		return err
+	}},
+}, whole, forms{what: partThreshold, card: one}).read
 
 // policy.approve = 1:proposal (its digest) · unknown….
 func (p Approve) AppendTo(w *wire.Writer) {
@@ -736,49 +714,41 @@ func (p Approve) AppendTo(w *wire.Writer) {
 	w.Keep(p.unknown)
 }
 
+// approvals is policy.approve at version 1.
+var approvals = declare("a policy.approve", []field[Approve]{
+	fixedField(1, partProposal, one, func(p *Approve) []byte { return p.Proposal[:] }),
+}, func(p *Approve, u wire.Unknown) (Versioned, error) {
+	p.unknown = u
+	return *p, nil
+})
+
 // ReadApprove reads policy.approve at version 1.
-func ReadApprove(r *wire.Reader) (Versioned, error) {
-	var p Approve
-	var has bool
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
-		if tag != 1 {
-			return nil
-		}
-		b := r.Bytes()
-		if has || len(b) != len(p.Proposal) {
-			return errors.New("it cites one proposal's 32-byte digest")
-		}
-		copy(p.Proposal[:], b)
-		has = true
-		return nil
-	})
-	p.unknown = r.Rest()
-	if err == nil && !has {
-		err = errors.New("it cites no proposal")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("a policy.approve: %w", err)
-	}
-	return p, nil
-}
+func ReadApprove(r *wire.Reader) (Versioned, error) { return approvals.decode(r) }
 
 // policy.request = unknown….
 func (p Request) AppendTo(w *wire.Writer) { w.Keep(p.unknown) }
 
+// requests is policy.request at version 1, which has no field of its own.
+var requests = declare("a policy.request", nil, func(p *Request, u wire.Unknown) (Versioned, error) {
+	p.unknown = u
+	return *p, nil
+})
+
 // ReadRequest reads policy.request at version 1.
-func ReadRequest(r *wire.Reader) (Versioned, error) {
-	err := r.Each(func(uint32, *wire.Reader) error { return nil })
-	if err != nil {
-		return nil, fmt.Errorf("a policy.request: %w", err)
-	}
-	return Request{unknown: r.Rest()}, nil
-}
+func ReadRequest(r *wire.Reader) (Versioned, error) { return requests.decode(r) }
+
+// The refusals of a proposal's name: none given, or one no pending
+// proposal's digest starts.
+var (
+	errEmptyDigestPrefix = errors.New("an empty digest prefix")
+	errNoPendingProposal = errors.New("a digest prefix no pending proposal's digest starts with")
+)
 
 // ParseDigestPrefix is the one digest among ds that hex starts, as an
 // approval names a pending proposal.
 func ParseDigestPrefix(hex string, ds []Digest) (Digest, error) {
 	if hex == "" {
-		return Digest{}, errors.New("a proposal is named by its digest or a prefix of it")
+		return Digest{}, fmt.Errorf("a proposal is named by its digest or a prefix of it: %w", errEmptyDigestPrefix)
 	}
 	var found []Digest
 	for _, d := range ds {
@@ -788,7 +758,7 @@ func ParseDigestPrefix(hex string, ds []Digest) (Digest, error) {
 	}
 	switch len(found) {
 	case 0:
-		return Digest{}, fmt.Errorf("no pending proposal's digest starts %s", hex)
+		return Digest{}, fmt.Errorf("%s: %w", hex, errNoPendingProposal)
 	case 1:
 		return found[0], nil
 	}

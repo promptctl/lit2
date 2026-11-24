@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -37,8 +38,10 @@ func TestAGitOlderThanTheFloorIsRefused(t *testing.T) {
 		"git version 1.99.9\n":                 false,
 		"hub version 2.14\n":                   false,
 	} {
-		if err := atFloor(version); (err == nil) != ok {
-			t.Errorf("atFloor(%q) = %v; want accepted %v", version, err, ok)
+		// the versions at the floor are the control of those below it
+		err := atFloor(version)
+		if ok && err != nil || !ok && !errors.Is(err, errBelowFloor) {
+			t.Errorf("atFloor(%q) = %v; want accepted %v, refused with errBelowFloor", version, err, ok)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package events
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -12,13 +13,13 @@ func TestAnEventIDFileReadsBackTheIDItWasWrittenFrom(t *testing.T) {
 			t.Errorf("ReadEventIDFile(%q) is %s, %v; want %s", good, got, err, id)
 		}
 	}
-	for _, bad := range []string{
-		strings.ToUpper(id.String()) + "\n",
-		id.String() + "\n\n",
-		id.String()[:62] + "zz\n",
+	for bad, want := range map[string]error{
+		strings.ToUpper(id.String()) + "\n": errNotAnEventID,
+		id.String() + "\n\n":                wrongSize{What: partEventIDText},
+		id.String()[:62] + "zz\n":           errNotAnEventID,
 	} {
-		if _, err := ReadEventIDFile([]byte(bad)); err == nil {
-			t.Errorf("ReadEventIDFile(%q) read an id", bad)
+		if _, err := ReadEventIDFile([]byte(bad)); !errors.Is(err, want) {
+			t.Errorf("ReadEventIDFile(%q) reads with %v; want %v", bad, err, want)
 		}
 	}
 }

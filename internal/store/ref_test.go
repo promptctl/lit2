@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/git"
@@ -17,8 +18,8 @@ func TestARefNameParsesBackOrIsRefused(t *testing.T) {
 		"refs/lit/log/", "refs/lit/log/0A000000000000000000000000000000", "refs/lit/log/0a00000000000000000000000000000",
 		"refs/lit/inbox/0a000000000000000000000000000000/x", "refs/lit/other/0a000000000000000000000000000000", "refs/heads/main",
 	} {
-		if r, err := ParseRef(n); err == nil {
-			t.Errorf("ParseRef(%s) read %v", n, r)
+		if r, err := ParseRef(n); !errors.Is(err, errNotARef) {
+			t.Errorf("ParseRef(%s) = %v, %v; want errNotARef", n, r, err)
 		}
 	}
 }

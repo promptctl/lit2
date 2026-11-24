@@ -100,7 +100,7 @@ func TestDefaultProfileParsesToTheDocumentedModel(t *testing.T) {
 	}
 	chain := []string{"backlog", "plan", "impl", "review", "merge", "done"}
 	for i, name := range chain[:len(chain)-1] {
-		c, _ := g.Resolve(name)
+		c := column(t, g, name)
 		if len(c.Next()) != 1 || c.Next()[0] != chain[i+1] {
 			t.Errorf("%s.next = %v, want %s", name, c.Next(), chain[i+1])
 		}
@@ -111,19 +111,19 @@ func TestDefaultProfileParsesToTheDocumentedModel(t *testing.T) {
 			t.Errorf("%s is not terminal", name)
 		}
 	}
-	if impl, _ := g.Resolve("impl"); len(impl.Entry()) != 1 || impl.Entry()[0].Severity != Error {
+	if impl := column(t, g, "impl"); len(impl.Entry()) != 1 || impl.Entry()[0].Severity != Error {
 		t.Errorf("impl's entry = %+v, want plan/verdict=pass at error", impl.Entry())
 	}
-	if review, _ := g.Resolve("review"); review.Entry()[0].Severity != Warning {
+	if review := column(t, g, "review"); review.Entry()[0].Severity != Warning {
 		t.Errorf("review's entry severity = %v, want warning", review.Entry()[0].Severity)
 	}
-	if merge, _ := g.Resolve("merge"); merge.Entry()[0].Test.Atom.String() != "pr/verdict=pass" {
+	if merge := column(t, g, "merge"); merge.Entry()[0].Test.Atom.String() != "pr/verdict=pass" {
 		t.Errorf("merge's entry = %s", merge.Entry()[0].Test.Atom)
 	}
-	if dup, _ := g.Resolve("dup"); dup.Entry()[0].Test.Atom.String() != "status/of" {
+	if dup := column(t, g, "dup"); dup.Entry()[0].Test.Atom.String() != "status/of" {
 		t.Errorf("dup's entry = %s, want status/of", dup.Entry()[0].Test.Atom)
 	}
-	if obs, _ := g.Resolve("obsolete"); obs.Entry()[0].Test.Atom.String() != "status/reason" {
+	if obs := column(t, g, "obsolete"); obs.Entry()[0].Test.Atom.String() != "status/reason" {
 		t.Errorf("obsolete's entry = %s, want status/reason", obs.Entry()[0].Test.Atom)
 	}
 	if links := sc.Links(); links["blocks"].Kind != Dependency || len(links["blocks"].Between) != 3 {
@@ -422,7 +422,7 @@ func TestChecksAndColumnsCarryTheirSeverity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done, _ := s.Root().Columns.Resolve("done")
+	done := column(t, s.Root().Columns, "done")
 	if len(done.Entry()) != 1 {
 		t.Fatalf("done's entry = %v, want the check's one test", done.Entry())
 	}
@@ -469,9 +469,8 @@ func TestTheSameNameOnTwoLevelsIsTwoFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, _ := events.ParseLevel(2)
-	leaf, _ := s.Table().Find(field.Leaf{}, "points")
-	feature, _ := s.Table().Find(field.Node{Level: two}, "points")
+	leaf := find(t, s.Table(), field.Leaf{}, "points")
+	feature := find(t, s.Table(), field.Node{Level: level(t, 2)}, "points")
 	if _, ok := leaf.(FieldRow).Decl.Kind.(field.Number); !ok {
 		t.Errorf("level 1's points = %#v, want a number", leaf)
 	}
@@ -710,4 +709,34 @@ func replace(old, new string) func(string) string {
 	return func(s string) string {
 		return strings.Replace(s, old, new, 1)
 	}
+}
+
+// column is the column name resolves to in g, failing t when it names none.
+func column(t *testing.T, g ColumnGraph, name string) Column {
+	t.Helper()
+	c, ok := g.Resolve(name)
+	if !ok {
+		t.Fatalf("no column %s", name)
+	}
+	return c
+}
+
+// level is level n, failing t when n is no level.
+func level(t *testing.T, n int) events.Level {
+	t.Helper()
+	l, err := events.ParseLevel(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+// find is the row tbl has at p for path, failing t when it has none.
+func find(t *testing.T, tbl Table, p field.Place, path field.Path) Row {
+	t.Helper()
+	r, err := tbl.Find(p, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }

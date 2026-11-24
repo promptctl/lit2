@@ -19,8 +19,12 @@ type Refusal interface {
 	refusal()
 }
 
-// Syntax is a path the grammar does not read.
-type Syntax struct{ Text, Why string }
+// Syntax is a path the grammar does not read, and why: an error that
+// carries the refusal of the step that did not read.
+type Syntax struct {
+	Text string
+	Why  error
+}
 
 // NotFound is an id that names no node.
 type NotFound struct{ ID string }
@@ -52,7 +56,8 @@ func (n NotFound) Error() string { return fmt.Sprintf("%s names nothing", n.ID) 
 func (a Ambiguous) Error() string {
 	return fmt.Sprintf("%s names %d nodes: %s", a.ID, len(a.Candidates), strings.Join(a.Candidates, ", "))
 }
-func (s Syntax) Error() string { return fmt.Sprintf("%q is not a path: %s", s.Text, s.Why) }
+func (s Syntax) Error() string { return fmt.Sprintf("%q is not a path: %v", s.Text, s.Why) }
+func (s Syntax) Unwrap() error { return s.Why }
 func (u Unplaced) Error() string {
 	return fmt.Sprintf("%s has no place in the tree: %s", u.Item, u.Why)
 }

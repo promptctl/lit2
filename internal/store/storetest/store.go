@@ -137,8 +137,8 @@ func All(bs []store.Batch) []string {
 	return ts
 }
 
-// PublishOwn seals the store's own log and publishes it.
-func PublishOwn(t *testing.T, s *store.Store) store.Published {
+// sealOwn seals the store's own log into a publication.
+func sealOwn(t *testing.T, s *store.Store) store.Publication {
 	t.Helper()
 	sealed, err := s.SealOwn()
 	if err != nil {
@@ -148,7 +148,23 @@ func PublishOwn(t *testing.T, s *store.Store) store.Published {
 	if !ok {
 		t.Fatalf("sealing the own log made %#v; want a publication", sealed)
 	}
-	out, err := s.Publish(p)
+	return p
+}
+
+// stale fails t unless err is the refusal of a publish whose ref moved
+// since its seal to the commit now.
+func stale(t *testing.T, err error, ref store.Ref, now git.ObjectID) {
+	t.Helper()
+	var moved git.Moved
+	if !errors.As(err, &moved) || moved.Name != ref.Name() || moved.Now != (git.Named{Target: now}) {
+		t.Errorf("the stale publish failed with %v; want git.Moved naming %s at %s", err, ref.Name(), now)
+	}
+}
+
+// PublishOwn seals the store's own log and publishes it.
+func PublishOwn(t *testing.T, s *store.Store) store.Published {
+	t.Helper()
+	out, err := s.Publish(sealOwn(t, s))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,20 +315,12 @@ func Store(t *testing.T, fresh Fresh) {
 		p := fresh(t)
 		s := store.Open(a, p, store.DefaultSegmentBound)
 		AppendAll(t, s, Numbered(t, 3, "first")...)
-		sealed, err := s.SealOwn()
-		if err != nil {
-			t.Fatal(err)
-		}
-		stale, ok := sealed.(store.Publication)
-		if !ok {
-			t.Fatalf("sealing the own log made %#v; want a publication", sealed)
-		}
+		early := sealOwn(t, s)
 		AppendAll(t, s, Numbered(t, 3, "more")...)
 		later := PublishOwn(t, s)
-		if out, err := s.Publish(stale); err == nil {
-			t.Fatalf("publishing what was sealed before the later publish was %+v; want it refused", out)
-		}
 		ref := store.WriterRef{Checkout: a}
+		_, err := s.Publish(early)
+		stale(t, err, ref, later.Commit)
 		got, err := p.Refs.List(ref.Name())
 		if err != nil {
 			t.Fatal(err)
@@ -327,15 +335,7 @@ func Store(t *testing.T, fresh Fresh) {
 		p := fresh(t)
 		s := store.Open(a, p, store.DefaultSegmentBound)
 		AppendAll(t, s, Numbered(t, 3, "event")...)
-		seal := func() store.Publication {
-			t.Helper()
-			sealed, err := s.SealOwn()
-			if err != nil {
-				t.Fatal(err)
-			}
-			return sealed.(store.Publication)
-		}
-		first, second := seal(), seal()
+		first, second := sealOwn(t, s), sealOwn(t, s)
 		one, err := s.Publish(first)
 		if err != nil {
 			t.Fatal(err)
@@ -352,16 +352,11 @@ func Store(t *testing.T, fresh Fresh) {
 		s := store.Open(a, p, store.DefaultSegmentBound)
 		AppendAll(t, s, Numbered(t, 3, "event")...)
 		PublishOwn(t, s)
-		sealed, err := s.SealOwn()
-		if err != nil {
-			t.Fatal(err)
-		}
-		idle := sealed.(store.Publication)
+		idle := sealOwn(t, s)
 		AppendAll(t, s, Numbered(t, 1, "more")...)
-		PublishOwn(t, s)
-		if out, err := s.Publish(idle); err == nil {
-			t.Errorf("an idle publish after the ref moved was %+v; want it refused", out)
-		}
+		later := PublishOwn(t, s)
+		_, err := s.Publish(idle)
+		stale(t, err, store.WriterRef{Checkout: a}, later.Commit)
 	})
 
 	t.Run("a log with no whole frame has nothing to publish, and makes no ref", func(t *testing.T) {
@@ -409,8 +404,11 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 		out := PublishOwn(t, s)
 		resealed, ok := out.Prior.(store.Resealed)
-		if !ok || resealed.Why == nil || out.Kept != 0 || out.Move != (store.RefReplaced{Previous: held}) {
-			t.Errorf("over a ref holding %s the publish was %+v; want it resealed from 0 with a reason, the ref replaced", held, out)
+		var none store.NoPublication
+		var notLit git.NotLit
+		if !ok || !errors.As(resealed.Why, &none) || none.Commit != held || !errors.As(resealed.Why, &notLit) || notLit.ID != held ||
+			out.Kept != 0 || out.Move != (store.RefReplaced{Previous: held}) {
+			t.Errorf("over a ref holding %s the publish was %+v; want it resealed from 0 for NoPublication of %s, not lit's, the ref replaced", held, out, held)
 		}
 		// a clone that fetched lit's repository and holds no log of a
 		other := fresh(t)

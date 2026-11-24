@@ -3,6 +3,7 @@ package storetest
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"slices"
 	"sync"
 	"testing"
@@ -10,8 +11,25 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// Files holds fresh, an empty store root each call, to the Files contract.
-func Files(t *testing.T, fresh func(*testing.T) store.Files) {
+// ModedFiles is Files that says the mode it made each file in.
+type ModedFiles interface {
+	store.Files
+	Mode(store.Path) (fs.FileMode, error)
+}
+
+// inMode fails t unless every file of ps was made in mode.
+func inMode(t *testing.T, f ModedFiles, mode fs.FileMode, ps ...store.Path) {
+	t.Helper()
+	for _, p := range ps {
+		if got, err := f.Mode(p); err != nil || got != mode {
+			t.Errorf("%s was made in %v, %v; want %v", p, got, err, mode)
+		}
+	}
+}
+
+// Files holds fresh, an empty store root each call that makes every file
+// in mode, to the Files contract.
+func Files(t *testing.T, mode fs.FileMode, fresh func(*testing.T) ModedFiles) {
 	const p store.Path = "log/a"
 	t.Run("an append to no file is NotFound", func(t *testing.T) {
 		if _, err := fresh(t).Append(p, []byte("x")); !errors.As(err, new(store.NotFound)) {
@@ -37,6 +55,7 @@ func Files(t *testing.T, fresh func(*testing.T) store.Files) {
 		if size, err := f.Size(p); err != nil || size != 10 {
 			t.Errorf("Size = %d, %v; want 10", size, err)
 		}
+		inMode(t, f, mode, p)
 	})
 	t.Run("create-once has one winner", func(t *testing.T) {
 		f := fresh(t)
@@ -63,6 +82,7 @@ func Files(t *testing.T, fresh func(*testing.T) store.Files) {
 		if err != nil || len(winners) != 1 || !bytes.Equal(got, winners[0]) {
 			t.Errorf("16 creations made %d winners and a file holding %q, %v; want one, holding its bytes", len(winners), got, err)
 		}
+		inMode(t, f, mode, p)
 	})
 	t.Run("a list holds the files of its directory, and no directory holds none", func(t *testing.T) {
 		f := fresh(t)
@@ -77,5 +97,6 @@ func Files(t *testing.T, fresh func(*testing.T) store.Files) {
 		if ps, err := f.List("log"); err != nil || !slices.Equal(ps, []store.Path{"log/a", "log/b"}) {
 			t.Errorf("List(log) = %v, %v; want log/a and log/b", ps, err)
 		}
+		inMode(t, f, mode, "log/a", "log/b", "other/c")
 	})
 }

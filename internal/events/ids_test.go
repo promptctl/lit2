@@ -2,6 +2,8 @@ package events
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"math"
 	"slices"
@@ -26,9 +28,17 @@ func TestAFullIDRoundTripsAndItsSegmentsAreItsPrefixes(t *testing.T) {
 		}
 	}
 	full := anItem.String()
-	for _, s := range []string{"", full[:25], full + "0", strings.ToUpper(full), full[:25] + "1", full[:25] + "i", "lit-" + full} {
-		if id, err := ParseItemID(s); err == nil {
-			t.Errorf("ParseItemID(%q) = %v; want it refused", s, id)
+	for s, want := range map[string]error{
+		"":                    errNotFullID,
+		full[:25]:             errNotFullID,
+		full + "0":            errNotFullID,
+		strings.ToUpper(full): errNotFullID,
+		full[:25] + "1":       errPadBits,
+		full[:25] + "i":       errNotFullID,
+		"lit-" + full:         errNotFullID,
+	} {
+		if id, err := ParseItemID(s); !errors.Is(err, want) {
+			t.Errorf("ParseItemID(%q) = %v, %v; want %v", s, id, err, want)
 		}
 	}
 }
@@ -155,21 +165,33 @@ func TestTwoCreatesOfOneCommandWidenEachOthersSegments(t *testing.T) {
 func TestAnEntropySourceThatRepeatsFailsMint(t *testing.T) {
 	var b KnownBuilder
 	b.Saw(anItem)
-	if m, err := Mint(context(1, Frontier{}, b.Known()), NewDrafts(topCreate), keyOf(1).Signer(), drawing(anItem)); err == nil || !strings.Contains(err.Error(), "repeats") {
-		t.Errorf("drawing a known id mints %v, %v; want an error naming the entropy source", m.Events, err)
+	// the controls: an id not known, and two ids that differ, mint
+	if _, err := Mint(context(1, Frontier{}, b.Known()), NewDrafts(topCreate), keyOf(1).Signer(), drawing(sharing(anItem, 25))); err != nil {
+		t.Fatalf("drawing an id not known: %v; the control must mint", err)
 	}
-	if _, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate, topCreate), keyOf(1).Signer(), drawing(anItem, anItem)); err == nil {
-		t.Error("one command drawing one id twice mints")
+	if _, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate, topCreate), keyOf(1).Signer(), drawing(anItem, sharing(anItem, 25))); err != nil {
+		t.Fatalf("drawing two ids: %v; the control must mint", err)
+	}
+	if m, err := Mint(context(1, Frontier{}, b.Known()), NewDrafts(topCreate), keyOf(1).Signer(), drawing(anItem)); !errors.Is(err, errEntropyRepeats) {
+		t.Errorf("drawing a known id mints %v, %v; want errEntropyRepeats", m.Events, err)
+	}
+	if _, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate, topCreate), keyOf(1).Signer(), drawing(anItem, anItem)); !errors.Is(err, errEntropyRepeats) {
+		t.Errorf("one command drawing one id twice: %v; want errEntropyRepeats", err)
 	}
 }
 
 func TestAnEntropySourceThatFailsFailsMint(t *testing.T) {
+	// the control: an id and a salt mint
+	if _, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate), keyOf(1).Signer(), bytes.NewReader(drawing(anItem).b)); err != nil {
+		t.Fatalf("entropy with an id and a salt: %v; the control must mint", err)
+	}
 	for name, src := range map[string]io.Reader{
 		"no id":   bytes.NewReader(nil),
 		"no salt": bytes.NewReader(anItem.b[:]),
 	} {
-		if m, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate), keyOf(1).Signer(), src); err == nil || !strings.Contains(err.Error(), "drawing") {
-			t.Errorf("entropy with %s mints %v, %v; want an error naming the draw", name, m.Events, err)
+		// the source's own error comes through, under Mint's
+		if m, err := Mint(context(1, Frontier{}, Known{}), NewDrafts(topCreate), keyOf(1).Signer(), src); !errors.Is(err, errEntropyFails) || !errors.Is(err, io.EOF) {
+			t.Errorf("entropy with %s mints %v, %v; want errEntropyFails over io.EOF", name, m.Events, err)
 		}
 	}
 }
@@ -198,16 +220,19 @@ func TestEverySubjectRoundTripsAndNoOtherShapeReads(t *testing.T) {
 		fields(&w)
 		return w.Encoded()
 	}
-	for name, b := range map[string][]byte{
-		"an element of the root": subject(func(w *wire.Writer) { w.Bytes(subjectElement, anElement.b[:]) }),
-		"a segment of the root":  subject(func(w *wire.Writer) { w.Uvarint(subjectWidth, 3) }),
-		"a short item id":        subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:15]) }),
-		"a long element id":      subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Bytes(subjectElement, make([]byte, 17)) }),
-		"a two-digit segment":    subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 2) }),
-		"a segment past the id":  subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 27) }),
+	for name, c := range map[string]struct {
+		b    []byte
+		want error
+	}{
+		"an element of the root": {subject(func(w *wire.Writer) { w.Bytes(subjectElement, anElement.b[:]) }), errRootNamesPart},
+		"a segment of the root":  {subject(func(w *wire.Writer) { w.Uvarint(subjectWidth, 3) }), errRootNamesPart},
+		"a short item id":        {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:15]) }), wrongSize{What: partItem}},
+		"a long element id":      {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Bytes(subjectElement, make([]byte, 17)) }), wrongSize{What: partElement}},
+		"a two-digit segment":    {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 2) }), errWidth},
+		"a segment past the id":  {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 27) }), errWidth},
 	} {
-		if got, err := readAbout(b); err == nil {
-			t.Errorf("%s reads as %#v", name, got)
+		if got, err := readAbout(c.b); !errors.Is(err, c.want) {
+			t.Errorf("%s reads as %#v, %v; want %v", name, got, err, c.want)
 		}
 	}
 }
@@ -231,20 +256,23 @@ func TestAShortIDParsesBareOrUnderAKnownPrefixOnly(t *testing.T) {
 			t.Errorf("ParseShortID(%q) = %#v, %v; want %#v", s, got, err, want)
 		}
 	}
-	if _, err := ParseShortID("rin-1f9", known); err == nil || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "another project") || !strings.Contains(err.Error(), "is lit") {
-		t.Errorf("an id under another prefix reads, or its refusal does not name it and the active one: %v", err)
+	if _, err := ParseShortID("rin-1f9", known); !errors.Is(err, ErrForeignPrefix) || !strings.Contains(err.Error(), "rin") || !strings.Contains(err.Error(), "another project's") || !strings.Contains(err.Error(), "is lit") {
+		t.Errorf("an id under another prefix reads, or its refusal does not name it as another project's and name the active one: %v", err)
 	}
-	if _, err := ParseShortID("lit-1f9", Prefixes{}); err == nil {
-		t.Error("the zero Prefixes reads an id under a prefix; it admits only a bare id")
+	if _, err := ParseShortID("1f9", Prefixes{}); err != nil {
+		t.Fatalf("the zero Prefixes refuses a bare id: %v; the control must read", err)
+	}
+	if _, err := ParseShortID("lit-1f9", Prefixes{}); !errors.Is(err, ErrForeignPrefix) {
+		t.Errorf("the zero Prefixes reads an id under a prefix, %v; it admits only a bare id", err)
 	}
 	for _, s := range []string{"", "1f", "1f9.", "1f9..zc7", "1fu", "lit-", "lit_1f9", "1f9/zc7", "unfiled", "\u212a12", "\u0130f9"} {
-		if got, err := ParseShortID(s, known); err == nil {
-			t.Errorf("ParseShortID(%q) = %#v; want it refused", s, got)
+		if got, err := ParseShortID(s, known); !errors.Is(err, errNotASegment) {
+			t.Errorf("ParseShortID(%q) = %#v, %v; want errNotASegment", s, got, err)
 		}
 	}
 	// a whole id's last digit holds two zero bits, as a segment or a full id
-	if _, err := ParseShortID(anItem.String()[:fullWidth-1]+"z", known); err == nil || !strings.Contains(err.Error(), "two zeros") {
-		t.Errorf("26 digits whose last holds a set pad bit: %v; want the pad bits named", err)
+	if _, err := ParseShortID(anItem.String()[:fullWidth-1]+"z", known); !errors.Is(err, errPadBits) {
+		t.Errorf("26 digits whose last holds a set pad bit: %v; want errPadBits", err)
 	}
 	segs := Segments{s: "1f9.zc7"}.List()
 	if got := Render(mustPrefix("abc"), anItem, segs); got != "abc-1f9.zc7" {
@@ -287,7 +315,10 @@ func TestAnEventIDReadsBackAndAShortOneIsRefused(t *testing.T) {
 	if got, err := ReadEventID(id[:]); err != nil || got != id {
 		t.Errorf("an event id reads back as %v, %v", got, err)
 	}
-	if _, err := ReadEventID(id[1:]); err == nil {
-		t.Errorf("a short event id reads; want it refused")
+	_, err := ReadEventID(id[1:])
+	if !errors.Is(err, wrongSize{What: partEventID}) {
+		t.Errorf("a short event id reads with %v; want an event id of the wrong length", err)
+	} else if says := fmt.Sprintf("%d bytes, not %d", len(id)-1, len(id)); !strings.Contains(err.Error(), says) {
+		t.Errorf("a short event id is refused as %q; want it to say %s", err, says)
 	}
 }

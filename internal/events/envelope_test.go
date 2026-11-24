@@ -2,6 +2,7 @@ package events
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -68,16 +69,27 @@ func TestAnEnvelopeThatLiesOrIsAmbiguousIsRefused(t *testing.T) {
 	p.Bytes(1, []byte("the text"))
 	lying.Bytes(envelopePlain, p.Encoded())
 	lying.Bytes(envelopeCommitment, bytes.Repeat([]byte{1}, 32))
-	both := append(SealPlain("a").wire(), lying.Encoded()...)
-	for name, b := range map[string][]byte{
-		"a plaintext whose commitment is not its text's": lying.Encoded(),
-		"two forms":           both,
-		"no commitment":       futureField(envelopePlain, string(p.Encoded())),
-		"a short commitment":  futureField(envelopeCommitment, "short"),
-		"bytes that are none": {0xff},
+	var both wire.Writer
+	both.Bytes(envelopePlain, p.Encoded())
+	sealedForm := nested(t, Envelope{form: sealed{suite: SuiteEd25519, tier: "tier", epoch: 1}}.wire(), envelopeSealed)
+	both.Bytes(envelopeSealed, sealedForm)
+	commitment := SealPlain("the text").Commitment()
+	both.Bytes(envelopeCommitment, commitment[:])
+	// the control: a plaintext committed to its own text reads
+	envelopeOf(t, SealPlain("the text").wire())
+	none := []byte{0xff}
+	for name, c := range map[string]struct {
+		b    []byte
+		want error
+	}{
+		"a plaintext whose commitment is not its text's": {lying.Encoded(), errCommitmentNotText},
+		"two forms":           {both.Encoded(), notOneForm{What: partEnvelope}},
+		"no commitment":       {futureField(envelopePlain, string(p.Encoded())), missing{What: partCommitment}},
+		"a short commitment":  {futureField(envelopeCommitment, "short"), wrongSize{What: partCommitment}},
+		"bytes that are none": {none, wireRefusal(t, none)},
 	} {
-		if e, err := readEnvelope(b); err == nil {
-			t.Errorf("%s reads as %#v; want it refused", name, e)
+		if e, err := readEnvelope(c.b); !errors.Is(err, c.want) {
+			t.Errorf("%s reads as %#v, %v; want %v", name, e, err, c.want)
 		}
 	}
 }

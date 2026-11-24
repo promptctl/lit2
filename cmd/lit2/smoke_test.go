@@ -56,7 +56,7 @@ func TestSmoke(t *testing.T) {
 				t.Errorf("lit2 %q does not name %s on stdout:\n%s", tc.args, verb, stdout.String())
 			}
 		}
-		if status != tc.status || !strings.Contains(stdout.String(), tc.stdout) || !strings.HasPrefix(stderr.String(), tc.errs) || (tc.errs == "") != (stderr.Len() == 0) {
+		if status != tc.status || !holds(stdout.String(), tc.stdout) || !strings.HasPrefix(stderr.String(), tc.errs) || (tc.errs == "") != (stderr.Len() == 0) {
 			t.Errorf("lit2 %q: status %d, stdout %q, stderr %q", tc.args, status, stdout.String(), stderr.String())
 		}
 	}
@@ -100,6 +100,16 @@ func TestSmoke(t *testing.T) {
 			t.Errorf("run %d records config %+v; want none, no version being applied", i, *c)
 		}
 	}
+}
+
+// holds is whether stdout is what a row expects of it: a row's text appears
+// in it, and a row with none expects nothing written, since every string
+// contains the empty one.
+func holds(stdout, want string) bool {
+	if want == "" {
+		return stdout == ""
+	}
+	return strings.Contains(stdout, want)
 }
 
 // TestSmokeWorksATicket makes a checkout a writer, the default profile its

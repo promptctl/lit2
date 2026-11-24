@@ -278,25 +278,23 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 	if err != nil {
 		return none(err)
 	}
-	pub := published{segs: make([]Kept, len(es))}
+	pub, spans := published{segs: make([]Kept, len(es))}, make([]Span, len(es))
 	for i, e := range es {
 		at, err := parseSegmentName(e.Name)
 		if err != nil {
 			return refused(fmt.Errorf("tree %s: %w", c.Tree, err))
-		}
-		if at != pub.end {
-			return refused(fmt.Errorf("tree %s: segment %s starts at %d, not at %d where the stream before it ends", c.Tree, e.Name, at, pub.end))
 		}
 		// the header alone, so reading heads inflates no segment
 		size, err := s.ports.Objects.BlobSize(e.Blob)
 		if err != nil {
 			return none(err)
 		}
-		if size == 0 {
-			return refused(fmt.Errorf("tree %s: segment %s holds no bytes", c.Tree, e.Name))
-		}
 		pub.segs[i] = Kept{Span: Span{From: at, To: at + Offset(size)}, Blob: e.Blob}
-		pub.end = pub.segs[i].Span.To
+		spans[i] = pub.segs[i].Span
+		pub.end += Offset(size) // the stream's end once tile has found no gap and no overlap
+	}
+	if err := tile(spans); err != nil {
+		return refused(fmt.Errorf("tree %s: %w", c.Tree, err))
 	}
 	return pub, log, nil
 }
@@ -322,11 +320,14 @@ type Range struct {
 	From   Offset
 }
 
+// errPastHead is a range that starts after its stream's head.
+var errPastHead = errors.New("a read past the stream's head")
+
 // Read reads a range of a stream, from From to the stream's head as Heads
 // saw it, so what a fold consumes matches the heads it read.
 func (s *Store) Read(r Range) (Scan, error) {
 	if r.From > r.Stream.Until.At {
-		return Scan{}, fmt.Errorf("%s: reading from %d, past its head at %d", r.Stream.Ref.Name(), r.From, r.Stream.Until.At)
+		return Scan{}, fmt.Errorf("%s: reading from %d, after its head at %d: %w", r.Stream.Ref.Name(), r.From, r.Stream.Until.At, errPastHead)
 	}
 	b, err := s.bytes(r.Stream.src, Span{From: r.From, To: r.Stream.Until.At})
 	if err != nil {
@@ -427,6 +428,9 @@ func (e ShorterThanPublished) Error() string {
 	return fmt.Sprintf("the log of %s ends at %d, before its publication's end at %d", e.Ref.Name(), e.Log, e.Published)
 }
 
+// errOtherLog is a ref's publication of a log other than the one sealed.
+var errOtherLog = errors.New("another log")
+
 // prior is what keepWithin keeps of ref's publication of the log now at
 // until, where sealing resumes, what was kept, and what the ref was when
 // read, which the publish replaces from. A ref holding no publication of
@@ -448,7 +452,7 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, git.Was, 
 		case err != nil:
 			return nil, 0, nil, nil, err
 		case log != until.Log:
-			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s", h.Target, log, until.Log)}, h, nil
+			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s: %w", h.Target, log, until.Log, errOtherLog)}, h, nil
 		case pub.end > until.At:
 			return nil, 0, nil, nil, ShorterThanPublished{Ref: ref, Log: until.At, Published: pub.end}
 		}
@@ -554,27 +558,30 @@ func (s *Store) Publish(p Publication) (Published, error) {
 	}
 	out.added(commit, stored, 0)
 	out.Commit, out.Move = commit, moved(p.from, commit)
-	_, unchanged := out.Move.(RefUnchanged)
-	if !unchanged {
-		err = s.ports.Refs.Replace(p.ref.Name(), p.from, commit)
-	}
-	if err == nil && !unchanged {
-		return out, nil
-	}
 	// a ref already naming the commit is what this publish wanted, whoever
 	// moved it there, so racing publishes of one log converge; one naming
-	// anything else has moved since the seal, and this publish is stale
-	now, herr := s.head(p.ref)
-	if herr != nil {
-		return Published{}, errors.Join(err, herr)
-	}
-	if now != (git.Named{Target: commit}) {
-		if err == nil {
-			err = fmt.Errorf("%s is %v, not the %s it named when this publication was sealed", p.ref.Name(), now, commit)
+	// anything else is a ref no longer what the seal read, Moved, and this
+	// publish is stale. An idle publish reads its ref and says Moved
+	// itself; a replace's refusal is returned as the backend said it
+	if _, idle := out.Move.(RefUnchanged); idle {
+		now, err := s.head(p.ref)
+		if err != nil {
+			return Published{}, err
 		}
+		if now != (git.Named{Target: commit}) {
+			return Published{}, git.Moved{Name: p.ref.Name(), From: p.from, Now: now}
+		}
+		return out, nil
+	}
+	err = s.ports.Refs.Replace(p.ref.Name(), p.from, commit)
+	var refusal git.Moved
+	if errors.As(err, &refusal) && refusal.Now == (git.Named{Target: commit}) {
+		out.Move = RefUnchanged{}
+		return out, nil
+	}
+	if err != nil {
 		return Published{}, err
 	}
-	out.Move = RefUnchanged{}
 	return out, nil
 }
 

@@ -62,10 +62,14 @@ type OSFiles struct {
 	mode fs.FileMode
 }
 
-// FilesAt is the store's files under root, which need not exist yet. Every
-// file it makes is 0644, as git makes lit's objects, so whoever can read
-// a clone's objects can read its logs too.
-func FilesAt(root string) OSFiles { return FilesAtMode(root, 0o644) }
+// readable is the mode of every store file, 0644, as readable as git makes
+// lit's objects, so whoever can read a clone's objects can read its logs
+// too.
+const readable fs.FileMode = 0o644
+
+// FilesAt is the store's files under root, which need not exist yet, every
+// file it makes readable.
+func FilesAt(root string) OSFiles { return FilesAtMode(root, readable) }
 
 // FilesAtMode is files under root, each made in mode: the identity files,
 // a secret among them, are 0600 through this same port.
@@ -166,6 +170,15 @@ func (o OSFiles) Size(p Path) (uint64, error) {
 	return uint64(info.Size()), nil
 }
 
+// Mode is the permission bits of the file at p.
+func (o OSFiles) Mode(p Path) (fs.FileMode, error) {
+	info, err := os.Stat(o.file(p))
+	if err != nil {
+		return 0, missing(p, err)
+	}
+	return info.Mode().Perm(), nil
+}
+
 func (o OSFiles) List(dir Path) ([]Path, error) {
 	entries, err := os.ReadDir(o.file(dir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -187,11 +200,19 @@ func (o OSFiles) List(dir Path) ([]Path, error) {
 // contract suite and safe for concurrent use.
 type MemoryFiles struct {
 	mu    sync.Mutex
+	mode  fs.FileMode
 	files map[Path][]byte
 }
 
-// NewMemoryFiles is an empty store root in process.
-func NewMemoryFiles() *MemoryFiles { return &MemoryFiles{files: map[Path][]byte{}} }
+// NewMemoryFiles is an empty store root in process, every file it makes
+// readable, as FilesAt makes them.
+func NewMemoryFiles() *MemoryFiles { return NewMemoryFilesMode(readable) }
+
+// NewMemoryFilesMode is an empty store root in process, every file it makes
+// in mode, as FilesAtMode makes them.
+func NewMemoryFilesMode(mode fs.FileMode) *MemoryFiles {
+	return &MemoryFiles{mode: mode, files: map[Path][]byte{}}
+}
 
 func (m *MemoryFiles) Append(p Path, b []byte) (uint64, error) {
 	m.mu.Lock()
@@ -233,6 +254,16 @@ func (m *MemoryFiles) Size(p Path) (uint64, error) {
 		return 0, NotFound{Path: p}
 	}
 	return uint64(len(f)), nil
+}
+
+// Mode is the mode the file at p was made in.
+func (m *MemoryFiles) Mode(p Path) (fs.FileMode, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.files[p]; !ok {
+		return 0, NotFound{Path: p}
+	}
+	return m.mode, nil
 }
 
 func (m *MemoryFiles) List(dir Path) ([]Path, error) {

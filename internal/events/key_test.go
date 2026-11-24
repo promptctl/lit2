@@ -4,9 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/lit2/internal/panics"
 )
 
 // keyFrom is the key whose Ed25519 seed is the hex seed.
@@ -67,44 +71,78 @@ func TestThePhraseIsTheBIP39MnemonicOfTheSeedAsEntropy(t *testing.T) {
 }
 
 func TestABadWordOrChecksumIsRefusedAndNoRefusalCarriesItsInput(t *testing.T) {
-	ws := strings.Fields(bip39[5][1])
-	swapped := append([]string{}, ws...)
-	swapped[0], swapped[1] = swapped[1], swapped[0]
-	lastChanged := append([]string{}, ws[:23]...)
-	lastChanged = append(lastChanged, "abandon")
-	for name, phrase := range map[string]string{
-		"a word not in the list": strings.Join(append([]string{"panda", "eyebrowz"}, ws[2:]...), " "),
-		"two words swapped":      strings.Join(swapped, " "),
-		"the last word changed":  strings.Join(lastChanged, " "),
-		"23 words":               strings.Join(ws[:23], " "),
-		"capitals":               strings.ToUpper(bip39[5][1]),
+	// each refusal is built from two phrases, so a refusal that carried any
+	// part of its input would differ between them
+	phrases := [2]string{bip39[5][1], bip39[6][1]}
+	for name, c := range map[string]struct {
+		of   func(ws []string) string
+		want error
+	}{
+		"a word not in the list": {func(ws []string) string {
+			return strings.Join(append([]string{ws[0], ws[1] + "z"}, ws[2:]...), " ")
+		}, errNotAWord},
+		"two words swapped": {func(ws []string) string {
+			swapped := slices.Clone(ws)
+			swapped[0], swapped[1] = swapped[1], swapped[0]
+			return strings.Join(swapped, " ")
+		}, errChecksum},
+		"the last word changed": {func(ws []string) string { return strings.Join(append(slices.Clone(ws[:23]), "abandon"), " ") }, errChecksum},
+		"23 words":              {func(ws []string) string { return strings.Join(ws[:23], " ") }, errPhraseLength},
+		"capitals":              {func(ws []string) string { return strings.ToUpper(strings.Join(ws, " ")) }, errNotAWord},
 	} {
-		k, err := ParsePhrase(phrase)
-		if err == nil {
-			t.Errorf("%s reads as %v; want it refused", name, k)
-			continue
-		}
-		for _, w := range strings.Fields(phrase) {
-			if len(w) > 3 && strings.Contains(err.Error(), w) {
-				t.Errorf("%s: the refusal %q carries the word %q", name, err, w)
+		var said [2]string
+		for i, p := range phrases {
+			if _, err := ParsePhrase(p); err != nil {
+				t.Fatalf("the control phrase %d does not read: %v", i, err)
+			}
+			phrase := c.of(strings.Fields(p))
+			k, err := ParsePhrase(phrase)
+			if !errors.Is(err, c.want) {
+				t.Errorf("%s reads as %v, %v; want %v", name, k, err, c.want)
+				continue
+			}
+			said[i] = err.Error()
+			// past the refusal's own fixed text, no word of the input, of
+			// any length, appears
+			rest := strings.Replace(said[i], c.want.Error(), "", 1)
+			for _, w := range strings.Fields(phrase) {
+				if strings.Contains(rest, w) {
+					t.Errorf("%s: the refusal %q carries the word %q", name, err, w)
+				}
 			}
 		}
+		if said[0] != said[1] {
+			t.Errorf("%s: two phrases are refused as %q and %q; want one refusal, carrying neither", name, said[0], said[1])
+		}
 	}
-	k := keyOf(7)
-	file := string(k.FileText())
-	seed := strings.TrimSuffix(strings.TrimPrefix(file, "ed25519 "), "\n")
-	for name, text := range map[string]string{
-		"no newline":     strings.TrimSuffix(file, "\n") + " ",
-		"another suite":  "ed25518 " + seed + "\n",
-		"padded base64":  "ed25519 " + seed[:42] + "=\n",
-		"a bad alphabet": "ed25519 " + seed[:42] + "+\n",
-		"empty":          "",
-		"twice":          file + file,
+	files := [2]string{string(keyOf(7).FileText()), string(keyOf(8).FileText())}
+	for name, c := range map[string]struct {
+		of   func(file, seed string) string
+		want error
+	}{
+		"no newline":     {func(file, _ string) string { return strings.TrimSuffix(file, "\n") + " " }, errKeyFileNewline},
+		"another suite":  {func(_, seed string) string { return "ed25518 " + seed + "\n" }, errKeyFileSuite},
+		"padded base64":  {func(_, seed string) string { return "ed25519 " + seed[:42] + "=\n" }, errKeyFileSeed},
+		"a bad alphabet": {func(_, seed string) string { return "ed25519 " + seed[:42] + "+\n" }, errKeyFileSeed},
+		"empty":          {func(string, string) string { return "" }, errKeyFileLength},
+		"twice":          {func(file, _ string) string { return file + file }, errKeyFileLength},
 	} {
-		if got, err := ParseKeyFile([]byte(text)); err == nil {
-			t.Errorf("a key file with %s reads as %v; want it refused", name, got)
-		} else if strings.Contains(err.Error(), seed[:8]) {
-			t.Errorf("a key file with %s is refused with %q, which carries the seed", name, err)
+		var said [2]string
+		for i, file := range files {
+			if _, err := ParseKeyFile([]byte(file)); err != nil {
+				t.Fatalf("the control key file %d does not read: %v", i, err)
+			}
+			seed := strings.TrimSuffix(strings.TrimPrefix(file, "ed25519 "), "\n")
+			got, err := ParseKeyFile([]byte(c.of(file, seed)))
+			if !errors.Is(err, c.want) {
+				t.Errorf("a key file with %s reads as %v, %v; want %v", name, got, err, c.want)
+				continue
+			}
+			said[i] = err.Error()
+		}
+		// two seeds refused alike: no part of either seed is in the refusal
+		if said[0] != said[1] {
+			t.Errorf("a key file with %s is refused as %q and %q; want one refusal, carrying neither seed", name, said[0], said[1])
 		}
 	}
 }
@@ -115,6 +153,23 @@ var didKeys = [][2]string{
 	{"c96ef9ea10c5e414c471723aff9de72c35fa5b70fae97e8832ecac7d2e2b8ed6", "did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2"},
 	{"47eb3eba85ebb34ff469689dbfcb1b93baa648185ddfb734fff41a403185413b", "did:key:z6MktgKTsu1QhX6QPbyqG6geXdw6FQCZBPq7uQpieWbiQiG7"},
 	{"aa19f750f580107930df0f2b0201c0c7f4210b0e2f4a4493f72dac472ae0e551", "did:key:z6MkhWqdDBPojHA7cprTGTt5yHv5yUi1B8cnXn8ReLumkw6E"},
+}
+
+// A key file of another suite is refused as one, saying what is wrong with
+// it: that it does not start with its suite. The key's own file is the
+// control.
+func TestAKeyFileOfAnotherSuiteSaysItDoesNotStartWithItsSuite(t *testing.T) {
+	file := string(keyOf(7).FileText())
+	if _, err := ParseKeyFile([]byte(file)); err != nil {
+		t.Fatalf("the control key file does not read: %v", err)
+	}
+	_, err := ParseKeyFile([]byte("ed25518" + strings.TrimPrefix(file, "ed25519")))
+	if !errors.Is(err, errKeyFileSuite) {
+		t.Fatalf("a key file of suite ed25518 reads with %v; want errKeyFileSuite", err)
+	}
+	if !strings.Contains(err.Error(), "does not start with its suite, ed25519") {
+		t.Errorf("a key file of another suite is refused as %q; want it to say it does not start with its suite, ed25519", err)
+	}
 }
 
 func TestThePrincipalIsItsDIDKey(t *testing.T) {
@@ -128,10 +183,16 @@ func TestThePrincipalIsItsDIDKey(t *testing.T) {
 			t.Errorf("ParsePrincipalID(%s) = %v, %v; want the seed's principal", v[1], p, err)
 		}
 	}
-	for _, s := range []string{"", "did:key:", "did:key:zz", "did:web:example.com", "did:key:z0OIl",
-		"did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme"} { // the last is secp256k1
-		if p, err := ParsePrincipalID(s); err == nil {
-			t.Errorf("ParsePrincipalID(%q) = %v; want it refused", s, p)
+	for s, want := range map[string]error{
+		"":                    errNotDIDKey,
+		"did:web:example.com": errNotDIDKey,
+		"did:key:":            errNotDIDKey,
+		"did:key:zz":          errNotEd25519Key,
+		"did:key:z0OIl":       errNotBase58,
+		"did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme": errNotEd25519Key, // secp256k1
+	} {
+		if p, err := ParsePrincipalID(s); !errors.Is(err, want) {
+			t.Errorf("ParsePrincipalID(%q) = %v, %v; want %v", s, p, err, want)
 		}
 	}
 }
@@ -143,14 +204,10 @@ func TestTheZeroKeyIsNoKey(t *testing.T) {
 		"FileText":  func(k Key) { k.FileText() },
 		"Phrase":    func(k Key) { k.Phrase() },
 	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("the zero Key's %s answered; want a panic", name)
-				}
-			}()
-			use(Key{})
-		}()
+		t.Run(name, func(t *testing.T) {
+			use(keyOf(1)) // the control: a key answers
+			panics.With(t, errNoKey, func() { use(Key{}) })
+		})
 	}
 }
 

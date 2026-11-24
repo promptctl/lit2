@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -67,10 +68,18 @@ func (r codeRepo) head() (string, bool, error) {
 	}
 	names, err := r.git(nil, "for-each-ref", "--format=%(objectname)", "--", strings.TrimSuffix(branch, "\n"))
 	if err == nil && names != "" {
-		err = fmt.Errorf("HEAD's %s names %s, which is no commit this repository holds", strings.TrimSpace(branch), strings.TrimSpace(names))
+		err = fmt.Errorf("HEAD's %s names %s, which this repository does not hold: %w", strings.TrimSpace(branch), strings.TrimSpace(names), errHeadMissing)
 	}
 	return "", false, err
 }
+
+// errHeadMissing is a HEAD whose branch names an object the repository
+// does not hold; errShallow is a question a clone cut short at its
+// boundary cannot answer.
+var (
+	errHeadMissing = errors.New("a HEAD naming a commit the repository does not hold")
+	errShallow     = errors.New("a history cut short, as a shallow clone's is")
+)
 
 // AtHead reads HEAD's entry at path. A file is a blob of a regular mode;
 // any other entry is NotAFile.
@@ -137,7 +146,7 @@ func (r codeRepo) EverAt(path string, id ObjectID) (bool, error) {
 		return false, err
 	}
 	if strings.TrimSpace(shallow) == "true" {
-		return false, fmt.Errorf("HEAD's history is not all in this clone, as in a shallow one, so whether %s was ever %s is unknown", id, path)
+		return false, fmt.Errorf("whether %s was ever %s is unknown, since HEAD's history is not all in this clone: %w", id, path, errShallow)
 	}
 	return false, nil
 }

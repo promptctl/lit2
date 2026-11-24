@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -46,6 +47,9 @@ func (r WriterRef) Name() git.RefName { return writerNS + git.RefName(r.Checkout
 // Name is refs/lit/inbox/<inbox-id>.
 func (r InboxRef) Name() git.RefName { return inboxNS + git.RefName(r.Inbox.String()) }
 
+// errNotARef is a ref name in neither of the two namespaces.
+var errNotARef = errors.New("a ref name in neither of lit's namespaces")
+
 // ParseRef is the one parser of a ref name into a Ref: a writer's or an
 // inbox's, its id in the one spelling String writes. Anything else is
 // refused `[LAW:parse-dont-validate]`.
@@ -60,7 +64,7 @@ func ParseRef(n git.RefName) (Ref, error) {
 			return InboxRef{Inbox: id}, nil
 		}
 	}
-	return nil, fmt.Errorf("%s is neither refs/lit/log/<checkout-id> nor refs/lit/inbox/<inbox-id>", n)
+	return nil, fmt.Errorf("%s is neither refs/lit/log/<checkout-id> nor refs/lit/inbox/<inbox-id>: %w", n, errNotARef)
 }
 
 // token reads a 128-bit token in its one spelling, 32 lowercase hex digits.

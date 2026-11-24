@@ -50,7 +50,7 @@ func TestASoloOwnersAddDraftsTheProposalAndItsApproval(t *testing.T) {
 		c := verbs.Compile(b.world(b.st), verbs.Add, []verbs.Operand{{Path: "/members", Value: `{principal: "` + joiner.Principal().String() + `", role: ` + role + `}`}},
 			func() (string, error) { return "", nil })
 		if no, refused := c.Refusal(); refused {
-			t.Fatalf("add a %s: refused %s: %v", role, no.Reason, no.Err)
+			t.Fatalf("add a %s: refused %s: %v", role, no.Reason, no.Err())
 		}
 		var got []events.Kind
 		for _, d := range c.Drafts {

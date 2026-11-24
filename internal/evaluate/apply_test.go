@@ -1,6 +1,7 @@
 package evaluate
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -124,10 +125,13 @@ func TestTheViewKnowsEveryPrefixAVersionDeclared(t *testing.T) {
 	s := founded
 	s, _ = mint(t, s, s.Known(), events.Act{About: events.Root{}, Payload: events.NewWorkspaceApply([]byte("prefix = \"old\"\n"), git.SHA1, nil)}, [16]byte{})
 	v := Of(s, version(t, withoutAudit, ""), time.Time{})
-	for text, ok := range map[string]bool{"lit-1f9": true, "old-1f9": true, "rin-1f9": false} {
-		if _, err := events.ParseShortID(text, v.Prefixes()); (err == nil) != ok {
-			t.Errorf("%s under the view's prefixes: %v; want read %v", text, err, ok)
+	for _, text := range []string{"lit-1f9", "old-1f9"} {
+		if _, err := events.ParseShortID(text, v.Prefixes()); err != nil {
+			t.Errorf("%s under the view's prefixes: %v; want it read", text, err)
 		}
+	}
+	if _, err := events.ParseShortID("rin-1f9", v.Prefixes()); !errors.Is(err, events.ErrForeignPrefix) {
+		t.Errorf("rin-1f9 under the view's prefixes: %v; want ErrForeignPrefix, a prefix no version declared", err)
 	}
 }
 

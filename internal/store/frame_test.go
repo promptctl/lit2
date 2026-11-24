@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -46,24 +47,32 @@ func logOf(t *testing.T, bs ...Batch) ([]byte, []string) {
 }
 
 func TestABatchIsNeverEmptyNorOverAFrame(t *testing.T) {
-	if _, err := NewBatch(); err == nil {
-		t.Error("NewBatch() made an empty batch")
-	}
-	if _, err := NewBatch(make(Record, maxBody)); err == nil {
-		t.Error("NewBatch made a batch over a frame's bound")
+	// the control: one record of the most bytes a frame carries with its
+	// header, and a batch of an empty record and another
+	if _, err := NewBatch(make(Record, maxBody-recordHeader)); err != nil {
+		t.Fatalf("NewBatch of a frame's bound refused: %v", err)
 	}
 	if b, err := NewBatch(Record(""), Record("x")); err != nil || len(b.Records()) != 2 {
 		t.Errorf("NewBatch of an empty record and another = %v, %v", b, err)
 	}
+	if _, err := NewBatch(); !errors.Is(err, errEmptyBatch) {
+		t.Errorf("NewBatch() = %v; want errEmptyBatch", err)
+	}
+	if _, err := NewBatch(make(Record, maxBody-recordHeader+1)); !errors.Is(err, errOverAFrame) {
+		t.Errorf("NewBatch of one byte over a frame's bound = %v; want errOverAFrame", err)
+	}
 }
 
 func TestEveryTruncationReadsAsWholeFramesAndAnIncompleteTail(t *testing.T) {
-	log, _ := logOf(t, mustBatch(t, "a"), mustBatch(t, "bb", "ccc"), mustBatch(t, ""), mustBatch(t, "dddd"))
-	ends := []Offset{}
-	for _, f := range ScanFrames(0, log).Frames {
-		ends = append(ends, f.At)
+	bs := []Batch{mustBatch(t, "a"), mustBatch(t, "bb", "ccc"), mustBatch(t, ""), mustBatch(t, "dddd")}
+	log, _ := logOf(t, bs...)
+	// each frame's end, from the encoded lengths alone
+	ends := make([]Offset, len(bs))
+	var at Offset
+	for i, b := range bs {
+		at += Offset(len(Encode(b)))
+		ends[i] = at
 	}
-	ends = append(ends[1:], Offset(len(log)))
 	for cut := range len(log) + 1 {
 		s := ScanFrames(0, log[:cut])
 		whole := 0

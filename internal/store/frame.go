@@ -47,15 +47,21 @@ type Batch struct {
 // ask a reader for more than a command could have written.
 const maxBody = 1 << 24
 
+// The two batches NewBatch refuses.
+var (
+	errEmptyBatch = errors.New("a batch of no record")
+	errOverAFrame = errors.New("a batch over what one frame carries")
+)
+
 // NewBatch is the batch of rs, refusing none and refusing more bytes than
 // one frame carries.
 func NewBatch(rs ...Record) (Batch, error) {
 	if len(rs) == 0 {
-		return Batch{}, errors.New("a batch holds at least one record")
+		return Batch{}, errEmptyBatch
 	}
 	b := Batch{first: rs[0], rest: rs[1:]}
 	if n := b.bodySize(); n > maxBody {
-		return Batch{}, fmt.Errorf("a batch of %d bytes is over the %d a frame carries", n, maxBody)
+		return Batch{}, fmt.Errorf("a batch of %d bytes, over the %d one frame carries: %w", n, maxBody, errOverAFrame)
 	}
 	return b, nil
 }

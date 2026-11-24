@@ -2,11 +2,13 @@ package events
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"testing"
 
 	"filippo.io/edwards25519"
 
 	"github.com/promptctl/lit2/internal/events/wire"
+	"github.com/promptctl/lit2/internal/panics"
 )
 
 // A suite stored as 257 must not read as suite 1, which a byte of 257 wraps
@@ -18,15 +20,45 @@ func TestASuiteWiderThanAByteIsRefused(t *testing.T) {
 		w.Bytes(2, []byte("k"))
 		return w.Encoded()
 	}
-	if _, err := readPrincipal(stored(257)); err == nil {
-		t.Error("a principal of suite 257 reads; want it refused")
-	}
-	if _, err := readSignature(stored(257)); err == nil {
-		t.Error("a signature of suite 257 reads; want it refused")
-	}
 	if _, err := readPrincipal(stored(uint64(SuiteEd25519))); err != nil {
-		t.Errorf("a principal of suite 1 does not read: %v", err)
+		t.Fatalf("a principal of suite 1 does not read: %v", err)
 	}
+	if _, err := readSignature(stored(uint64(SuiteEd25519))); err != nil {
+		t.Fatalf("a signature of suite 1 does not read: %v", err)
+	}
+	if _, err := readPrincipal(stored(257)); !errors.Is(err, errNotAByte) {
+		t.Errorf("a principal of suite 257 reads with %v; want errNotAByte", err)
+	}
+	if _, err := readSignature(stored(257)); !errors.Is(err, errNotAByte) {
+		t.Errorf("a signature of suite 257 reads with %v; want errNotAByte", err)
+	}
+}
+
+// A principal or a signature names its suite, or it is refused; one of suite
+// 1 is the control that reads.
+func TestAPrincipalOrSignatureNamingNoSuiteIsRefused(t *testing.T) {
+	var named, unnamed wire.Writer
+	named.Uvarint(1, uint64(SuiteEd25519))
+	named.Bytes(2, []byte("k"))
+	unnamed.Bytes(2, []byte("k"))
+	if _, err := readPrincipal(named.Encoded()); err != nil {
+		t.Fatalf("a principal naming its suite does not read: %v", err)
+	}
+	if _, err := readSignature(named.Encoded()); err != nil {
+		t.Fatalf("a signature naming its suite does not read: %v", err)
+	}
+	if _, err := readPrincipal(unnamed.Encoded()); !errors.Is(err, missing{What: partSuite}) {
+		t.Errorf("a principal naming no suite reads with %v; want no suite", err)
+	}
+	if _, err := readSignature(unnamed.Encoded()); !errors.Is(err, missing{What: partSuite}) {
+		t.Errorf("a signature naming no suite reads with %v; want no suite", err)
+	}
+}
+
+// Two suites of one id is a build fault; two of different ids is the control.
+func TestTwoSuitesOfOneIDPanic(t *testing.T) {
+	NewSuites(Ed25519(), twin{})
+	panics.With(t, errRegisteredTwice, func() { NewSuites(Ed25519(), Ed25519()) })
 }
 
 // The all-zero key is a point of small order. Under it, the signature whose R

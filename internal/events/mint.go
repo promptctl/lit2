@@ -2,6 +2,7 @@ package events
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -81,6 +82,14 @@ type Minted struct {
 	Batch  store.Batch
 }
 
+// Mint's refusals: a Context with no clock reading, a caller's bug, and an
+// entropy source that fails or repeats.
+var (
+	errNoClock        = errors.New("Mint under a Context with no clock reading")
+	errEntropyFails   = errors.New("a failing entropy source")
+	errEntropyRepeats = errors.New("a repeating entropy source")
+)
+
 // Mint signs ds as events at the causal positions after c's frontier,
 // one each, in order: the one place a position, an id or a signature is
 // made `[LAW:single-enforcer]`. A create's id is 128 bits read from
@@ -95,7 +104,7 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 		// [LAW:no-silent-failure] the zero time is past UnixNano's range and
 		// would be signed as a recorded-at in 1754; the root reads one clock
 		// for every command, so a Context without it is a caller's bug
-		panic("events: Mint under a Context with no clock reading")
+		panic(fmt.Errorf("events: %w", errNoClock))
 	}
 	var m Minted
 	var records []store.Record
@@ -104,7 +113,7 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 	name := func(in Namespace) ([16]byte, int, error) {
 		var id [16]byte
 		if _, err := io.ReadFull(entropy, id[:]); err != nil {
-			return id, 0, fmt.Errorf("drawing an id: %w", err)
+			return id, 0, fmt.Errorf("drawing an id: %w: %w", errEntropyFails, err)
 		}
 		shared := c.Known.shared(id)
 		for _, other := range mine {
@@ -113,7 +122,7 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 		if shared == fullWidth {
 			// [LAW:no-silent-failure] 128 random bits repeat only when the
 			// source does
-			return id, 0, fmt.Errorf("drawing an id: %s is already known, so the entropy source repeats", digits(id, fullWidth))
+			return id, 0, fmt.Errorf("drawing an id: %s is already known: %w", digits(id, fullWidth), errEntropyRepeats)
 		}
 		w := max(Width(c.Known.Fill(in)+fill[in]), shared+1)
 		mine, fill[in] = append(mine, id), fill[in]+1
@@ -126,7 +135,7 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 		body := payloadWire(p)
 		var salt Salt
 		if _, err := io.ReadFull(entropy, salt[:]); err != nil {
-			return fmt.Errorf("drawing a payload's salt: %w", err)
+			return fmt.Errorf("drawing a payload's salt: %w: %w", errEntropyFails, err)
 		}
 		h := Header{
 			kind: p.Kind(), schema: p.Schema(), about: at,
@@ -138,8 +147,9 @@ func Mint(c Context, ds Drafts, s Signer, entropy io.Reader) (Minted, error) {
 		read, err := readHeader(raw)
 		if err != nil {
 			// [LAW:single-enforcer] readHeader is the one judge of a header,
-			// and its error names the field a caller left unset
-			panic(fmt.Sprintf("events: Mint wrote a header that does not read: %v", err))
+			// and its error names the field a caller left unset, its identity
+			// kept for the caller's test to name
+			panic(fmt.Errorf("events: Mint wrote a header that does not read: %w", err))
 		}
 		sig := s.Sign(signed(raw))
 		sigRaw := signatureWire(sig)

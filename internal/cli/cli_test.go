@@ -65,8 +65,8 @@ func TestABareLit2IsAGetOfTheRoot(t *testing.T) {
 			t.Errorf("Parse(%q) = %#v, %v; want get /", args, got, err)
 		}
 	}
-	if _, err := parse("--dry-run"); err == nil {
-		t.Error("lit2 --dry-run parsed; a get takes no --dry-run")
+	if _, err := parse("--dry-run"); !errors.Is(err, errNoDryRun) {
+		t.Errorf("lit2 --dry-run = %v; want errNoDryRun: a get takes no --dry-run", err)
 	}
 }
 
@@ -83,39 +83,56 @@ func TestDoubleDashEndsFlagsAndDashIsAValue(t *testing.T) {
 
 func TestNotALit2CommandLine(t *testing.T) {
 	for _, tc := range []struct {
-		args []string
-		want ParseCode
+		args, control []string
+		want          error
 	}{
-		{[]string{"frobnicate"}, UnknownVerb},
-		{[]string{"admin", "frobnicate"}, UnknownVerb},
-		{[]string{"get"}, Usage},
-		{[]string{"set", "x/status"}, Usage},
-		{[]string{"add", "x/labels", "a", "x/labels"}, Usage},
-		{[]string{"admin"}, Usage},
-		{[]string{"config"}, Usage},
-		{[]string{"config", "frobnicate"}, UnknownVerb},
-		{[]string{"config", "commit", "--dry-run"}, Usage},
-		{[]string{"admin", "init", "extra"}, Usage},
-		{[]string{"get", "x", "--frob"}, Usage},
-		{[]string{"get", "x", "--dry-run"}, Usage},
-		{[]string{"admin", "init", "--dry-run"}, Usage},
+		{[]string{"frobnicate"}, []string{"get", "x"}, errUnknownVerb},
+		{[]string{"admin", "frobnicate"}, []string{"admin", "init"}, errUnknownVerb},
+		{[]string{"get"}, []string{"get", "x"}, errNoPaths},
+		{[]string{"set", "x/status"}, []string{"set", "x/status", "v"}, errNotPairs},
+		{[]string{"add", "x/labels", "a", "x/labels"}, []string{"add", "x/labels", "a"}, errNotPairs},
+		{[]string{"admin"}, []string{"admin", "init"}, errNoCommand},
+		{[]string{"config"}, []string{"config", "commit"}, errNoCommand},
+		{[]string{"config", "frobnicate"}, []string{"config", "commit"}, errUnknownVerb},
+		{[]string{"config", "commit", "--dry-run"}, []string{"config", "commit"}, errNoDryRun},
+		{[]string{"admin", "init", "extra"}, []string{"admin", "init"}, errOperands},
+		{[]string{"get", "x", "--frob"}, []string{"get", "x"}, errUnknownFlag},
+		{[]string{"get", "x", "--dry-run"}, []string{"get", "x"}, errNoDryRun},
+		{[]string{"admin", "init", "--dry-run"}, []string{"admin", "init"}, errNoDryRun},
 	} {
+		if _, err := parse(tc.control...); err != nil {
+			t.Errorf("control Parse(%q): %v", tc.control, err)
+		}
 		_, err := parse(tc.args...)
 		var f ParseFailure
-		if !errors.As(err, &f) || f.Code != tc.want || f.Class() != reason.ClassUsage {
-			t.Errorf("Parse(%q) failed with %#v; want a usage-class failure with code %d", tc.args, err, tc.want)
+		if !errors.As(err, &f) || f.Class() != reason.ClassUsage || !errors.Is(err, tc.want) {
+			t.Errorf("Parse(%q) failed with %v; want a usage-class failure of %v", tc.args, err, tc.want)
 		}
 	}
 }
 
-func TestEveryParseCodeHasItsOwnWireName(t *testing.T) {
-	seen := map[string]ParseCode{}
-	for _, code := range []ParseCode{UnknownVerb, Usage} {
-		name := ParseFailure{Code: code}.Reason()
-		if prior, ok := seen[name]; ok || name == "" {
-			t.Errorf("codes %d and %d share the wire name %q", prior, code, name)
+// TestEveryParseRefusalHasItsOwnWireName: a word that names no row is
+// unknown_verb, and a row's operands or a flag that are wrong are usage.
+func TestEveryParseRefusalHasItsOwnWireName(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"frobnicate"}, "unknown_verb"},
+		{[]string{"config", "frobnicate"}, "unknown_verb"},
+		{[]string{"get"}, "usage"},
+		{[]string{"get", "x", "--frob"}, "usage"},
+		{[]string{"config", "commit", "--dry-run"}, "usage"},
+	} {
+		_, err := parse(tc.args...)
+		var f ParseFailure
+		if !errors.As(err, &f) {
+			t.Errorf("Parse(%q) = %v; want a ParseFailure", tc.args, err)
+			continue
 		}
-		seen[name] = code
+		if got := f.Reason(); got != tc.want {
+			t.Errorf("Parse(%q) is reason %q; want %q", tc.args, got, tc.want)
+		}
 	}
 }
 

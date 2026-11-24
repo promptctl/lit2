@@ -2,6 +2,7 @@ package git
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -54,14 +55,22 @@ type ObjectID struct {
 // length in lowercase hex digits.
 func ParseObjectID(f ObjectFormat, s string) (ObjectID, error) {
 	b, err := hex.DecodeString(s)
-	if err == nil && hex.EncodeToString(b) == s {
-		var id ObjectID
-		if id, err = ObjectIDFrom(f, b); err == nil {
-			return id, nil
-		}
+	if err != nil || hex.EncodeToString(b) != s {
+		return ObjectID{}, fmt.Errorf("%q is not a %s object id: it is not lowercase hex", s, f)
 	}
-	return ObjectID{}, fmt.Errorf("%q is not a %s object id", s, f)
+	id, err := ObjectIDFrom(f, b)
+	if err != nil {
+		return ObjectID{}, fmt.Errorf("%q is not a %s object id: %w", s, f, err)
+	}
+	return id, nil
 }
+
+// errNoFormat is a format that is neither of git's, so no sum is an id of
+// it; errSumSize is a sum not the length its format's ids are.
+var (
+	errNoFormat = errors.New("no object format")
+	errSumSize  = errors.New("a sum not of its format's length")
+)
 
 // ObjectIDFrom reads an object id held as its format and its sum, the
 // form Sum gives: the sum is the format's length in bytes.
@@ -69,10 +78,10 @@ func ObjectIDFrom(f ObjectFormat, sum []byte) (ObjectID, error) {
 	switch f {
 	case SHA1, SHA256:
 	default:
-		return ObjectID{}, fmt.Errorf("a sum cannot be read as an id of %s", f)
+		return ObjectID{}, fmt.Errorf("a sum cannot be read as an id of %s: %w", f, errNoFormat)
 	}
 	if len(sum) != f.size() {
-		return ObjectID{}, fmt.Errorf("a %d-byte sum is not a %s object id", len(sum), f)
+		return ObjectID{}, fmt.Errorf("a %d-byte sum is not a %s object id: %w", len(sum), f, errSumSize)
 	}
 	id := ObjectID{format: f}
 	copy(id.sum[:], sum)
@@ -181,7 +190,9 @@ type Refs interface {
 	// listed as one, never the listing's failure.
 	List(prefix RefName) (Listing, error)
 	// Replace points name at to, an object the repository holds, if name
-	// still is what from says; otherwise it refuses.
+	// still is what from says; otherwise it refuses with Moved, whose Now
+	// is the ref's state as read after git refused. A refusal that reads
+	// the ref still naming from is git's own failure, Refused, not Moved.
 	Replace(name RefName, from Was, to ObjectID) error
 }
 
@@ -199,6 +210,13 @@ type Absent struct{}
 func (Named) was()  {}
 func (Absent) was() {}
 
+// String is the object the ref names.
+func (n Named) String() string { return n.Target.String() }
+
+// String says there is no ref, so a refusal naming a ref's state reads it
+// in words.
+func (Absent) String() string { return "absent" }
+
 // name is the one grammar of a tree entry's name and of a refname's
 // component in lit's repository: a letter or digit, then letters, digits,
 // _ and -. It admits every name lit makes, hex ids and words, and nothing
@@ -206,6 +224,15 @@ func (Absent) was() {}
 // the characters git check-ref-format or fsck forbid
 // `[LAW:single-enforcer]`. gittest holds it to git itself.
 var name = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// ErrNotAName is a name the name grammar refuses, as a tree entry's name
+// or as a refname, which is refs/ and names: one refusal for the one
+// grammar.
+var ErrNotAName = errors.New("a name not of letters, digits, _ and -")
+
+// ErrDuplicateEntry is a tree given two entries of one name, which git
+// fsck refuses.
+var ErrDuplicateEntry = errors.New("two tree entries of one name")
 
 // parseRefName refuses a name that is not refs/ and one or more names.
 func parseRefName(n RefName) error {
@@ -215,7 +242,7 @@ func parseRefName(n RefName) error {
 		ok = ok && name.MatchString(p)
 	}
 	if !ok {
-		return fmt.Errorf("%q is not a refname lit writes: refs/ and names of letters, digits, _ and -", n)
+		return fmt.Errorf("%q is not a refname lit writes, refs/ and names: %w", n, ErrNotAName)
 	}
 	return nil
 }
@@ -235,6 +262,19 @@ func under(n, p RefName) bool {
 	return n == p || strings.HasPrefix(string(n), strings.TrimSuffix(string(p), "/")+"/")
 }
 
+// Moved is a ref no longer what its writer read: a replace refused, or a
+// publish with nothing to write whose ref has moved since its seal read
+// it. From is what the writer read, Now the ref's state as read after the
+// refusal, so the writer decides from the refusal itself whether it lost
+// a race or won it under another publish.
+type Moved struct {
+	Name RefName
+	From Was
+	Now  Was
+}
+
+func (m Moved) Error() string { return fmt.Sprintf("%s is %v, not %v", m.Name, m.Now, m.From) }
+
 // MissingObject is an id the object database does not hold.
 type MissingObject struct{ ID ObjectID }
 
@@ -243,13 +283,23 @@ func (m MissingObject) Error() string {
 }
 
 // NotLit is an object the repository holds that lit did not write: of
-// another kind than asked for, or of a shape lit's encoding never makes.
+// another kind than asked for, ErrWrongKind, or of a shape lit's encoding
+// never makes, errForeignShape.
 type NotLit struct {
 	ID  ObjectID
-	Why string
+	Why error
 }
 
-func (n NotLit) Error() string { return fmt.Sprintf("object %s is %s", n.ID, n.Why) }
+func (n NotLit) Error() string { return fmt.Sprintf("object %s is %v", n.ID, n.Why) }
+
+func (n NotLit) Unwrap() error { return n.Why }
+
+// ErrWrongKind is an object of another kind than the one asked for.
+var ErrWrongKind = errors.New("an object of another kind")
+
+// errForeignShape is a tree or commit of a shape lit's encoding never
+// writes.
+var errForeignShape = errors.New("an object of a shape lit never writes")
 
 // ForeignFormat is an id of another format than the repository it is asked
 // of, the zero id's included: it names nothing there, so it is refused,
