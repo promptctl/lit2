@@ -733,10 +733,8 @@ decided in the body.
   in the one format go-git reads whole: SHA-1, refs as files, no automatic
   gc, and every object and ref fsynced, which needs git 2.36 or later, so
   lit refuses an older git before any write. A read never writes: a ref
-  naming no object, which git never writes and refuses to update or
-  delete, is one unreadable stream, and its writer's next publish removes
-  it under git's own lock and makes it again, as it clears a lock a killed
-  git left. The first budget run measures go-git's object walk on the
+  or object that will not read is one unreadable stream, said, and stops
+  no other. The first budget run measures go-git's object walk on the
   depth corpus.
 - **C. `topic`.** A built-in settable field, one short word that groups
   items across the tree and renders in the id, kept from v1 because a

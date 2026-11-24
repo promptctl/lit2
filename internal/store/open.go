@@ -187,13 +187,13 @@ func (s *Store) Heads() (Heads, error) {
 		if local[ref] {
 			continue // read from its log, which the publication is a prefix of
 		}
+		// a read writes nothing, so any failure to read one stream, a
+		// publication lit did not write or an object that will not read, is
+		// that stream's, said, and stops no other
 		pub, log, err := s.publication(r.Target)
-		if errors.As(err, new(NoPublication)) {
+		if err != nil {
 			unreadable(string(r.Name), err)
 			continue
-		}
-		if err != nil {
-			return Heads{}, err
 		}
 		h.Streams = append(h.Streams, Stream{Ref: ref, Until: Position{Log: log, At: pub.end}, src: pub})
 	}
@@ -410,8 +410,6 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, git.Was, 
 	switch h := h.(type) {
 	case git.Absent:
 		return nil, 0, NoPrior{}, h, nil
-	case git.Broken:
-		return nil, 0, Resealed{Why: h.Ref}, h, nil
 	case git.Named:
 		pub, log, err := s.publication(h.Target)
 		switch {
@@ -443,7 +441,7 @@ func (s *Store) head(ref Ref) (git.Was, error) {
 	}
 	for _, b := range l.Broken {
 		if b.Name == ref.Name() {
-			return git.Broken{Ref: b}, nil
+			return nil, b
 		}
 	}
 	return git.Absent{}, nil
@@ -558,7 +556,7 @@ func moved(h git.Was, to git.ObjectID) RefMove {
 			return RefUnchanged{}
 		}
 		return RefReplaced{Previous: h.Target}
-	case git.Absent, git.Broken:
+	case git.Absent:
 		return RefCreated{}
 	}
 	panic(fmt.Sprintf("store: %T is not what a ref was", h))

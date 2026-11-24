@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -142,42 +141,45 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 }
 
 // A ref broken by something other than git, which writes every ref
-// whole, is one unreadable stream, named, hiding no other, and a read
-// leaves it; its writer's next publish repairs it from its log, so nobody
-// mends lit's repository by hand.
-func TestABrokenWriterRefHealsOnItsWritersNextPublish(t *testing.T) {
+// whole, and an object that will not read are each one unreadable stream,
+// said, hiding no other, and the read that finds them writes nothing.
+func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 	c := gittest.Clone(t)
-	sa := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(4)), store.DefaultSegmentBound)
-	storetest.AppendAll(t, sa, storetest.Numbered(t, 3, "a")...)
-	storetest.PublishOwn(t, sa)
-	sb := store.Open(idb, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(5)), store.DefaultSegmentBound)
-	storetest.AppendAll(t, sb, storetest.Numbered(t, 2, "b")...)
-	storetest.PublishOwn(t, sb)
-	name := store.WriterRef{Checkout: ida}.Name()
-	path := filepath.Join(c.SharedDir(), "store", "repo", filepath.FromSlash(string(name)))
-	if err := os.WriteFile(path, []byte("torn"), 0o644); err != nil {
+	publish := func(id store.CheckoutID, seed byte) store.Published {
+		s := store.Open(id, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(seed)), store.DefaultSegmentBound)
+		storetest.AppendAll(t, s, storetest.Numbered(t, 2, "event")...)
+		return storetest.PublishOwn(t, s)
+	}
+	publish(ida, 4)
+	pb := publish(idb, 5)
+	publish(store.CheckoutID{0xc}, 6)
+	repo := filepath.Join(c.SharedDir(), "store", "repo")
+	ref := filepath.Join(repo, filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name())))
+	if err := os.WriteFile(ref, []byte("torn"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// a reader holding no log reads every stream from its ref
-	reader := func() *store.Store {
-		ports := store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(6))
-		ports.Files = store.NewMemoryFiles()
-		return store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound)
+	// b's commit, its loose file cut short as a filesystem that lost a
+	// write would leave it
+	object := filepath.Join(repo, "objects", pb.Commit.String()[:2], pb.Commit.String()[2:])
+	if err := os.Chmod(object, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	h, err := reader().Heads()
-	if err != nil || len(h.Unreadable) != 1 || h.Unreadable[0].Name != string(name) || !errors.As(h.Unreadable[0].Why, new(git.BrokenRef)) || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: idb}) {
-		t.Errorf("with a's ref broken a reader's heads are %+v, %v; want %s broken and b's stream read", h, err, name)
+	if err := os.WriteFile(object, []byte{0x78}, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(path); err != nil || string(got) != "torn" {
+	ports := store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7))
+	ports.Files = store.NewMemoryFiles()
+	h, err := store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound).Heads()
+	names := []string{}
+	for _, u := range h.Unreadable {
+		names = append(names, u.Name)
+	}
+	want := []string{string(store.WriterRef{Checkout: ida}.Name()), string(store.WriterRef{Checkout: idb}.Name())}
+	if err != nil || !slices.Equal(names, want) || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: store.CheckoutID{0xc}}) {
+		t.Errorf("with a's ref torn and b's commit cut short a reader's heads are %+v, %v; want %v unreadable and c's stream read", h, err, want)
+	}
+	if got, err := os.ReadFile(ref); err != nil || string(got) != "torn" {
 		t.Errorf("a read changed the broken ref: %q, %v", got, err)
-	}
-	storetest.AppendAll(t, sa, storetest.Numbered(t, 1, "more")...)
-	healed := storetest.PublishOwn(t, sa)
-	if r, ok := healed.Prior.(store.Resealed); healed.Move != (store.RefCreated{}) || !ok || !errors.As(r.Why, new(git.BrokenRef)) {
-		t.Errorf("the publish over its broken ref was %+v; want the ref made again, resealed from 0 saying why", healed)
-	}
-	if got := storetest.Read(storetest.Whole(t, reader(), store.WriterRef{Checkout: ida})); len(got) != 4 {
-		t.Errorf("after the publish a reader reads %d of a's records; want all 4", len(got))
 	}
 }
 

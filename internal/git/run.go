@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Git is the user's git binary, the one writer of lit's repository and
@@ -26,8 +25,6 @@ type Git struct {
 	// env is the environment the process was given, which the user's own
 	// repositories are read under, as git reads them there.
 	env []string
-	// now is the clock a stale lock's age is read against.
-	now func() time.Time
 	mu  sync.Mutex
 	log []Spawn
 	// floor is whether this git keeps lit's repository durable, asked once,
@@ -59,12 +56,11 @@ func (Exited) ended()    {}
 func (Unstarted) ended() {}
 
 // Find is git as the process environment env names it: the first
-// executable git in an absolute directory on its PATH, which reads now
-// for the time. A relative entry, the empty one among them, names a
-// directory only relative to wherever lit2 happens to run, so it names no
-// git, as Go's os/exec refuses one.
-func Find(env []string, now func() time.Time) *Git {
-	g := &Git{env: env, now: now}
+// executable git in an absolute directory on its PATH. A relative entry,
+// the empty one among them, names a directory only relative to wherever
+// lit2 happens to run, so it names no git, as Go's os/exec refuses one.
+func Find(env []string) *Git {
+	g := &Git{env: env}
 	for _, kv := range env {
 		path, ok := strings.CutPrefix(kv, "PATH=")
 		if !ok {

@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -23,9 +22,8 @@ import (
 
 // Repository is lit's own object database on disk: a bare git repository
 // at its directory, holding lit's objects and refs/lit/**, never the code
-// repository's (event-store charter #9). git is its one writer, but for
-// what a writer clears on a ref git refuses to write, a broken file or a
-// lock a killed git left, so git owns its formats, its locks
+// repository's (event-store charter #9). git is its one writer, so git
+// owns its formats, its locks
 // and its fsync `[LAW:one-source-of-truth]`;
 // go-git reads it in process, so a read costs no process and no pipe round
 // trip per object. It is created by its first write, so a read creates
@@ -298,6 +296,12 @@ func (d *onDisk) list(prefix RefName) (Listing, error) {
 	if err != nil {
 		return Listing{}, err
 	}
+	// go-git reads the list of packs once; a listing has it read again, so
+	// the objects a pack brought since, a fetch's among them, are seen by
+	// every read after it
+	if d.db != nil {
+		d.db.Reindex()
+	}
 	names, err := d.refNames()
 	if err != nil {
 		return Listing{}, fmt.Errorf("reading the refs of %s: %w", d.dir, err)
@@ -388,15 +392,13 @@ func (d *onDisk) ref(s reader, n RefName) (RefHead, error) {
 
 // replace has git move name from what it named to to, refusing if it
 // names anything else by then; git's zero id as the old value is a ref
-// that must not exist yet. A broken ref is removed first, under git's own
-// lock, so the replace makes it again, and a lock a killed git left is
-// cleared first, so no write of the ref is refused for good.
+// that must not exist yet.
 func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	var old string
 	switch from := from.(type) {
 	case Named:
 		old = from.Target.String()
-	case Absent, Broken:
+	case Absent:
 		old = strings.Repeat("0", 2*SHA1.size())
 	default:
 		panic(fmt.Sprintf("git: %T is not what a ref was", from))
@@ -404,67 +406,8 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	if err := d.g.durable(); err != nil {
 		return err
 	}
-	if err := d.unstale(name); err != nil {
-		return err
-	}
-	if _, ok := from.(Broken); ok {
-		if err := d.unbreak(name); err != nil {
-			return err
-		}
-	}
 	_, err := d.git(d.dir, nil, "update-ref", string(name), to.String(), old)
 	return err
-}
-
-// staleLock is an age no lock of git's on a ref reaches while git writes
-// it, which takes milliseconds: a lock this old is one a killed git left,
-// which git never removes and which refuses every write of the ref.
-const staleLock = 10 * time.Minute
-
-// unstale removes name's lock if a killed git left it. A lock younger is
-// a write under way, which update-ref refuses as it refuses any race; two
-// writers clearing one stale lock can at worst fail a third's write.
-func (d *onDisk) unstale(name RefName) error {
-	lock := d.refPath(name) + ".lock"
-	info, err := os.Stat(lock)
-	if errors.Is(err, fs.ErrNotExist) || err == nil && d.g.now().Sub(info.ModTime()) < staleLock {
-		return nil
-	}
-	if err == nil {
-		err = os.Remove(lock)
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	return err
-}
-
-// unbreak removes name's file if it is broken, holding git's own lock on
-// the ref, which git takes the same way, so no git writes it meanwhile, and
-// reading it again under the lock: a ref another writer has made whole
-// since is kept, for update-ref to refuse as the race it is. git neither
-// updates nor deletes a broken ref, so this removal and unstale's are the
-// writes of lit's repository that are not git's.
-func (d *onDisk) unbreak(name RefName) error {
-	path := d.refPath(name)
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("locking %s to repair it: %w", name, err)
-	}
-	defer func() { _ = lock.Close(); _ = os.Remove(path + ".lock") }()
-	d.mu.Lock()
-	s, err := d.storage()
-	if err == nil {
-		_, err = d.ref(s, name)
-	}
-	d.mu.Unlock()
-	if !errors.As(err, new(BrokenRef)) {
-		return nil
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return nil
 }
 
 // refPath is the file of the loose ref name.

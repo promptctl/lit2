@@ -39,7 +39,7 @@ func Main(args []string) int {
 		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
 		return 2
 	}
-	g := git.Find(os.Environ(), systemClock{}.Now)
+	g := git.Find(os.Environ())
 	place, open := here(g), diskStore(g, rand.Reader)
 	return Run(Process{
 		Clock:         systemClock{},

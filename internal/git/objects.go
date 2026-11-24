@@ -138,7 +138,7 @@ type Listing struct {
 
 // BrokenRef is a ref that cannot be read as naming an object, which git
 // never writes: its file empty, torn, symbolic or the zero id. A read
-// lists it and goes on; its writer repairs it by replacing it from Broken.
+// lists it and goes on.
 type BrokenRef struct {
 	Name RefName
 	Why  string
@@ -185,8 +185,7 @@ type Refs interface {
 	Replace(name RefName, from Was, to ObjectID) error
 }
 
-// Was is what a ref named when its writer read it: an object, nothing, or
-// a broken file, which a replace from it repairs.
+// Was is what a ref named when its writer read it: an object, or nothing.
 //
 //sumtype:decl
 type Was interface{ was() }
@@ -197,12 +196,8 @@ type Named struct{ Target ObjectID }
 // Absent is no ref.
 type Absent struct{}
 
-// Broken is a ref that named no object, as BrokenRef says.
-type Broken struct{ Ref BrokenRef }
-
 func (Named) was()  {}
 func (Absent) was() {}
-func (Broken) was() {}
 
 // name is the one grammar of a tree entry's name and of a refname's
 // component in lit's repository: a letter or digit, then letters, digits,
