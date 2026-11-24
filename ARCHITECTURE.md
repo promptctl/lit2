@@ -38,6 +38,7 @@ store
 git
 reason
 assets
+panics
 ```
 
 Each line of the `dependencies` block is a module outside the standard
@@ -101,6 +102,7 @@ row; the architecture test fails on one without.
 | field kinds, value parsers, built-in fields, the atom | `field` | the field language config and address both read |
 | `@` references in prose | `verbs`, `cli` | normalized to `@<segments>` in verbs before the envelope seals; rendered as `@` plus the current name by cli at Speak |
 | scenarios.md as the acceptance contract | `scenarios` | each scenario walked over root's twin |
+| a test's hold on the panic it names | `panics` | a precondition's panic identified by its error, any other panicked again; imported by tests alone |
 
 ## Decisions
 

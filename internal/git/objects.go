@@ -181,7 +181,7 @@ type Refs interface {
 	// listed as one, never the listing's failure.
 	List(prefix RefName) (Listing, error)
 	// Replace points name at to, an object the repository holds, if name
-	// still is what from says; otherwise it refuses.
+	// still is what from says; otherwise it refuses with Moved.
 	Replace(name RefName, from Was, to ObjectID) error
 }
 
@@ -234,6 +234,18 @@ func parsePrefix(p RefName) error {
 func under(n, p RefName) bool {
 	return n == p || strings.HasPrefix(string(n), strings.TrimSuffix(string(p), "/")+"/")
 }
+
+// Moved is a replace refused because its ref no longer is what its writer
+// read: From is what the writer read, Now what the ref names instead, so
+// the writer decides from the refusal itself whether it lost a race or won
+// it under another publish.
+type Moved struct {
+	Name RefName
+	From Was
+	Now  Was
+}
+
+func (m Moved) Error() string { return fmt.Sprintf("%s is %v, not %v", m.Name, m.Now, m.From) }
 
 // MissingObject is an id the object database does not hold.
 type MissingObject struct{ ID ObjectID }

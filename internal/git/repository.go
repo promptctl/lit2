@@ -438,7 +438,34 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 		return err
 	}
 	_, err := d.git(d.dir, nil, "update-ref", string(name), to.String(), old)
+	if err == nil {
+		return nil
+	}
+	// git refuses a stale old value as it refuses everything else, so the
+	// ref's state after the refusal, not git's words, says whether it moved
+	now, rerr := d.was(name)
+	if rerr == nil && now != from {
+		return Moved{Name: name, From: from, Now: now}
+	}
 	return err
+}
+
+// was is what the ref name names now, as go-git reads it.
+func (d *onDisk) was(name RefName) (Was, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s, err := d.storage()
+	if err != nil {
+		return nil, err
+	}
+	h, err := d.ref(s, name)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return Absent{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return Named{Target: h.Target}, nil
 }
 
 // refPath is the file of the loose ref name.

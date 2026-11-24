@@ -554,25 +554,29 @@ func (s *Store) Publish(p Publication) (Published, error) {
 	}
 	out.added(commit, stored, 0)
 	out.Commit, out.Move = commit, moved(p.from, commit)
-	_, unchanged := out.Move.(RefUnchanged)
-	if !unchanged {
-		err = s.ports.Refs.Replace(p.ref.Name(), p.from, commit)
-	}
-	if err == nil && !unchanged {
-		return out, nil
-	}
 	// a ref already naming the commit is what this publish wanted, whoever
 	// moved it there, so racing publishes of one log converge; one naming
-	// anything else has moved since the seal, and this publish is stale
-	now, herr := s.head(p.ref)
-	if herr != nil {
-		return Published{}, errors.Join(err, herr)
+	// anything else has moved since the seal, and this publish is stale. An
+	// idle publish reads its ref, and a replace's refusal says what it is
+	var now git.Was
+	var moved git.Moved
+	switch _, unchanged := out.Move.(RefUnchanged); {
+	case unchanged:
+		now, err = s.head(p.ref)
+	default:
+		err = s.ports.Refs.Replace(p.ref.Name(), p.from, commit)
+		if err == nil {
+			return out, nil
+		}
+		if errors.As(err, &moved) {
+			now, err = moved.Now, nil
+		}
+	}
+	if err != nil {
+		return Published{}, err
 	}
 	if now != (git.Named{Target: commit}) {
-		if err == nil {
-			err = fmt.Errorf("%s is %v, not the %s it named when this publication was sealed", p.ref.Name(), now, commit)
-		}
-		return Published{}, err
+		return Published{}, git.Moved{Name: p.ref.Name(), From: p.from, Now: now}
 	}
 	out.Move = RefUnchanged{}
 	return out, nil

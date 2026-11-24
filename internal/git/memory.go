@@ -84,7 +84,7 @@ func (m *memory) replace(name RefName, from Was, to ObjectID) error {
 		now = Named{Target: target}
 	}
 	if now != from {
-		return fmt.Errorf("%s is %v, not %v", name, now, from)
+		return Moved{Name: name, From: from, Now: now}
 	}
 	for n := range m.refs {
 		if n != name && (under(n, name) || under(name, n)) {
