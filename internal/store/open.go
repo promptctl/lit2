@@ -202,6 +202,36 @@ func (s *Store) Heads() (Heads, error) {
 	return h, nil
 }
 
+// Scanned is one stream read whole, and the range it read.
+type Scanned struct {
+	Range Range
+	Scan  Scan
+}
+
+// ReadAll is Heads with every stream read whole from 0, in order. A stream
+// whose bytes will not read joins the heads' Unreadable, as one whose ref
+// or publication will not, so which streams read is judged here alone and
+// one bad blob stops no other stream.
+func (s *Store) ReadAll() (Heads, []Scanned, error) {
+	h, err := s.Heads()
+	if err != nil {
+		return Heads{}, nil, err
+	}
+	streams, scans := []Stream{}, []Scanned{}
+	for _, st := range h.Streams {
+		r := Range{Stream: st, From: 0}
+		scan, err := s.Read(r)
+		if err != nil {
+			h.Unreadable = append(h.Unreadable, Unreadable{Name: string(st.Ref.Name()), Why: err})
+			continue
+		}
+		streams, scans = append(streams, st), append(scans, Scanned{Range: r, Scan: scan})
+	}
+	h.Streams = streams
+	slices.SortFunc(h.Unreadable, func(a, b Unreadable) int { return cmp.Compare(a.Name, b.Name) })
+	return h, scans, nil
+}
+
 // logStream is the stream of the log at p, up to its size now.
 func (s *Store) logStream(p Path) (Stream, error) {
 	owner, err := logOwner(p)
@@ -223,7 +253,7 @@ func (s *Store) logStream(p Path) (Stream, error) {
 // message, and its segments, from the tree's names, each one's span
 // checked against its blob's size: segments that do not tile the stream
 // from 0 make no publication. What makes none is NoPublication; any other
-// failure is the repository's, and stops its reader.
+// failure is the repository's.
 func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 	// a missing object or one lit did not write is no publication; a
 	// failure to read is the repository's
@@ -273,8 +303,8 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 
 // NoPublication is a commit a ref names that holds no publication: lost
 // from the repository, not lit's, or segments that do not tile a stream.
-// It is the one failure a reader takes as an unreadable stream, and a
-// publish as a reason to reseal; every other failure stops them.
+// It is the one failure a publish takes as a reason to reseal; every other
+// failure stops it.
 type NoPublication struct {
 	Commit git.ObjectID
 	Why    error

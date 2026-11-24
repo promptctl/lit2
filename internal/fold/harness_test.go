@@ -160,7 +160,7 @@ func (wd *world) append(ref store.Ref, batch store.Batch) {
 // span is ref's batches from..to as a read of a stream whose head is the
 // end of batch to finds them: its range from the offset of batch from, its
 // until the end of batch to.
-func (wd *world) span(ref store.Ref, from, to int) fold.Scanned {
+func (wd *world) span(ref store.Ref, from, to int) store.Scanned {
 	s := wd.streams[ref]
 	var all []byte
 	var at store.Offset
@@ -174,15 +174,15 @@ func (wd *world) span(ref store.Ref, from, to int) fold.Scanned {
 		at = store.Offset(len(all))
 	}
 	r := store.Range{Stream: store.Stream{Ref: ref, Until: store.Position{Log: s.log, At: store.Offset(len(all))}}, From: at}
-	return fold.Scanned{Range: r, Scan: store.ScanFrames(at, all[at:])}
+	return store.Scanned{Range: r, Scan: store.ScanFrames(at, all[at:])}
 }
 
 // head is ref's batch count.
 func (wd *world) head(ref store.Ref) int { return len(wd.streams[ref].batches) }
 
 // scans is every stream from 0, in the order the streams were made.
-func (wd *world) scans() []fold.Scanned {
-	var out []fold.Scanned
+func (wd *world) scans() []store.Scanned {
+	var out []store.Scanned
 	for _, ref := range wd.order {
 		out = append(out, wd.span(ref, 0, wd.head(ref)))
 	}
@@ -198,7 +198,7 @@ func (wd *world) replay() fold.Folded {
 // batch of a stream upto does not name: what a writer that has read only
 // those folds.
 func (wd *world) view(upto map[store.Ref]int) fold.State {
-	var scans []fold.Scanned
+	var scans []store.Scanned
 	for _, ref := range wd.order {
 		n, ok := upto[ref]
 		if !ok {

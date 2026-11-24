@@ -141,42 +141,63 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 }
 
 // A ref broken by something other than git, which writes every ref
-// whole, and an object that will not read are each one unreadable stream,
-// said, hiding no other, and the read that finds them writes nothing.
+// whole, a commit that will not read, and a segment whose header reads but
+// whose body does not are each one unreadable stream, said, hiding no
+// other, and the read that finds them writes nothing.
 func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 	c := gittest.Clone(t)
 	publish := func(id store.CheckoutID, seed byte) store.Published {
 		s := store.Open(id, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(seed)), store.DefaultSegmentBound)
-		storetest.AppendAll(t, s, storetest.Numbered(t, 2, "event")...)
+		// each writer's own records, so no two share a segment's blob
+		storetest.AppendAll(t, s, storetest.Numbered(t, 2, id.String())...)
 		return storetest.PublishOwn(t, s)
 	}
 	publish(ida, 4)
 	pb := publish(idb, 5)
 	publish(store.CheckoutID{0xc}, 6)
+	pd := publish(store.CheckoutID{0xd}, 8)
 	repo := filepath.Join(c.SharedDir(), "store", "repo")
+	cut := func(id git.ObjectID, keep int) {
+		t.Helper()
+		path := filepath.Join(repo, "objects", id.String()[:2], id.String()[2:])
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, b[:min(keep, len(b)/2)], 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ref := filepath.Join(repo, filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name())))
 	if err := os.WriteFile(ref, []byte("torn"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// b's commit, its loose file cut short as a filesystem that lost a
-	// write would leave it
-	object := filepath.Join(repo, "objects", pb.Commit.String()[:2], pb.Commit.String()[2:])
-	if err := os.Chmod(object, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(object, []byte{0x78}, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	ports := store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7))
 	ports.Files = store.NewMemoryFiles()
-	h, err := store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound).Heads()
+	// d's one segment, its loose file cut to half, so its header reads and
+	// its body does not, as a filesystem that lost a write would leave it
+	commit, err := ports.Objects.Commit(pd.Commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segs, err := ports.Objects.Tree(commit.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut(segs[0].Blob, 1<<20)
+	// b's commit, cut to its first byte
+	cut(pb.Commit, 1)
+	h, read, err := store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound).ReadAll()
 	names := []string{}
 	for _, u := range h.Unreadable {
 		names = append(names, u.Name)
 	}
-	want := []string{string(store.WriterRef{Checkout: ida}.Name()), string(store.WriterRef{Checkout: idb}.Name())}
-	if err != nil || !slices.Equal(names, want) || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: store.CheckoutID{0xc}}) {
-		t.Errorf("with a's ref torn and b's commit cut short a reader's heads are %+v, %v; want %v unreadable and c's stream read", h, err, want)
+	want := []string{string(store.WriterRef{Checkout: ida}.Name()), string(store.WriterRef{Checkout: idb}.Name()), string(store.WriterRef{Checkout: store.CheckoutID{0xd}}.Name())}
+	if err != nil || !slices.Equal(names, want) || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: store.CheckoutID{0xc}}) || len(read) != 1 || len(storetest.Read(read[0].Scan)) != 2 {
+		t.Errorf("with a's ref torn, b's commit and d's segment cut short a reader's heads are %+v and reads %d, %v; want %v unreadable and c's stream read whole", h, len(read), err, want)
 	}
 	if got, err := os.ReadFile(ref); err != nil || string(got) != "torn" {
 		t.Errorf("a read changed the broken ref: %q, %v", got, err)

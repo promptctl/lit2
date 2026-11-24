@@ -83,7 +83,7 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	resealed := store.Published{Commit: published.Commit, Move: store.RefCreated{}, New: []git.ObjectID{},
 		Prior: store.Resealed{Why: errors.New("its publication does not read")}}
 	block := storeBlockOf(t, StoreFacts{
-		Heads: []store.Heads{h}, Reads: []Read{{Range: store.Range{Stream: h.Streams[0], From: 0}, Scan: scan}},
+		Heads: []store.Heads{h}, Reads: []store.Scanned{{Range: store.Range{Stream: h.Streams[0], From: 0}, Scan: scan}},
 		Appends:   []store.Appended{appended},
 		Publishes: []store.Publishing{published, idle, resealed, nothing},
 	})

@@ -163,7 +163,7 @@ func TestEveryFoldOfOneHistoryAgrees(t *testing.T) {
 			for range 4 {
 				// every stream arrives in two pieces, split anywhere, the
 				// pieces of all streams in any order
-				var scans []fold.Scanned
+				var scans []store.Scanned
 				for _, ref := range w.order {
 					at := r.IntN(w.head(ref) + 1)
 					scans = append(scans, w.span(ref, 0, at), w.span(ref, at, w.head(ref)))

@@ -20,7 +20,7 @@ import (
 type StoreFacts struct {
 	Opening   Opening
 	Heads     []store.Heads
-	Reads     []Read
+	Reads     []store.Scanned
 	Folds     []fold.FoldFacts
 	Appends   []store.Appended
 	Publishes []store.Publishing
@@ -30,12 +30,6 @@ type StoreFacts struct {
 // Fresh is what admin init did to each identity file: created it, or
 // found it there already.
 type Fresh struct{ Checkout, Key store.Made }
-
-// Read is one range a fold read and what the scan found in it.
-type Read struct {
-	Range store.Range
-	Scan  store.Scan
-}
 
 // Opening is the store an invocation's checkout opened, once, or why it has
 // none.
@@ -162,7 +156,7 @@ func publish(p store.Publishing) publishLine {
 	panic(fmt.Sprintf("command: %T is not a Publishing", p))
 }
 
-func reads(rs []Read) *readLine {
+func reads(rs []store.Scanned) *readLine {
 	l := &readLine{Torn: []tornLine{}}
 	torn := map[string]tornLine{}
 	for _, r := range rs {

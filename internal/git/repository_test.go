@@ -293,6 +293,8 @@ func TestABrokenRefIsListedAndLeftByARead(t *testing.T) {
 		l, err := repo.List("refs/lit/")
 		if err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/good", Target: blob}}) || len(l.Broken) != 1 || l.Broken[0].Name != "refs/lit/log/torn" {
 			t.Errorf("with a ref file holding %q, List = %+v, %v; want refs/lit/log/good, and refs/lit/log/torn broken", text, l, err)
+		} else if !strings.Contains(l.Broken[0].Why, strings.TrimSpace(text)) {
+			t.Errorf("a ref file holding %q is broken because %q; want what it holds said", text, l.Broken[0].Why)
 		}
 		if got, err := os.ReadFile(torn); err != nil || string(got) != text {
 			t.Errorf("listing changed the broken ref holding %q: %q, %v", text, got, err)
@@ -310,8 +312,8 @@ func TestABrokenRefIsListedAndLeftByARead(t *testing.T) {
 }
 
 // Objects a pack brings after the storage was opened, as a fetch or a
-// repack brings them, are read after the next listing.
-func TestAPackArrivingAfterTheFirstReadIsReadAfterAListing(t *testing.T) {
+// repack brings them, are read, with no other step between.
+func TestAPackArrivingAfterTheFirstReadIsRead(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
 	repo := gittest.Runner(t).RepositoryAt(dir)
 	first, err := gittest.Put(repo, []byte("first"))
@@ -335,11 +337,59 @@ func TestAPackArrivingAfterTheFirstReadIsReadAfterAListing(t *testing.T) {
 	if loose, _ := filepath.Glob(filepath.Join(dir, "objects", blob.String()[:2], "*")); len(loose) != 0 {
 		t.Fatalf("the repack left the blob loose: %v", loose)
 	}
-	if _, err := repo.List("refs/lit/"); err != nil {
+	if _, err := repo.Blob(blob); err != nil {
+		t.Errorf("a blob moved into a new pack read as %v; want it read", err)
+	}
+}
+
+// A write is one git process for each kind it holds, however many objects
+// that is, and the version check before it runs once per Git.
+func TestAWriteIsOneSpawnPerKind(t *testing.T) {
+	g := gittest.Runner(t)
+	repo := g.RepositoryAt(filepath.Join(gittest.Physical(t), "repo"))
+	if _, err := gittest.Put(repo, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Blob(blob); err != nil {
-		t.Errorf("a blob moved into a new pack read as %v after a listing; want it read", err)
+	before := len(g.Spawns())
+	bs := make([][]byte, 100)
+	for i := range bs {
+		bs[i] = fmt.Appendf(nil, "blob %d", i)
+	}
+	if _, err := repo.PutBlobs(bs); err != nil {
+		t.Fatal(err)
+	}
+	spawns := g.Spawns()
+	if len(spawns) != before+1 {
+		t.Errorf("putting %d blobs spawned %+v; want one git process", len(bs), spawns[before:])
+	}
+	versions := 0
+	for _, s := range spawns {
+		if slices.Contains(s.Args, "version") {
+			versions++
+		}
+	}
+	if versions != 1 {
+		t.Errorf("two writes asked git its version %d times; want once", versions)
+	}
+}
+
+// A GIT_ variable of the caller's, as a hook sets one, never sends lit's
+// objects anywhere but lit's repository.
+func TestTheCallersGitVariablesNeverRedirectAWrite(t *testing.T) {
+	root := gittest.Physical(t)
+	elsewhere := filepath.Join(root, "elsewhere")
+	gittest.Git(t, root, "init", "-q", "--bare", elsewhere)
+	dir := filepath.Join(root, "repo")
+	g := gittest.Runner(t, "GIT_DIR="+elsewhere, "GIT_OBJECT_DIRECTORY="+filepath.Join(elsewhere, "objects"), "GIT_INDEX_FILE="+filepath.Join(elsewhere, "index"))
+	id, err := gittest.Put(g.RepositoryAt(dir), []byte("mine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gittest.Ask(t, dir, "cat-file", "-e", id.String()); err != nil {
+		t.Errorf("the blob is not in lit's repository: %v", err)
+	}
+	if _, err := gittest.Ask(t, elsewhere, "cat-file", "-e", id.String()); err == nil {
+		t.Errorf("the blob was written into the repository the caller's GIT_ variables name")
 	}
 }
 

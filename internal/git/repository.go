@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -40,9 +41,11 @@ type onDisk struct {
 	g   *Git
 	dir string
 	// mu guards db, the go-git storage every read shares, opened once the
-	// repository exists.
-	mu sync.Mutex
-	db *filesystem.Storage
+	// repository exists, and packs, when its pack directory last changed as
+	// db read it.
+	mu    sync.Mutex
+	db    *filesystem.Storage
+	packs time.Time
 }
 
 // git runs git on the repository at dir: the one place a spawn names
@@ -170,6 +173,9 @@ func (d *onDisk) storage() (reader, error) {
 	// an object is opened lazily, so a look reads its header alone and never
 	// inflates a segment to learn its size
 	d.db = filesystem.NewStorageWithOptions(osfs.New(d.dir), cache.NewObjectLRUDefault(), filesystem.Options{LargeObjectThreshold: 1})
+	if info, err := os.Stat(filepath.Join(d.dir, "objects", "pack")); err == nil {
+		d.packs = info.ModTime()
+	}
 	return d.db, nil
 }
 
@@ -204,6 +210,9 @@ func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
 	}
 	o, err := s.EncodedObject(plumbing.AnyObject, plumbing.Hash(id.Sum()))
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		o, err = d.again(s, id)
+	}
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
 		return nil, "", MissingObject{ID: id}
 	}
 	if err != nil {
@@ -214,6 +223,22 @@ func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
 		return nil, "", NotLit{ID: id, Why: fmt.Sprintf("a %s, which lit never writes", o.Type())}
 	}
 	return o, k, nil
+}
+
+// again looks id up once more if a pack has arrived since go-git last read
+// the list of packs, which it reads once, so an object a fetch or a repack
+// brought is found, not answered missing.
+func (d *onDisk) again(s reader, id ObjectID) (plumbing.EncodedObject, error) {
+	info, err := os.Stat(filepath.Join(d.dir, "objects", "pack"))
+	if d.db == nil || errors.Is(err, fs.ErrNotExist) || err == nil && info.ModTime().Equal(d.packs) {
+		return nil, plumbing.ErrObjectNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	d.packs = info.ModTime()
+	d.db.Reindex()
+	return s.EncodedObject(plumbing.AnyObject, plumbing.Hash(id.Sum()))
 }
 
 // kinds is each of go-git's object types that is one of lit's kinds.
@@ -283,8 +308,7 @@ func (d *onDisk) writable() error {
 
 // list is every ref under prefix, each name read by go-git on its own, so
 // a ref go-git cannot read is broken alone and hides no other. Reading
-// never writes: a broken ref is listed as such, and only its writer, which
-// can make it again, repairs it. A read during a write is safe, since git
+// never writes: a broken ref is listed as such. A read during a write is safe, since git
 // writes a ref as <ref>.lock and renames it into place and writes each
 // object whole before any ref names it, so a reader sees a ref as it was
 // or as it is.
@@ -295,12 +319,6 @@ func (d *onDisk) list(prefix RefName) (Listing, error) {
 	s, err := d.storage()
 	if err != nil {
 		return Listing{}, err
-	}
-	// go-git reads the list of packs once; a listing has it read again, so
-	// the objects a pack brought since, a fetch's among them, are seen by
-	// every read after it
-	if d.db != nil {
-		d.db.Reindex()
 	}
 	names, err := d.refNames()
 	if err != nil {
@@ -376,18 +394,31 @@ func (d *onDisk) ref(s reader, n RefName) (RefHead, error) {
 	// the file is; any other failure to read it is a broken ref, never the
 	// listing's
 	if err != nil {
-		_, serr := os.Lstat(d.refPath(n))
-		if errors.Is(err, plumbing.ErrReferenceNotFound) && errors.Is(serr, fs.ErrNotExist) {
+		if _, serr := os.Lstat(d.refPath(n)); errors.Is(err, plumbing.ErrReferenceNotFound) && errors.Is(serr, fs.ErrNotExist) {
 			return RefHead{}, err
 		}
-		return RefHead{}, BrokenRef{Name: n, Why: fmt.Sprintf("go-git cannot read it: %v", err)}
+		return RefHead{}, d.broken(n, fmt.Sprintf("go-git cannot read it: %v", err))
 	}
 	h := r.Hash()
 	if r.Type() != plumbing.HashReference || h.IsZero() {
-		return RefHead{}, BrokenRef{Name: n, Why: fmt.Sprintf("it holds %q, no object id", r.Strings()[1])}
+		return RefHead{}, d.broken(n, fmt.Sprintf("it holds %q, no object id", r.Strings()[1]))
 	}
 	target, err := ObjectIDFrom(SHA1, h[:])
 	return RefHead{Name: n, Target: target}, err
+}
+
+// broken is the ref n, which names no object, said by what its file holds,
+// since go-git reads a torn file as the zero id or the packed ref; packed
+// is why, for a name with no loose file.
+func (d *onDisk) broken(n RefName, packed string) BrokenRef {
+	b, err := os.ReadFile(d.refPath(n))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return BrokenRef{Name: n, Why: packed}
+	case err != nil:
+		return BrokenRef{Name: n, Why: err.Error()}
+	}
+	return BrokenRef{Name: n, Why: fmt.Sprintf("it holds %.80q, no object id", b)}
 }
 
 // replace has git move name from what it named to to, refusing if it
