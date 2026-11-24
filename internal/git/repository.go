@@ -5,27 +5,27 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/filesystem"
-	"github.com/go-git/go-git/v5/storage/filesystem/dotgit"
 	none "github.com/go-git/go-git/v5/storage/memory"
 )
 
 // Repository is lit's own object database on disk: a bare git repository
 // at its directory, holding lit's objects and refs/lit/**, never the code
 // repository's (event-store charter #9). git is its one writer, but for
-// the broken refs a listing removes, so git owns its formats, its locks
+// what a writer clears on a ref git refuses to write, a broken file or a
+// lock a killed git left, so git owns its formats, its locks
 // and its fsync `[LAW:one-source-of-truth]`;
 // go-git reads it in process, so a read costs no process and no pipe round
 // trip per object. It is created by its first write, so a read creates
@@ -42,10 +42,9 @@ type onDisk struct {
 	g   *Git
 	dir string
 	// mu guards db, the go-git storage every read shares, opened once the
-	// repository exists, and opened, the path go-git last opened in it.
-	mu     sync.Mutex
-	db     *filesystem.Storage
-	opened string
+	// repository exists.
+	mu sync.Mutex
+	db *filesystem.Storage
 }
 
 // git runs git on the repository at dir: the one place a spawn names
@@ -146,11 +145,10 @@ func (d *onDisk) created() (bool, error) {
 }
 
 // reader is what reads of lit's repository ask of go-git: an object by
-// id, whether it holds one, and every ref.
+// id, and a ref by name.
 type reader interface {
 	EncodedObject(plumbing.ObjectType, plumbing.Hash) (plumbing.EncodedObject, error)
-	HasEncodedObject(plumbing.Hash) error
-	IterReferences() (storer.ReferenceIter, error)
+	Reference(plumbing.ReferenceName) (*plumbing.Reference, error)
 }
 
 // storage is what reads see: the repository's storage once it
@@ -173,32 +171,8 @@ func (d *onDisk) storage() (reader, error) {
 	}
 	// an object is opened lazily, so a look reads its header alone and never
 	// inflates a segment to learn its size
-	d.db = filesystem.NewStorageWithOptions(unlocked{Filesystem: osfs.New(d.dir), opened: &d.opened}, cache.NewObjectLRUDefault(), filesystem.Options{LargeObjectThreshold: 1})
+	d.db = filesystem.NewStorageWithOptions(osfs.New(d.dir), cache.NewObjectLRUDefault(), filesystem.Options{LargeObjectThreshold: 1})
 	return d.db, nil
-}
-
-// unlocked is the repository's directory with every file git never reads
-// as a ref hidden: a name that begins with a dot, and a lock. git writes a
-// ref as <ref>.lock and renames it into place; go-git's ref walk reads
-// every file it lists, so a listing during a write would read the
-// half-written lock as a ref, and a stray dotfile as a broken one. It
-// keeps the path go-git last opened, so a ref file the walk fails on is
-// known by name.
-type unlocked struct {
-	billy.Filesystem
-	opened *string
-}
-
-func (u unlocked) ReadDir(path string) ([]os.FileInfo, error) {
-	fs, err := u.Filesystem.ReadDir(path)
-	return slices.DeleteFunc(fs, func(f os.FileInfo) bool {
-		return strings.HasPrefix(f.Name(), ".") || strings.HasSuffix(f.Name(), ".lock")
-	}), err
-}
-
-func (u unlocked) Open(path string) (billy.File, error) {
-	*u.opened = path
-	return u.Filesystem.Open(path)
 }
 
 func (d *onDisk) look(id ObjectID) (kind, uint64, error) {
@@ -239,7 +213,7 @@ func (d *onDisk) object(id ObjectID) (plumbing.EncodedObject, kind, error) {
 	}
 	k, ok := kinds[o.Type()]
 	if !ok {
-		return nil, "", fmt.Errorf("object %s is a %s, which lit's repository never holds", id, o.Type())
+		return nil, "", NotLit{ID: id, Why: fmt.Sprintf("a %s, which lit never writes", o.Type())}
 	}
 	return o, k, nil
 }
@@ -309,93 +283,120 @@ func (d *onDisk) writable() error {
 	return d.create()
 }
 
-// list is every ref under prefix, read by go-git's walk, with every
-// broken ref removed. A ref is broken when it names no object lit's
-// repository holds: its file empty, not an id, symbolic, the zero id, or
-// torn, none of which git writes, since it writes a ref whole through its
-// lock and never at an object it lacks. git neither updates nor deletes a
-// broken ref, so lit removes its file, and its writer's next publish makes
-// it again from its log; nothing is lost, since the file named nothing.
-// Each removal is in the listing, so it is never unseen.
+// list is every ref under prefix, each name read by go-git on its own, so
+// a ref go-git cannot read is broken alone and hides no other. Reading
+// never writes: a broken ref is listed as such, and only its writer, which
+// can make it again, repairs it. A read during a write is safe, since git
+// writes a ref as <ref>.lock and renames it into place and writes each
+// object whole before any ref names it, so a reader sees a ref as it was
+// or as it is.
 func (d *onDisk) list(prefix RefName) (Listing, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	l := Listing{Heads: []RefHead{}, Broken: []BrokenRef{}}
 	s, err := d.storage()
 	if err != nil {
 		return Listing{}, err
 	}
-	removed := []BrokenRef{}
-	for {
-		heads, broken, err := walk(s, prefix)
-		// an empty ref file stops go-git's walk without its name, which is
-		// the path go-git opened last; once it is removed the walk is run
-		// again
-		if errors.Is(err, dotgit.ErrEmptyRefFile) && !slices.ContainsFunc(removed, func(b BrokenRef) bool { return string(b.Name) == filepath.ToSlash(d.opened) }) {
-			broken = append(broken, BrokenRef{Name: RefName(filepath.ToSlash(d.opened)), Why: "its file is empty"})
-			err = nil
+	names, err := d.refNames()
+	if err != nil {
+		return Listing{}, fmt.Errorf("reading the refs of %s: %w", d.dir, err)
+	}
+	for _, n := range names {
+		if !under(n, prefix) {
+			continue
 		}
-		if err != nil {
+		h, err := d.ref(s, n)
+		var broken BrokenRef
+		switch {
+		case errors.As(err, &broken):
+			l.Broken = append(l.Broken, broken)
+		case errors.Is(err, plumbing.ErrReferenceNotFound):
+		case err != nil:
 			return Listing{}, fmt.Errorf("reading the refs of %s: %w", d.dir, err)
-		}
-		for _, b := range broken {
-			if err := os.Remove(filepath.Join(d.dir, filepath.FromSlash(string(b.Name)))); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return Listing{}, fmt.Errorf("removing %w: %w", b, err)
-			}
-		}
-		removed = append(removed, broken...)
-		if heads != nil {
-			slices.SortFunc(heads, func(a, b RefHead) int { return strings.Compare(string(a.Name), string(b.Name)) })
-			return Listing{Heads: heads, Removed: removed}, nil
+		default:
+			l.Heads = append(l.Heads, h)
 		}
 	}
+	return l, nil
 }
 
-// walk is every ref under prefix that names an object s holds, and every
-// other ref under it, broken; its heads are nil when the walk stopped.
-func walk(s reader, prefix RefName) ([]RefHead, []BrokenRef, error) {
-	refs, err := s.IterReferences()
-	if err != nil {
-		return nil, nil, err
-	}
-	heads, broken := []RefHead{}, []BrokenRef{}
-	err = refs.ForEach(func(r *plumbing.Reference) error {
-		n := RefName(r.Name())
-		if !under(n, prefix) {
+// refNames is the name of every ref the repository holds, sorted: each
+// file under refs/ git would read as one, any name with a component that
+// begins with a dot or ends in .lock left out as git leaves it out, and
+// each name packed-refs holds. Only the names are lit's to find; each ref
+// is go-git's to read.
+func (d *onDisk) refNames() ([]RefName, error) {
+	seen := map[RefName]bool{}
+	err := filepath.WalkDir(filepath.Join(d.dir, "refs"), func(path string, e fs.DirEntry, err error) error {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
 			return nil
-		}
-		if r.Type() != plumbing.HashReference {
-			broken = append(broken, BrokenRef{Name: n, Why: "it is symbolic"})
-			return nil
-		}
-		h := r.Hash()
-		if err := s.HasEncodedObject(h); errors.Is(err, plumbing.ErrObjectNotFound) {
-			broken = append(broken, BrokenRef{Name: n, Why: fmt.Sprintf("it names %s, which lit's repository does not hold", h)})
-			return nil
-		} else if err != nil {
+		case err != nil:
 			return err
+		case strings.HasPrefix(e.Name(), ".") || strings.HasSuffix(e.Name(), ".lock"):
+			if e.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		case e.IsDir():
+			return nil
 		}
-		target, err := ObjectIDFrom(SHA1, h[:])
-		if err != nil {
-			return fmt.Errorf("ref %s: %w", n, err)
-		}
-		heads = append(heads, RefHead{Name: n, Target: target})
-		return nil
+		rel, err := filepath.Rel(d.dir, path)
+		seen[RefName(filepath.ToSlash(rel))] = true
+		return err
 	})
 	if err != nil {
-		return nil, broken, err
+		return nil, err
 	}
-	return heads, broken, nil
+	packed, err := os.ReadFile(filepath.Join(d.dir, "packed-refs"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	// a packed ref is "<id> <name>"; a header begins with #, and a peeled
+	// id, ^<id>, has no name
+	for _, line := range strings.Split(string(packed), "\n") {
+		if _, n, ok := strings.Cut(line, " "); ok && !strings.HasPrefix(line, "#") {
+			seen[RefName(n)] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
+}
+
+// ref is the ref n as go-git reads it, BrokenRef if it names no object,
+// or plumbing.ErrReferenceNotFound if it is gone.
+func (d *onDisk) ref(s reader, n RefName) (RefHead, error) {
+	r, err := s.Reference(plumbing.ReferenceName(n))
+	// go-git reads a loose file it cannot parse as the packed ref, which a
+	// name lit found on disk need not have, so not found is gone only if
+	// the file is; any other failure to read it is a broken ref, never the
+	// listing's
+	if err != nil {
+		_, serr := os.Lstat(d.refPath(n))
+		if errors.Is(err, plumbing.ErrReferenceNotFound) && errors.Is(serr, fs.ErrNotExist) {
+			return RefHead{}, err
+		}
+		return RefHead{}, BrokenRef{Name: n, Why: fmt.Sprintf("go-git cannot read it: %v", err)}
+	}
+	h := r.Hash()
+	if r.Type() != plumbing.HashReference || h.IsZero() {
+		return RefHead{}, BrokenRef{Name: n, Why: fmt.Sprintf("it holds %q, no object id", r.Strings()[1])}
+	}
+	target, err := ObjectIDFrom(SHA1, h[:])
+	return RefHead{Name: n, Target: target}, err
 }
 
 // replace has git move name from what it named to to, refusing if it
 // names anything else by then; git's zero id as the old value is a ref
-// that must not exist yet.
+// that must not exist yet. A broken ref is removed first, under git's own
+// lock, so the replace makes it again, and a lock a killed git left is
+// cleared first, so no write of the ref is refused for good.
 func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	var old string
 	switch from := from.(type) {
 	case Named:
 		old = from.Target.String()
-	case Absent:
+	case Absent, Broken:
 		old = strings.Repeat("0", 2*SHA1.size())
 	default:
 		panic(fmt.Sprintf("git: %T is not what a ref was", from))
@@ -403,6 +404,70 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	if err := d.g.durable(); err != nil {
 		return err
 	}
+	if err := d.unstale(name); err != nil {
+		return err
+	}
+	if _, ok := from.(Broken); ok {
+		if err := d.unbreak(name); err != nil {
+			return err
+		}
+	}
 	_, err := d.git(d.dir, nil, "update-ref", string(name), to.String(), old)
 	return err
+}
+
+// staleLock is an age no lock of git's on a ref reaches while git writes
+// it, which takes milliseconds: a lock this old is one a killed git left,
+// which git never removes and which refuses every write of the ref.
+const staleLock = 10 * time.Minute
+
+// unstale removes name's lock if a killed git left it. A lock younger is
+// a write under way, which update-ref refuses as it refuses any race; two
+// writers clearing one stale lock can at worst fail a third's write.
+func (d *onDisk) unstale(name RefName) error {
+	lock := d.refPath(name) + ".lock"
+	info, err := os.Stat(lock)
+	if errors.Is(err, fs.ErrNotExist) || err == nil && d.g.now().Sub(info.ModTime()) < staleLock {
+		return nil
+	}
+	if err == nil {
+		err = os.Remove(lock)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// unbreak removes name's file if it is broken, holding git's own lock on
+// the ref, which git takes the same way, so no git writes it meanwhile, and
+// reading it again under the lock: a ref another writer has made whole
+// since is kept, for update-ref to refuse as the race it is. git neither
+// updates nor deletes a broken ref, so this removal and unstale's are the
+// writes of lit's repository that are not git's.
+func (d *onDisk) unbreak(name RefName) error {
+	path := d.refPath(name)
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("locking %s to repair it: %w", name, err)
+	}
+	defer func() { _ = lock.Close(); _ = os.Remove(path + ".lock") }()
+	d.mu.Lock()
+	s, err := d.storage()
+	if err == nil {
+		_, err = d.ref(s, name)
+	}
+	d.mu.Unlock()
+	if !errors.As(err, new(BrokenRef)) {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// refPath is the file of the loose ref name.
+func (d *onDisk) refPath(name RefName) string {
+	return filepath.Join(d.dir, filepath.FromSlash(string(name)))
 }

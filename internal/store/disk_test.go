@@ -142,9 +142,9 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 }
 
 // A ref broken by something other than git, which writes every ref
-// whole, is removed and said as the one stream not read, hiding no other;
-// its writer's next publish makes it again from its log, so nobody repairs
-// lit's repository by hand.
+// whole, is one unreadable stream, named, hiding no other, and a read
+// leaves it; its writer's next publish repairs it from its log, so nobody
+// mends lit's repository by hand.
 func TestABrokenWriterRefHealsOnItsWritersNextPublish(t *testing.T) {
 	c := gittest.Clone(t)
 	sa := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(4)), store.DefaultSegmentBound)
@@ -154,12 +154,10 @@ func TestABrokenWriterRefHealsOnItsWritersNextPublish(t *testing.T) {
 	storetest.AppendAll(t, sb, storetest.Numbered(t, 2, "b")...)
 	storetest.PublishOwn(t, sb)
 	name := store.WriterRef{Checkout: ida}.Name()
-	tear := func() {
-		if err := os.WriteFile(filepath.Join(c.SharedDir(), "store", "repo", filepath.FromSlash(string(name))), []byte("torn"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	path := filepath.Join(c.SharedDir(), "store", "repo", filepath.FromSlash(string(name)))
+	if err := os.WriteFile(path, []byte("torn"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	tear()
 	// a reader holding no log reads every stream from its ref
 	reader := func() *store.Store {
 		ports := store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(6))
@@ -168,21 +166,18 @@ func TestABrokenWriterRefHealsOnItsWritersNextPublish(t *testing.T) {
 	}
 	h, err := reader().Heads()
 	if err != nil || len(h.Unreadable) != 1 || h.Unreadable[0].Name != string(name) || !errors.As(h.Unreadable[0].Why, new(git.BrokenRef)) || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: idb}) {
-		t.Errorf("with a's ref broken a reader's heads are %+v, %v; want %s said removed and b's stream read", h, err, name)
+		t.Errorf("with a's ref broken a reader's heads are %+v, %v; want %s broken and b's stream read", h, err, name)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "torn" {
+		t.Errorf("a read changed the broken ref: %q, %v", got, err)
 	}
 	storetest.AppendAll(t, sa, storetest.Numbered(t, 1, "more")...)
-	if healed := storetest.PublishOwn(t, sa); healed.Move != (store.RefCreated{}) || healed.Prior != (store.NoPrior{}) {
-		t.Errorf("the publish after a reader removed the ref was %+v; want the ref made again from 0", healed)
-	}
-	// torn again, its removal is the writer's own seal's, which says why
-	tear()
-	storetest.AppendAll(t, sa, storetest.Numbered(t, 1, "last")...)
 	healed := storetest.PublishOwn(t, sa)
 	if r, ok := healed.Prior.(store.Resealed); healed.Move != (store.RefCreated{}) || !ok || !errors.As(r.Why, new(git.BrokenRef)) {
-		t.Errorf("the publish over its torn ref was %+v; want the ref made again, resealed from 0 saying why", healed)
+		t.Errorf("the publish over its broken ref was %+v; want the ref made again, resealed from 0 saying why", healed)
 	}
-	if got := storetest.Read(storetest.Whole(t, reader(), store.WriterRef{Checkout: ida})); len(got) != 5 {
-		t.Errorf("after the publish a reader reads %d of a's records; want all 5", len(got))
+	if got := storetest.Read(storetest.Whole(t, reader(), store.WriterRef{Checkout: ida})); len(got) != 4 {
+		t.Errorf("after the publish a reader reads %d of a's records; want all 4", len(got))
 	}
 }
 

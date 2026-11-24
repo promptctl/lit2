@@ -129,22 +129,23 @@ type RefHead struct {
 	Target ObjectID
 }
 
-// Listing is the refs under a prefix, sorted by name, and each broken ref
-// the listing removed.
+// Listing is the refs under a prefix, each sorted by name: those that name
+// an object, and those that are broken.
 type Listing struct {
-	Heads   []RefHead
-	Removed []BrokenRef
+	Heads  []RefHead
+	Broken []BrokenRef
 }
 
-// BrokenRef is a ref that named no object lit's repository holds, so the
-// listing removed it.
+// BrokenRef is a ref that cannot be read as naming an object, which git
+// never writes: its file empty, torn, symbolic or the zero id. A read
+// lists it and goes on; its writer repairs it by replacing it from Broken.
 type BrokenRef struct {
 	Name RefName
 	Why  string
 }
 
 func (b BrokenRef) Error() string {
-	return fmt.Sprintf("broken ref %s, as %s", b.Name, b.Why)
+	return fmt.Sprintf("ref %s is broken: %s", b.Name, b.Why)
 }
 
 // Put is one object a put names: its id, and whether the put added it.
@@ -177,14 +178,15 @@ type Objects interface {
 type Refs interface {
 	// List is every ref under prefix: the ref the prefix names and every
 	// ref below it, as git for-each-ref matches a prefix. A broken ref is
-	// removed, never the listing's failure, and the listing says so.
+	// listed as one, never the listing's failure.
 	List(prefix RefName) (Listing, error)
 	// Replace points name at to, an object the repository holds, if name
 	// still is what from says; otherwise it refuses.
 	Replace(name RefName, from Was, to ObjectID) error
 }
 
-// Was is what a ref named when its writer read it: an object, or nothing.
+// Was is what a ref named when its writer read it: an object, nothing, or
+// a broken file, which a replace from it repairs.
 //
 //sumtype:decl
 type Was interface{ was() }
@@ -195,8 +197,12 @@ type Named struct{ Target ObjectID }
 // Absent is no ref.
 type Absent struct{}
 
+// Broken is a ref that named no object, as BrokenRef says.
+type Broken struct{ Ref BrokenRef }
+
 func (Named) was()  {}
 func (Absent) was() {}
+func (Broken) was() {}
 
 // name is the one grammar of a tree entry's name and of a refname's
 // component in lit's repository: a letter or digit, then letters, digits,

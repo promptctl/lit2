@@ -732,10 +732,12 @@ decided in the body.
   process and no pipe round trip per object; git creates that repository
   in the one format go-git reads whole: SHA-1, refs as files, no automatic
   gc, and every object and ref fsynced, which needs git 2.36 or later, so
-  lit refuses an older git before any write. A ref naming no object, which
-  git never writes and refuses to update or delete, a listing removes,
-  and its writer's next publish makes it again. The first budget run measures go-git's
-  object walk on the depth corpus.
+  lit refuses an older git before any write. A read never writes: a ref
+  naming no object, which git never writes and refuses to update or
+  delete, is one unreadable stream, and its writer's next publish removes
+  it under git's own lock and makes it again, as it clears a lock a killed
+  git left. The first budget run measures go-git's object walk on the
+  depth corpus.
 - **C. `topic`.** A built-in settable field, one short word that groups
   items across the tree and renders in the id, kept from v1 because a
   reader cannot tell `1f9.zc7` from `2ae.k3f` without it: the create

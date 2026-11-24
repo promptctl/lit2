@@ -322,6 +322,48 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 	})
 
+	t.Run("two publications of one sealed state both succeed, converging on one commit", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		AppendAll(t, s, Numbered(t, 3, "event")...)
+		seal := func() store.Publication {
+			t.Helper()
+			sealed, err := s.SealOwn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return sealed.(store.Publication)
+		}
+		first, second := seal(), seal()
+		one, err := s.Publish(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		two, err := s.Publish(second)
+		if err != nil || two.Commit != one.Commit || two.Move != (store.RefUnchanged{}) {
+			t.Errorf("the second publish of one state was %+v, %v; want it unchanged at %s", two, err, one.Commit)
+		}
+	})
+
+	t.Run("an idle publication sealed before another publish moved its ref is refused, not reported unchanged", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		AppendAll(t, s, Numbered(t, 3, "event")...)
+		PublishOwn(t, s)
+		sealed, err := s.SealOwn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle := sealed.(store.Publication)
+		AppendAll(t, s, Numbered(t, 1, "more")...)
+		PublishOwn(t, s)
+		if out, err := s.Publish(idle); err == nil {
+			t.Errorf("an idle publish after the ref moved was %+v; want it refused", out)
+		}
+	})
+
 	t.Run("a log with no whole frame has nothing to publish, and makes no ref", func(t *testing.T) {
 		t.Parallel()
 		p := fresh(t)
@@ -346,7 +388,7 @@ func Store(t *testing.T, fresh Fresh) {
 		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
 			t.Errorf("sealing a log with no whole frame made %#v, %v; want %#v", sealed, err, want)
 		}
-		if refs, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs.Heads)+len(refs.Removed) != 0 {
+		if refs, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs.Heads)+len(refs.Broken) != 0 {
 			t.Errorf("with nothing to publish the refs are %v, %v; want none", refs, err)
 		}
 	})

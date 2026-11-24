@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
@@ -154,7 +155,7 @@ func TestLitsRepositoryIsCreatedPinned(t *testing.T) {
 // A git missing from PATH is one loud error from every spawn, each on the
 // record as never started.
 func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
-	g := git.Find([]string{"PATH=" + t.TempDir() + "::relative"})
+	g := git.Find([]string{"PATH=" + t.TempDir() + "::relative"}, func() time.Time { return gittest.Now })
 	_, errLocate := g.Locate(t.TempDir())
 	_, errPut := gittest.Put(g.RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil)
 	for _, err := range []error{errLocate, errPut} {
@@ -251,15 +252,31 @@ func TestRepositoryListsPackedAndLooseRefs(t *testing.T) {
 	}
 	l, err := repo.List("refs/lit/")
 	want := []git.RefHead{{Name: "refs/lit/log/both", Target: other}, {Name: "refs/lit/log/loose", Target: other}, {Name: "refs/lit/log/packed", Target: blob}}
-	if err != nil || !slices.Equal(l.Heads, want) || len(l.Removed) != 0 {
+	if err != nil || !slices.Equal(l.Heads, want) || len(l.Broken) != 0 {
 		t.Errorf("List = %+v, %v; want %v, the loose ref over its packed copy", l, err, want)
 	}
 }
 
-// A ref naming no object the repository holds, which git never writes, is
-// removed by the listing, which says so and lists every other ref; the
-// name is then free for its writer to make again.
-func TestABrokenRefIsRemovedAndTheOthersListed(t *testing.T) {
+// An object of a kind lit never writes, a tag, is NotLit, the refusal of
+// every object lit did not write, never a failure of another kind.
+func TestATagIsNotLit(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := gittest.ID(t, gittest.GitIn(t, dir, "object "+blob.String()+"\ntype blob\ntag t\ntagger t <t@t> 0 +0000\n\nt\n", "mktag"))
+	if _, err := repo.Commit(tag); !errors.As(err, new(git.NotLit)) {
+		t.Errorf("reading a tag as a commit failed with %v; want NotLit", err)
+	}
+}
+
+// A ref go-git cannot read as naming an object, which git never writes, is
+// listed as broken by name beside every other ref, and the listing, a
+// read, leaves it there; an empty HEAD, which no listing reads, is left
+// too. Its writer's replace from Broken repairs it.
+func TestABrokenRefIsListedAndItsWritersReplaceRepairsIt(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
 	repo := gittest.Runner(t).RepositoryAt(dir)
 	blob, err := gittest.Put(repo, []byte("x"))
@@ -270,23 +287,103 @@ func TestABrokenRefIsRemovedAndTheOthersListed(t *testing.T) {
 		t.Fatal(err)
 	}
 	torn := filepath.Join(dir, "refs", "lit", "log", "torn")
-	for _, text := range []string{"", "torn", "ref: refs/lit/log/good", strings.Repeat("0", 40) + "\n", blob.String()[:20], gittest.ID(t, "ce013625030ba8dba906f756967f9e9ca394464a").String()} {
+	for _, text := range []string{"", "torn", "ref: refs/lit/log/good", strings.Repeat("0", 40) + "\n"} {
 		if err := os.WriteFile(torn, []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		l, err := repo.List("refs/lit/")
-		if err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/good", Target: blob}}) || len(l.Removed) != 1 || l.Removed[0].Name != "refs/lit/log/torn" {
-			t.Errorf("with a ref file holding %q, List = %+v, %v; want refs/lit/log/good, and refs/lit/log/torn removed", text, l, err)
+		if err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/good", Target: blob}}) || len(l.Broken) != 1 || l.Broken[0].Name != "refs/lit/log/torn" {
+			t.Fatalf("with a ref file holding %q, List = %+v, %v; want refs/lit/log/good, and refs/lit/log/torn broken", text, l, err)
 		}
-		if _, err := os.Stat(torn); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("the ref file holding %q is still there: %v", text, err)
+		if got, err := os.ReadFile(torn); err != nil || string(got) != text {
+			t.Errorf("listing changed the broken ref holding %q: %q, %v", text, got, err)
 		}
-		if err := repo.Replace("refs/lit/log/torn", git.Absent{}, blob); err != nil {
-			t.Errorf("after the listing removed it, making the ref again failed: %v", err)
+		if err := repo.Replace("refs/lit/log/torn", git.Broken{Ref: l.Broken[0]}, blob); err != nil {
+			t.Errorf("replacing the ref holding %q from Broken failed: %v", text, err)
 		}
-		if err := os.Remove(torn); err != nil {
+		if l, err := repo.List("refs/lit/log/torn"); err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/torn", Target: blob}}) {
+			t.Errorf("after the repair the ref is %+v, %v; want it naming %s", l, err, blob)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "HEAD"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := repo.List("refs/lit/"); err != nil || len(l.Heads) != 2 {
+		t.Errorf("with an empty HEAD, List = %+v, %v; want both refs", l, err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil || info.Size() != 0 {
+		t.Errorf("listing touched the empty HEAD: %v, %v", info, err)
+	}
+}
+
+// A ref made whole by another writer after it was read broken is kept: the
+// repair reads it again under git's lock, and the replace from Broken is
+// then refused as the race it is.
+func TestARepairKeepsARefMadeWholeSinceItWasRead(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := gittest.Put(repo, []byte("y"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Replace("refs/lit/log/w", git.Absent{}, blob); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "refs", "lit", "log", "w")
+	if err := os.WriteFile(path, []byte("torn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, err := repo.List("refs/lit/")
+	if err != nil || len(l.Broken) != 1 {
+		t.Fatalf("List = %+v, %v; want refs/lit/log/w broken", l, err)
+	}
+	// the other writer's repair lands between this one's read and its own
+	if err := os.WriteFile(path, []byte(other.String()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Replace("refs/lit/log/w", git.Broken{Ref: l.Broken[0]}, blob); err == nil {
+		t.Error("a replace from Broken over a ref made whole since = nil; want it refused")
+	}
+	if l, err := repo.List("refs/lit/"); err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/w", Target: other}}) {
+		t.Errorf("after the refused repair the ref is %+v, %v; want the other writer's %s", l, err, other)
+	}
+}
+
+// A lock a killed git left on a ref is cleared by the next replace, so no
+// write of the ref is refused for good; a lock young enough to be a write
+// under way is left, and the replace refused as a race.
+func TestAStaleLockIsClearedAndALiveOneKept(t *testing.T) {
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := gittest.Runner(t).RepositoryAt(dir)
+	blob, err := gittest.Put(repo, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "refs", "lit", "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(dir, "refs", "lit", "log", "w.lock")
+	aged := func(age time.Duration) {
+		t.Helper()
+		at := gittest.Now.Add(-age)
+		if err := os.WriteFile(lock, nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chtimes(lock, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aged(9 * time.Minute)
+	if err := repo.Replace("refs/lit/log/w", git.Absent{}, blob); err == nil {
+		t.Error("a replace under a live lock = nil; want it refused")
+	}
+	aged(11 * time.Minute)
+	if err := repo.Replace("refs/lit/log/w", git.Absent{}, blob); err != nil {
+		t.Errorf("a replace under a stale lock failed: %v", err)
 	}
 }
 
@@ -360,7 +457,7 @@ func TestALockFileIsNoRef(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if l, err := repo.List("refs/lit/"); err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/a", Target: blob}}) || len(l.Removed) != 0 {
+		if l, err := repo.List("refs/lit/"); err != nil || !slices.Equal(l.Heads, []git.RefHead{{Name: "refs/lit/log/a", Target: blob}}) || len(l.Broken) != 0 {
 			t.Errorf("with lock files and dotfiles holding %q, List = %+v, %v; want refs/lit/log/a alone", lock, l, err)
 		}
 	}
@@ -373,7 +470,7 @@ func TestReadingCreatesNoRepository(t *testing.T) {
 	if _, err := repo.Blob(gittest.ID(t, "ce013625030ba8dba906f756967f9e9ca394464a")); !errors.As(err, new(git.MissingObject)) {
 		t.Errorf("reading an absent repository failed with %v; want MissingObject", err)
 	}
-	if l, err := repo.List("refs/lit/"); err != nil || len(l.Heads)+len(l.Removed) != 0 {
+	if l, err := repo.List("refs/lit/"); err != nil || len(l.Heads)+len(l.Broken) != 0 {
 		t.Errorf("listing an absent repository = %+v, %v; want nothing", l, err)
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {

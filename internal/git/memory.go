@@ -59,11 +59,11 @@ func (m *memory) write(objs []object) ([]ObjectID, error) {
 	return ids, nil
 }
 
-// list removes nothing: the twin's refs are a map, so none is ever broken.
+// list never holds a broken ref: the twin's refs are a map, never a file.
 func (m *memory) list(prefix RefName) (Listing, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	l := Listing{Heads: []RefHead{}, Removed: []BrokenRef{}}
+	l := Listing{Heads: []RefHead{}, Broken: []BrokenRef{}}
 	for _, n := range slices.Sorted(maps.Keys(m.refs)) {
 		if under(n, prefix) {
 			l.Heads = append(l.Heads, RefHead{Name: n, Target: m.refs[n]})

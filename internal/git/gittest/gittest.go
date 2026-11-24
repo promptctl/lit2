@@ -248,7 +248,7 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 	list := func(t *testing.T, refs git.Refs, prefix git.RefName) []git.RefHead {
 		t.Helper()
 		l, err := refs.List(prefix)
-		if err != nil || len(l.Removed) != 0 {
+		if err != nil || len(l.Broken) != 0 {
 			t.Fatalf("List(%s) = %+v, %v", prefix, l, err)
 		}
 		return l.Heads

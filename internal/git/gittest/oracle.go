@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/lit2/internal/git"
 )
@@ -69,10 +70,14 @@ func Env(t testing.TB) []string {
 	return []string{"PATH=" + filepath.Dir(bin), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}
 }
 
+// Now is the time a test's git reads, fixed, so a lock's age is the one a
+// test gives it.
+var Now = time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
+
 // Runner is lit2's git as a test runs it.
 func Runner(t testing.TB, env ...string) *git.Git {
 	t.Helper()
-	return git.Find(append(Env(t), env...))
+	return git.Find(append(Env(t), env...), func() time.Time { return Now })
 }
 
 // Physical is a temporary directory by its physical path, as Locate and

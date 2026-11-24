@@ -163,7 +163,7 @@ func (s *Store) Heads() (Heads, error) {
 	if err != nil {
 		return Heads{}, err
 	}
-	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Removed), LogsRead: len(logs)}
+	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs)}
 	unreadable := func(name string, why error) { h.Unreadable = append(h.Unreadable, Unreadable{Name: name, Why: why}) }
 	local := map[Ref]bool{}
 	for _, p := range logs {
@@ -175,7 +175,7 @@ func (s *Store) Heads() (Heads, error) {
 		local[st.Ref] = true
 		h.Streams = append(h.Streams, st)
 	}
-	for _, b := range refs.Removed {
+	for _, b := range refs.Broken {
 		unreadable(string(b.Name), b)
 	}
 	for _, r := range refs.Heads {
@@ -403,16 +403,15 @@ func (e ShorterThanPublished) Error() string {
 // this log is resealed from 0, and the publish that follows replaces it
 // (the store's decision 11).
 func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, git.Was, error) {
-	h, removed, err := s.head(ref)
+	h, err := s.head(ref)
 	if err != nil {
 		return nil, 0, nil, nil, err
 	}
 	switch h := h.(type) {
 	case git.Absent:
-		if removed != nil {
-			return nil, 0, Resealed{Why: *removed}, h, nil
-		}
 		return nil, 0, NoPrior{}, h, nil
+	case git.Broken:
+		return nil, 0, Resealed{Why: h.Ref}, h, nil
 	case git.Named:
 		pub, log, err := s.publication(h.Target)
 		switch {
@@ -431,24 +430,23 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, git.Was, 
 	panic(fmt.Sprintf("store: %T is not what a ref was", h))
 }
 
-// head is what ref names now, and, if the listing removed it as broken,
-// why.
-func (s *Store) head(ref Ref) (git.Was, *git.BrokenRef, error) {
+// head is what ref names now.
+func (s *Store) head(ref Ref) (git.Was, error) {
 	l, err := s.ports.Refs.List(ref.Name())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	for _, h := range l.Heads {
 		if h.Name == ref.Name() {
-			return git.Named{Target: h.Target}, nil, nil
+			return git.Named{Target: h.Target}, nil
 		}
 	}
-	for _, b := range l.Removed {
+	for _, b := range l.Broken {
 		if b.Name == ref.Name() {
-			return git.Absent{}, &b, nil
+			return git.Broken{Ref: b}, nil
 		}
 	}
-	return git.Absent{}, nil, nil
+	return git.Absent{}, nil
 }
 
 // RefMove is what a publish did to its ref.
@@ -528,13 +526,27 @@ func (s *Store) Publish(p Publication) (Published, error) {
 	}
 	out.added(commit, stored, 0)
 	out.Commit, out.Move = commit, moved(p.from, commit)
-	switch out.Move.(type) {
-	case RefUnchanged:
-	case RefCreated, RefReplaced:
-		if err := s.ports.Refs.Replace(p.ref.Name(), p.from, commit); err != nil {
-			return Published{}, err
-		}
+	_, unchanged := out.Move.(RefUnchanged)
+	if !unchanged {
+		err = s.ports.Refs.Replace(p.ref.Name(), p.from, commit)
 	}
+	if err == nil && !unchanged {
+		return out, nil
+	}
+	// a ref already naming the commit is what this publish wanted, whoever
+	// moved it there, so racing publishes of one log converge; one naming
+	// anything else has moved since the seal, and this publish is stale
+	now, herr := s.head(p.ref)
+	if herr != nil {
+		return Published{}, errors.Join(err, herr)
+	}
+	if now != (git.Named{Target: commit}) {
+		if err == nil {
+			err = fmt.Errorf("%s is %v, not the %s it named when this publication was sealed", p.ref.Name(), now, commit)
+		}
+		return Published{}, err
+	}
+	out.Move = RefUnchanged{}
 	return out, nil
 }
 
@@ -546,7 +558,7 @@ func moved(h git.Was, to git.ObjectID) RefMove {
 			return RefUnchanged{}
 		}
 		return RefReplaced{Previous: h.Target}
-	case git.Absent:
+	case git.Absent, git.Broken:
 		return RefCreated{}
 	}
 	panic(fmt.Sprintf("store: %T is not what a ref was", h))
