@@ -11,9 +11,9 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
-	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/verbs"
 )
 
@@ -47,18 +47,18 @@ func (s session) pins(e events.EventID) {
 // nil.
 func (s session) file(b []byte) {
 	s.t.Helper()
-	tree := store.NewMemoryFiles()
+	tree := files.NewMemory()
 	if b != nil {
 		if _, err := tree.CreateOnce(verbs.WorkspaceFile, b); err != nil {
 			s.t.Fatal(err)
 		}
 	}
-	s.twin.Process.WorkTree = func(git.Checkout) store.Files { return tree }
+	s.twin.Process.WorkTree = func(git.Checkout) files.Files { return tree }
 }
 
 // commit commits b as the file in HEAD.
 func (s session) commit(b []byte) {
-	s.twin.Code.Commit(map[string][]byte{verbs.WorkspaceFile: b})
+	s.twin.Code.Commit(map[string][]byte{verbs.WorkspacePath(): b})
 }
 
 func blob(b []byte) git.ObjectID { return git.HashBlob(git.SHA1, b) }

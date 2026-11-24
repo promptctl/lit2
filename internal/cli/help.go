@@ -29,7 +29,7 @@ func Groups() []Group {
 			{Name: "sync", Operands: TakesNothing{Make: func() Command { return AdminSync{} }}, Summary: "publish this checkout's events and fetch and verify every writer's"},
 		}}},
 		{Word: "config", Table: Table{rows: []Row{
-			{Name: "commit", Operands: TakesNothing{Make: func() Command { return ConfigCommit{} }}, Summary: "apply the committed .lit/workspace.toml as the next version"},
+			{Name: "commit", Operands: TakesNothing{Make: func() Command { return ConfigCommit{} }}, Summary: "apply the committed " + verbs.WorkspacePath() + " as the next version"},
 			{Name: "status", Operands: TakesNothing{Make: func() Command { return ConfigStatus{} }}, Summary: "the version in force, the file against it, and any contending"},
 		}}},
 	}

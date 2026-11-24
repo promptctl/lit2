@@ -11,10 +11,10 @@ import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
-	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/verbs"
 )
 
@@ -36,7 +36,7 @@ type inForce struct {
 func (o opened) load() (inForce, error) {
 	in, ok := o.folded.State.Workspace().(fold.InForce)
 	if !ok {
-		return inForce{}, workspaceFailure{err: fmt.Errorf("%w: lit2 config commit applies the committed %s", errNoVersionInForce, verbs.WorkspaceFile)}
+		return inForce{}, workspaceFailure{err: fmt.Errorf("%w: lit2 config commit applies the committed %s", errNoVersionInForce, verbs.WorkspacePath())}
 	}
 	schema, err := config.Load(in.Active.Bytes, o.p.Reader)
 	if err != nil {
@@ -78,7 +78,7 @@ func (r body) fields() cli.Fields {
 // the file as the board says it. It is never parsed here.
 func (o opened) workspaceFile() ([]byte, verbs.File) {
 	b, err := read(o.p.WorkTree(o.checkout), verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })
-	var none store.NotFound
+	var none files.NotFound
 	switch {
 	case errors.As(err, &none):
 		return nil, verbs.NoFile{}
@@ -100,22 +100,22 @@ func (o opened) commit() cli.Outcome {
 	case verbs.OnDisk:
 		disk = f
 	case verbs.NoFile:
-		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%w: there is no %s; write it, commit it, then lit2 config commit", errNothingToApply, verbs.WorkspaceFile))}
+		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%w: there is no %s; write it, commit it, then lit2 config commit", errNothingToApply, verbs.WorkspacePath()))}
 	case verbs.UnreadableFile:
-		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading %s: %w", verbs.WorkspaceFile, f.Err)}}
+		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading %s: %w", verbs.WorkspacePath(), f.Err)}}
 	}
-	at, err := o.p.Code(o.checkout).AtHead(verbs.WorkspaceFile)
+	at, err := o.p.Code(o.checkout).AtHead(verbs.WorkspacePath())
 	if err != nil {
 		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading the code repository: %w", err)}}
 	}
 	switch at := at.(type) {
 	case git.Untracked:
-		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[2]w: %[1]s is not in HEAD; git add %[1]s and git commit, then lit2 config commit", verbs.WorkspaceFile, errNotInHead))}
+		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[2]w: %[1]s is not in HEAD; git add %[1]s and git commit, then lit2 config commit", verbs.WorkspacePath(), errNotInHead))}
 	case git.NotAFile:
-		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[3]w: HEAD holds %[1]s as mode %[2]s, not a regular file; commit %[1]s as a regular file, then lit2 config commit", verbs.WorkspaceFile, at.Mode, errNotAFileInHead))}
+		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[3]w: HEAD holds %[1]s as mode %[2]s, not a regular file; commit %[1]s as a regular file, then lit2 config commit", verbs.WorkspacePath(), at.Mode, errNotAFileInHead))}
 	case git.Tracked:
 		if at.Blob != disk.Blob {
-			return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[3]w: %[1]s differs from HEAD's %[2]s; git commit %[1]s, then lit2 config commit", verbs.WorkspaceFile, at.Blob, errDiffersFromHead))}
+			return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[3]w: %[1]s differs from HEAD's %[2]s; git commit %[1]s, then lit2 config commit", verbs.WorkspacePath(), at.Blob, errDiffersFromHead))}
 		}
 	}
 	// version one is written under itself; any later under the version in
@@ -166,7 +166,7 @@ func (o opened) judged(drafts []events.Draft, ref git.ObjectID, said string) cli
 // appends the frame and names the enrollment in FoundingFile, then says
 // said. The pin comes first: a frame that loses the race to pin is never
 // written, since every replica would carry it `[LAW:single-enforcer]`.
-func (o opened) found(shared, tree store.Files, drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
+func (o opened) found(shared, tree files.Files, drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
 	m, err := o.mint(drafts, ref)
 	if err != nil {
 		return failed(err)
@@ -190,7 +190,7 @@ func (o opened) found(shared, tree store.Files, drafts []events.Draft, ref git.O
 	if err := writeFoundingFile(tree, founding, pinPath(o.checkout)); err != nil {
 		return failed(err)
 	}
-	return written(fmt.Fprintf(o.p.Out, "%sfounding %s named in %s: commit it, and every clone adopts this store\n", said, founding.Enrollment, FoundingFile))
+	return written(fmt.Fprintf(o.p.Out, "%sfounding %s named in %s: commit it, and every clone adopts this store\n", said, founding.Enrollment, foundingPath))
 }
 
 // judge is the frame m extended onto s, and its failure when the fold
@@ -221,13 +221,13 @@ func (o opened) status() cli.Outcome {
 	if !ok {
 		return cli.Done{}
 	}
-	ever, err := o.p.Code(o.checkout).EverAt(verbs.WorkspaceFile, in.Active.Blob)
+	ever, err := o.p.Code(o.checkout).EverAt(verbs.WorkspacePath(), in.Active.Blob)
 	if err != nil {
 		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading the code repository: %w", err)}}
 	}
 	history := "in HEAD's history: yes"
 	if !ever {
-		history = fmt.Sprintf("in HEAD's history: no, %s was never %s on this branch", in.Active.Blob, verbs.WorkspaceFile)
+		history = fmt.Sprintf("in HEAD's history: no, %s was never %s on this branch", in.Active.Blob, verbs.WorkspacePath())
 	}
 	return written(io.WriteString(o.p.Out, history+"\n"))
 }
@@ -251,7 +251,7 @@ func (r body) init() cli.Outcome {
 	}
 	r.rec.Stored.Inits = append(r.rec.Stored.Inits, fresh)
 	said := fmt.Sprintf("principal %s\n", minted.Key.Principal())
-	if fresh.Key == store.Created {
+	if fresh.Key == files.Created {
 		said += fmt.Sprintf("recovery phrase: %s\nwrite it down: it is the one way to restore this key\n", minted.Key.Phrase())
 	}
 	// the phrase is said before anything else can fail: it is shown once
@@ -340,13 +340,13 @@ func (r body) init() cli.Outcome {
 // versionOne is the file in the work tree, the default profile created
 // there first when there is none; read back, so a race to create it
 // applies the winner's.
-func versionOne(tree store.Files) ([]byte, error) {
+func versionOne(tree files.Files) ([]byte, error) {
 	if _, err := tree.CreateOnce(verbs.WorkspaceFile, assets.DefaultWorkspace.Bytes()); err != nil {
-		return nil, fmt.Errorf("writing %s: %w", verbs.WorkspaceFile, err)
+		return nil, fmt.Errorf("writing %s: %w", verbs.WorkspacePath(), err)
 	}
 	b, err := read(tree, verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", verbs.WorkspaceFile, err)
+		return nil, fmt.Errorf("reading %s: %w", verbs.WorkspacePath(), err)
 	}
 	return b, nil
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/promptctl/lit2/internal/cli"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/store/storetest"
@@ -13,7 +14,7 @@ import (
 
 func memoryStore() *store.Store {
 	repo := git.NewMemory()
-	return store.Open(store.CheckoutID{9}, store.Ports{Files: store.NewMemoryFiles(), Objects: repo, Refs: repo, Entropy: storetest.Entropy(1)}, store.DefaultSegmentBound)
+	return store.Open(store.CheckoutID{9}, store.MemoryPorts(files.NewMemory(), repo, repo, storetest.Entropy(1)), store.DefaultSegmentBound)
 }
 
 func storeBlockOf(t *testing.T, f StoreFacts) map[string]any {
@@ -56,7 +57,7 @@ func TestAnEventThatNeverUsedItsStoreHasNoStoreBlock(t *testing.T) {
 // TestAnInitSaysWhichIdentityFilesItCreated: the block names each file
 // created or found, both readings visible.
 func TestAnInitSaysWhichIdentityFilesItCreated(t *testing.T) {
-	in := first(t, storeBlockOf(t, StoreFacts{Inits: []Fresh{{Checkout: store.Created, Key: store.Existing}}}), "init")
+	in := first(t, storeBlockOf(t, StoreFacts{Inits: []Fresh{{Checkout: files.Created, Key: files.Existing}}}), "init")
 	if in["checkout_created"] != true || in["key_created"] != false {
 		t.Errorf("the init line is %v; want the checkout created and the key found", in)
 	}
@@ -114,7 +115,7 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 }
 
 func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
-	appended := store.Appended{Records: 2, Bytes: 40, Log: store.Existing}
+	appended := store.Appended{Records: 2, Bytes: 40, Log: files.Existing}
 	e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
 		r.Stored.Appends = append(r.Stored.Appends, appended)
 		panic("after the append")

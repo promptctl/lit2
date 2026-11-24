@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 // founding is what the session's clone pins and what its work tree's
@@ -56,11 +56,11 @@ func TestInitFoundsOverAnEnrollmentNoFileNames(t *testing.T) {
 
 func TestInitRefusesAFoundingFileNamingAnotherFounding(t *testing.T) {
 	s := newSession(t)
-	tree := store.NewMemoryFiles()
+	tree := files.NewMemory()
 	if _, err := tree.CreateOnce(FoundingFile, events.EventID{1}.FileText()); err != nil {
 		t.Fatal(err)
 	}
-	s.twin.Process.WorkTree = func(git.Checkout) store.Files { return tree }
+	s.twin.Process.WorkTree = func(git.Checkout) files.Files { return tree }
 	r := s.lit("admin", "init")
 	var contradicted foundingContradicted
 	if r.status == 0 || !errors.As(failure(t, r.event), &contradicted) || !strings.Contains(r.err, "the pin stands") || !strings.Contains(r.err, pinPath(twinCheckout)) {

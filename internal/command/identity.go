@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
@@ -26,31 +27,37 @@ func (PrincipalFile) file() {}
 
 // NameOf is f's name in its directory, which is f's alone, the same in
 // every checkout.
-func NameOf(f File) store.Path {
+func NameOf(f File) files.Name {
 	switch f.(type) {
 	case IDFile:
-		return "id"
+		return idName
 	case PrincipalFile:
-		return "principal"
+		return principalName
 	}
 	panic(fmt.Sprintf("command: %T is not a File", f))
 }
 
-// DirOf is the directory f lives in for checkout c, the one a Files is
-// rooted at for it.
-func DirOf(f File, c git.Checkout) string {
+// The identity files' names.
+var (
+	idName        = files.MustName("id")
+	principalName = files.MustName("principal")
+)
+
+// DirOf is the directory f lives in for checkout c, the one its Files is
+// over: git names both.
+func DirOf(f File, c git.Checkout) files.Dir {
 	switch f.(type) {
 	case IDFile:
-		return c.PrivateDir()
+		return c.Private()
 	case PrincipalFile:
-		return c.SharedDir()
+		return c.Shared()
 	}
 	panic(fmt.Sprintf("command: %T is not a File", f))
 }
 
 // PathOf is f's path for c, as the command event names it.
 func PathOf(f File, c git.Checkout) string {
-	return filepath.Join(DirOf(f, c), filepath.FromSlash(string(NameOf(f))))
+	return filepath.Join(DirOf(f, c).Path(), NameOf(f).String())
 }
 
 // Paths is the missing files' paths for c, the id file's first.

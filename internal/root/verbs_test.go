@@ -7,8 +7,8 @@ import (
 
 	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
-	"github.com/promptctl/lit2/internal/store"
 )
 
 // session is one twin run many times, as a person in one checkout does.
@@ -357,7 +357,7 @@ func TestInitPrintsThePrincipal(t *testing.T) {
 	if r.out != "principal "+twinKey().Principal().String()+"\n" {
 		t.Errorf("admin init printed %q", r.out)
 	}
-	if got := r.event.Store.Inits; len(got) != 1 || got[0] != (command.Fresh{Checkout: store.Existing, Key: store.Existing}) {
+	if got := r.event.Store.Inits; len(got) != 1 || got[0] != (command.Fresh{Checkout: files.Existing, Key: files.Existing}) {
 		t.Errorf("admin init's event records %+v; want both files found", got)
 	}
 	if again := s.ok("admin", "init"); again != r.out {

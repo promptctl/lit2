@@ -63,8 +63,12 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 		if got := appendOne(t, opened.Store, twinID); !slices.Equal(got, []string{"an event"}) {
 			t.Errorf("the opened store reads back %v", got)
 		}
-		if _, err := os.Stat(filepath.Join(dir, ".git", "lit", "store", "log", twinID.String())); err != nil {
-			t.Errorf("the append did not land in the store under the common dir: %v", err)
+		// the store is the common dir's: one opened from the common dir
+		// alone reads the append, from its log, since nothing is published
+		alone := git.Checkout{CommonDir: in.Checkout.CommonDir, Format: in.Checkout.Format}
+		h, err := store.Open(store.CheckoutID{0xff}, store.DiskPorts(gittest.Runner(t), alone, rand.Reader), store.DefaultSegmentBound).Heads()
+		if err != nil || h.LogsRead != 1 || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: twinID}) {
+			t.Errorf("the store of the common dir alone holds %+v, %v; want the append in twinID's log", h, err)
 		}
 	}
 }

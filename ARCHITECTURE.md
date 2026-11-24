@@ -18,7 +18,9 @@ directory under `internal/`, and a unit's subdirectories belong to it. A unit
 imports only units below it in this block `[LAW:one-way-deps]`; `root` and
 `command` sit beside the stack of architecture.md §6, importing from it with
 nothing in it importing them, and `architecture` and `scenarios` are test
-only. The rows from `cli` to `git` are §6's drawing, in its order.
+only. The rows from `cli` to `git` are §6's drawing, in its order; `files`,
+below them, is the files of one directory, which every unit keeping a file
+on disk opens a port of.
 
 ```layers
 architecture
@@ -36,6 +38,7 @@ fold
 events
 store
 git
+files
 reason
 assets
 panics
@@ -149,6 +152,11 @@ The decisions the layout needed and the design documents did not make.
   `<git-dir>/lit/checkout/`: `id`, 32 lowercase hex digits and a newline,
   which git deletes with the worktree. Per work tree, `.lit/workspace.toml`,
   committed with the code, which only init writes, and only when absent.
+  Each of these directories, and the store's `log/`, is read and written
+  through its own `files` port: the directory is opened inside its parent
+  and must be the real directory at its name, never a symlink, and a file's
+  name is one path element, so no port reaches another's files. Only the
+  store opens `log/`.
 - **D12 Command log** `$XDG_STATE_HOME/lit/commands/<UTC date>.jsonl`
   (`~/.local/state` when unset): one line per invocation in one `O_APPEND`
   write, per machine; every write removes day files older than 30 days.

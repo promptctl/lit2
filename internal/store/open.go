@@ -5,20 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 )
 
-// Ports is everything the store touches: its files, lit's repository, and
-// entropy for a new log's id. The disk and the twins are two sets of the
-// same ports, and the Store over them is one type.
+// Ports is everything the store touches: its logs' files, lit's
+// repository, and entropy for a new log's id. The disk and the twins are
+// two sets of the same ports, and the Store over them is one type. Every
+// field is unexported, so a Ports is made only by DiskPorts and
+// MemoryPorts, and no files handle over the store's logs is taken from
+// outside the store or handed out of it `[LAW:types-are-the-program]`.
 type Ports struct {
-	Files   Files
-	Objects git.Objects
-	Refs    git.Refs
-	Entropy io.Reader
+	files   files.Files
+	objects git.Objects
+	refs    git.Refs
+	entropy io.Reader
 }
 
 // DiskPorts is the store of at's clone on disk, rooted at
@@ -26,9 +29,16 @@ type Ports struct {
 // kept by g. It reads nothing; every worktree of a clone builds the same
 // ports.
 func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader) Ports {
-	root := filepath.Join(at.SharedDir(), "store")
-	repo := g.RepositoryAt(filepath.Join(root, repoDir))
-	return Ports{Files: FilesAt(root), Objects: repo, Refs: repo, Entropy: entropy}
+	l := locate(at)
+	repo := g.RepositoryAt(l.repo)
+	return Ports{files: files.At(l.logs), objects: repo, refs: repo, entropy: entropy}
+}
+
+// MemoryPorts is a store in process: its logs in logs, the in-memory
+// twin, which whoever builds the store keeps, and lit's repository's
+// objects and refs.
+func MemoryPorts(logs *files.Memory, objects git.Objects, refs git.Refs, entropy io.Reader) Ports {
+	return Ports{files: logs, objects: objects, refs: refs, entropy: entropy}
 }
 
 // Store is one clone's store as one checkout sees it: every writer's
@@ -51,7 +61,7 @@ func Open(me CheckoutID, p Ports, bound SegmentBound) *Store {
 type Appended struct {
 	Records, Bytes int
 	Until          Position
-	Log            Made
+	Log            files.Made
 }
 
 // Append writes one command's batch to this checkout's log as one frame:
@@ -59,47 +69,47 @@ type Appended struct {
 // derived. The first append creates the log, so exactly one header
 // survives two first appends racing.
 func (s *Store) Append(b Batch) (Appended, error) {
-	p := LogPath(s.me)
-	log, opened, err := s.ownLog(p)
+	n := LogName(s.me)
+	log, opened, err := s.ownLog(n)
 	if err != nil {
 		return Appended{}, err
 	}
 	frame := Encode(b)
-	end, err := s.ports.Files.Append(p, frame)
+	end, err := s.ports.files.Append(n, frame)
 	if err != nil {
 		return Appended{}, err
 	}
 	return Appended{Records: len(b.Records()), Bytes: len(frame), Until: Position{Log: log, At: Offset(end - headerSize)}, Log: opened}, nil
 }
 
-// ownLog is the id of the log at p, created with a new id when there is
+// ownLog is the id of the log n, created with a new id when there is
 // none. The log is read before it is appended to, so bytes are never
 // added to a file that is not a log.
-func (s *Store) ownLog(p Path) (LogID, Made, error) {
-	id, err := s.logID(p)
-	if !errors.As(err, new(NotFound)) {
-		return id, Existing, err
+func (s *Store) ownLog(n files.Name) (LogID, files.Made, error) {
+	id, err := s.logID(n)
+	if !errors.As(err, new(files.NotFound)) {
+		return id, files.Existing, err
 	}
 	var fresh LogID
-	if _, err := io.ReadFull(s.ports.Entropy, fresh[:]); err != nil {
+	if _, err := io.ReadFull(s.ports.entropy, fresh[:]); err != nil {
 		return LogID{}, 0, fmt.Errorf("minting a log id: %w", err)
 	}
-	opened, err := s.ports.Files.CreateOnce(p, logHeader(fresh))
+	opened, err := s.ports.files.CreateOnce(n, logHeader(fresh))
 	if err != nil {
 		return LogID{}, 0, err
 	}
-	id, err = s.logID(p)
+	id, err = s.logID(n)
 	return id, opened, err
 }
 
-func (s *Store) logID(p Path) (LogID, error) {
-	h, err := s.ports.Files.ReadAt(p, 0, headerSize)
+func (s *Store) logID(n files.Name) (LogID, error) {
+	h, err := s.ports.files.ReadAt(n, 0, headerSize)
 	if err != nil {
 		return LogID{}, err
 	}
 	id, err := parseLogHeader(h)
 	if err != nil {
-		return LogID{}, fmt.Errorf("%s: %w", p, err)
+		return LogID{}, fmt.Errorf("the log %s: %w", n, err)
 	}
 	return id, nil
 }
@@ -118,7 +128,7 @@ type Stream struct {
 type source interface{ source() }
 
 // logFile is a stream read from a log under this common dir.
-type logFile struct{ path Path }
+type logFile struct{ name files.Name }
 
 // published is a stream read from a publication's segments, in stream
 // order, each with the span publication read it to hold, which tile the
@@ -133,7 +143,7 @@ func (published) source() {}
 
 // Unreadable is a ref or a log that is not a stream: a ref name ParseRef
 // refuses, a ref naming objects that are missing or not lit's, or a log whose header does not read. Name is the ref name or the log's
-// path.
+// name.
 type Unreadable struct {
 	Name string
 	Why  error
@@ -155,21 +165,21 @@ type Heads struct {
 // writes visible whether or not its sync has run
 // `[LAW:no-ambient-temporal-coupling]`.
 func (s *Store) Heads() (Heads, error) {
-	refs, err := s.ports.Refs.List(litRefs)
+	refs, err := s.ports.refs.List(litRefs)
 	if err != nil {
 		return Heads{}, err
 	}
-	logs, err := s.ports.Files.List(logDir)
+	logs, err := s.ports.files.List()
 	if err != nil {
 		return Heads{}, err
 	}
 	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs)}
 	unreadable := func(name string, why error) { h.Unreadable = append(h.Unreadable, Unreadable{Name: name, Why: why}) }
 	local := map[Ref]bool{}
-	for _, p := range logs {
-		st, err := s.logStream(p)
+	for _, n := range logs {
+		st, err := s.logStream(n)
 		if err != nil {
-			unreadable(string(p), err)
+			unreadable(n.String(), err)
 			continue
 		}
 		local[st.Ref] = true
@@ -232,21 +242,21 @@ func (s *Store) ReadAll() (Heads, []Scanned, error) {
 	return h, scans, nil
 }
 
-// logStream is the stream of the log at p, up to its size now.
-func (s *Store) logStream(p Path) (Stream, error) {
-	owner, err := logOwner(p)
+// logStream is the stream of the log n, up to its size now.
+func (s *Store) logStream(n files.Name) (Stream, error) {
+	owner, err := logOwner(n)
 	if err != nil {
 		return Stream{}, err
 	}
-	log, err := s.logID(p)
+	log, err := s.logID(n)
 	if err != nil {
 		return Stream{}, err
 	}
-	size, err := s.ports.Files.Size(p)
+	size, err := s.ports.files.Size(n)
 	if err != nil {
 		return Stream{}, err
 	}
-	return Stream{Ref: WriterRef{Checkout: owner}, Until: Position{Log: log, At: Offset(size - headerSize)}, src: logFile{path: p}}, nil
+	return Stream{Ref: WriterRef{Checkout: owner}, Until: Position{Log: log, At: Offset(size - headerSize)}, src: logFile{name: n}}, nil
 }
 
 // publication reads the publication a commit holds: its log, from the
@@ -266,7 +276,7 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 	refused := func(why error) (published, LogID, error) {
 		return published{}, LogID{}, NoPublication{Commit: commit, Why: why}
 	}
-	c, err := s.ports.Objects.Commit(commit)
+	c, err := s.ports.objects.Commit(commit)
 	if err != nil {
 		return none(err)
 	}
@@ -274,7 +284,7 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 	if err != nil {
 		return refused(err)
 	}
-	es, err := s.ports.Objects.Tree(c.Tree)
+	es, err := s.ports.objects.Tree(c.Tree)
 	if err != nil {
 		return none(err)
 	}
@@ -285,7 +295,7 @@ func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
 			return refused(fmt.Errorf("tree %s: %w", c.Tree, err))
 		}
 		// the header alone, so reading heads inflates no segment
-		size, err := s.ports.Objects.BlobSize(e.Blob)
+		size, err := s.ports.objects.BlobSize(e.Blob)
 		if err != nil {
 			return none(err)
 		}
@@ -339,7 +349,7 @@ func (s *Store) Read(r Range) (Scan, error) {
 func (s *Store) bytes(src source, want Span) ([]byte, error) {
 	switch src := src.(type) {
 	case logFile:
-		return s.ports.Files.ReadAt(src.path, headerSize+uint64(want.From), want.Len())
+		return s.ports.files.ReadAt(src.name, headerSize+uint64(want.From), want.Len())
 	case published:
 		b := make([]byte, 0, want.Len())
 		for _, seg := range src.segs {
@@ -347,7 +357,7 @@ func (s *Store) bytes(src source, want Span) ([]byte, error) {
 			if sp.To <= want.From || sp.From >= want.To {
 				continue // outside the range read
 			}
-			blob, err := s.ports.Objects.Blob(seg.Blob)
+			blob, err := s.ports.objects.Blob(seg.Blob)
 			if err != nil {
 				return nil, err
 			}
@@ -392,7 +402,7 @@ func (NothingToPublish) publishing() {}
 // shorter than its own publication is ShorterThanPublished.
 func (s *Store) SealOwn() (Sealing, error) {
 	ref := WriterRef{Checkout: s.me}
-	st, err := s.logStream(LogPath(s.me))
+	st, err := s.logStream(LogName(s.me))
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +410,7 @@ func (s *Store) SealOwn() (Sealing, error) {
 	if err != nil {
 		return nil, err
 	}
-	tail, err := s.ports.Files.ReadAt(LogPath(s.me), headerSize+uint64(from), uint64(st.Until.At-from))
+	tail, err := s.ports.files.ReadAt(LogName(s.me), headerSize+uint64(from), uint64(st.Until.At-from))
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +474,7 @@ func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, git.Was, 
 
 // head is what ref names now.
 func (s *Store) head(ref Ref) (git.Was, error) {
-	l, err := s.ports.Refs.List(ref.Name())
+	l, err := s.ports.refs.List(ref.Name())
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +538,7 @@ func (s *Store) Publish(p Publication) (Published, error) {
 			fresh = append(fresh, f.Bytes)
 		}
 	}
-	puts, err := s.ports.Objects.PutBlobs(fresh)
+	puts, err := s.ports.objects.PutBlobs(fresh)
 	if err != nil {
 		return Published{}, err
 	}
@@ -547,12 +557,12 @@ func (s *Store) Publish(p Publication) (Published, error) {
 		}
 		entries = append(entries, git.Entry{Name: segmentName(span(seg).From), Blob: blob})
 	}
-	tree, stored, err := s.ports.Objects.PutTree(entries)
+	tree, stored, err := s.ports.objects.PutTree(entries)
 	if err != nil {
 		return Published{}, err
 	}
 	out.added(tree, stored, 0)
-	commit, stored, err := s.ports.Objects.PutCommit(git.Commit{Tree: tree, Message: commitMessage(p.log)})
+	commit, stored, err := s.ports.objects.PutCommit(git.Commit{Tree: tree, Message: commitMessage(p.log)})
 	if err != nil {
 		return Published{}, err
 	}
@@ -573,7 +583,7 @@ func (s *Store) Publish(p Publication) (Published, error) {
 		}
 		return out, nil
 	}
-	err = s.ports.Refs.Replace(p.ref.Name(), p.from, commit)
+	err = s.ports.refs.Replace(p.ref.Name(), p.from, commit)
 	var refusal git.Moved
 	if errors.As(err, &refusal) && refusal.Now == (git.Named{Target: commit}) {
 		out.Move = RefUnchanged{}

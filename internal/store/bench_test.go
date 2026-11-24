@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/store/storetest"
@@ -44,8 +45,7 @@ func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 		}
 	}
 	open := func() *store.Store {
-		ports := store.DiskPorts(gittest.Runner(b), c, storetest.Entropy(0))
-		ports.Files = store.NewMemoryFiles()
+		ports := store.WithFiles(store.DiskPorts(gittest.Runner(b), c, storetest.Entropy(0)), files.NewMemory())
 		return store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound)
 	}
 	heads := func(s *store.Store) store.Heads {

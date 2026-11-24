@@ -1,5 +1,5 @@
 // Package storetest is the behavioral suite every substrate of the store
-// passes, and the contract suite of its Files port. Its assertions speak of
+// passes. Its assertions speak of
 // logs, segments, publications, and refs (architecture.md
 // §3.16), never of file layouts or bytes beyond git's object ids.
 package storetest
@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
@@ -33,8 +34,25 @@ func (l *locked) Read(b []byte) (int, error) {
 	return l.r.Read(b)
 }
 
-// Fresh is a substrate: the ports of a fresh common dir, empty, each call.
-type Fresh func(*testing.T) store.Ports
+// Clone is one clone's store as the suite reaches it: the ports a Store
+// opens over, the files of its logs behind them, for the subtests that
+// write a log's raw bytes, and lit's repository.
+type Clone struct {
+	Ports   store.Ports
+	Logs    files.Files
+	Objects git.Objects
+	Refs    git.Refs
+}
+
+// Substrate is where a suite's stores live. Its callers build the ports,
+// so this package never does.
+type Substrate struct {
+	// Fresh is a fresh clone's store, empty, each call.
+	Fresh func(*testing.T) Clone
+	// Fetched is a fresh clone's store that fetched c's lit repository and
+	// holds none of c's logs.
+	Fetched func(t *testing.T, c Clone) Clone
+}
 
 var (
 	a = store.CheckoutID{0xa}
@@ -185,26 +203,26 @@ func segments(t *testing.T, objects git.Objects, commit git.ObjectID) []git.Entr
 	return es
 }
 
-// Store holds fresh to the store's behavior.
-func Store(t *testing.T, fresh Fresh) {
+// Store holds sub to the store's behavior.
+func Store(t *testing.T, sub Substrate) {
 	t.Run("a fresh common dir reads zero refs, zero logs and no stream", func(t *testing.T) {
 		t.Parallel()
-		s := store.Open(a, fresh(t), store.DefaultSegmentBound)
+		s := store.Open(a, sub.Fresh(t).Ports, store.DefaultSegmentBound)
 		h := heads(t, s)
 		if h.RefsRead != 0 || h.LogsRead != 0 || len(h.Streams) != 0 {
 			t.Errorf("a fresh store's heads are %+v; want zero refs, zero logs, no stream", h)
 		}
-		if _, err := s.SealOwn(); !errors.As(err, new(store.NotFound)) {
+		if _, err := s.SealOwn(); !errors.As(err, new(files.NotFound)) {
 			t.Errorf("sealing with no log failed with %v; want NotFound", err)
 		}
 	})
 
 	t.Run("appended batches read back in order, each whole, at increasing offsets", func(t *testing.T) {
 		t.Parallel()
-		s := store.Open(a, fresh(t), store.DefaultSegmentBound)
+		s := store.Open(a, sub.Fresh(t).Ports, store.DefaultSegmentBound)
 		bs := []store.Batch{batch(t, "one"), batch(t, "two", "three"), batch(t, "four", "five", "six")}
 		appended := AppendAll(t, s, bs...)
-		if appended[0].Log != store.Created || appended[1].Log != store.Existing || appended[2].Records != 3 {
+		if appended[0].Log != files.Created || appended[1].Log != files.Existing || appended[2].Records != 3 {
 			t.Errorf("the appends were %+v; want the first to create the log", appended)
 		}
 		scan := Whole(t, s, store.WriterRef{Checkout: a})
@@ -220,12 +238,12 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("a partial frame is not read or consumed, and is one torn span once a frame follows it", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 		AppendAll(t, s, batch(t, "before"))
 		partial := store.Encode(batch(t, "lost in a crash"))
 		partial = partial[:len(partial)/2]
-		if _, err := p.Files.Append(store.LogPath(a), partial); err != nil {
+		if _, err := p.Logs.Append(store.LogName(a), partial); err != nil {
 			t.Fatal(err)
 		}
 		scan := Whole(t, s, store.WriterRef{Checkout: a})
@@ -241,14 +259,14 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("many appenders to one log lose no record", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
+		p := sub.Fresh(t)
 		var want []string
 		var wg sync.WaitGroup
 		for g := range 8 {
 			bs := Numbered(t, 4, fmt.Sprintf("g%d", g))
 			want = append(want, All(bs)...)
 			wg.Go(func() {
-				s := store.Open(a, p, store.DefaultSegmentBound)
+				s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 				for _, bt := range bs {
 					if _, err := s.Append(bt); err != nil {
 						t.Error(err)
@@ -258,7 +276,7 @@ func Store(t *testing.T, fresh Fresh) {
 			})
 		}
 		wg.Wait()
-		scan := Whole(t, store.Open(a, p, store.DefaultSegmentBound), store.WriterRef{Checkout: a})
+		scan := Whole(t, store.Open(a, p.Ports, store.DefaultSegmentBound), store.WriterRef{Checkout: a})
 		got := Read(scan)
 		slices.Sort(got)
 		slices.Sort(want)
@@ -269,8 +287,8 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("many appends publish as one commit whose stream reads back the log", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 		bs := Numbered(t, 50, "event")
 		AppendAll(t, s, bs...)
 		out := PublishOwn(t, s)
@@ -278,9 +296,8 @@ func Store(t *testing.T, fresh Fresh) {
 			t.Errorf("the publish was %+v; want a created ref, no prior, and only its segments, one tree and one commit new", out)
 		}
 		// a clone that fetched lit's repository and holds no log of a
-		other := fresh(t)
-		other.Objects, other.Refs = p.Objects, p.Refs
-		reader := store.Open(b, other, store.DefaultSegmentBound)
+		other := sub.Fetched(t, p)
+		reader := store.Open(b, other.Ports, store.DefaultSegmentBound)
 		scan := Whole(t, reader, store.WriterRef{Checkout: a})
 		if !slices.Equal(Read(scan), All(bs)) || len(scan.Torn) != 0 || scan.End != scan.Until {
 			t.Errorf("the publication reads back %d records; want the log's %d", len(Read(scan)), len(bs))
@@ -289,8 +306,8 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("a second publish sends only the open segment's delta, and an idle one nothing", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, 256)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, 256)
 		AppendAll(t, s, Numbered(t, 30, "first")...)
 		first := PublishOwn(t, s)
 		before := segments(t, p.Objects, first.Commit)
@@ -312,8 +329,8 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("a publication sealed before another publish of its log is refused, and the ref keeps the later one", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 		AppendAll(t, s, Numbered(t, 3, "first")...)
 		early := sealOwn(t, s)
 		AppendAll(t, s, Numbered(t, 3, "more")...)
@@ -332,8 +349,8 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("two publications of one sealed state both succeed, converging on one commit", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 		AppendAll(t, s, Numbered(t, 3, "event")...)
 		first, second := sealOwn(t, s), sealOwn(t, s)
 		one, err := s.Publish(first)
@@ -348,8 +365,8 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("an idle publication sealed before another publish moved its ref is refused, not reported unchanged", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 		AppendAll(t, s, Numbered(t, 3, "event")...)
 		PublishOwn(t, s)
 		idle := sealOwn(t, s)
@@ -361,24 +378,24 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("a log with no whole frame has nothing to publish, and makes no ref", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 		AppendAll(t, s, batch(t, "one"))
-		size, err := p.Files.Size(store.LogPath(a))
+		size, err := p.Logs.Size(store.LogName(a))
 		if err != nil {
 			t.Fatal(err)
 		}
-		header, err := p.Files.ReadAt(store.LogPath(a), 0, size-uint64(len(store.Encode(batch(t, "one")))))
+		header, err := p.Logs.ReadAt(store.LogName(a), 0, size-uint64(len(store.Encode(batch(t, "one")))))
 		if err != nil {
 			t.Fatal(err)
 		}
 		// the header and half a frame: what a crash in the first append leaves
 		half := store.Encode(batch(t, "half"))
-		crashed := fresh(t)
-		if _, err := crashed.Files.CreateOnce(store.LogPath(a), append(header, half[:len(half)/2]...)); err != nil {
+		crashed := sub.Fresh(t)
+		if _, err := crashed.Logs.CreateOnce(store.LogName(a), append(header, half[:len(half)/2]...)); err != nil {
 			t.Fatal(err)
 		}
-		s = store.Open(a, crashed, store.DefaultSegmentBound)
+		s = store.Open(a, crashed.Ports, store.DefaultSegmentBound)
 		sealed, err := s.SealOwn()
 		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
 			t.Errorf("sealing a log with no whole frame made %#v, %v; want %#v", sealed, err, want)
@@ -390,8 +407,8 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("a ref whose publication does not read is resealed from 0, and says why", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, 64)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, 64)
 		bs := Numbered(t, 10, "event")
 		AppendAll(t, s, bs...)
 		ref := store.WriterRef{Checkout: a}
@@ -411,43 +428,41 @@ func Store(t *testing.T, fresh Fresh) {
 			t.Errorf("over a ref holding %s the publish was %+v; want it resealed from 0 for NoPublication of %s, not lit's, the ref replaced", held, out, held)
 		}
 		// a clone that fetched lit's repository and holds no log of a
-		other := fresh(t)
-		other.Objects, other.Refs = p.Objects, p.Refs
-		if got := Read(Whole(t, store.Open(b, other, 64), ref)); !slices.Equal(got, All(bs)) {
+		other := sub.Fetched(t, p)
+		if got := Read(Whole(t, store.Open(b, other.Ports, 64), ref)); !slices.Equal(got, All(bs)) {
 			t.Errorf("the resealed publication reads %v; want the log's %v", got, All(bs))
 		}
 	})
 
 	t.Run("a log shorter than its own publication is refused, not sealed", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 		AppendAll(t, s, batch(t, "one"))
-		size, err := p.Files.Size(store.LogPath(a))
+		size, err := p.Logs.Size(store.LogName(a))
 		if err != nil {
 			t.Fatal(err)
 		}
-		short, err := p.Files.ReadAt(store.LogPath(a), 0, size)
+		short, err := p.Logs.ReadAt(store.LogName(a), 0, size)
 		if err != nil {
 			t.Fatal(err)
 		}
 		AppendAll(t, s, batch(t, "two"))
 		PublishOwn(t, s)
 		// the same repository beside a log holding only the first batch
-		rewound := fresh(t)
-		rewound.Objects, rewound.Refs = p.Objects, p.Refs
-		if _, err := rewound.Files.CreateOnce(store.LogPath(a), short); err != nil {
+		rewound := sub.Fetched(t, p)
+		if _, err := rewound.Logs.CreateOnce(store.LogName(a), short); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Open(a, rewound, store.DefaultSegmentBound).SealOwn(); !errors.As(err, new(store.ShorterThanPublished)) {
+		if _, err := store.Open(a, rewound.Ports, store.DefaultSegmentBound).SealOwn(); !errors.As(err, new(store.ShorterThanPublished)) {
 			t.Errorf("sealing a log shorter than its publication failed with %v; want ShorterThanPublished", err)
 		}
 	})
 
 	t.Run("an inbox publication reads like a writer's, and its rewrite reads in its place", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		s := store.Open(a, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 		inbox := store.InboxRef{Inbox: store.InboxID{1}}
 		publish := func(from git.Was, log store.LogID, records ...string) store.Published {
 			t.Helper()
@@ -476,8 +491,8 @@ func Store(t *testing.T, fresh Fresh) {
 
 	t.Run("two checkouts over one common dir write their own logs and refs and read each other", func(t *testing.T) {
 		t.Parallel()
-		p := fresh(t)
-		sa, sb := store.Open(a, p, store.DefaultSegmentBound), store.Open(b, p, store.DefaultSegmentBound)
+		p := sub.Fresh(t)
+		sa, sb := store.Open(a, p.Ports, store.DefaultSegmentBound), store.Open(b, p.Ports, store.DefaultSegmentBound)
 		AppendAll(t, sa, batch(t, "from a"))
 		AppendAll(t, sb, batch(t, "from b"))
 		for _, s := range []*store.Store{sa, sb} {

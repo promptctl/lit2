@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
@@ -53,7 +54,7 @@ func TestTwoWorktreesOfOneCloneShareOneStoreEachWithItsOwnLogAndRef(t *testing.T
 			t.Errorf("a worktree reads b's stream as %v; want %v", got, fromB)
 		}
 	}
-	repo := filepath.Join(main.SharedDir(), "store", "repo")
+	repo := store.RepositoryDir(main)
 	refs := strings.Fields(gittest.Git(t, repo, "for-each-ref", "--format=%(refname)", "refs/lit/"))
 	want := []string{string(store.WriterRef{Checkout: ida}.Name()), string(store.WriterRef{Checkout: idb}.Name())}
 	if !slices.Equal(refs, want) {
@@ -96,7 +97,7 @@ func TestAThousandAppendsAndAPublishLeaveTheCodeRepositoryAsItWasAndPassFsck(t *
 	if after := codeRepository(t, c); after != before {
 		t.Errorf("the code repository changed:\nbefore\n%s\nafter\n%s", before, after)
 	}
-	repo := filepath.Join(c.SharedDir(), "store", "repo")
+	repo := store.RepositoryDir(c)
 	gittest.Git(t, repo, "fsck", "--strict", "--no-dangling", first.Commit.String(), second.Commit.String())
 	if got := gittest.Git(t, repo, "rev-parse", string(store.WriterRef{Checkout: ida}.Name())); got != second.Commit.String() {
 		t.Errorf("git reads the writer's ref as %s; want the second publish's commit %s", got, second.Commit)
@@ -107,13 +108,13 @@ func TestAThousandAppendsAndAPublishLeaveTheCodeRepositoryAsItWasAndPassFsck(t *
 }
 
 // TestAppendingProcess is the child of the two-process test: with
-// LIT2_STORE_ROOT set it appends LIT2_APPENDS records to the log there,
-// each on its own turn, and exits; run directly, it has no store to
-// append to and skips.
+// LIT2_WORKTREE set it appends LIT2_APPENDS records to the log of the
+// store of the checkout there, each on its own turn, and exits; run
+// directly, it has no store to append to and skips.
 func TestAppendingProcess(t *testing.T) {
-	root := os.Getenv("LIT2_STORE_ROOT")
-	if root == "" {
-		t.Skip("the child of TestTwoProcessesAppendingToOneLogLoseNoRecord, run only by it with LIT2_STORE_ROOT set")
+	worktree := os.Getenv("LIT2_WORKTREE")
+	if worktree == "" {
+		t.Skip("the child of TestTwoProcessesAppendingToOneLogLoseNoRecord, run only by it with LIT2_WORKTREE set")
 	}
 	var n, turn int
 	if _, err := fmt.Sscan(os.Getenv("LIT2_APPENDS"), &n); err != nil {
@@ -122,9 +123,13 @@ func TestAppendingProcess(t *testing.T) {
 	if _, err := fmt.Sscan(os.Getenv("LIT2_FIRST_TURN"), &turn); err != nil {
 		t.Fatal(err)
 	}
-	repo := gittest.Runner(t).RepositoryAt(filepath.Join(root, "repo"))
-	files := &turnTaking{Files: store.FilesAt(root), t: t, dir: os.Getenv("LIT2_BARRIER"), turn: turn}
-	ports := store.Ports{Files: files, Objects: repo, Refs: repo, Entropy: storetest.Entropy(byte(os.Getpid()))}
+	g := gittest.Runner(t)
+	c, err := g.Locate(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := store.DiskPorts(g, c, storetest.Entropy(byte(os.Getpid())))
+	ports := store.WithFiles(disk, &turnTaking{Files: store.FilesOf(disk), t: t, dir: os.Getenv("LIT2_BARRIER"), turn: turn})
 	storetest.AppendAll(t, store.Open(ida, ports, store.DefaultSegmentBound), storetest.Numbered(t, n, os.Getenv("LIT2_PREFIX"))...)
 }
 
@@ -135,19 +140,19 @@ func TestAppendingProcess(t *testing.T) {
 // Append is the one call of a store's append that writes the log;
 // creating the log is CreateOnce, whose race is its own and needs no turn.
 type turnTaking struct {
-	store.Files
+	files.Files
 	t    *testing.T
 	dir  string
 	turn int
 }
 
-func (f *turnTaking) Append(p store.Path, b []byte) (uint64, error) {
+func (f *turnTaking) Append(n files.Name, b []byte) (uint64, error) {
 	prev := "go"
 	if f.turn > 0 {
 		prev = fmt.Sprintf("turn-%d", f.turn-1)
 	}
 	await(f.t, func() bool { return exists(f.t, filepath.Join(f.dir, prev)) })
-	end, err := f.Files.Append(p, b)
+	end, err := f.Files.Append(n, b)
 	if err != nil {
 		return end, err
 	}
@@ -191,7 +196,7 @@ func exists(t *testing.T, path string) bool {
 // between two of the other's [LAW:verifiable-goals]: the interleaving is
 // forced, never left to the scheduler.
 func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
-	root, barrier := filepath.Join(t.TempDir(), "store"), t.TempDir()
+	c, barrier := gittest.Clone(t), t.TempDir()
 	// the children end by the test's own deadline, so a hung child fails
 	// this test rather than the whole binary's timeout; and a child that
 	// fails strands the other on a turn it will never get, so either's
@@ -208,7 +213,7 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 	var wg sync.WaitGroup
 	for i, prefix := range prefixes {
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAppendingProcess$", "-test.count=1")
-		cmd.Env = append(os.Environ(), "LIT2_STORE_ROOT="+root, fmt.Sprintf("LIT2_APPENDS=%d", appends), "LIT2_PREFIX="+prefix, "LIT2_BARRIER="+barrier, fmt.Sprintf("LIT2_FIRST_TURN=%d", i))
+		cmd.Env = append(os.Environ(), "LIT2_WORKTREE="+c.WorkTree, fmt.Sprintf("LIT2_APPENDS=%d", appends), "LIT2_PREFIX="+prefix, "LIT2_BARRIER="+barrier, fmt.Sprintf("LIT2_FIRST_TURN=%d", i))
 		cmd.Stdout, cmd.Stderr = &outs[i], &outs[i]
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -234,8 +239,7 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 	if len(turns) != 2*appends {
 		t.Errorf("the appenders took %d turns; want one per append, %d", len(turns), 2*appends)
 	}
-	repo := gittest.Runner(t).RepositoryAt(filepath.Join(root, "repo"))
-	s := store.Open(idb, store.Ports{Files: store.FilesAt(root), Objects: repo, Refs: repo, Entropy: storetest.Entropy(3)}, store.DefaultSegmentBound)
+	s := store.Open(idb, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(3)), store.DefaultSegmentBound)
 	got := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: ida}))
 	if len(got) != 2*appends || len(slices.Compact(slices.Sorted(slices.Values(got)))) != 2*appends {
 		t.Errorf("two processes of %d appends each left %d records; want %d, each once", appends, len(got), 2*appends)
@@ -267,7 +271,7 @@ func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 	pb := publish(idb, 5)
 	publish(store.CheckoutID{0xc}, 6)
 	pd := publish(store.CheckoutID{0xd}, 8)
-	repo := filepath.Join(c.SharedDir(), "store", "repo")
+	repo := store.RepositoryDir(c)
 	cut := func(id git.ObjectID, keep int) {
 		t.Helper()
 		path := filepath.Join(repo, "objects", id.String()[:2], id.String()[2:])
@@ -286,15 +290,16 @@ func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 	if err := os.WriteFile(ref, []byte("torn"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ports := store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7))
-	ports.Files = store.NewMemoryFiles()
+	// a reader holding no log
+	ports := store.WithFiles(store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7)), files.NewMemory())
+	objects, _ := store.RepositoryOf(ports)
 	// d's one segment, its loose file cut to half, so its header reads and
 	// its body does not, as a filesystem that lost a write would leave it
-	commit, err := ports.Objects.Commit(pd.Commit)
+	commit, err := objects.Commit(pd.Commit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	segs, err := ports.Objects.Tree(commit.Tree)
+	segs, err := objects.Tree(commit.Tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,8 +328,8 @@ func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(5)), store.DefaultSegmentBound)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "event")...)
 	out := storetest.PublishOwn(t, s)
-	root := filepath.Join(c.SharedDir(), "store")
-	object, err := os.Stat(filepath.Join(root, "repo", "objects", out.Commit.String()[:2], out.Commit.String()[2:]))
+	repo := store.RepositoryDir(c)
+	object, err := os.Stat(filepath.Join(repo, "objects", out.Commit.String()[:2], out.Commit.String()[2:]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +337,7 @@ func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	if objectPerm&0o444 == 0 {
 		t.Fatalf("git made the commit's object file %v, readable by no one", objectPerm)
 	}
-	log, err := os.Stat(filepath.Join(root, filepath.FromSlash(string(store.LogPath(ida)))))
+	log, err := os.Stat(filepath.Join(store.LogDir(c).Path(), store.LogName(ida).String()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +347,7 @@ func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	}
 	// git writes the ref, so its write bits are git's; its read bits are
 	// the objects'
-	ref, err := os.Stat(filepath.Join(root, "repo", filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name()))))
+	ref, err := os.Stat(filepath.Join(repo, filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name()))))
 	if err != nil {
 		t.Fatal(err)
 	}

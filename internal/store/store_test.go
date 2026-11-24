@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 )
@@ -60,21 +61,21 @@ func forge(t *testing.T, p Ports, ref Ref, log LogID, at []Offset, bs [][]byte) 
 	t.Helper()
 	es := make([]git.Entry, len(at))
 	for i := range at {
-		blob, err := gittest.Put(p.Objects, bs[i])
+		blob, err := gittest.Put(p.objects, bs[i])
 		if err != nil {
 			t.Fatal(err)
 		}
 		es[i] = git.Entry{Name: segmentName(at[i]), Blob: blob}
 	}
-	tree, _, err := p.Objects.PutTree(es)
+	tree, _, err := p.objects.PutTree(es)
 	if err != nil {
 		t.Fatal(err)
 	}
-	commit, _, err := p.Objects.PutCommit(git.Commit{Tree: tree, Message: commitMessage(log)})
+	commit, _, err := p.objects.PutCommit(git.Commit{Tree: tree, Message: commitMessage(log)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Refs.Replace(ref.Name(), git.Absent{}, commit); err != nil {
+	if err := p.refs.Replace(ref.Name(), git.Absent{}, commit); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -116,7 +117,7 @@ func TestAPublicationWhoseSegmentDoesNotFillItsSpanIsUnreadableAndResealed(t *te
 	if _, err := s.Publish(pub); err != nil {
 		t.Fatal(err)
 	}
-	reader := Open(CheckoutID{0xc}, Ports{Files: NewMemoryFiles(), Objects: p.Objects, Refs: p.Refs, Entropy: bytes.NewReader(nil)}, DefaultSegmentBound)
+	reader := Open(CheckoutID{0xc}, MemoryPorts(files.NewMemory(), p.objects, p.refs, bytes.NewReader(nil)), DefaultSegmentBound)
 	h, err = reader.Heads()
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +175,7 @@ func TestAPublicationOfNoSegmentIsUnreadableAndResealed(t *testing.T) {
 func appended(t *testing.T, me CheckoutID, records ...string) (*Store, Ports, [][]byte, LogID) {
 	t.Helper()
 	repo := git.NewMemory()
-	p := Ports{Files: NewMemoryFiles(), Objects: repo, Refs: repo, Entropy: bytes.NewReader(make([]byte, 64))}
+	p := MemoryPorts(files.NewMemory(), repo, repo, bytes.NewReader(make([]byte, 64)))
 	s := Open(me, p, DefaultSegmentBound)
 	var frames [][]byte
 	for _, r := range records {
@@ -187,7 +188,7 @@ func appended(t *testing.T, me CheckoutID, records ...string) (*Store, Ports, []
 		}
 		frames = append(frames, Encode(b))
 	}
-	log, err := s.logID(LogPath(me))
+	log, err := s.logID(LogName(me))
 	if err != nil {
 		t.Fatal(err)
 	}

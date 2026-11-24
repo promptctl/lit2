@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
@@ -26,7 +27,7 @@ type Twin struct {
 	Process  Process
 	Out, Err *bytes.Buffer
 	Commands *command.Memory
-	Tree     *store.MemoryFiles
+	Tree     *files.Memory
 	Code     *git.CodeMemory
 	ports    store.Ports
 }
@@ -73,7 +74,7 @@ func twinReader() config.ReaderVersion {
 // the init.
 func NewTwin() Twin {
 	t := NewFreshTwin()
-	t.Code.Commit(map[string][]byte{verbs.WorkspaceFile: assets.DefaultWorkspace.Bytes()})
+	t.Code.Commit(map[string][]byte{verbs.WorkspacePath(): assets.DefaultWorkspace.Bytes()})
 	if status := Run(t.Process, []string{"admin", "init"}); status != 0 {
 		panic(fmt.Sprintf("root: the twin's admin init exited %d: %s", status, t.Err))
 	}
@@ -92,7 +93,7 @@ func NewFreshTwin() Twin {
 	// trace id the twin mints
 	stored := rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 's', 't', 'o', 'r', 'e'})
 	repo := git.NewMemory()
-	ports := store.Ports{Files: store.NewMemoryFiles(), Objects: repo, Refs: repo, Entropy: stored}
+	ports := store.MemoryPorts(files.NewMemory(), repo, repo, stored)
 	return twinOver(ports, twinCheckout, twinID, twinKey(), [32]byte{'l', 'i', 't', '2', ' ', 't', 'w', 'i', 'n'})
 }
 
@@ -120,10 +121,10 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 	out, errOut, commands := &bytes.Buffer{}, &bytes.Buffer{}, &command.Memory{}
 	entropy := rand.NewChaCha8(seed)
 	opened := command.Opened{Store: store.Open(id, ports, store.DefaultSegmentBound)}
-	tree, code := store.NewMemoryFiles(), &git.CodeMemory{}
+	tree, code := files.NewMemory(), &git.CodeMemory{}
 	// the twin is minted: its identity files hold its id and key, so init
 	// finds them there
-	shared, private := store.NewMemoryFilesMode(identityMode), store.NewMemoryFilesMode(identityMode)
+	shared, private := files.NewMemoryMode(identityMode), files.NewMemoryMode(identityMode)
 	if _, err := private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()); err != nil {
 		panic(err)
 	}
@@ -138,13 +139,13 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 			Place:         command.InCheckout{Checkout: c, Identity: command.Minted{Checkout: id, Key: key}},
 			Store:         opened,
 			Open:          func(git.Checkout, command.Minted) command.Opening { return opened },
-			WorkTree:      func(git.Checkout) store.Files { return tree },
+			WorkTree:      func(git.Checkout) files.Files { return tree },
 			Code:          func(git.Checkout) git.Code { return code },
 			Git:           func() []git.Spawn { return []git.Spawn{} },
 			Fold:          foldEnv(2),
 			Reader:        twinReader(),
 			Commands:      commands,
-			IdentityFiles: func(git.Checkout) (store.Files, store.Files) { return shared, private },
+			IdentityFiles: func(git.Checkout) (files.Files, files.Files) { return shared, private },
 			In:            strings.NewReader(""),
 			Out:           out,
 			Err:           errOut,

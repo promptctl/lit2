@@ -8,16 +8,16 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
-	"github.com/promptctl/lit2/internal/store"
-	"github.com/promptctl/lit2/internal/store/storetest"
 )
 
 // clone is one clone's shared identity dir and two worktrees' private
 // ones, over the disk adapter or its twin.
 type clone struct {
-	shared   store.Files
-	worktree [2]store.Files
+	shared   files.Files
+	worktree [2]files.Files
 }
 
 // worktrees is a main worktree and a linked one of one clone, at root.
@@ -33,7 +33,7 @@ func onDisk(t *testing.T) clone {
 	cs := worktrees(t.TempDir())
 	shared, a := identityFiles(cs[0])
 	_, b := identityFiles(cs[1])
-	return clone{shared: shared, worktree: [2]store.Files{a, b}}
+	return clone{shared: shared, worktree: [2]files.Files{a, b}}
 }
 
 func TestTheIdentityFilesOnDiskAreASecrets(t *testing.T) {
@@ -54,8 +54,8 @@ func TestTheIdentityFilesOnDiskAreASecrets(t *testing.T) {
 }
 
 func inMemory(*testing.T) clone {
-	files := func() store.Files { return store.NewMemoryFilesMode(identityMode) }
-	return clone{shared: files(), worktree: [2]store.Files{files(), files()}}
+	fresh := func() files.Files { return files.NewMemoryMode(identityMode) }
+	return clone{shared: fresh(), worktree: [2]files.Files{fresh(), fresh()}}
 }
 
 func entropy(seed byte) *rand.ChaCha8 { return rand.NewChaCha8([32]byte{'i', 'd', seed}) }
@@ -103,7 +103,7 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 		if got[0].Key.Principal() != got[1].Key.Principal() || got[0].Checkout == got[1].Checkout {
 			t.Errorf("two worktrees minted %v and %v; want one principal and two checkout ids", got[0], got[1])
 		}
-		if made[0] != (command.Fresh{Checkout: store.Created, Key: store.Existing}) || made[1] != (command.Fresh{Checkout: store.Created, Key: store.Created}) {
+		if made[0] != (command.Fresh{Checkout: files.Created, Key: files.Existing}) || made[1] != (command.Fresh{Checkout: files.Created, Key: files.Created}) {
 			t.Errorf("the held mint made %+v and the other %+v; want the other's key created, the held one's found, and each its own checkout id", made[0], made[1])
 		}
 	})
@@ -113,10 +113,10 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 			t.Fatal(err)
 		}
 		for _, f := range []struct {
-			fs   store.Files
+			fs   files.Files
 			file command.File
 		}{{c.shared, command.PrincipalFile{}}, {c.worktree[0], command.IDFile{}}} {
-			moded, ok := f.fs.(storetest.ModedFiles)
+			moded, ok := f.fs.(filestest.ModedFiles)
 			if !ok {
 				t.Fatalf("%T says no file's mode", f.fs)
 			}
@@ -135,7 +135,7 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 		if err != nil || again.Checkout != first.Checkout || again.Key.Principal() != first.Key.Principal() {
 			t.Errorf("a second mint is %v, %v; want the first, %v", again, err, first)
 		}
-		if made != (command.Fresh{Checkout: store.Existing, Key: store.Existing}) {
+		if made != (command.Fresh{Checkout: files.Existing, Key: files.Existing}) {
 			t.Errorf("a second mint made %+v; want both files existing", made)
 		}
 		if read := readIdentity(c.shared, c.worktree[0]); read != command.Identity(first) {
@@ -167,15 +167,15 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 // it reaches the files beneath: it says so on reached, then waits for
 // release.
 type heldFiles struct {
-	store.Files
+	files.Files
 	reached, release chan struct{}
 }
 
-func heldAtKeyCreate(fs store.Files) heldFiles {
+func heldAtKeyCreate(fs files.Files) heldFiles {
 	return heldFiles{Files: fs, reached: make(chan struct{}), release: make(chan struct{})}
 }
 
-func (h heldFiles) CreateOnce(p store.Path, b []byte) (store.Made, error) {
+func (h heldFiles) CreateOnce(p files.Name, b []byte) (files.Made, error) {
 	if p == command.NameOf(command.PrincipalFile{}) {
 		close(h.reached)
 		<-h.release
