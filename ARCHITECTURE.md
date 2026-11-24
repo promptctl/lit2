@@ -74,7 +74,7 @@ row; the architecture test fails on one without.
 | §3.13 Rewrite | `fold`, `store` | applied by the fold; segments re-sealed by store |
 | §3.14 Identity | `root`, `events` | the checkout id, principal and agent label read in root; attribution carried in events |
 | §3.15 The workspace file | `config`, `fold`, `evaluate`, `verbs`, `root`, `assets` | the one schema parse of an applied version in config; the applies and which version is in force folded; the §3.5 check against every live version in evaluate; the one judge of an apply, `Admit`, and the board's `workspace` line in verbs; `config commit`, `config status` and init's version one in root; the default profile in assets |
-| §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs through git |
+| §3.16 Log, segment and ref | `store`, `git` | the log, segments, writer refs and inbox refs in store; objects and refs written by the git binary and read by go-git |
 | §3.17 Principal and policy | `events`, `fold` | the key, signature and suite in events; the policy as events folded |
 | §3.18 Capability | `verbs`, `fold` | the capability verdict in fold's step, the one enforcer, over roles from the folded policy; the default roles, membership paths compiled to proposals and a refusal's rendering in verbs |
 | §3.19 Tier and envelope | `events`, `verbs` | the envelope and suite in events; prose sealed in verbs, so no layer below sees it |
@@ -109,10 +109,9 @@ The decisions the layout needed and the design documents did not make.
 - **D1 Module path** `github.com/promptctl/lit2`: v1's org, the binary's name.
 - **D2 Go and tooling.** `go 1.26`; the third-party modules are the ones
   the `dependencies` block names, each in one unit: go-git with its go-billy
-  filesystem in `git` alone, for lit's objects and refs and to read the
-  code repository's HEAD and history (architecture.md decision B), through
-  its storage and object packages, so none of its transport packages is
-  linked; edwards25519 in
+  filesystem in `git` alone, to read lit's objects and refs in process
+  (architecture.md decision B), through its storage and object packages,
+  so none of its transport packages is linked; edwards25519 in
   `events` for the signature check; the TOML parser and `x/mod` in
   `config`. Tests are
   the standard `testing` package. Lint is golangci-lint v2 as a `tool`
@@ -140,8 +139,9 @@ The decisions the layout needed and the design documents did not make.
   (`EX_SOFTWARE`); 78 environment (`EX_CONFIG`). Any other status means lit2
   died unrecorded. stdout carries only the answer asked for; stderr only the
   error line and the unrecorded line.
-- **D10 Checkout discovery in process**: walk up to `.git`, a directory or a
-  `gitdir:` file, then `commondir`; no git binary, no go-git, no `GIT_DIR`.
+- **D10 Checkout discovery by git**: `git rev-parse` from the working
+  directory, under the process's environment, so `GIT_DIR`,
+  `GIT_CEILING_DIRECTORIES` and safe.directory count as they do for git.
 - **D11 On disk.** Per clone, `<git-common-dir>/lit/`: `store/`, the store's
   root, and `principal`, beside the store and outside it. Per checkout,
   `<git-dir>/lit/checkout/`: `id`, 32 lowercase hex digits and a newline,

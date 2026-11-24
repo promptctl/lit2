@@ -85,7 +85,7 @@ func (o opened) workspaceFile() ([]byte, verbs.File) {
 	case err != nil:
 		return nil, verbs.UnreadableFile{Err: err}
 	}
-	return b, verbs.OnDisk{Blob: git.HashBlob(o.store.Format, b)}
+	return b, verbs.OnDisk{Blob: git.HashBlob(o.checkout.Format, b)}
 }
 
 // commit is config commit: the file, once it is HEAD's, applied as the
@@ -104,13 +104,15 @@ func (o opened) commit() cli.Outcome {
 	case verbs.UnreadableFile:
 		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading %s: %w", verbs.WorkspaceFile, f.Err)}}
 	}
-	at, err := o.p.Code(o.checkout, o.store.Format).AtHead(verbs.WorkspaceFile)
+	at, err := o.p.Code(o.checkout).AtHead(verbs.WorkspaceFile)
 	if err != nil {
 		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading the code repository: %w", err)}}
 	}
 	switch at := at.(type) {
 	case git.Untracked:
 		return cli.Failed{Failure: commitRefused{why: fmt.Sprintf("%[1]s is not in HEAD: git add %[1]s and git commit, then lit2 config commit", verbs.WorkspaceFile)}}
+	case git.NotAFile:
+		return cli.Failed{Failure: commitRefused{why: fmt.Sprintf("HEAD holds %[1]s as mode %[2]s, not a file: commit %[1]s as a regular file, then lit2 config commit", verbs.WorkspaceFile, at.Mode)}}
 	case git.Tracked:
 		if at.Blob != disk.Blob {
 			return cli.Failed{Failure: commitRefused{why: fmt.Sprintf("%[1]s differs from HEAD's %[2]s: git commit %[1]s, then lit2 config commit", verbs.WorkspaceFile, at.Blob)}}
@@ -135,7 +137,7 @@ func (o opened) commit() cli.Outcome {
 // apply judges version and, admitted, writes it as one apply under ref,
 // then says said.
 func (o opened) apply(version []byte, blob, ref git.ObjectID, said string) cli.Outcome {
-	act, err := verbs.Admit(o.folded.State, version, o.store.Format, o.p.Reader)
+	act, err := verbs.Admit(o.folded.State, version, o.checkout.Format, o.p.Reader)
 	if err != nil {
 		return failed(err)
 	}
@@ -219,7 +221,7 @@ func (o opened) status() cli.Outcome {
 	if !ok {
 		return cli.Done{}
 	}
-	ever, err := o.p.Code(o.checkout, o.store.Format).EverAt(verbs.WorkspaceFile, in.Active.Blob)
+	ever, err := o.p.Code(o.checkout).EverAt(verbs.WorkspaceFile, in.Active.Blob)
 	if err != nil {
 		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading the code repository: %w", err)}}
 	}
@@ -318,8 +320,8 @@ func (r body) init() cli.Outcome {
 		if err != nil {
 			return cli.Failed{Failure: workspaceFailure{err: err}}
 		}
-		ref = git.HashBlob(so.Format, b)
-		act, err := verbs.Admit(o.folded.State, b, so.Format, r.p.Reader)
+		ref = git.HashBlob(in.Checkout.Format, b)
+		act, err := verbs.Admit(o.folded.State, b, in.Checkout.Format, r.p.Reader)
 		if err != nil {
 			return failed(err)
 		}
@@ -327,7 +329,7 @@ func (r body) init() cli.Outcome {
 	case len(drafts) == 0:
 		return written(io.WriteString(r.p.Out, "no workspace version is in force: an owner applies one with lit2 config commit\n"))
 	default:
-		ref = git.HashBlob(so.Format, assets.DefaultWorkspace.Bytes())
+		ref = git.HashBlob(in.Checkout.Format, assets.DefaultWorkspace.Bytes())
 	}
 	if founds {
 		return o.found(shared, tree, drafts, ref, said)

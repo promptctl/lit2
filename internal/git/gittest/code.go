@@ -1,6 +1,7 @@
 package gittest
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,6 +71,14 @@ func Code(t *testing.T, fresh func(*testing.T) Commits) {
 		ever(t, c, idTwo, true)
 		ever(t, c, idOne, false)
 	})
+	t.Run("an id of another format is refused, never answered no", func(t *testing.T) {
+		c := fresh(t)
+		c.Commit(t, map[string][]byte{path: one})
+		foreign := git.HashBlob(git.SHA256, one)
+		if got, err := c.EverAt(path, foreign); !errors.As(err, new(git.ForeignFormat)) {
+			t.Errorf("EverAt(%s) = %v, %v; want ForeignFormat", foreign, got, err)
+		}
+	})
 	t.Run("a blob at another path is not at this one", func(t *testing.T) {
 		c := fresh(t)
 		c.Commit(t, map[string][]byte{"elsewhere.toml": one})
@@ -89,11 +98,12 @@ func NewRepo(t *testing.T) Repo {
 	t.Helper()
 	dir := Physical(t)
 	Git(t, dir, "init", "-q", "-b", "main")
-	c, err := git.Locate(dir)
+	g := Runner(t)
+	c, err := g.Locate(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Repo{Code: git.CodeAt(c, git.SHA1), Dir: dir}
+	return Repo{Code: g.CodeAt(c), Dir: dir}
 }
 
 // Commit writes files as the work tree's whole content and commits it.

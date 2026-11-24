@@ -41,9 +41,12 @@ type Process struct {
 	// WorkTree is a checkout's work tree, read for .lit/workspace.toml and
 	// .lit/founding and written only by init, creating them.
 	WorkTree func(git.Checkout) store.Files
-	// Code is a checkout's code repository in its object format, read
-	// for the blob HEAD holds at a path and its history.
-	Code     func(git.Checkout, git.ObjectFormat) git.Code
+	// Code is a checkout's code repository, read for the blob HEAD holds
+	// at a path and its history.
+	Code func(git.Checkout) git.Code
+	// Git is the record of each git process the invocation ran, for the
+	// command's event.
+	Git      func() []git.Spawn
 	Fold     fold.Env
 	Reader   config.ReaderVersion
 	Commands command.Sink
@@ -67,7 +70,7 @@ func Run(p Process, args []string) int {
 	}
 	table, groups := cli.Verbs(), cli.Groups()
 	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: p.Place, Agent: p.Agent}
-	event := command.Record(p.Clock, inv, func(now time.Time, rec command.Recorder) cli.Outcome {
+	event := command.Record(p.Clock, p.Git, inv, func(now time.Time, rec command.Recorder) cli.Outcome {
 		rec.Stored.Opening = p.Store
 		cmd, err := cli.Parse(table, groups, args)
 		if err != nil {
@@ -76,9 +79,9 @@ func Run(p Process, args []string) int {
 		rec.Asked(cli.Summarize(cmd))
 		return dispatch(body{p: p, now: now, rec: rec}, table, groups, cmd)
 	})
-	// [LAW:no-silent-failure] exception: stderr is where failures are said;
-	// when writing to it fails there is no channel left but the exit status,
-	// which still carries the outcome.
+	// [LAW:no-silent-failure] exception: stderr is where failures are said,
+	// a lost event among them; when writing to it fails there is no channel
+	// left but the exit status, which still carries the outcome.
 	_, _ = io.WriteString(p.Err, cli.Report(event.Outcome))
 	if err := p.Commands.Write(event); err != nil {
 		_, _ = io.WriteString(p.Err, logFailure(err))
