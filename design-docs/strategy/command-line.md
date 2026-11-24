@@ -48,7 +48,7 @@ Serves: Operations.
 Spec: `specifications/command-line.md`.
 
 **Every write echoes what it did.** Each write prints the diff it made, path by
-path, and every derivation it triggered, so a replacing typo is visible and
+path, and every derivation it set off, so a replacing typo is visible and
 reversible from its own echo. A refusal names the path, the reason and
 everything unmet at once, and says nothing was written, so an agent fixes it
 in one pass.

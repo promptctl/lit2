@@ -4,18 +4,19 @@ What lit says to an agent, when, and in what register.
 
 ## Diagnosis
 
-The moments when the next loop could be made cheaper (project-intent.md,
-"Feedback over control"), when a ticket is created, finished or abandoned, pass
-unremarked unless something speaks at them. But text that speaks too often or
-too loudly is noise: nudges to be careful, restated principles, imperatives
-in capitals. An agent learns to discount them, and they crowd out the line
-that mattered. Text lit did not write, a ticket body or a remote's error, can
-also be mistaken for lit's own instruction.
+The points in an agent's work when the next loop could be made cheaper
+(project-intent.md, "Feedback over control"), when a ticket is created,
+finished or abandoned, pass unremarked unless something speaks at them. But
+text that speaks too often or too loudly is noise: nudges to be careful,
+restated principles, imperatives in capitals. An agent learns to discount
+them, and they crowd out the line that mattered. Text lit did not write, a
+ticket body or a remote's error, can also be mistaken for lit's own
+instruction.
 
 ## Guiding policy
 
-Guidance is prose lit prints at a moment in an agent's work, so the agent
-reads it when it applies. lit defines the moments; the text at each is
+Guidance is prose lit prints at a point in an agent's work, so the agent
+reads it when it applies. lit defines the hook events; the text at each is
 workspace data, carried by handlers (`strategy/process.md`). Guidance is
 always advisory: an invariant is a requirement, refused with its reason, and
 derived state is echoed, not advised. Guidance states facts and their
@@ -39,7 +40,7 @@ Serves: Operations.
 Spec: `specifications/workflows.md`.
 
 **Speak where the next loop is cheapest to improve.** Guidance is most useful
-at three kinds of moment. At *capture*, when a ticket or an epic finishes or a
+at three points. At *capture*, when a ticket or an epic finishes or a
 session ends, it asks for the deposit: the sibling that became actionable or
 obsolete, the follow-up that surfaced, the pattern that recurred. At
 *creation*, it asks the creator to invest while context is highest: what done

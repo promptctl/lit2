@@ -24,7 +24,7 @@ The process is data a generic engine interprets. One concept, the
 stored, and everything else about it is derived. The engine reads only a
 column's flags, its forward edges and its requirement lists. Invariants are
 requirements, checked loudly at the transition write; heuristics are
-handlers, which speak quietly at the moments they apply. Strength matches
+handlers, which speak quietly when they apply. Strength matches
 certainty.
 
 ## Actions
@@ -91,11 +91,11 @@ Serves: Data.
 Spec: `specifications/columns-and-requirements.md`.
 
 **One mechanism for everything the process says.** A workflow is a named set
-of handlers a project adopts or declines as one thing; a handler binds moments
-the engine observes, filtered by the CLI's own selector, to a body it runs at
-those moments. A column's guidance, the orientation on a bare `lit`, and help
-topics are all handlers. lit defines the moment kinds; what happens at each
-moment is data.
+of handlers a project adopts or declines as one thing; a handler binds hook
+events the engine observes, filtered by the CLI's own selector, to a body it
+runs at those hook events. A column's guidance, the orientation on a bare
+`lit`, and help topics are all handlers. lit defines the hook event kinds;
+what happens at each hook event is data.
 Serves: Operations, Complexity.
 Spec: `specifications/workflows.md`.
 

@@ -153,7 +153,7 @@ a selector filters its comments and history like any list:
 `dee/comments/(by=claude_64e3)`.
 
 A **glob** expands to the paths it matches: `rin.*` is every child of `rin`,
-`*/title` every item's title. The same glob grammar binds handler moments
+`*/title` every item's title. The same glob grammar binds handler hook events
 (`specifications/workflows.md`).
 
 ## Bulk
@@ -193,7 +193,7 @@ Output is a contract `[LAW:nothing-unseen]`.
   works without JSON.
 - Every write echoes the diff it made, one line per path:
   `dee/status backlog → plan`.
-- Every derivation a write triggers is echoed with it:
+- Every derivation a write sets off is echoed with it:
   `⇒ dee/claim = this checkout`.
 - `--dry-run` prints the expanded selector or glob first, then the same
   lines the write would echo, then `(dry run: nothing written)`. On

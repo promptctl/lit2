@@ -10,14 +10,14 @@ name is the name of a discipline: `plan-review`, `capture`. The column graph
 is `/columns`; the word workflow means this unit.
 
 A **handler** is one binding and one body, `/workflows/<name>/handlers/<id>`.
-It binds to a moment lit observes and runs its body at that moment. It is
-the unit that is overridden.
+It binds to a hook event lit observes and runs its body at that hook event. It
+is the unit that is overridden.
 
 | handler field | type | meaning |
 |---|---|---|
-| `on` | list of moments | when it fires; at least one |
+| `on` | list of hook events | when it fires; at least one |
 | `where` | selector | which subjects it fires for; empty matches every subject |
-| `body` | text | what it runs at the moment |
+| `body` | text | what it runs at the hook event |
 | `enabled` | bool | whether it fires; true unless set |
 
 | workflow field | type | meaning |
@@ -26,12 +26,12 @@ the unit that is overridden.
 | `enabled` | bool | true unless set; off fires none of its handlers, whatever theirs say |
 | `handlers` | map id → handler | the handlers |
 
-## Moments
+## Hook events
 
-A moment is a kind and an argument. What happens at a moment is data
+A hook event is a kind and an argument. What happens at a hook event is data
 `[LAW:types-are-the-program]`. The kinds:
 
-| moment | fires when | subject |
+| hook event | fires when | subject |
 |---|---|---|
 | `enter <column>` | a transition write landed and put the ticket in the column | the ticket |
 | `leave <column>` | a transition write landed and took the ticket out of the column | the ticket |
@@ -47,10 +47,10 @@ arrival, `wrote */comments` is every comment on any ticket.
 subject as the command leaves it: after the write for `enter`, `leave` and
 `wrote`, unchanged for `refused`. A handler for finishing any ticket is
 `on: [enter *]`, `where: (stage=terminal)`; one for an epic finishing is
-`where: (stage=terminal parent/stage=terminal)`. A moment with no subject
+`where: (stage=terminal parent/stage=terminal)`. A hook event with no subject
 ticket (`read /lanes`) has nothing for a selector to match, so only handlers
 with an empty `where` fire there `[LAW:composability]`. Several handlers at
-one moment run in address order, `<workflow>/<handler>` ascending.
+one hook event run in address order, `<workflow>/<handler>` ascending.
 
 The body is text with two substitutions: `{$}` is the subject's id, and
 `{$/<field>}` is a field of the subject read after the write, such as
@@ -122,7 +122,7 @@ Undecided: the shipped list and names.
 ## Inspection
 
 `get /workflows` lists every resolved workflow in the node it is run from,
-one line per workflow and per handler: name, on or off, the moments and
+one line per workflow and per handler: name, on or off, the hook events and
 selector, then the layer that supplied it and, where it applies, `stale`,
 `unchanged` or `base unknown`:
 
@@ -164,12 +164,12 @@ The handler bound `read /` prints after it.
 
 The command's event records, under `handlers`:
 
-- `moments`: the moments the command raised, `[]` when none.
-- `fired`: per handler that fired, its address, the moment it matched, the
+- `hook_events`: the hook events the command raised, `[]` when none.
+- `fired`: per handler that fired, its address, the hook event it matched, the
   layer that supplied it, and whether it is stale.
-- `suppressed`: per handler that matched a moment and did not fire: address,
-  moment, and one reason, `workflow-off@<layer>`, `handler-off@<layer>` or
-  `where-unmatched`.
+- `suppressed`: per handler that matched a hook event and did not fire:
+  address, hook event, and one reason, `workflow-off@<layer>`,
+  `handler-off@<layer>` or `where-unmatched`.
 
-`moments: []` and `fired: []` are different facts and both are written
+`hook_events: []` and `fired: []` are different facts and both are written
 `[LAW:nothing-unseen]`.

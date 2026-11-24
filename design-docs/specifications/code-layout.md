@@ -37,7 +37,7 @@ it importing them; `scenarios` is test only.
 | `root` | the composition root and the dispatcher every invocation passes through |
 | `command` | the command event and the command log |
 | `cli` | argv → typed command; rendering; exit statuses; `--json` |
-| `guidance` | moments → resolved handlers |
+| `guidance` | hook events → resolved handlers |
 | `verbs` | `get`/`set`/`add`/`rm` on typed addresses; the requirement gate; verb → intents; the echo |
 | `address` | path grammar; selectors; globs |
 | `evaluate` | derivations under the clock or the configuration: `held`, claim expiry, staleness, stage, rollup |
@@ -135,7 +135,7 @@ functions of (events, clock, entropy, argv, writer); the rest is the edge
    derivations, the echo. Refusal of any path refuses the whole.
 6. **Perform.** Append the intents to this checkout's log, or decline
    because `--dry-run` was given. Update the snapshot.
-7. **Speak.** Print the echo and run the handlers for the moments raised;
+7. **Speak.** Print the echo and run the handlers for the hook events raised;
    under `--json`, one object keyed by path.
 8. **Record** the command event: paths, expansion, verdicts, events,
    handlers fired and suppressed, cache hit or refold, timings, `dry_run`,
