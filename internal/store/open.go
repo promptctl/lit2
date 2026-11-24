@@ -163,7 +163,7 @@ func (s *Store) Heads() (Heads, error) {
 	if err != nil {
 		return Heads{}, err
 	}
-	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs), LogsRead: len(logs)}
+	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Removed), LogsRead: len(logs)}
 	unreadable := func(name string, why error) { h.Unreadable = append(h.Unreadable, Unreadable{Name: name, Why: why}) }
 	local := map[Ref]bool{}
 	for _, p := range logs {
@@ -175,7 +175,10 @@ func (s *Store) Heads() (Heads, error) {
 		local[st.Ref] = true
 		h.Streams = append(h.Streams, st)
 	}
-	for _, r := range refs {
+	for _, b := range refs.Removed {
+		unreadable(string(b.Name), b)
+	}
+	for _, r := range refs.Heads {
 		ref, err := ParseRef(r.Name)
 		if err != nil {
 			unreadable(string(r.Name), err)
@@ -185,9 +188,12 @@ func (s *Store) Heads() (Heads, error) {
 			continue // read from its log, which the publication is a prefix of
 		}
 		pub, log, err := s.publication(r.Target)
-		if err != nil {
+		if errors.As(err, new(NoPublication)) {
 			unreadable(string(r.Name), err)
 			continue
+		}
+		if err != nil {
+			return Heads{}, err
 		}
 		h.Streams = append(h.Streams, Stream{Ref: ref, Until: Position{Log: log, At: pub.end}, src: pub})
 	}
@@ -216,42 +222,69 @@ func (s *Store) logStream(p Path) (Stream, error) {
 // publication reads the publication a commit holds: its log, from the
 // message, and its segments, from the tree's names, each one's span
 // checked against its blob's size: segments that do not tile the stream
-// from 0 make no publication.
+// from 0 make no publication. What makes none is NoPublication; any other
+// failure is the repository's, and stops its reader.
 func (s *Store) publication(commit git.ObjectID) (published, LogID, error) {
+	// a missing object or one lit did not write is no publication; a
+	// failure to read is the repository's
+	none := func(err error) (published, LogID, error) {
+		if errors.As(err, new(git.MissingObject)) || errors.As(err, new(git.NotLit)) {
+			err = NoPublication{Commit: commit, Why: err}
+		}
+		return published{}, LogID{}, err
+	}
+	refused := func(why error) (published, LogID, error) {
+		return published{}, LogID{}, NoPublication{Commit: commit, Why: why}
+	}
 	c, err := s.ports.Objects.Commit(commit)
 	if err != nil {
-		return published{}, LogID{}, err
+		return none(err)
 	}
 	log, err := parseCommitMessage(c.Message)
 	if err != nil {
-		return published{}, LogID{}, err
+		return refused(err)
 	}
 	es, err := s.ports.Objects.Tree(c.Tree)
 	if err != nil {
-		return published{}, LogID{}, err
+		return none(err)
 	}
 	pub := published{segs: make([]Kept, len(es))}
 	for i, e := range es {
 		at, err := parseSegmentName(e.Name)
 		if err != nil {
-			return published{}, LogID{}, fmt.Errorf("tree %s: %w", c.Tree, err)
+			return refused(fmt.Errorf("tree %s: %w", c.Tree, err))
 		}
 		if at != pub.end {
-			return published{}, LogID{}, fmt.Errorf("tree %s: segment %s starts at %d, not at %d where the stream before it ends", c.Tree, e.Name, at, pub.end)
+			return refused(fmt.Errorf("tree %s: segment %s starts at %d, not at %d where the stream before it ends", c.Tree, e.Name, at, pub.end))
 		}
 		// the header alone, so reading heads inflates no segment
 		size, err := s.ports.Objects.BlobSize(e.Blob)
 		if err != nil {
-			return published{}, LogID{}, fmt.Errorf("tree %s: segment %s: %w", c.Tree, e.Name, err)
+			return none(err)
 		}
 		if size == 0 {
-			return published{}, LogID{}, fmt.Errorf("tree %s: segment %s holds no bytes", c.Tree, e.Name)
+			return refused(fmt.Errorf("tree %s: segment %s holds no bytes", c.Tree, e.Name))
 		}
 		pub.segs[i] = Kept{Span: Span{From: at, To: at + Offset(size)}, Blob: e.Blob}
 		pub.end = pub.segs[i].Span.To
 	}
 	return pub, log, nil
 }
+
+// NoPublication is a commit a ref names that holds no publication: lost
+// from the repository, not lit's, or segments that do not tile a stream.
+// It is the one failure a reader takes as an unreadable stream, and a
+// publish as a reason to reseal; every other failure stops them.
+type NoPublication struct {
+	Commit git.ObjectID
+	Why    error
+}
+
+func (n NoPublication) Error() string {
+	return fmt.Sprintf("commit %s holds no publication: %v", n.Commit, n.Why)
+}
+
+func (n NoPublication) Unwrap() error { return n.Why }
 
 // Range is a stream's bytes from From to its head.
 type Range struct {
@@ -332,7 +365,7 @@ func (s *Store) SealOwn() (Sealing, error) {
 	if err != nil {
 		return nil, err
 	}
-	kept, from, prior, err := s.prior(ref, st.Until)
+	kept, from, prior, was, err := s.prior(ref, st.Until)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +377,7 @@ func (s *Store) SealOwn() (Sealing, error) {
 	if len(segs) == 0 {
 		return NothingToPublish{Ref: ref, Log: st.Until.Log}, nil
 	}
-	p, err := NewPublication(ref, st.Until.Log, segs)
+	p, err := NewPublication(ref, was, st.Until.Log, segs)
 	if err != nil {
 		return nil, err
 	}
@@ -365,45 +398,57 @@ func (e ShorterThanPublished) Error() string {
 }
 
 // prior is what keepWithin keeps of ref's publication of the log now at
-// until, where sealing resumes, and what was kept. A ref whose
-// publication cannot be kept is resealed from 0, and the publish that
-// follows replaces it (the store's decision 11).
-func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, error) {
-	h, err := s.head(ref)
+// until, where sealing resumes, what was kept, and what the ref was when
+// read, which the publish replaces from. A ref holding no publication of
+// this log is resealed from 0, and the publish that follows replaces it
+// (the store's decision 11).
+func (s *Store) prior(ref Ref, until Position) ([]Kept, Offset, Prior, git.Was, error) {
+	h, removed, err := s.head(ref)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, nil, nil, err
 	}
 	switch h := h.(type) {
 	case git.Absent:
-		return nil, 0, NoPrior{}, nil
+		if removed != nil {
+			return nil, 0, Resealed{Why: *removed}, h, nil
+		}
+		return nil, 0, NoPrior{}, h, nil
 	case git.Named:
 		pub, log, err := s.publication(h.Target)
 		switch {
+		case errors.As(err, new(NoPublication)):
+			return nil, 0, Resealed{Why: err}, h, nil
 		case err != nil:
-			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s does not read: %w", h.Target, err)}, nil
+			return nil, 0, nil, nil, err
 		case log != until.Log:
-			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s", h.Target, log, until.Log)}, nil
+			return nil, 0, Resealed{Why: fmt.Errorf("its publication %s is of log %s, not %s", h.Target, log, until.Log)}, h, nil
 		case pub.end > until.At:
-			return nil, 0, nil, ShorterThanPublished{Ref: ref, Log: until.At, Published: pub.end}
+			return nil, 0, nil, nil, ShorterThanPublished{Ref: ref, Log: until.At, Published: pub.end}
 		}
 		kept, from := keepWithin(pub.segs, s.bound)
-		return kept, from, KeptFrom{Commit: h.Target}, nil
+		return kept, from, KeptFrom{Commit: h.Target}, h, nil
 	}
 	panic(fmt.Sprintf("store: %T is not what a ref was", h))
 }
 
-// head is what ref names now.
-func (s *Store) head(ref Ref) (git.Was, error) {
-	heads, err := s.ports.Refs.List(ref.Name())
+// head is what ref names now, and, if the listing removed it as broken,
+// why.
+func (s *Store) head(ref Ref) (git.Was, *git.BrokenRef, error) {
+	l, err := s.ports.Refs.List(ref.Name())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	for _, h := range heads {
+	for _, h := range l.Heads {
 		if h.Name == ref.Name() {
-			return git.Named{Target: h.Target}, nil
+			return git.Named{Target: h.Target}, nil, nil
 		}
 	}
-	return git.Absent{}, nil
+	for _, b := range l.Removed {
+		if b.Name == ref.Name() {
+			return git.Absent{}, &b, nil
+		}
+	}
+	return git.Absent{}, nil, nil
 }
 
 // RefMove is what a publish did to its ref.
@@ -439,17 +484,36 @@ type Published struct {
 }
 
 // Publish makes p the head of its ref as one parentless commit: its fresh
-// segments stored as blobs, one tree of every segment named by its start
-// offset, one commit whose message names the log, and the ref replaced
-// unless it names that commit already. The commit is a pure function of
-// the tree, so racing publishes of one log converge on one id.
+// segments stored as blobs in one write, one tree of every segment named
+// by its start offset, one commit whose message names the log, and the ref
+// replaced from what it was when p was sealed, unless it names that commit
+// already. The commit is a pure function of the tree, so racing publishes
+// of one log converge on one id, and a publish sealed before another
+// replaced the ref is refused rather than undoing it.
 func (s *Store) Publish(p Publication) (Published, error) {
 	out := Published{New: []git.ObjectID{}, Prior: p.prior}
+	var fresh [][]byte
+	for _, seg := range p.segs {
+		if f, ok := seg.(Fresh); ok {
+			fresh = append(fresh, f.Bytes)
+		}
+	}
+	puts, err := s.ports.Objects.PutBlobs(fresh)
+	if err != nil {
+		return Published{}, err
+	}
 	entries := make([]git.Entry, 0, len(p.segs))
 	for _, seg := range p.segs {
-		blob, err := s.store(seg, &out)
-		if err != nil {
-			return Published{}, err
+		var blob git.ObjectID
+		switch seg := seg.(type) {
+		case Kept:
+			out.Kept++
+			blob = seg.Blob
+		case Fresh:
+			out.Sealed++
+			put := puts[0]
+			puts, blob = puts[1:], put.ID
+			out.added(put.ID, put.Stored, len(seg.Bytes))
 		}
 		entries = append(entries, git.Entry{Name: segmentName(span(seg).From), Blob: blob})
 	}
@@ -463,15 +527,11 @@ func (s *Store) Publish(p Publication) (Published, error) {
 		return Published{}, err
 	}
 	out.added(commit, stored, 0)
-	h, err := s.head(p.ref)
-	if err != nil {
-		return Published{}, err
-	}
-	out.Commit, out.Move = commit, moved(h, commit)
+	out.Commit, out.Move = commit, moved(p.from, commit)
 	switch out.Move.(type) {
 	case RefUnchanged:
 	case RefCreated, RefReplaced:
-		if err := s.ports.Refs.Replace(p.ref.Name(), h, commit); err != nil {
+		if err := s.ports.Refs.Replace(p.ref.Name(), p.from, commit); err != nil {
 			return Published{}, err
 		}
 	}
@@ -490,24 +550,6 @@ func moved(h git.Was, to git.ObjectID) RefMove {
 		return RefCreated{}
 	}
 	panic(fmt.Sprintf("store: %T is not what a ref was", h))
-}
-
-// store is a segment's blob: a kept one's id, or a fresh one's bytes put.
-func (s *Store) store(seg Segment, out *Published) (git.ObjectID, error) {
-	switch seg := seg.(type) {
-	case Kept:
-		out.Kept++
-		return seg.Blob, nil
-	case Fresh:
-		out.Sealed++
-		id, stored, err := s.ports.Objects.PutBlob(seg.Bytes)
-		if err != nil {
-			return git.ObjectID{}, err
-		}
-		out.added(id, stored, len(seg.Bytes))
-		return id, nil
-	}
-	panic(fmt.Sprintf("store: %T is not a Segment", seg))
 }
 
 func (out *Published) added(id git.ObjectID, stored git.Stored, bytes int) {

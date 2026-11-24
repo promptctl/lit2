@@ -1,6 +1,7 @@
 package gittest
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,6 +70,14 @@ func Code(t *testing.T, fresh func(*testing.T) Commits) {
 		c.Commit(t, map[string][]byte{path: two})
 		ever(t, c, idTwo, true)
 		ever(t, c, idOne, false)
+	})
+	t.Run("an id of another format is refused, never answered no", func(t *testing.T) {
+		c := fresh(t)
+		c.Commit(t, map[string][]byte{path: one})
+		foreign := git.HashBlob(git.SHA256, one)
+		if got, err := c.EverAt(path, foreign); !errors.As(err, new(git.ForeignFormat)) {
+			t.Errorf("EverAt(%s) = %v, %v; want ForeignFormat", foreign, got, err)
+		}
 	})
 	t.Run("a blob at another path is not at this one", func(t *testing.T) {
 		c := fresh(t)

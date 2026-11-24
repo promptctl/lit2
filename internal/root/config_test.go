@@ -164,8 +164,9 @@ func TestInitAppliesTheFileThereOrRefusesIt(t *testing.T) {
 	}
 }
 
-// TestConfigCommitAppliesOnlyWhatHEADHolds: absent, untracked and changed
-// since HEAD are each refused naming the step; HEAD's file applies once.
+// TestConfigCommitAppliesOnlyWhatHEADHolds: absent, untracked, not a file
+// and changed since HEAD are each refused naming the step; HEAD's file
+// applies once.
 func TestConfigCommitAppliesOnlyWhatHEADHolds(t *testing.T) {
 	s := freshSession(t)
 	s.ok("admin", "init")
@@ -178,6 +179,12 @@ func TestConfigCommitAppliesOnlyWhatHEADHolds(t *testing.T) {
 	if r := s.refused("workspace", "config", "commit"); !strings.Contains(r.err, "git add .lit/workspace.toml") {
 		t.Errorf("a file HEAD does not hold: %q", r.err)
 	}
+	code := s.twin.Code
+	s.twin.Process.Code = func(git.Checkout) git.Code { return symlinked{Code: code} }
+	if r := s.refused("workspace", "config", "commit"); !strings.Contains(r.err, "HEAD holds .lit/workspace.toml as mode 120000, not a file") {
+		t.Errorf("a path HEAD holds as a symlink: %q", r.err)
+	}
+	s.twin.Process.Code = func(git.Checkout) git.Code { return code }
 	s.commit(next)
 	s.file(append(next, "# edited\n"...))
 	if r := s.refused("workspace", "config", "commit"); !strings.Contains(r.err, "git commit .lit/workspace.toml") {
@@ -332,6 +339,11 @@ func TestAVersionInForceThisReleaseCannotReadRefusesConfigCommit(t *testing.T) {
 		t.Errorf("config commit under an unreadable version: status %d, stderr %q, %d appends", r.status, r.err, appends(r.event))
 	}
 }
+
+// symlinked is a code repository whose HEAD holds every path as a symlink.
+type symlinked struct{ git.Code }
+
+func (symlinked) AtHead(string) (git.HeadBlob, error) { return git.NotAFile{Mode: "120000"}, nil }
 
 // unreadableHistory is a code repository whose history does not read.
 type unreadableHistory struct{ git.Code }

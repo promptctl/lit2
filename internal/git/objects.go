@@ -129,11 +129,37 @@ type RefHead struct {
 	Target ObjectID
 }
 
+// Listing is the refs under a prefix, sorted by name, and each broken ref
+// the listing removed.
+type Listing struct {
+	Heads   []RefHead
+	Removed []BrokenRef
+}
+
+// BrokenRef is a ref that named no object lit's repository holds, so the
+// listing removed it.
+type BrokenRef struct {
+	Name RefName
+	Why  string
+}
+
+func (b BrokenRef) Error() string {
+	return fmt.Sprintf("broken ref %s, as %s", b.Name, b.Why)
+}
+
+// Put is one object a put names: its id, and whether the put added it.
+type Put struct {
+	ID     ObjectID
+	Stored Stored
+}
+
 // Objects stores and reads blobs, trees and commits by object id in lit's
 // own object database, which is SHA-1 (the store's decision 11). An id of
 // another format is ForeignFormat; an id it does not hold is MissingObject.
 type Objects interface {
-	PutBlob(b []byte) (ObjectID, Stored, error)
+	// PutBlobs stores every blob of bs in one write, its Put for each in
+	// order.
+	PutBlobs(bs [][]byte) ([]Put, error)
 	Blob(id ObjectID) ([]byte, error)
 	// BlobSize reads the object's header only, so listing heads never
 	// inflates a segment.
@@ -149,9 +175,10 @@ type Objects interface {
 // replaced, never advanced, and only from what its writer read it naming,
 // so a replace that raced another fails rather than undoing it.
 type Refs interface {
-	// List is every ref under prefix, sorted by name: the ref the prefix
-	// names and every ref below it, as git for-each-ref matches a prefix.
-	List(prefix RefName) ([]RefHead, error)
+	// List is every ref under prefix: the ref the prefix names and every
+	// ref below it, as git for-each-ref matches a prefix. A broken ref is
+	// removed, never the listing's failure, and the listing says so.
+	List(prefix RefName) (Listing, error)
 	// Replace points name at to, an object the repository holds, if name
 	// still is what from says; otherwise it refuses.
 	Replace(name RefName, from Was, to ObjectID) error
@@ -214,10 +241,31 @@ func (m MissingObject) Error() string {
 	return fmt.Sprintf("object %s is not in lit's repository", m.ID)
 }
 
-// ForeignFormat is an id of a format lit's repository does not use, the
-// zero id's included.
-type ForeignFormat struct{ ID ObjectID }
+// NotLit is an object the repository holds that lit did not write: of
+// another kind than asked for, or of a shape lit's encoding never makes.
+type NotLit struct {
+	ID  ObjectID
+	Why string
+}
+
+func (n NotLit) Error() string { return fmt.Sprintf("object %s is %s", n.ID, n.Why) }
+
+// ForeignFormat is an id of another format than the repository it is asked
+// of, the zero id's included: it names nothing there, so it is refused,
+// never answered as an object missing.
+type ForeignFormat struct {
+	ID         ObjectID
+	Repository ObjectFormat
+}
 
 func (f ForeignFormat) Error() string {
-	return fmt.Sprintf("%s id %s cannot name an object in lit's sha1 repository", f.ID.format, f.ID)
+	return fmt.Sprintf("%s id %s cannot name an object in a %s repository", f.ID.format, f.ID, f.Repository)
+}
+
+// inFormat refuses an id that is not of format f.
+func inFormat(id ObjectID, f ObjectFormat) error {
+	if id.format != f {
+		return ForeignFormat{ID: id, Repository: f}
+	}
+	return nil
 }

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/store/storetest"
@@ -19,7 +18,7 @@ import (
 // refold reads. Each run is one invocation's, with its own git.
 func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 	const writers, batches, perBatch = 10, 2000, 10
-	c, env := gittest.Clone(b), gittest.Env(b)
+	c := gittest.Clone(b)
 	setup := gittest.Runner(b)
 	for w := range writers {
 		s := store.Open(store.CheckoutID{byte(w + 1)}, store.DiskPorts(setup, c, storetest.Entropy(byte(w))), store.DefaultSegmentBound)
@@ -45,8 +44,7 @@ func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 		}
 	}
 	open := func() *store.Store {
-		g := git.Find(env)
-		ports := store.DiskPorts(g, c, storetest.Entropy(0))
+		ports := store.DiskPorts(gittest.Runner(b), c, storetest.Entropy(0))
 		ports.Files = store.NewMemoryFiles()
 		return store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound)
 	}

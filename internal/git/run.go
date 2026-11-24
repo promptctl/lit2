@@ -28,6 +28,9 @@ type Git struct {
 	env []string
 	mu  sync.Mutex
 	log []Spawn
+	// floor is whether this git keeps lit's repository durable, asked once,
+	// before its first write.
+	floor func() error
 }
 
 // Spawn is one git process as the command's event records it: its
@@ -58,6 +61,13 @@ func (Unstarted) ended() {}
 // lit2 happens to run, so it names no git, as Go's os/exec refuses one.
 func Find(env []string) *Git {
 	g := &Git{env: env, log: []Spawn{}}
+	g.floor = sync.OnceValue(func() error {
+		out, err := g.run("", g.litEnv(), nil, "version")
+		if err != nil {
+			return err
+		}
+		return atFloor(string(out))
+	})
 	for _, kv := range env {
 		path, ok := strings.CutPrefix(kv, "PATH=")
 		if !ok {
@@ -75,6 +85,23 @@ func Find(env []string) *Git {
 	}
 	g.missing = errors.New("git is not in an absolute directory on PATH: lit2 writes its repository and reads the code repository through the user's git")
 	return g
+}
+
+// durable refuses a git older than 2.36, which takes core.fsync without a
+// word and fsyncs no ref, so lit's repository would be less durable than
+// it is set to be. Every write of lit's repository asks it first.
+func (g *Git) durable() error { return g.floor() }
+
+// floor is the oldest git that honors core.fsync.
+var floor = [2]int{2, 36}
+
+// atFloor refuses a git whose git version says it is older than floor.
+func atFloor(version string) error {
+	var v [2]int
+	if _, err := fmt.Sscanf(version, "git version %d.%d", &v[0], &v[1]); err != nil || v[0] < floor[0] || v[0] == floor[0] && v[1] < floor[1] {
+		return fmt.Errorf("lit2 needs git %d.%d or later to keep its repository durable; %q is what git says it is", floor[0], floor[1], strings.TrimSpace(version))
+	}
+	return nil
 }
 
 // Spawns is the record of every git process this Git ran or tried to, in
@@ -98,9 +125,13 @@ func (r Refused) Error() string {
 func (r Refused) Unwrap() error { return r.Err }
 
 // userEnv is the environment the user's own repositories are read under:
-// the process's, so git finds and reads them as it does for the user, and
-// messages in the C locale, so a refusal reads the same everywhere.
-func (g *Git) userEnv() []string { return append(slices.Clone(g.env), "LC_ALL=C") }
+// the process's, so git finds and reads them as it does for the user;
+// messages in the C locale, so a refusal reads the same everywhere; and no
+// lazy fetch, so an object a partial clone lacks is git's error, never a
+// foreground trip to its remote.
+func (g *Git) userEnv() []string {
+	return append(slices.Clone(g.env), "LC_ALL=C", "GIT_NO_LAZY_FETCH=1")
+}
 
 // litEnv is the environment lit's repository is written under: no GIT_
 // variable of the caller's, which a hook sets to redirect objects into
@@ -115,8 +146,11 @@ func (g *Git) litEnv() []string {
 // stdin, and is its stdout, or Refused. Every attempt is recorded, one
 // that never started included.
 func (g *Git) run(dir string, env []string, stdin []byte, args ...string) ([]byte, error) {
-	s := Spawn{Args: slices.Clone(args)}
-	out, err := g.exec(dir, env, stdin, &s)
+	s := Spawn{Args: make([]string, len(args))}
+	for i, a := range args {
+		s.Args[i] = credentials.ReplaceAllString(a, "${1}***@")
+	}
+	out, err := g.exec(dir, env, stdin, args, &s)
 	g.mu.Lock()
 	g.log = append(g.log, s)
 	g.mu.Unlock()
@@ -126,13 +160,14 @@ func (g *Git) run(dir string, env []string, stdin []byte, args ...string) ([]byt
 	return out, nil
 }
 
-// exec runs one git process and fills in how s ended.
-func (g *Git) exec(dir string, env []string, stdin []byte, s *Spawn) ([]byte, error) {
+// exec runs one git process on args and fills in how s, their record,
+// ended.
+func (g *Git) exec(dir string, env []string, stdin []byte, args []string, s *Spawn) ([]byte, error) {
 	if g.missing != nil {
 		s.Ended = Unstarted{Why: g.missing.Error()}
 		return nil, g.missing
 	}
-	cmd := exec.Command(g.bin, s.Args...)
+	cmd := exec.Command(g.bin, args...)
 	cmd.Dir, cmd.Env, cmd.Stdin = dir, env, bytes.NewReader(stdin)
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr

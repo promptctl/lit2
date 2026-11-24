@@ -20,10 +20,7 @@ var minted = map[command.File]string{command.IDFile{}: string(twinID.FileText())
 // path, holding each identity file given with its text and no other.
 func checkout(t *testing.T, files map[command.File]string) string {
 	t.Helper()
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := gittest.Physical(t)
 	gittest.Git(t, dir, "init", "-q")
 	c := git.Checkout{WorkTree: dir, GitDir: filepath.Join(dir, ".git"), CommonDir: filepath.Join(dir, ".git")}
 	for f, text := range files {

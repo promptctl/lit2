@@ -732,7 +732,9 @@ decided in the body.
   process and no pipe round trip per object; git creates that repository
   in the one format go-git reads whole: SHA-1, refs as files, no automatic
   gc, and every object and ref fsynced, which needs git 2.36 or later, so
-  creating it refuses an older git. The first budget run measures go-git's
+  lit refuses an older git before any write. A ref naming no object, which
+  git never writes and refuses to update or delete, a listing removes,
+  and its writer's next publish makes it again. The first budget run measures go-git's
   object walk on the depth corpus.
 - **C. `topic`.** A built-in settable field, one short word that groups
   items across the tree and renders in the id, kept from v1 because a

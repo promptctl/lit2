@@ -59,7 +59,10 @@ These are settled. Do not reopen them in the design.
 4. **Permissive licensing only; the user's git writes, and transports in
    the background.** No copyleft dependencies; linked libraries must be
    permissive. The user's own `git` binary is the one writer of lit's
-   repository, so git owns its formats, locks and fsync, and the one reader
+   repository, so git owns its formats, locks and fsync, but for one
+   removal: a ref naming no object, which git neither updates nor deletes,
+   lit removes, and its writer publishes it again, so lit's repository
+   never needs mending by hand. git is also the one reader
    of the code repository, so lit finds and reads what git finds and reads
    there. lit reads its own repository's objects and refs in-process through
    such a library, which never touches the network, so a read costs no

@@ -111,16 +111,6 @@ func TestAHeadNamingAMissingObjectIsAnError(t *testing.T) {
 	}
 }
 
-// An id of another format than the code repository's names nothing in it,
-// refused, never answered no.
-func TestEverAtRefusesAnIDOfAnotherFormat(t *testing.T) {
-	repo := gittest.NewRepo(t)
-	repo.Commit(t, map[string][]byte{"f": []byte("x\n")})
-	if ever, err := repo.EverAt("f", git.HashBlob(git.SHA256, []byte("x\n"))); err == nil || !strings.Contains(err.Error(), "sha256") {
-		t.Errorf("EverAt(a sha256 id) in a sha1 repository = %v, %v; want a refusal naming the format", ever, err)
-	}
-}
-
 // TestAShallowCloneSaysWhatItCannotKnow: a blob before the boundary is
 // found; one the walk must pass the boundary for is unknown, refused naming
 // the shallow clone, never answered no.

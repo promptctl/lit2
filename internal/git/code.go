@@ -109,8 +109,8 @@ func regular(mode string) bool { return mode == fileMode || mode == "100755" }
 // found in a shallow clone may be past its boundary, so the answer is
 // unknown, refused as such, never answered no.
 func (r codeRepo) EverAt(path string, id ObjectID) (bool, error) {
-	if id.Format() != r.c.Format {
-		return false, fmt.Errorf("%s is a %s id, which names nothing in this %s repository", id, id.Format(), r.c.Format)
+	if err := inFormat(id, r.c.Format); err != nil {
+		return false, err
 	}
 	commit, ok, err := r.head()
 	if err != nil || !ok {
@@ -175,6 +175,9 @@ func (m *CodeMemory) AtHead(path string) (HeadBlob, error) {
 }
 
 func (m *CodeMemory) EverAt(path string, id ObjectID) (bool, error) {
+	if err := inFormat(id, SHA1); err != nil {
+		return false, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, c := range m.commits {

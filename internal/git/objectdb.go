@@ -75,9 +75,11 @@ type backend interface {
 	look(id ObjectID) (kind, uint64, error)
 	// read is its kind and bytes, or MissingObject.
 	read(id ObjectID) (kind, []byte, error)
-	// write stores o and is the id the backend gave it.
-	write(o object) (ObjectID, error)
-	list(prefix RefName) ([]RefHead, error)
+	// write stores objs and is the id the backend gave each, in order: in
+	// one step for any number of them, so a publish's cost in git
+	// processes does not grow with what it writes.
+	write(objs []object) ([]ObjectID, error)
+	list(prefix RefName) (Listing, error)
 	// replace points name at to if it still is what from says.
 	replace(name RefName, from Was, to ObjectID) error
 }
@@ -85,7 +87,13 @@ type backend interface {
 // repo is lit's repository over a backend: its Objects and Refs.
 type repo struct{ b backend }
 
-func (r repo) PutBlob(b []byte) (ObjectID, Stored, error) { return r.put(blob(b)) }
+func (r repo) PutBlobs(bs [][]byte) ([]Put, error) {
+	objs := make([]object, len(bs))
+	for i, b := range bs {
+		objs[i] = blob(b)
+	}
+	return r.put(objs)
+}
 
 func (r repo) Blob(id ObjectID) ([]byte, error) { return r.content(blobKind, id) }
 
@@ -109,7 +117,7 @@ func (r repo) PutTree(es []Entry) (ObjectID, Stored, error) {
 			return ObjectID{}, 0, err
 		}
 	}
-	return r.put(tree(sorted))
+	return r.putOne(tree(sorted))
 }
 
 // Tree reads a lit tree: what lit's encoding writes, and nothing else, so
@@ -124,18 +132,16 @@ func (r repo) Tree(id ObjectID) ([]Entry, error) {
 		mode, after, _ := bytes.Cut(rest, []byte(" "))
 		n, after, _ := bytes.Cut(after, []byte{0})
 		if string(mode) != fileMode || !name.Match(n) || len(after) < 20 {
-			return nil, fmt.Errorf("tree %s: not a lit tree", id)
+			return nil, NotLit{ID: id, Why: "a tree lit did not write"}
 		}
 		blob, _ := ObjectIDFrom(SHA1, after[:20])
 		es, rest = append(es, Entry{Name: string(n), Blob: blob}), after[20:]
 	}
-	_, again := tree(es).encode()
-	strict := true
+	// the entries' bytes are all read above, so only their order is left
 	for i := 1; i < len(es); i++ {
-		strict = strict && byName(es[i-1], es[i]) < 0
-	}
-	if !bytes.Equal(again, b) || !strict {
-		return nil, fmt.Errorf("tree %s: not a lit tree", id)
+		if byName(es[i-1], es[i]) >= 0 {
+			return nil, NotLit{ID: id, Why: "a tree lit did not write"}
+		}
 	}
 	return es, nil
 }
@@ -145,7 +151,7 @@ func (r repo) PutCommit(c Commit) (ObjectID, Stored, error) {
 	if _, err := r.holds(treeKind, c.Tree); err != nil {
 		return ObjectID{}, 0, err
 	}
-	return r.put(commit(c))
+	return r.putOne(commit(c))
 }
 
 // Commit reads a lit commit: its tree, lit's identity at time zero, no
@@ -161,15 +167,15 @@ func (r repo) Commit(id ObjectID) (Commit, error) {
 	msg, okShape := strings.CutPrefix(rest, identity+"\n")
 	t, err := ParseObjectID(SHA1, tree)
 	if !ok || !okShape || err != nil {
-		return Commit{}, fmt.Errorf("commit %s: not a lit commit", id)
+		return Commit{}, NotLit{ID: id, Why: "a commit lit did not write"}
 	}
 	return Commit{Tree: t, Message: msg}, nil
 }
 
-// List is every ref under prefix, sorted by name.
-func (r repo) List(prefix RefName) ([]RefHead, error) {
+// List is every ref under prefix.
+func (r repo) List(prefix RefName) (Listing, error) {
 	if err := parsePrefix(prefix); err != nil {
-		return nil, err
+		return Listing{}, err
 	}
 	return r.b.list(prefix)
 }
@@ -189,27 +195,49 @@ func (r repo) Replace(name RefName, from Was, to ObjectID) error {
 	return r.b.replace(name, from, to)
 }
 
-// put stores o unless the repository holds it already; content addressing
-// makes a second write of one object the same object. The backend's id
-// must be the one lit computed: git is the oracle of every id lit names.
-func (r repo) put(o object) (ObjectID, Stored, error) {
-	id := idOf(o)
-	_, _, err := r.b.look(id)
-	if err == nil {
-		return id, Existing, nil
-	}
-	if !errors.As(err, new(MissingObject)) {
-		return ObjectID{}, 0, err
-	}
-	got, err := r.b.write(o)
+func (r repo) putOne(o object) (ObjectID, Stored, error) {
+	ps, err := r.put([]object{o})
 	if err != nil {
 		return ObjectID{}, 0, err
 	}
-	if got != id {
-		k, _ := o.encode()
-		return ObjectID{}, 0, fmt.Errorf("git stored a %s as %s; lit computes %s", k, got, id)
+	return ps[0].ID, ps[0].Stored, nil
+}
+
+// put stores each of objs the repository does not hold already, all in one
+// write; content addressing makes a second write of one object the same
+// object. The backend's ids must be the ones lit computed: git is the
+// oracle of every id lit names.
+func (r repo) put(objs []object) ([]Put, error) {
+	ps := make([]Put, len(objs))
+	var fresh []object
+	var at []int
+	queued := map[ObjectID]bool{}
+	for i, o := range objs {
+		ps[i] = Put{ID: idOf(o), Stored: Existing}
+		if queued[ps[i].ID] {
+			continue
+		}
+		_, _, err := r.b.look(ps[i].ID)
+		if errors.As(err, new(MissingObject)) {
+			ps[i].Stored, queued[ps[i].ID] = New, true
+			fresh, at = append(fresh, o), append(at, i)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	return id, New, nil
+	got, err := r.b.write(fresh)
+	if err != nil {
+		return nil, err
+	}
+	for j, id := range got {
+		if want := ps[at[j]].ID; id != want {
+			k, _ := fresh[j].encode()
+			return nil, fmt.Errorf("git stored a %s as %s; lit computes %s", k, id, want)
+		}
+	}
+	return ps, nil
 }
 
 // holds is the size of the object of kind k id names, refusing an id the
@@ -220,7 +248,7 @@ func (r repo) holds(k kind, id ObjectID) (uint64, error) {
 	}
 	got, size, err := r.b.look(id)
 	if err == nil && got != k {
-		err = fmt.Errorf("object %s is a %s, not a %s", id, got, k)
+		err = NotLit{ID: id, Why: fmt.Sprintf("a %s, not a %s", got, k)}
 	}
 	return size, err
 }
@@ -234,16 +262,11 @@ func (r repo) content(k kind, id ObjectID) ([]byte, error) {
 		return nil, err
 	}
 	if got != k {
-		return nil, fmt.Errorf("object %s is a %s, not a %s", id, got, k)
+		return nil, NotLit{ID: id, Why: fmt.Sprintf("a %s, not a %s", got, k)}
 	}
 	return b, nil
 }
 
 // own refuses an id of another format, or the zero id: lit's repository is
 // SHA-1, so neither names anything in it.
-func own(id ObjectID) error {
-	if id.format != SHA1 {
-		return ForeignFormat{ID: id}
-	}
-	return nil
-}
+func own(id ObjectID) error { return inFormat(id, SHA1) }

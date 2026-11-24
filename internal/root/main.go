@@ -110,7 +110,7 @@ func opening(p command.Place, open func(git.Checkout, command.Minted) command.Op
 }
 
 // diskStore opens a minted checkout's store over its clone's common dir on
-// disk, beside the code repository's object format, read once.
+// disk, lit's repository written by g.
 func diskStore(g *git.Git, entropy io.Reader) func(git.Checkout, command.Minted) command.Opening {
 	return func(c git.Checkout, id command.Minted) command.Opening {
 		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(g, c, entropy), store.DefaultSegmentBound)}

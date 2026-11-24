@@ -47,25 +47,29 @@ func (m *memory) read(id ObjectID) (kind, []byte, error) {
 	return o.kind, slices.Clone(o.bytes), nil
 }
 
-func (m *memory) write(o object) (ObjectID, error) {
-	k, b := o.encode()
-	id := hashObject(SHA1, k, b)
+func (m *memory) write(objs []object) ([]ObjectID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.objects[id] = stored{kind: k, bytes: slices.Clone(b)}
-	return id, nil
+	ids := make([]ObjectID, len(objs))
+	for i, o := range objs {
+		k, b := o.encode()
+		ids[i] = hashObject(SHA1, k, b)
+		m.objects[ids[i]] = stored{kind: k, bytes: slices.Clone(b)}
+	}
+	return ids, nil
 }
 
-func (m *memory) list(prefix RefName) ([]RefHead, error) {
+// list removes nothing: the twin's refs are a map, so none is ever broken.
+func (m *memory) list(prefix RefName) (Listing, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	heads := []RefHead{}
+	l := Listing{Heads: []RefHead{}, Removed: []BrokenRef{}}
 	for _, n := range slices.Sorted(maps.Keys(m.refs)) {
 		if under(n, prefix) {
-			heads = append(heads, RefHead{Name: n, Target: m.refs[n]})
+			l.Heads = append(l.Heads, RefHead{Name: n, Target: m.refs[n]})
 		}
 	}
-	return heads, nil
+	return l, nil
 }
 
 // replace refuses as git update-ref does: a ref that no longer is what

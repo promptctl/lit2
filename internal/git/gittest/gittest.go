@@ -21,6 +21,25 @@ func ID(t *testing.T, s string) git.ObjectID {
 	return id
 }
 
+// Put stores the one blob b in db, for a test that needs a blob there.
+func Put(db git.Objects, b []byte) (git.ObjectID, error) {
+	ps, err := db.PutBlobs([][]byte{b})
+	if err != nil {
+		return git.ObjectID{}, err
+	}
+	return ps[0].ID, nil
+}
+
+// PutBlob is Put, failing the test on an error.
+func PutBlob(t testing.TB, db git.Objects, b []byte) git.ObjectID {
+	t.Helper()
+	id, err := Put(db, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // The ids git gives these objects, as git hash-object prints them.
 const (
 	helloBlob = "ce013625030ba8dba906f756967f9e9ca394464a" // "hello\n"
@@ -46,13 +65,14 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 			content string
 			id      string
 		}{{"hello\n", helloBlob}, {"", emptyBlob}} {
-			id, stored, err := db.PutBlob([]byte(c.content))
-			if err != nil || id != ID(t, c.id) || stored != git.New {
-				t.Errorf("PutBlob(%q) = %v, %v, %v; want %s, New", c.content, id, stored, err, c.id)
+			ps, err := db.PutBlobs([][]byte{[]byte(c.content)})
+			if err != nil || len(ps) != 1 || ps[0] != (git.Put{ID: ID(t, c.id), Stored: git.New}) {
+				t.Fatalf("PutBlobs(%q) = %v, %v; want %s, New", c.content, ps, err, c.id)
 			}
-			again, stored, err := db.PutBlob([]byte(c.content))
-			if err != nil || again != id || stored != git.Existing {
-				t.Errorf("a second PutBlob(%q) = %v, %v, %v; want %s, Existing", c.content, again, stored, err, id)
+			id := ps[0].ID
+			again, err := db.PutBlobs([][]byte{[]byte(c.content)})
+			if err != nil || len(again) != 1 || again[0] != (git.Put{ID: id, Stored: git.Existing}) {
+				t.Errorf("a second PutBlobs(%q) = %v, %v; want %s, Existing", c.content, again, err, id)
 			}
 			b, err := db.Blob(id)
 			if err != nil || string(b) != c.content {
@@ -62,6 +82,18 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 			if err != nil || size != uint64(len(c.content)) {
 				t.Errorf("BlobSize(%s) = %d, %v; want %d", id, size, err, len(c.content))
 			}
+		}
+	})
+	t.Run("a batch is put in one call: each blob's id in order, and New only for the first of each the repository lacked", func(t *testing.T) {
+		db := fresh(t)
+		held := PutBlob(t, db, []byte("hello\n"))
+		ps, err := db.PutBlobs([][]byte{nil, []byte("hello\n"), nil, []byte("x")})
+		want := []git.Put{{ID: ID(t, emptyBlob), Stored: git.New}, {ID: held, Stored: git.Existing}, {ID: ID(t, emptyBlob), Stored: git.Existing}, {ID: git.HashBlob(git.SHA1, []byte("x")), Stored: git.New}}
+		if err != nil || !slices.Equal(ps, want) {
+			t.Errorf("PutBlobs = %v, %v; want %v", ps, err, want)
+		}
+		if ps, err := db.PutBlobs(nil); err != nil || len(ps) != 0 {
+			t.Errorf("PutBlobs(nothing) = %v, %v; want nothing", ps, err)
 		}
 	})
 	t.Run("an id it does not hold is missing", func(t *testing.T) {
@@ -79,7 +111,7 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 	})
 	t.Run("a repository holds the empty tree, as every git repository does", func(t *testing.T) {
 		db := fresh(t)
-		if _, _, err := db.PutBlob(nil); err != nil {
+		if _, err := db.PutBlobs([][]byte{nil}); err != nil {
 			t.Fatal(err)
 		}
 		if es, err := db.Tree(ID(t, emptyTree)); err != nil || len(es) != 0 {
@@ -92,8 +124,7 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 		if err != nil || empty != ID(t, emptyTree) {
 			t.Errorf("PutTree(nil) = %v, %v; want git's empty tree %s", empty, err, emptyTree)
 		}
-		hello, _, _ := db.PutBlob([]byte("hello\n"))
-		nothing, _, _ := db.PutBlob(nil)
+		hello, nothing := PutBlob(t, db, []byte("hello\n")), PutBlob(t, db, nil)
 		es := []git.Entry{{Name: "b", Blob: hello}, {Name: "a", Blob: nothing}}
 		id, stored, err := db.PutTree(es)
 		if err != nil || stored != git.New {
@@ -110,7 +141,7 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 	})
 	t.Run("a tree git would refuse is refused", func(t *testing.T) {
 		db := fresh(t)
-		blob, _, _ := db.PutBlob([]byte("x"))
+		blob := PutBlob(t, db, []byte("x"))
 		for _, es := range [][]git.Entry{{{Name: "a", Blob: blob}, {Name: "a", Blob: blob}}} {
 			if _, _, err := db.PutTree(es); err == nil {
 				t.Errorf("PutTree(%v) stored a tree", es)
@@ -124,7 +155,7 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 	})
 	t.Run("an object of one kind is never read or named as another", func(t *testing.T) {
 		db := fresh(t)
-		blob, _, _ := db.PutBlob([]byte("x"))
+		blob := PutBlob(t, db, []byte("x"))
 		tree, _, _ := db.PutTree([]git.Entry{{Name: "a", Blob: blob}})
 		commit, _, _ := db.PutCommit(git.Commit{Tree: tree, Message: "m\n"})
 		_, errBlob := db.Blob(tree)
@@ -210,20 +241,17 @@ func Refused() []git.RefName {
 func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 	objects := func(t *testing.T, r Repository) (a, b git.ObjectID) {
 		t.Helper()
-		a, _, errA := r.PutBlob([]byte("hello\n"))
-		b, _, errB := r.PutBlob(nil)
-		if err := errors.Join(errA, errB); err != nil {
-			t.Fatal(err)
-		}
-		return a, b
+		return PutBlob(t, r, []byte("hello\n")), PutBlob(t, r, nil)
 	}
+	// list is the refs under prefix, every one whole, as lit's own writes
+	// leave them
 	list := func(t *testing.T, refs git.Refs, prefix git.RefName) []git.RefHead {
 		t.Helper()
-		heads, err := refs.List(prefix)
-		if err != nil {
-			t.Fatalf("List(%s) = %v, %v", prefix, heads, err)
+		l, err := refs.List(prefix)
+		if err != nil || len(l.Removed) != 0 {
+			t.Fatalf("List(%s) = %+v, %v", prefix, l, err)
 		}
-		return heads
+		return l.Heads
 	}
 	t.Run("a fresh repository holds no ref", func(t *testing.T) {
 		if heads := list(t, fresh(t), "refs/lit/"); len(heads) != 0 {

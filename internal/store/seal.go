@@ -45,16 +45,18 @@ func span(s Segment) Span {
 // Publication with different values `[LAW:one-type-per-behavior]`.
 type Publication struct {
 	ref   Ref
+	from  git.Was
 	log   LogID
 	segs  []Segment
 	prior Prior
 }
 
-// NewPublication is the publication of segs on ref for log, refusing
-// segments that leave a gap, overlap, or hold no bytes, and no segment at
-// all, which would publish an empty tree. Its caller built every segment,
-// so it read no prior publication.
-func NewPublication(ref Ref, log LogID, segs []Segment) (Publication, error) {
+// NewPublication is the publication of segs on ref for log, replacing the
+// ref from what it was when its caller read it, refusing segments that
+// leave a gap, overlap, or hold no bytes, and no segment at all, which
+// would publish an empty tree. Its caller built every segment, so it read
+// no prior publication.
+func NewPublication(ref Ref, from git.Was, log LogID, segs []Segment) (Publication, error) {
 	if len(segs) == 0 {
 		return Publication{}, fmt.Errorf("a publication of %s holds no segment", ref.Name())
 	}
@@ -69,7 +71,7 @@ func NewPublication(ref Ref, log LogID, segs []Segment) (Publication, error) {
 		}
 		at = sp.To
 	}
-	return Publication{ref: ref, log: log, segs: segs, prior: NoPrior{}}, nil
+	return Publication{ref: ref, from: from, log: log, segs: segs, prior: NoPrior{}}, nil
 }
 
 // Prior is what a publication kept of the one its ref held before it.

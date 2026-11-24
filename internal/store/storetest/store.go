@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
 )
 
@@ -293,6 +294,34 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 	})
 
+	t.Run("a publication sealed before another publish of its log is refused, and the ref keeps the later one", func(t *testing.T) {
+		t.Parallel()
+		p := fresh(t)
+		s := store.Open(a, p, store.DefaultSegmentBound)
+		AppendAll(t, s, Numbered(t, 3, "first")...)
+		sealed, err := s.SealOwn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale, ok := sealed.(store.Publication)
+		if !ok {
+			t.Fatalf("sealing the own log made %#v; want a publication", sealed)
+		}
+		AppendAll(t, s, Numbered(t, 3, "more")...)
+		later := PublishOwn(t, s)
+		if out, err := s.Publish(stale); err == nil {
+			t.Fatalf("publishing what was sealed before the later publish was %+v; want it refused", out)
+		}
+		ref := store.WriterRef{Checkout: a}
+		got, err := p.Refs.List(ref.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []git.RefHead{{Name: ref.Name(), Target: later.Commit}}; !slices.Equal(got.Heads, want) {
+			t.Errorf("after the refused publish the ref is %v; want the later publish's %v", got, want)
+		}
+	})
+
 	t.Run("a log with no whole frame has nothing to publish, and makes no ref", func(t *testing.T) {
 		t.Parallel()
 		p := fresh(t)
@@ -317,7 +346,7 @@ func Store(t *testing.T, fresh Fresh) {
 		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
 			t.Errorf("sealing a log with no whole frame made %#v, %v; want %#v", sealed, err, want)
 		}
-		if refs, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs) != 0 {
+		if refs, err := crashed.Refs.List("refs/lit/"); err != nil || len(refs.Heads)+len(refs.Removed) != 0 {
 			t.Errorf("with nothing to publish the refs are %v, %v; want none", refs, err)
 		}
 	})
@@ -329,7 +358,7 @@ func Store(t *testing.T, fresh Fresh) {
 		bs := Numbered(t, 10, "event")
 		AppendAll(t, s, bs...)
 		ref := store.WriterRef{Checkout: a}
-		held, _, err := p.Objects.PutBlob([]byte("not a commit"))
+		held, err := gittest.Put(p.Objects, []byte("not a commit"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -380,9 +409,9 @@ func Store(t *testing.T, fresh Fresh) {
 		p := fresh(t)
 		s := store.Open(a, p, store.DefaultSegmentBound)
 		inbox := store.InboxRef{Inbox: store.InboxID{1}}
-		publish := func(log store.LogID, records ...string) store.Published {
+		publish := func(from git.Was, log store.LogID, records ...string) store.Published {
 			t.Helper()
-			pub, err := store.NewPublication(inbox, log, []store.Segment{store.Fresh{Start: 0, Bytes: store.Encode(batch(t, records...))}})
+			pub, err := store.NewPublication(inbox, from, log, []store.Segment{store.Fresh{Start: 0, Bytes: store.Encode(batch(t, records...))}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -392,11 +421,11 @@ func Store(t *testing.T, fresh Fresh) {
 			}
 			return out
 		}
-		filed := publish(store.LogID{1}, "filed", "remotely")
+		filed := publish(git.Absent{}, store.LogID{1}, "filed", "remotely")
 		if got := Read(Whole(t, s, inbox)); filed.Move != (store.RefCreated{}) || !slices.Equal(got, []string{"filed", "remotely"}) {
 			t.Errorf("the inbox reads %v after %+v; want its two records", got, filed)
 		}
-		rewrite := publish(store.LogID{2}, "filed")
+		rewrite := publish(git.Named{Target: filed.Commit}, store.LogID{2}, "filed")
 		if rewrite.Move != (store.RefReplaced{Previous: filed.Commit}) {
 			t.Errorf("the rewrite's publish was %+v; want it to replace the ref", rewrite)
 		}
@@ -421,7 +450,8 @@ func Store(t *testing.T, fresh Fresh) {
 		}
 		PublishOwn(t, sa)
 		PublishOwn(t, sb)
-		refs, err := p.Refs.List("refs/lit/")
+		l, err := p.Refs.List("refs/lit/")
+		refs := l.Heads
 		if err != nil || len(refs) != 2 || refs[0].Name != (store.WriterRef{Checkout: a}).Name() || refs[1].Name != (store.WriterRef{Checkout: b}).Name() {
 			t.Errorf("after both publish the refs are %v, %v; want one per checkout", refs, err)
 		}
