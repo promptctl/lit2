@@ -90,7 +90,7 @@ func ParseKeyFile(b []byte) (Key, error) {
 	}
 	text, ok := bytes.CutPrefix(b, []byte(keyFile))
 	if !ok {
-		return Key{}, fmt.Errorf("the key file starts with its suite, ed25519: %w", errKeyFileSuite)
+		return Key{}, fmt.Errorf("the key file does not start with its suite, ed25519: %w", errKeyFileSuite)
 	}
 	text, ok = bytes.CutSuffix(text, []byte("\n"))
 	if !ok {

@@ -380,11 +380,11 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 				t.Fatal(err)
 			}
 		}
-		// This refusal is git's alone on disk, so it has no identity of
-		// lit's: each refused call is paired with the same call in the same
+		// On disk this refusal is git's own, with no identity lit can read,
+		// so each refused call is paired with the same call in the same
 		// state, its name alone changed so no ref is its directory or under
 		// it, which is taken.
-		// [LAW:verifiable-goals] exception: on disk git alone enforces this; proven by its minimal pair
+		// [LAW:verifiable-goals] exception: git's refusal, with no identity lit can read; proven by its minimal pair
 		for _, c := range []struct{ refused, taken git.RefName }{
 			{"refs/lit/a/b", "refs/lit/d/b"},
 			{"refs/lit/b", "refs/lit/e"},

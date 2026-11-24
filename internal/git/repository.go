@@ -440,7 +440,14 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	if err := d.g.durable(); err != nil {
 		return err
 	}
-	_, err := d.git(d.dir, nil, "update-ref", string(name), to.String(), old)
+	// git waits for another publish that holds the ref's lock, so it reads
+	// the ref only once that publish has moved it, and refuses it stale;
+	// left at git's 100ms, a publish slower than that would find the ref
+	// still from, and its git's refusal to lock would stand for the stale
+	// one, failing a publish of the state the winner already made. 10s is
+	// far past one update-ref's hold of a lock, so only a holder git
+	// itself would never wait out, one killed with its lock left, outlasts it
+	_, err := d.git(d.dir, nil, "-c", "core.filesRefLockTimeout="+refLockWait, "update-ref", string(name), to.String(), old)
 	if err == nil {
 		return nil
 	}
@@ -456,6 +463,10 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	}
 	return err
 }
+
+// refLockWait is how long, in milliseconds, update-ref waits for another
+// holder of a ref's lock.
+const refLockWait = "10000"
 
 // was is what the ref name names now, as go-git reads it.
 func (d *onDisk) was(name RefName) (Was, error) {

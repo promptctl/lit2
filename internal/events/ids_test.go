@@ -3,6 +3,7 @@ package events
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"slices"
@@ -225,8 +226,8 @@ func TestEverySubjectRoundTripsAndNoOtherShapeReads(t *testing.T) {
 	}{
 		"an element of the root": {subject(func(w *wire.Writer) { w.Bytes(subjectElement, anElement.b[:]) }), errRootNamesPart},
 		"a segment of the root":  {subject(func(w *wire.Writer) { w.Uvarint(subjectWidth, 3) }), errRootNamesPart},
-		"a short item id":        {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:15]) }), wrongSize{What: "an id", Got: 15, Want: 16}},
-		"a long element id":      {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Bytes(subjectElement, make([]byte, 17)) }), wrongSize{What: "an id", Got: 17, Want: 16}},
+		"a short item id":        {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:15]) }), wrongSize{What: partItem}},
+		"a long element id":      {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Bytes(subjectElement, make([]byte, 17)) }), wrongSize{What: partElement}},
 		"a two-digit segment":    {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 2) }), errWidth},
 		"a segment past the id":  {subject(func(w *wire.Writer) { w.Bytes(subjectItem, anItem.b[:]); w.Uvarint(subjectWidth, 27) }), errWidth},
 	} {
@@ -314,7 +315,10 @@ func TestAnEventIDReadsBackAndAShortOneIsRefused(t *testing.T) {
 	if got, err := ReadEventID(id[:]); err != nil || got != id {
 		t.Errorf("an event id reads back as %v, %v", got, err)
 	}
-	if _, err := ReadEventID(id[1:]); !errors.Is(err, wrongSize{What: "an event id", Got: len(id) - 1, Want: len(id)}) {
-		t.Errorf("a short event id reads with %v; want an event id of %d bytes, not %d", err, len(id)-1, len(id))
+	_, err := ReadEventID(id[1:])
+	if !errors.Is(err, wrongSize{What: partEventID}) {
+		t.Errorf("a short event id reads with %v; want an event id of the wrong length", err)
+	} else if says := fmt.Sprintf("%d bytes, not %d", len(id)-1, len(id)); !strings.Contains(err.Error(), says) {
+		t.Errorf("a short event id is refused as %q; want it to say %s", err, says)
 	}
 }

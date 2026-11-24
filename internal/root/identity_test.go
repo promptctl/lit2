@@ -2,7 +2,6 @@ package root
 
 import (
 	"errors"
-	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/store/storetest"
 )
 
 // clone is one clone's shared identity dir and two worktrees' private
@@ -116,9 +116,7 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 			fs   store.Files
 			file command.File
 		}{{c.shared, command.PrincipalFile{}}, {c.worktree[0], command.IDFile{}}} {
-			moded, ok := f.fs.(interface {
-				Mode(store.Path) (fs.FileMode, error)
-			})
+			moded, ok := f.fs.(storetest.ModedFiles)
 			if !ok {
 				t.Fatalf("%T says no file's mode", f.fs)
 			}

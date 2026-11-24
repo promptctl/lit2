@@ -273,10 +273,8 @@ type Accepted struct {
 
 // Refused is an operand that did not: why, and for an address, the
 // detail that names its paths. A value's text is never in it. Its error is
-// unexported and set by every refusal this package makes, so a Refused
-// that holds no error is never a refusal: it is only the zero a false
-// Refusal returns beside its false.
-// [LAW:types-are-the-program] no caller can make a refusal with no cause.
+// unexported: every refusal this package makes sets it, and the zero a
+// false Refusal returns beside its false holds none.
 type Refused struct {
 	Text   string
 	Reason string

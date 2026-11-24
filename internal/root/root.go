@@ -115,7 +115,7 @@ func dispatch(r body, table cli.Table, groups []cli.Group, cmd cli.Command) cli.
 	case cli.AdminInit:
 		return r.init()
 	case cli.AdminSync:
-		return notBuilt("admin sync")
+		return notBuilt("admin sync", "lit-converge-5eq")
 	case cli.ConfigCommit:
 		return r.stored(opened.commit)
 	case cli.ConfigStatus:
@@ -164,10 +164,11 @@ func logFailure(err error) string {
 	return fmt.Sprintf("lit2: command event not recorded: %v\n", err)
 }
 
-// notBuilt ends a row whose body is not in this binary yet (D14). Once the
-// last body is bound it is unused, and the lint forces its deletion.
-func notBuilt(verb string) cli.Outcome {
-	return cli.Failed{Failure: command.Broke(fmt.Errorf("%w: lit2 %s is not built in this binary", errNotBuilt, verb))}
+// notBuilt ends a row whose body is not in this binary yet, naming ticket,
+// the ticket that builds it (D14). Once the last body is bound it is
+// unused, and the lint forces its deletion.
+func notBuilt(verb, ticket string) cli.Outcome {
+	return cli.Failed{Failure: command.Broke(fmt.Errorf("%w: lit2 %s is not built in this binary; %s builds it", errNotBuilt, verb, ticket))}
 }
 
 // errNotBuilt is a row whose body this binary does not hold.

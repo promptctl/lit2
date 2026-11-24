@@ -107,9 +107,10 @@ func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
 	s, ev := mint(t, s, s, 0xa, top(2), [16]byte{0x10})
 	seg := made(ev).Segment().String()
 	s, ec := mint(t, s, s, 0xa, comment(made(ev).ID), [16]byte{0x30})
-	note := seg + "/comments/" + made2(ec).Segment().String()
+	noteSeg := made2(ec).Segment().String()
+	note := seg + "/comments/" + noteSeg
 	// the shape refusals, each beside a control that differs only in the
-	// empty step, so a removed refusal or broken setup fails its row
+	// refused step, so a removed refusal or broken setup fails its row
 	for _, tc := range []struct {
 		text, control string
 		want          error
@@ -121,6 +122,9 @@ func TestAPathThatNamesNothingSaysWhy(t *testing.T) {
 		{note + "/", note, address.ErrEmptyStep},
 		{seg + "//title", seg + "/title", address.ErrEmptyStep},
 		{note + "//body", note + "/body", address.ErrEmptyStep},
+		{seg + "/comments/Not.A", note, address.ErrSegments},
+		{note + "." + noteSeg, note, address.ErrSegments},
+		{seg + "/comments/zzz-" + noteSeg, note, address.ErrPrefixedElement},
 	} {
 		if _, r := parse(s, schema, tc.control); r != nil {
 			t.Errorf("control %q refused: %v", tc.control, r)

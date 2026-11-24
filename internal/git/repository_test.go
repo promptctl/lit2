@@ -4,11 +4,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
@@ -118,20 +121,42 @@ func TestLocateWithNoGitIsNotFoundAndARefusalIsGits(t *testing.T) {
 	if _, err := gittest.Runner(t).Locate(dir); err != (git.NotFound{Dir: dir}) {
 		t.Errorf("Locate(%s) failed with %v; want NotFound", dir, err)
 	}
-	bare := gittest.Physical(t)
-	gittest.Git(t, bare, "init", "-q", "--bare")
-	_, err := gittest.Runner(t).Locate(bare)
-	if !errors.As(err, new(git.Refused)) || !strings.Contains(err.Error(), "work tree") {
-		t.Errorf("Locate in a bare repository failed with %v; want git's refusal, which names the work tree", err)
+	// refusedBy is whether err is git's refusal of Locate's rev-parse in
+	// dir, exiting as git itself exits there
+	refusedBy := func(t *testing.T, dir string, err error) bool {
+		t.Helper()
+		var refused git.Refused
+		if !errors.As(err, &refused) || len(refused.Spawn.Args) == 0 || refused.Spawn.Args[0] != "rev-parse" {
+			return false
+		}
+		return refused.Spawn.Ended == git.Ended(git.Exited{Code: gittest.Exit(t, dir, "rev-parse", "--show-toplevel")})
 	}
-	// a pruned worktree: its .git names a git dir that is gone
-	pruned := gittest.Physical(t)
-	gone := filepath.Join(gittest.Physical(t), "worktrees", "gone")
-	if err := os.WriteFile(filepath.Join(pruned, ".git"), []byte("gitdir: "+gone+"\n"), 0o644); err != nil {
+	// [LAW:verifiable-goals] exception: git's refusal, with no identity lit can read; proven by its minimal pair
+	root := gittest.Physical(t)
+	worktree, bare := filepath.Join(root, "worktree"), filepath.Join(root, "bare")
+	gittest.Git(t, root, "init", "-q", worktree)
+	gittest.Git(t, root, "init", "-q", "--bare", bare)
+	if _, err := gittest.Runner(t).Locate(worktree); err != nil {
+		t.Fatalf("control: Locate in a repository with a work tree failed with %v", err)
+	}
+	if _, err := gittest.Runner(t).Locate(bare); !refusedBy(t, bare, err) {
+		t.Errorf("Locate in a bare repository failed with %v; want git's refusal of its rev-parse", err)
+	}
+	// [LAW:verifiable-goals] exception: git's refusal, with no identity lit can read; proven by its minimal pair
+	main, linked := filepath.Join(root, "main"), filepath.Join(root, "linked")
+	gittest.Git(t, root, "init", "-q", "-b", "main", main)
+	gittest.Git(t, main, "commit", "-q", "--allow-empty", "-m", "first")
+	gittest.Git(t, main, "worktree", "add", "-q", linked)
+	if _, err := gittest.Runner(t).Locate(linked); err != nil {
+		t.Fatalf("control: Locate in a live linked worktree failed with %v", err)
+	}
+	// pruned: its .git names a git dir that is gone
+	gone := filepath.Join(main, ".git", "worktrees", "linked")
+	if err := os.RemoveAll(gone); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gittest.Runner(t).Locate(pruned); !errors.As(err, new(git.Refused)) || !strings.Contains(err.Error(), gone) {
-		t.Errorf("Locate in a pruned worktree failed with %v; want git's refusal, naming the git dir %s", err, gone)
+	if _, err := gittest.Runner(t).Locate(linked); !refusedBy(t, linked, err) || !strings.Contains(err.Error(), gone) {
+		t.Errorf("Locate in a pruned worktree failed with %v; want git's refusal of its rev-parse, naming the git dir %s", err, gone)
 	}
 }
 
@@ -441,9 +466,10 @@ func TestALockFileIsNoRef(t *testing.T) {
 }
 
 // A replace git refuses is Moved only when the ref, read after the
-// refusal, has moved: a ref held by another's lock is still what its
-// writer read, so the refusal is git's own, Refused; a ref that will not
-// read after the refusal says that too, beside git's.
+// refusal, has moved: a ref git cannot lock, its directory closed to
+// writes, is still what its writer read, so the refusal is git's own,
+// Refused; a ref that will not read after the refusal says that too,
+// beside git's.
 func TestAReplaceGitRefusesIsSaidByTheRefsStateAfter(t *testing.T) {
 	dir := filepath.Join(gittest.Physical(t), "repo")
 	repo := gittest.Runner(t).RepositoryAt(dir)
@@ -455,12 +481,15 @@ func TestAReplaceGitRefusesIsSaidByTheRefsStateAfter(t *testing.T) {
 		t.Fatalf("control: a replace from absent failed with %v", err)
 	}
 	logs := filepath.Join(dir, "refs", "lit", "log")
-	if err := os.WriteFile(filepath.Join(logs, "locked.lock"), nil, 0o644); err != nil {
+	if err := os.Chmod(logs, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	err = repo.Replace("refs/lit/log/locked", git.Absent{}, blob)
+	err = repo.Replace("refs/lit/log/closed", git.Absent{}, blob)
+	if err := os.Chmod(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if !errors.As(err, new(git.Refused)) || errors.As(err, new(git.Moved)) {
-		t.Errorf("a replace of a locked ref still absent = %v; want Refused, not Moved", err)
+		t.Errorf("a replace of a ref git cannot lock, still absent, = %v; want Refused, not Moved", err)
 	}
 	if err := os.WriteFile(filepath.Join(logs, "torn"), []byte("torn"), 0o644); err != nil {
 		t.Fatal(err)
@@ -469,6 +498,82 @@ func TestAReplaceGitRefusesIsSaidByTheRefsStateAfter(t *testing.T) {
 	var broken git.BrokenRef
 	if !errors.As(err, new(git.Refused)) || !errors.As(err, &broken) || broken.Name != "refs/lit/log/torn" {
 		t.Errorf("a replace of a ref that will not read = %v; want Refused and the ref broken", err)
+	}
+}
+
+// A replace waits out another publish holding its ref's lock: git takes
+// the lock once the holder has moved the ref and let it go, and refuses
+// the stale old value, so the replace is Moved to the holder's commit,
+// never git's refusal to lock a ref the holder was moving. The holder is
+// a lock file made by hand, held until the replace's git has started, as
+// a git on PATH says by a file before it runs the real one; it then
+// commits as git does, its lock renamed onto the ref. Nothing outside git
+// sees its first try at the lock, so whether that try meets the holder
+// is not forced: git starting is slower than the release, so the test
+// also holds lit to asking git for the wait.
+func TestAReplaceWaitsOutAnotherHoldersLock(t *testing.T) {
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim, started := t.TempDir(), filepath.Join(t.TempDir(), "started")
+	script := fmt.Sprintf("#!/bin/sh\nfor a; do [ \"$a\" = update-ref ] && printf '%%s\\n' \"$@\" >%q; done\nexec %q \"$@\"\n", started, real)
+	if err := os.WriteFile(filepath.Join(shim, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := slices.DeleteFunc(gittest.Env(t), func(kv string) bool { return strings.HasPrefix(kv, "PATH=") })
+	dir := filepath.Join(gittest.Physical(t), "repo")
+	repo := git.Find(append(env, "PATH="+shim)).RepositoryAt(dir)
+	a, b := gittest.PutBlob(t, repo, []byte("a")), gittest.PutBlob(t, repo, []byte("b"))
+	const name git.RefName = "refs/lit/log/w"
+	if err := repo.Replace(name, git.Absent{}, a); err != nil {
+		t.Fatalf("control: a replace from absent failed with %v", err)
+	}
+	if err := os.Remove(started); err != nil {
+		t.Fatalf("the git on PATH said no start of the control's update-ref: %v", err)
+	}
+	ref := filepath.Join(dir, filepath.FromSlash(string(name)))
+	if err := os.WriteFile(ref+".lock", []byte(b.String()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	replaced := make(chan error, 1)
+	go func() { replaced <- repo.Replace(name, git.Named{Target: a}, b) }()
+	deadline, ok := t.Deadline()
+	if !ok {
+		deadline = time.Now().Add(time.Minute)
+	}
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-replaced:
+			t.Fatalf("the replace ended, with %v, before its git said it started", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the replace's git did not start by the test's deadline")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := os.Rename(ref+".lock", ref); err != nil {
+		t.Fatal(err)
+	}
+	err = <-replaced
+	var moved git.Moved
+	if !errors.As(err, &moved) || moved != (git.Moved{Name: name, From: git.Named{Target: a}, Now: git.Named{Target: b}}) {
+		t.Errorf("a replace from %s while another publish held the ref's lock and moved it to %s = %v; want Moved to %s", a, b, err, b)
+	}
+	// what is forced is lit's side: it asks git to wait for the lock, and
+	// git's documented retry does the rest
+	args, err := os.ReadFile(started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "-c\ncore.filesRefLockTimeout=10000\nupdate-ref\n") {
+		t.Errorf("the replace ran git %q; want update-ref given ten seconds to wait for its ref's lock", args)
 	}
 }
 

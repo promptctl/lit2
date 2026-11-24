@@ -173,7 +173,7 @@ func readValue(b []byte) (Value, error) {
 	// whole once the loop has read the message
 	var made []func(wire.Unknown) Value
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	_, err := readOnce(r, map[uint32]part{valueProse: partProse, valuePlain: partPlain}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case valueProse:
 			e, err := readEnvelope(r.Bytes())
@@ -189,7 +189,7 @@ func readValue(b []byte) (Value, error) {
 	case err != nil:
 		return nil, fmt.Errorf("a value: %w", err)
 	case len(made) != 1:
-		return nil, fmt.Errorf("a value is prose or plain: %w", notOneForm{What: "a value", N: len(made)})
+		return nil, fmt.Errorf("a value is prose or plain, and this one is in %d forms: %w", len(made), notOneForm{What: partValue})
 	}
 	return made[0](r.Rest()), nil
 }
@@ -337,7 +337,7 @@ func PlacementWire(p Placement) []byte {
 // ReadItemCreate reads item.create at version 1.
 func ReadItemCreate(r *wire.Reader) (Versioned, error) {
 	var p ItemCreate
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	_, err := readOnce(r, map[uint32]part{1: partPlacement}, func(tag uint32, r *wire.Reader) error {
 		var err error
 		if tag == 1 {
 			p.Place, err = ReadPlacement(r.Bytes())
@@ -349,7 +349,7 @@ func ReadItemCreate(r *wire.Reader) (Versioned, error) {
 	case err != nil:
 		return nil, err
 	case p.Place == nil:
-		return nil, fmt.Errorf("an item.create: %w", missing{What: "placement"})
+		return nil, fmt.Errorf("an item.create: %w", missing{What: partPlacement})
 	}
 	return p, nil
 }
@@ -361,14 +361,14 @@ func ReadPlacement(b []byte) (Placement, error) {
 	// whole once the loop has read the message
 	var made []func(wire.Unknown) Placement
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	_, err := readOnce(r, map[uint32]part{placeAtLevel: partLevel, placeBelowParent: partParent}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case placeAtLevel:
 			l, err := ParseLevel(int(min(r.Uvarint(), topLevel+1)))
 			made = append(made, func(u wire.Unknown) Placement { return AtLevel{Level: l, unknown: u} })
 			return err
 		case placeBelowParent:
-			parent, err := idBits(r.Bytes())
+			parent, err := idBits(partParent, r.Bytes())
 			made = append(made, func(u wire.Unknown) Placement { return BelowParent{Parent: ItemID{b: parent}, unknown: u} })
 			return err
 		}
@@ -378,7 +378,7 @@ func ReadPlacement(b []byte) (Placement, error) {
 	case err != nil:
 		return nil, fmt.Errorf("a placement: %w", err)
 	case len(made) != 1:
-		return nil, fmt.Errorf("a placement is a level or below its parent: %w", notOneForm{What: "a placement", N: len(made)})
+		return nil, fmt.Errorf("a placement is a level or below its parent, and this one is in %d forms: %w", len(made), notOneForm{What: partPlacement})
 	}
 	return made[0](r.Rest()), nil
 }
@@ -394,13 +394,10 @@ func (p FieldSet) AppendTo(w *wire.Writer) {
 // ReadFieldSet reads field.set at version 1.
 func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 	var p FieldSet
-	err := readNamed(r, map[uint32]named{1: {&p.Field, "field"}}, map[uint32]*[]EventID{3: &p.Over},
+	err := readNamed(r, map[uint32]named{1: {&p.Field, partField}}, map[uint32]*[]EventID{3: &p.Over}, map[uint32]part{2: partValue},
 		func(tag uint32, r *wire.Reader) error {
 			if tag != 2 {
 				return nil
-			}
-			if p.Value != nil {
-				return twice{What: "its value"}
 			}
 			var err error
 			p.Value, err = readValue(r.Bytes())
@@ -408,7 +405,7 @@ func ReadFieldSet(r *wire.Reader) (Versioned, error) {
 		})
 	p.unknown = r.Rest()
 	if err == nil && p.Value == nil {
-		err = missing{What: "value"}
+		err = missing{What: partValue}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("a field.set: %w", err)
@@ -426,7 +423,7 @@ func (p MemberAdd) AppendTo(w *wire.Writer) {
 // ReadMemberAdd reads member.add at version 1.
 func ReadMemberAdd(r *wire.Reader) (Versioned, error) {
 	var p MemberAdd
-	err := readNamed(r, map[uint32]named{1: {&p.Field, "field"}, 2: {&p.Member, "member"}}, nil, nil)
+	err := readNamed(r, map[uint32]named{1: {&p.Field, partField}, 2: {&p.Member, partMember}}, nil, nil, nil)
 	p.unknown = r.Rest()
 	if err != nil {
 		return nil, fmt.Errorf("a member.add: %w", err)
@@ -445,7 +442,7 @@ func (p MemberRm) AppendTo(w *wire.Writer) {
 // ReadMemberRm reads member.rm at version 1.
 func ReadMemberRm(r *wire.Reader) (Versioned, error) {
 	var p MemberRm
-	err := readNamed(r, map[uint32]named{1: {&p.Field, "field"}, 2: {&p.Member, "member"}}, map[uint32]*[]EventID{3: &p.Observed}, nil)
+	err := readNamed(r, map[uint32]named{1: {&p.Field, partField}, 2: {&p.Member, partMember}}, map[uint32]*[]EventID{3: &p.Observed}, nil, nil)
 	p.unknown = r.Rest()
 	if err != nil {
 		return nil, fmt.Errorf("a member.rm: %w", err)
@@ -474,7 +471,7 @@ var errFieldOrder = errors.New("a transition's fields out of strict name order")
 // thing about each, and two moves that say the same compare equal.
 func ReadTransition(r *wire.Reader) (Versioned, error) {
 	var p Transition
-	err := readNamed(r, map[uint32]named{1: {&p.From, "from"}, 2: {&p.To, "to"}}, map[uint32]*[]EventID{3: &p.Over},
+	err := readNamed(r, map[uint32]named{1: {&p.From, partFrom}, 2: {&p.To, partTo}}, map[uint32]*[]EventID{3: &p.Over}, nil,
 		func(tag uint32, r *wire.Reader) error {
 			if tag != 4 {
 				return nil
@@ -510,12 +507,9 @@ func (f TransitionField) wire() []byte {
 func readTransitionField(b []byte) (TransitionField, error) {
 	var f TransitionField
 	r := wire.NewReader(b)
-	err := readNamed(r, map[uint32]named{1: {&f.Field, "field"}}, nil, func(tag uint32, r *wire.Reader) error {
+	err := readNamed(r, map[uint32]named{1: {&f.Field, partField}}, nil, map[uint32]part{2: partValue}, func(tag uint32, r *wire.Reader) error {
 		if tag != 2 {
 			return nil
-		}
-		if f.Value != nil {
-			return twice{What: "its value"}
 		}
 		var err error
 		f.Value, err = readValue(r.Bytes())
@@ -523,7 +517,7 @@ func readTransitionField(b []byte) (TransitionField, error) {
 	})
 	f.unknown = r.Rest()
 	if err == nil && f.Value == nil {
-		err = missing{What: "value"}
+		err = missing{What: partValue}
 	}
 	if err != nil {
 		return TransitionField{}, fmt.Errorf("a field: %w", err)
@@ -531,33 +525,27 @@ func readTransitionField(b []byte) (TransitionField, error) {
 	return f, nil
 }
 
-// twice is What, a field a message gives once, given again: a payload's
-// name, value, version or blob, a policy's owner role, role, member or
-// threshold. It is one type wherever it is met, What saying which field
-// `[LAW:one-type-per-behavior]`, and comparable, so errors.Is names one.
-type twice struct{ What string }
-
-func (t twice) Error() string { return t.What + ", given twice" }
-
-// named is one name field of a payload: where it is read into, and what
-// a refusal calls it.
+// named is one name field of a payload: where it is read into, and which
+// field a refusal names.
 type named struct {
 	into *Name
-	what string
+	what part
 }
 
 // readNamed reads a payload's name fields, each exactly once, and its
-// lists of event ids, handing every other field to more: the one reader
-// of a payload's names, so a name given twice is refused by every kind
-// alike, as readValue refuses a value of two forms `[LAW:single-enforcer]`.
-func readNamed(r *wire.Reader, names map[uint32]named, ids map[uint32]*[]EventID, more func(uint32, *wire.Reader) error) error {
-	seen := map[uint32]bool{}
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+// lists of event ids, handing every other field to more, which reads each
+// field once names at most once: the one reader of a payload's names, so
+// a name is parsed and required by every kind alike `[LAW:single-enforcer]`.
+func readNamed(r *wire.Reader, names map[uint32]named, ids map[uint32]*[]EventID, once map[uint32]part, more func(uint32, *wire.Reader) error) error {
+	singular := maps.Clone(once)
+	if singular == nil {
+		singular = map[uint32]part{}
+	}
+	for tag, n := range names {
+		singular[tag] = n.what
+	}
+	seen, err := readOnce(r, singular, func(tag uint32, r *wire.Reader) error {
 		if n, ok := names[tag]; ok {
-			if seen[tag] {
-				return twice{What: "its " + n.what}
-			}
-			seen[tag] = true
 			v, err := ParseName(string(r.Bytes()))
 			if err != nil {
 				return fmt.Errorf("its %s: %w", n.what, err)
@@ -595,12 +583,10 @@ func (p CommentAdd) AppendTo(w *wire.Writer) {
 // ReadCommentAdd reads comment.add at version 1.
 func ReadCommentAdd(r *wire.Reader) (Versioned, error) {
 	var p CommentAdd
-	var hasBody bool
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{1: partCommentBody}, func(tag uint32, r *wire.Reader) error {
 		var err error
 		if tag == 1 {
 			p.Body, err = readEnvelope(r.Bytes())
-			hasBody = true
 		}
 		return err
 	})
@@ -608,8 +594,8 @@ func ReadCommentAdd(r *wire.Reader) (Versioned, error) {
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("a comment.add: %w", err)
-	case !hasBody:
-		return nil, fmt.Errorf("a comment.add: %w", missing{What: "body"})
+	case !seen[1]:
+		return nil, fmt.Errorf("a comment.add: %w", missing{What: partCommentBody})
 	}
 	return p, nil
 }
@@ -631,18 +617,12 @@ var errBlobNotVersion = errors.New("a blob that is not git's id for the version 
 func ReadWorkspaceApply(r *wire.Reader) (Versioned, error) {
 	var p WorkspaceApply
 	var hasVersion, hasBlob bool
-	err := readNamed(r, nil, map[uint32]*[]EventID{3: &p.Over}, func(tag uint32, r *wire.Reader) error {
+	err := readNamed(r, nil, map[uint32]*[]EventID{3: &p.Over}, map[uint32]part{1: partVersion, 2: partBlob}, func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
-			if hasVersion {
-				return twice{What: "its version"}
-			}
 			p.version, hasVersion = r.Bytes(), true
 		case 2:
-			if hasBlob {
-				return twice{What: "its blob"}
-			}
 			p.blob, err = readObjectID(r.Bytes(), "the version's blob")
 			hasBlob = true
 		}
@@ -652,9 +632,9 @@ func ReadWorkspaceApply(r *wire.Reader) (Versioned, error) {
 	switch {
 	case err != nil:
 	case !hasVersion:
-		err = missing{What: "version"}
+		err = missing{What: partVersion}
 	case !hasBlob:
-		err = missing{What: "blob"}
+		err = missing{What: partBlob}
 	case git.HashBlob(p.blob.Format(), p.version) != p.blob:
 		err = fmt.Errorf("its blob %s: %w", p.blob, errBlobNotVersion)
 	}

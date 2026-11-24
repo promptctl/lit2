@@ -290,16 +290,16 @@ func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 		header []byte
 		want   error
 	}{
-		"no config-ref":                {edited(e.raw, headerConfigRef, none), missing{What: "config-ref"}},
-		"no policy version":            {edited(e.raw, headerPolicy, none), missing{What: "policy version"}},
-		"no causal position":           {edited(e.raw, headerPosition, none), missing{What: "causal position"}},
-		"no payload hash":              {edited(e.raw, headerPayloadHash, none), missing{What: "payload hash"}},
-		"policy version 0":             {edited(e.raw, headerPolicy, func(w *wire.Writer) { w.Uvarint(headerPolicy, 0) }), zeroField{What: "policy version"}},
-		"causal position 0":            {edited(e.raw, headerPosition, func(w *wire.Writer) { w.Uvarint(headerPosition, 0) }), zeroField{What: "causal position"}},
+		"no config-ref":                {edited(e.raw, headerConfigRef, none), missing{What: partConfigRef}},
+		"no policy version":            {edited(e.raw, headerPolicy, none), missing{What: partPolicy}},
+		"no causal position":           {edited(e.raw, headerPosition, none), missing{What: partPosition}},
+		"no payload hash":              {edited(e.raw, headerPayloadHash, none), missing{What: partPayloadHash}},
+		"policy version 0":             {edited(e.raw, headerPolicy, func(w *wire.Writer) { w.Uvarint(headerPolicy, 0) }), zeroField{What: partPolicy}},
+		"causal position 0":            {edited(e.raw, headerPosition, func(w *wire.Writer) { w.Uvarint(headerPosition, 0) }), zeroField{What: partPosition}},
 		"recorded-at 0":                {edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 0) }), errNotATime},
 		"recorded-at past int64":       {edited(e.raw, headerRecordedAt, func(w *wire.Writer) { w.Uvarint(headerRecordedAt, 1<<63) }), errNotATime},
 		"a root that names an element": {edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(2, "abc")) }), errRootNamesPart},
-		"a subject that is no item id": {edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(1, "not an id")) }), wrongSize{What: "an id", Got: len("not an id"), Want: 16}},
+		"a subject that is no item id": {edited(e.raw, headerSubject, func(w *wire.Writer) { w.Bytes(headerSubject, futureField(1, "not an id")) }), wrongSize{What: partItem}},
 		"bytes that are no message":    {noMessage, wireRefusal(t, noMessage)},
 	} {
 		if _, err := readHeader(c.header); !errors.Is(err, c.want) {
@@ -311,34 +311,37 @@ func TestARecordMissingWhatAnEventCannotBeWithoutIsMalformed(t *testing.T) {
 		}
 	}
 	unsigned := futureField(recordHeader, string(e.raw))
-	if _, err := readRecord(unsigned); !errors.Is(err, missing{What: "signature"}) {
+	if _, err := readRecord(unsigned); !errors.Is(err, missing{What: partSignature}) {
 		t.Errorf("a record with no signature reads with %v; want no signature", err)
 	}
 	if _, ok := Decode(here, store.Record(unsigned)).(Malformed); !ok {
 		t.Error("a record with no signature decodes; want it malformed")
 	}
-	if _, err := readRecord(futureField(recordSignature, string(signatureWire(e.Signature())))); !errors.Is(err, missing{What: "header"}) {
+	if _, err := readRecord(futureField(recordSignature, string(signatureWire(e.Signature())))); !errors.Is(err, missing{What: partHeader}) {
 		t.Errorf("a record with no header reads with %v; want no header", err)
 	}
 	// an attribution names its checkout and its principal; the one with both
 	// is the control
-	attribution := func(checkout, principal bool) []byte {
+	attribution := func(checkout int, principal bool) []byte {
 		var w wire.Writer
-		if checkout {
-			w.Bytes(1, make([]byte, 16))
+		if checkout > 0 {
+			w.Bytes(1, make([]byte, checkout))
 		}
 		if principal {
 			w.Bytes(2, k.Principal().wire())
 		}
 		return w.Encoded()
 	}
-	if _, err := readAttribution(attribution(true, true)); err != nil {
+	if _, err := readAttribution(attribution(16, true)); err != nil {
 		t.Fatalf("an attribution with a checkout and a principal: %v; the control must read", err)
 	}
-	if _, err := readAttribution(attribution(false, true)); !errors.Is(err, missing{What: "16-byte checkout id"}) {
+	if _, err := readAttribution(attribution(0, true)); !errors.Is(err, missing{What: partCheckout}) {
 		t.Errorf("an attribution with no checkout reads with %v; want no checkout id", err)
 	}
-	if _, err := readAttribution(attribution(true, false)); !errors.Is(err, missing{What: "principal"}) {
+	if _, err := readAttribution(attribution(15, true)); !errors.Is(err, wrongSize{What: partCheckout}) {
+		t.Errorf("an attribution with a 15-byte checkout reads with %v; want a checkout id of the wrong length", err)
+	}
+	if _, err := readAttribution(attribution(16, false)); !errors.Is(err, missing{What: partPrincipal}) {
 		t.Errorf("an attribution with no principal reads with %v; want no principal", err)
 	}
 }
@@ -401,7 +404,7 @@ func TestMintRefusesWhatACallerLeftUnset(t *testing.T) {
 		"no clock reading":           {noClock, act, errNoClock},
 		"no agent":                   {noAgent, act, errNotAnAgent},
 		"a two-digit segment":        {at, Act{About: NewItem{ID: anItem, Width: 2}, Payload: act.Payload}, errWidth},
-		"no policy version":          {noPolicy, act, zeroField{What: "policy version"}},
+		"no policy version":          {noPolicy, act, zeroField{What: partPolicy}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			panics.With(t, tc.want, func() { _, _ = Mint(tc.c, NewDrafts(tc.d), keyOf(1).Signer(), entropy(1)) })

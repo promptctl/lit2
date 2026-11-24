@@ -75,7 +75,7 @@ func TestAnUnknownVerbIsUsage(t *testing.T) {
 func TestARowWithNoBodyIsInternal(t *testing.T) {
 	twin := NewTwin()
 	status, e := run(t, twin, "admin", "sync")
-	if status != 70 || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(twin.Err.String(), "lit2 admin sync is not built in this binary") {
+	if status != 70 || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(twin.Err.String(), "lit2 admin sync is not built in this binary; lit-converge-5eq builds it") {
 		t.Errorf("lit2 admin sync: status %d, stderr %q", status, twin.Err)
 	}
 	if e.Command.Name != "admin sync" {

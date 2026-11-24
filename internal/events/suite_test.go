@@ -47,10 +47,10 @@ func TestAPrincipalOrSignatureNamingNoSuiteIsRefused(t *testing.T) {
 	if _, err := readSignature(named.Encoded()); err != nil {
 		t.Fatalf("a signature naming its suite does not read: %v", err)
 	}
-	if _, err := readPrincipal(unnamed.Encoded()); !errors.Is(err, missing{What: "suite"}) {
+	if _, err := readPrincipal(unnamed.Encoded()); !errors.Is(err, missing{What: partSuite}) {
 		t.Errorf("a principal naming no suite reads with %v; want no suite", err)
 	}
-	if _, err := readSignature(unnamed.Encoded()); !errors.Is(err, missing{What: "suite"}) {
+	if _, err := readSignature(unnamed.Encoded()); !errors.Is(err, missing{What: partSuite}) {
 		t.Errorf("a signature naming no suite reads with %v; want no suite", err)
 	}
 }

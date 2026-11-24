@@ -69,7 +69,11 @@ func TestAnEnvelopeThatLiesOrIsAmbiguousIsRefused(t *testing.T) {
 	p.Bytes(1, []byte("the text"))
 	lying.Bytes(envelopePlain, p.Encoded())
 	lying.Bytes(envelopeCommitment, bytes.Repeat([]byte{1}, 32))
-	both := append(SealPlain("a").wire(), lying.Encoded()...)
+	var both wire.Writer
+	both.Bytes(envelopePlain, p.Encoded())
+	both.Bytes(envelopeSealed, futureField(2, "tier"))
+	commitment := SealPlain("the text").Commitment()
+	both.Bytes(envelopeCommitment, commitment[:])
 	// the control: a plaintext committed to its own text reads
 	envelopeOf(t, SealPlain("the text").wire())
 	none := []byte{0xff}
@@ -78,9 +82,9 @@ func TestAnEnvelopeThatLiesOrIsAmbiguousIsRefused(t *testing.T) {
 		want error
 	}{
 		"a plaintext whose commitment is not its text's": {lying.Encoded(), errCommitmentNotText},
-		"two forms":           {both, notOneForm{What: "an envelope", N: 2}},
-		"no commitment":       {futureField(envelopePlain, string(p.Encoded())), missing{What: "commitment"}},
-		"a short commitment":  {futureField(envelopeCommitment, "short"), wrongSize{What: "an envelope's commitment", Got: len("short"), Want: 32}},
+		"two forms":           {both.Encoded(), notOneForm{What: partEnvelope}},
+		"no commitment":       {futureField(envelopePlain, string(p.Encoded())), missing{What: partCommitment}},
+		"a short commitment":  {futureField(envelopeCommitment, "short"), wrongSize{What: partCommitment}},
 		"bytes that are none": {none, wireRefusal(t, none)},
 	} {
 		if e, err := readEnvelope(c.b); !errors.Is(err, c.want) {

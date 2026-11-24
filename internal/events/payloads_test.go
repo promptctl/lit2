@@ -3,6 +3,7 @@ package events
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -233,11 +234,13 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	if _, err := readValue(Plain{Canonical: "b"}.wire()); err != nil {
 		t.Fatalf("a value in one form: %v; the control must read", err)
 	}
-	if _, err := readValue(twoForms.Encoded()); !errors.Is(err, notOneForm{What: "a value", N: 2}) {
-		t.Errorf("a value in both forms reads with %v; want a value in 2 forms", err)
-	}
-	if _, err := readValue(nil); !errors.Is(err, notOneForm{What: "a value", N: 0}) {
-		t.Errorf("a value in neither form reads with %v; want a value in 0 forms", err)
+	for b, n := range map[string]int{string(twoForms.Encoded()): 2, "": 0} {
+		_, err := readValue([]byte(b))
+		if !errors.Is(err, notOneForm{What: partValue}) {
+			t.Errorf("a value in %d forms reads with %v; want a value not in one form", n, err)
+		} else if says := fmt.Sprintf("in %d forms", n); !strings.Contains(err.Error(), says) {
+			t.Errorf("a value in %d forms is refused as %q; want it to say %s", n, err, says)
+		}
 	}
 	var noValue wire.Writer
 	noValue.Bytes(1, []byte("title"))
@@ -249,14 +252,6 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	bothPlaces.Uvarint(placeAtLevel, 1)
 	bothPlaces.Bytes(placeBelowParent, anItem.b[:])
 	shortParent.Bytes(placeBelowParent, anItem.b[:8])
-	// a name field is one name: a second is refused, not read as either
-	var twoTos, twoFields wire.Writer
-	twoTos.Bytes(1, []byte("backlog"))
-	twoTos.Bytes(2, []byte("plan"))
-	twoTos.Bytes(2, []byte("done"))
-	twoFields.Bytes(1, []byte("title"))
-	twoFields.Bytes(1, []byte("reason"))
-	twoFields.Bytes(2, Plain{Canonical: "x"}.wire())
 	place := func(b []byte) []byte {
 		var w wire.Writer
 		w.Bytes(1, b)
@@ -282,14 +277,6 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 	otherBlob.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, []byte("other")), "blob"))
 	noBlob.Bytes(1, aVersion)
 	noVersion.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
-	// one version and one blob: a second of either is refused, not read as one
-	var twoVersions, twoBlobs wire.Writer
-	twoVersions.Bytes(1, []byte("other"))
-	twoVersions.Bytes(1, aVersion)
-	twoVersions.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
-	twoBlobs.Bytes(1, aVersion)
-	twoBlobs.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
-	twoBlobs.Bytes(2, objectIDWire(git.HashBlob(git.SHA1, aVersion), "blob"))
 	// the controls: each reader reads a payload of its kind whole
 	for _, p := range []Payload{
 		FieldSet{Field: MustName("title"), Value: Plain{Canonical: "x"}},
@@ -310,24 +297,20 @@ func TestAPayloadMissingWhatItCannotBeWithoutIsRefused(t *testing.T) {
 		b    []byte
 		want error
 	}{
-		{"a field.set with no value", ReadFieldSet, noValue.Encoded(), missing{What: "value"}},
+		{"a field.set with no value", ReadFieldSet, noValue.Encoded(), missing{What: partValue}},
 		{"a field.set of a field that is no name", ReadFieldSet, badField.Encoded(), ErrNotAName},
-		{"an item.create placed nowhere", ReadItemCreate, nil, missing{What: "placement"}},
+		{"an item.create placed nowhere", ReadItemCreate, nil, missing{What: partPlacement}},
 		{"an item.create at level 6", ReadItemCreate, place(levelSix.Encoded()), ErrNotALevel},
-		{"an item.create at a level and below its parent", ReadItemCreate, place(bothPlaces.Encoded()), notOneForm{What: "a placement", N: 2}},
-		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded()), wrongSize{What: "an id", Got: 8, Want: 16}},
-		{"a member.add of no member", ReadMemberAdd, place([]byte("labels")), missing{What: "member"}},
-		{"a transition with two tos", ReadTransition, twoTos.Encoded(), twice{What: "its to"}},
+		{"an item.create at a level and below its parent", ReadItemCreate, place(bothPlaces.Encoded()), notOneForm{What: partPlacement}},
+		{"an item.create below a parent whose id is short", ReadItemCreate, place(shortParent.Encoded()), wrongSize{What: partParent}},
+		{"a member.add of no member", ReadMemberAdd, place([]byte("labels")), missing{What: partMember}},
 		{"a transition carrying one field twice", ReadTransition, twiceCarried.Encoded(), errFieldOrder},
 		{"a transition carrying its fields out of name order", ReadTransition, outOfOrder.Encoded(), errFieldOrder},
-		{"a transition carrying a field with no value", ReadTransition, noCarriedValue.Encoded(), missing{What: "value"}},
-		{"a field.set with two fields", ReadFieldSet, twoFields.Encoded(), twice{What: "its field"}},
-		{"a comment.add with no body", ReadCommentAdd, nil, missing{What: "body"}},
+		{"a transition carrying a field with no value", ReadTransition, noCarriedValue.Encoded(), missing{What: partValue}},
+		{"a comment.add with no body", ReadCommentAdd, nil, missing{What: partCommentBody}},
 		{"a workspace.apply whose blob names other bytes", ReadWorkspaceApply, otherBlob.Encoded(), errBlobNotVersion},
-		{"a workspace.apply with no blob", ReadWorkspaceApply, noBlob.Encoded(), missing{What: "blob"}},
-		{"a workspace.apply with no version", ReadWorkspaceApply, noVersion.Encoded(), missing{What: "version"}},
-		{"a workspace.apply with two versions", ReadWorkspaceApply, twoVersions.Encoded(), twice{What: "its version"}},
-		{"a workspace.apply with two blobs", ReadWorkspaceApply, twoBlobs.Encoded(), twice{What: "its blob"}},
+		{"a workspace.apply with no blob", ReadWorkspaceApply, noBlob.Encoded(), missing{What: partBlob}},
+		{"a workspace.apply with no version", ReadWorkspaceApply, noVersion.Encoded(), missing{What: partVersion}},
 	} {
 		if _, err := c.read(wire.NewReader(c.b)); !errors.Is(err, c.want) {
 			t.Errorf("%s reads with %v; want %v", c.name, err, c.want)

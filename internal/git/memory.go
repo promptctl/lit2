@@ -86,7 +86,8 @@ func (m *memory) replace(name RefName, from Was, to ObjectID) error {
 	if now != from {
 		return Moved{Name: name, From: from, Now: now}
 	}
-	// [LAW:verifiable-goals] exception: on disk git alone enforces this; proven by its minimal pair
+	// untyped, as git's own refusal of it is, so the twin gives no
+	// identity the disk repository cannot
 	for n := range m.refs {
 		if n != name && (under(n, name) || under(name, n)) {
 			return fmt.Errorf("%s cannot be a ref beside %s", name, n)

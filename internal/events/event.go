@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/promptctl/lit2/internal/events/wire"
@@ -74,32 +76,6 @@ func (id EventID) String() string { return hex.EncodeToString(id[:]) }
 // reads: its 64 lowercase hex digits and one newline.
 func (id EventID) FileText() []byte { return []byte(id.String() + "\n") }
 
-// The decoders' shared refusals, each one type wherever it is met, with
-// the field it is about as a value, so two refusals of one kind stay two
-// refusals `[LAW:one-type-per-behavior]`: a field a message cannot be
-// without is absent, a fixed-length field is another length, and a header
-// field is at the zero no event carries. Each is comparable, so errors.Is
-// names one refusal by its value.
-type (
-	// missing is a message with no What, a field it cannot be without.
-	missing struct{ What string }
-	// wrongSize is What, a fixed-length field, Got bytes long, not Want.
-	wrongSize struct {
-		What      string
-		Got, Want int
-	}
-	// zeroField is a header with What at zero, which no event leaves it.
-	zeroField struct{ What string }
-)
-
-func (m missing) Error() string { return "no " + m.What }
-
-func (s wrongSize) Error() string {
-	return fmt.Sprintf("%s of %d bytes, not %d", s.What, s.Got, s.Want)
-}
-
-func (z zeroField) Error() string { return "a zero " + z.What }
-
 // errNotAnEventID is a founding file's text that is no event id.
 var errNotAnEventID = errors.New("an event id file's text that is no event id")
 
@@ -112,8 +88,8 @@ func ReadEventIDFile(b []byte) (EventID, error) {
 	if !crlf {
 		text, _ = bytes.CutSuffix(b, []byte("\n"))
 	}
-	if form := 2 * len(EventID{}); len(text) != form {
-		return EventID{}, wrongSize{What: "an event id file's text before its line ending", Got: len(text), Want: form}
+	if err := sized(partEventIDText, text, 2*len(EventID{})); err != nil {
+		return EventID{}, err
 	}
 	var id EventID
 	if n, err := hex.Decode(id[:], text); err != nil || n != len(id) || hex.EncodeToString(id[:]) != string(text) {
@@ -124,8 +100,8 @@ func ReadEventIDFile(b []byte) (EventID, error) {
 
 // ReadEventID reads an id's stored form.
 func ReadEventID(b []byte) (EventID, error) {
-	if len(b) != len(EventID{}) {
-		return EventID{}, wrongSize{What: "an event id", Got: len(b), Want: len(EventID{})}
+	if err := sized(partEventID, b, len(EventID{})); err != nil {
+		return EventID{}, err
 	}
 	return EventID(b), nil
 }
@@ -321,14 +297,13 @@ type record struct {
 
 func readRecord(b []byte) (record, error) {
 	var rec record
-	var hasHeader, hasSig bool
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{recordHeader: partHeader, recordSignature: partSignature, recordBody: partBody}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case recordHeader:
-			rec.header, hasHeader = bytes.Clone(r.Bytes()), true
+			rec.header = bytes.Clone(r.Bytes())
 		case recordSignature:
-			rec.sigRaw, hasSig = bytes.Clone(r.Bytes()), true
+			rec.sigRaw = bytes.Clone(r.Bytes())
 		case recordBody:
 			rec.body, rec.hasBody = bytes.Clone(r.Bytes()), true
 		}
@@ -337,10 +312,10 @@ func readRecord(b []byte) (record, error) {
 	switch {
 	case err != nil:
 		return record{}, fmt.Errorf("the record: %w", err)
-	case !hasHeader:
-		return record{}, fmt.Errorf("the record: %w", missing{What: "header"})
-	case !hasSig:
-		return record{}, fmt.Errorf("the record: %w", missing{What: "signature"})
+	case !seen[recordHeader]:
+		return record{}, fmt.Errorf("the record: %w", missing{What: partHeader})
+	case !seen[recordSignature]:
+		return record{}, fmt.Errorf("the record: %w", missing{What: partSignature})
 	}
 	sig, err := readSignature(rec.sigRaw)
 	if err != nil {
@@ -352,16 +327,15 @@ func readRecord(b []byte) (record, error) {
 
 func readSignature(b []byte) (Signature, error) {
 	var s Signature
-	var hasSuite bool
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{1: partSuite, 2: partSignatureBytes}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			suite, err := byteOf(r)
 			if err != nil {
 				return err
 			}
-			s.Suite, hasSuite = SuiteID(suite), true
+			s.Suite = SuiteID(suite)
 		case 2:
 			s.Bytes = bytes.Clone(r.Bytes())
 		}
@@ -370,8 +344,8 @@ func readSignature(b []byte) (Signature, error) {
 	switch {
 	case err != nil:
 		return Signature{}, fmt.Errorf("the signature: %w", err)
-	case !hasSuite:
-		return Signature{}, fmt.Errorf("the signature: %w", missing{What: "suite"})
+	case !seen[1]:
+		return Signature{}, fmt.Errorf("the signature: %w", missing{What: partSuite})
 	}
 	return s, nil
 }
@@ -383,22 +357,21 @@ func bodyOf(k Kinds, h Header, rec record) Body {
 	}
 	var salt Salt
 	var payload []byte
-	var hasSalt, hasPayload bool
 	r := wire.NewReader(rec.body)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{1: partSalt, 2: partPayload}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			b := r.Bytes()
-			hasSalt = len(b) == len(salt)
 			copy(salt[:], b)
+			return sized(partSalt, b, len(salt))
 		case 2:
-			payload, hasPayload = bytes.Clone(r.Bytes()), true
+			payload = bytes.Clone(r.Bytes())
 		}
 		return nil
 	})
-	// a body that does not parse, or whose hash is not the header's, is
-	// not the body the writer signed
-	if err != nil || !hasSalt || !hasPayload || payloadHash(salt, payload) != h.payload {
+	// a body that does not parse, gives a field twice, or whose hash is not
+	// the header's, is not the body the writer signed
+	if err != nil || !seen[1] || !seen[2] || payloadHash(salt, payload) != h.payload {
 		return Uncommitted{}
 	}
 	return k.read(h.kind, h.schema, salt, payload)
@@ -526,9 +499,10 @@ func recordWire(header, sig []byte, salt Salt, payload []byte) []byte {
 	return w.Encoded()
 }
 
-// headerNames names each header field, in tag order.
-var headerNames = [...]string{"kind", "schema version", "subject", "attribution", "config-ref", "policy version",
-	"causal position", "recorded-at", "payload hash"}
+// headerParts is each header field by its tag.
+var headerParts = map[uint32]part{headerKind: partKind, headerSchema: partSchema, headerSubject: partSubject,
+	headerAttribution: partAttribution, headerConfigRef: partConfigRef, headerPolicy: partPolicy,
+	headerPosition: partPosition, headerRecordedAt: partRecordedAt, headerPayloadHash: partPayloadHash}
 
 // errNotATime is a recorded-at outside the clock's range.
 var errNotATime = errors.New("a recorded-at no clock past 1970 reads as a time")
@@ -537,13 +511,9 @@ var errNotATime = errors.New("a recorded-at no clock past 1970 reads as a time")
 // event cannot be without, or a root carrying an element name, is refused.
 func readHeader(b []byte) (Header, error) {
 	var h Header
-	var seen [headerPayloadHash + 1]bool
 	r := wire.NewReader(b)
 	var err error
-	err = r.Each(func(tag uint32, r *wire.Reader) error {
-		if tag <= headerPayloadHash {
-			seen[tag] = true
-		}
+	seen, err := readOnce(r, headerParts, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case headerKind:
 			h.kind = Kind(r.Bytes())
@@ -572,29 +542,27 @@ func readHeader(b []byte) (Header, error) {
 		case headerPayloadHash:
 			c := r.Bytes()
 			copy(h.payload[:], c)
-			if len(c) != len(h.payload) {
-				err = wrongSize{What: "the payload hash", Got: len(c), Want: len(h.payload)}
-			}
+			err = sized(partPayloadHash, c, len(h.payload))
 		}
 		return err
 	})
 	if err != nil {
 		return Header{}, fmt.Errorf("the header: %w", err)
 	}
-	for i, name := range headerNames {
-		if !seen[i+1] {
-			return Header{}, fmt.Errorf("the header: %w", missing{What: name})
+	for _, tag := range slices.Sorted(maps.Keys(headerParts)) {
+		if !seen[tag] {
+			return Header{}, fmt.Errorf("the header: %w", missing{What: headerParts[tag]})
 		}
 	}
 	switch {
 	case h.kind == "":
-		return Header{}, fmt.Errorf("the header: %w", zeroField{What: "kind"})
+		return Header{}, fmt.Errorf("the header: %w", zeroField{What: partKind})
 	case h.schema == 0:
-		return Header{}, fmt.Errorf("the header: %w", zeroField{What: "schema version"})
+		return Header{}, fmt.Errorf("the header: %w", zeroField{What: partSchema})
 	case h.policy == 0:
-		return Header{}, fmt.Errorf("the header: %w", zeroField{What: "policy version"})
+		return Header{}, fmt.Errorf("the header: %w", zeroField{What: partPolicy})
 	case h.position.n == 0:
-		return Header{}, fmt.Errorf("the header: %w", zeroField{What: "causal position"})
+		return Header{}, fmt.Errorf("the header: %w", zeroField{What: partPosition})
 	}
 	return h, nil
 }
@@ -608,29 +576,29 @@ var errRootNamesPart = errors.New("a root subject naming an element or a segment
 func readAbout(b []byte) (About, error) {
 	var item, element []byte
 	var width uint64
-	var hasItem, hasElement, hasWidth bool
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{subjectItem: partItem, subjectElement: partElement, subjectWidth: partWidth}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case subjectItem:
-			item, hasItem = r.Bytes(), true
+			item = r.Bytes()
 		case subjectElement:
-			element, hasElement = r.Bytes(), true
+			element = r.Bytes()
 		case subjectWidth:
-			width, hasWidth = r.Uvarint(), true
+			width = r.Uvarint()
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("the subject: %w", err)
 	}
+	hasItem, hasElement, hasWidth := seen[subjectItem], seen[subjectElement], seen[subjectWidth]
 	if !hasItem {
 		if hasElement || hasWidth {
 			return nil, errRootNamesPart
 		}
 		return Root{}, nil
 	}
-	of, err := idBits(item)
+	of, err := idBits(partItem, item)
 	if err != nil {
 		return nil, fmt.Errorf("the subject's item: %w", err)
 	}
@@ -644,7 +612,7 @@ func readAbout(b []byte) (About, error) {
 		}
 		return Item{ID: ItemID{b: of}}, nil
 	}
-	el, err := idBits(element)
+	el, err := idBits(partElement, element)
 	if err != nil {
 		return nil, fmt.Errorf("the subject's element: %w", err)
 	}
@@ -654,11 +622,11 @@ func readAbout(b []byte) (About, error) {
 	return Element{Of: ItemID{b: of}, ID: ElementID{b: el}}, nil
 }
 
-// idBits reads an id's stored 16 bytes.
-func idBits(b []byte) ([16]byte, error) {
+// idBits reads an id's stored 16 bytes, the field what.
+func idBits(what part, b []byte) ([16]byte, error) {
 	var id [16]byte
-	if len(b) != len(id) {
-		return id, wrongSize{What: "an id", Got: len(b), Want: len(id)}
+	if err := sized(what, b, len(id)); err != nil {
+		return id, err
 	}
 	copy(id[:], b)
 	return id, nil
@@ -667,18 +635,16 @@ func idBits(b []byte) ([16]byte, error) {
 // readAttribution reads an attribution's stored form.
 func readAttribution(b []byte) (Attribution, error) {
 	a := Attribution{Agent: Unlabeled{}}
-	var hasCheckout, hasPrincipal bool
 	r := wire.NewReader(b)
 	var err error
-	err = r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{1: partCheckout, 2: partPrincipal, 3: partAgent}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			c := r.Bytes()
-			hasCheckout = len(c) == len(a.Checkout)
 			copy(a.Checkout[:], c)
+			err = sized(partCheckout, c, len(a.Checkout))
 		case 2:
 			a.Principal, err = readPrincipal(r.Bytes())
-			hasPrincipal = true
 		case 3:
 			a.Agent = AgentFrom(string(r.Bytes()))
 		}
@@ -687,10 +653,10 @@ func readAttribution(b []byte) (Attribution, error) {
 	switch {
 	case err != nil:
 		return Attribution{}, fmt.Errorf("the attribution: %w", err)
-	case !hasCheckout:
-		return Attribution{}, fmt.Errorf("the attribution: %w", missing{What: "16-byte checkout id"})
-	case !hasPrincipal:
-		return Attribution{}, fmt.Errorf("the attribution: %w", missing{What: "principal"})
+	case !seen[1]:
+		return Attribution{}, fmt.Errorf("the attribution: %w", missing{What: partCheckout})
+	case !seen[2]:
+		return Attribution{}, fmt.Errorf("the attribution: %w", missing{What: partPrincipal})
 	}
 	return a, nil
 }
@@ -707,16 +673,15 @@ func (p PrincipalID) wire() []byte {
 // readPrincipal reads a principal's stored form.
 func readPrincipal(b []byte) (PrincipalID, error) {
 	var p PrincipalID
-	var hasSuite bool
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{1: partSuite, 2: partKey}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			suite, err := byteOf(r)
 			if err != nil {
 				return err
 			}
-			p.suite, hasSuite = SuiteID(suite), true
+			p.suite = SuiteID(suite)
 		case 2:
 			p.key = string(r.Bytes())
 		}
@@ -725,8 +690,8 @@ func readPrincipal(b []byte) (PrincipalID, error) {
 	switch {
 	case err != nil:
 		return PrincipalID{}, fmt.Errorf("the principal: %w", err)
-	case !hasSuite:
-		return PrincipalID{}, fmt.Errorf("the principal: %w", missing{What: "suite"})
+	case !seen[1]:
+		return PrincipalID{}, fmt.Errorf("the principal: %w", missing{What: partSuite})
 	}
 	return p, nil
 }
@@ -737,7 +702,7 @@ func readObjectID(b []byte, what string) (git.ObjectID, error) {
 	var format git.ObjectFormat
 	var sum []byte
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	_, err := readOnce(r, map[uint32]part{1: partObjectFormat, 2: partObjectHash}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			f, err := byteOf(r)

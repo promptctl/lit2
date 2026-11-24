@@ -105,16 +105,6 @@ var (
 	errCommitmentNotText = errors.New("a plaintext envelope whose commitment is not its text's")
 )
 
-// notOneForm is What, a message of a sum, holding N of the sum's forms, not
-// one: one type every reader of a sum refuses with, What saying which sum
-// `[LAW:one-type-per-behavior]`.
-type notOneForm struct {
-	What string
-	N    int
-}
-
-func (f notOneForm) Error() string { return fmt.Sprintf("%s in %d forms", f.What, f.N) }
-
 // Open reads e with k's keys.
 func Open(e Envelope, k Keyring) Opened {
 	switch f := e.form.(type) {
@@ -170,25 +160,21 @@ func (e Envelope) wire() []byte {
 // or a plaintext whose commitment is not its text's, is refused.
 func readEnvelope(b []byte) (Envelope, error) {
 	var e Envelope
-	forms, committed := 0, false
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{envelopePlain: partPlaintext, envelopeSealed: partSealed, envelopeCommitment: partCommitment}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case envelopePlain:
 			p, err := readPlain(r.Bytes())
-			e.form, forms = p, forms+1
+			e.form = p
 			return err
 		case envelopeSealed:
 			s, err := readSealed(r.Bytes())
-			e.form, forms = s, forms+1
+			e.form = s
 			return err
 		case envelopeCommitment:
 			c := r.Bytes()
-			if len(c) != len(e.commitment) {
-				return wrongSize{What: "an envelope's commitment", Got: len(c), Want: len(e.commitment)}
-			}
 			copy(e.commitment[:], c)
-			committed = true
+			return sized(partCommitment, c, len(e.commitment))
 		}
 		return nil
 	})
@@ -197,11 +183,11 @@ func readEnvelope(b []byte) (Envelope, error) {
 	}
 	e.unknown = r.Rest()
 	switch {
-	case forms > 1:
-		return Envelope{}, fmt.Errorf("an envelope is plain or sealed: %w", notOneForm{What: "an envelope", N: forms})
-	case !committed:
-		return Envelope{}, fmt.Errorf("an envelope: %w", missing{What: "commitment"})
-	case forms == 0:
+	case seen[envelopePlain] && seen[envelopeSealed]:
+		return Envelope{}, fmt.Errorf("an envelope is plain or sealed, and this one is both: %w", notOneForm{What: partEnvelope})
+	case !seen[envelopeCommitment]:
+		return Envelope{}, fmt.Errorf("an envelope: %w", missing{What: partCommitment})
+	case e.form == nil:
 		e.form = unknownForm{}
 	}
 	if p, ok := e.form.(plain); ok && plainCommitment(p.text) != e.commitment {
@@ -213,7 +199,7 @@ func readEnvelope(b []byte) (Envelope, error) {
 func readPlain(b []byte) (plain, error) {
 	var p plain
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	_, err := readOnce(r, map[uint32]part{1: partText}, func(tag uint32, r *wire.Reader) error {
 		if tag == 1 {
 			p.text = bytes.Clone(r.Bytes())
 		}
@@ -229,7 +215,7 @@ func readPlain(b []byte) (plain, error) {
 func readSealed(b []byte) (sealed, error) {
 	var s sealed
 	r := wire.NewReader(b)
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	_, err := readOnce(r, map[uint32]part{1: partSuite, 2: partTier, 3: partEpoch, 4: partNonce, 5: partCiphertext}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
 			suite, err := byteOf(r)

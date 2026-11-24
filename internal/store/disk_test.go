@@ -107,30 +107,57 @@ func TestAThousandAppendsAndAPublishLeaveTheCodeRepositoryAsItWasAndPassFsck(t *
 }
 
 // TestAppendingProcess is the child of the two-process test: with
-// LIT2_STORE_ROOT set it says it is ready, waits for the parent's go, then
-// appends LIT2_APPENDS records to the log there, prints when its first
-// append began and its last ended, and exits; run directly, it has no
-// store to append to and skips.
+// LIT2_STORE_ROOT set it appends LIT2_APPENDS records to the log there,
+// each on its own turn, and exits; run directly, it has no store to
+// append to and skips.
 func TestAppendingProcess(t *testing.T) {
 	root := os.Getenv("LIT2_STORE_ROOT")
 	if root == "" {
 		t.Skip("the child of TestTwoProcessesAppendingToOneLogLoseNoRecord, run only by it with LIT2_STORE_ROOT set")
 	}
-	var n int
+	var n, turn int
 	if _, err := fmt.Sscan(os.Getenv("LIT2_APPENDS"), &n); err != nil {
 		t.Fatal(err)
 	}
-	prefix, barrier := os.Getenv("LIT2_PREFIX"), os.Getenv("LIT2_BARRIER")
-	repo := gittest.Runner(t).RepositoryAt(filepath.Join(root, "repo"))
-	ports := store.Ports{Files: store.FilesAt(root), Objects: repo, Refs: repo, Entropy: storetest.Entropy(byte(os.Getpid()))}
-	s, batches := store.Open(ida, ports, store.DefaultSegmentBound), storetest.Numbered(t, n, prefix)
-	if err := os.WriteFile(filepath.Join(barrier, "ready-"+prefix), nil, 0o644); err != nil {
+	if _, err := fmt.Sscan(os.Getenv("LIT2_FIRST_TURN"), &turn); err != nil {
 		t.Fatal(err)
 	}
-	await(t, func() bool { return exists(t, filepath.Join(barrier, "go")) })
-	first := time.Now()
-	storetest.AppendAll(t, s, batches...)
-	fmt.Printf("appended %d %d\n", first.UnixNano(), time.Now().UnixNano())
+	repo := gittest.Runner(t).RepositoryAt(filepath.Join(root, "repo"))
+	files := &turnTaking{Files: store.FilesAt(root), t: t, dir: os.Getenv("LIT2_BARRIER"), turn: turn}
+	ports := store.Ports{Files: files, Objects: repo, Refs: repo, Entropy: storetest.Entropy(byte(os.Getpid()))}
+	storetest.AppendAll(t, store.Open(ida, ports, store.DefaultSegmentBound), storetest.Numbered(t, n, os.Getenv("LIT2_PREFIX"))...)
+}
+
+// turnTaking is Files whose every append waits for its turn: turn n is
+// taken once turn-<n-1> is in dir, turn 0 once go is, and handed on by
+// creating turn-<n>, once, after the append has landed. Its process takes
+// every other turn, so the other process's turns fall between its own.
+// Append is the one call of a store's append that writes the log;
+// creating the log is CreateOnce, whose race is its own and needs no turn.
+type turnTaking struct {
+	store.Files
+	t    *testing.T
+	dir  string
+	turn int
+}
+
+func (f *turnTaking) Append(p store.Path, b []byte) (uint64, error) {
+	prev := "go"
+	if f.turn > 0 {
+		prev = fmt.Sprintf("turn-%d", f.turn-1)
+	}
+	await(f.t, func() bool { return exists(f.t, filepath.Join(f.dir, prev)) })
+	end, err := f.Files.Append(p, b)
+	if err != nil {
+		return end, err
+	}
+	// O_EXCL, so a turn two processes both took fails the second
+	h, err := os.OpenFile(filepath.Join(f.dir, fmt.Sprintf("turn-%d", f.turn)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return end, err
+	}
+	f.turn += 2
+	return end, h.Close()
 }
 
 // await polls done, briefly, until it holds or the test's deadline, a
@@ -159,47 +186,40 @@ func exists(t *testing.T, path string) bool {
 	return err == nil
 }
 
-// Two processes appending to one log at once lose no record. Both wait on
-// a barrier, each ready before the parent says go, so their appends
-// start together, and each says when its appends began and ended, so the
-// test fails if they never overlapped.
+// Two processes appending to one log lose no record. Their appends are
+// made to alternate, each on its own turn, so every append of one lands
+// between two of the other's [LAW:verifiable-goals]: the interleaving is
+// forced, never left to the scheduler.
 func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 	root, barrier := filepath.Join(t.TempDir(), "store"), t.TempDir()
 	// the children end by the test's own deadline, so a hung child fails
-	// this test rather than the whole binary's timeout
-	ctx := t.Context()
+	// this test rather than the whole binary's timeout; and a child that
+	// fails strands the other on a turn it will never get, so either's
+	// failure ends both
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	if deadline, ok := t.Deadline(); ok {
-		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, deadline)
 		defer cancel()
 	}
+	const appends = 100
 	prefixes := []string{"first", "second"}
 	outs := make([]bytes.Buffer, len(prefixes))
-	exited := make(chan error, len(prefixes))
 	var wg sync.WaitGroup
 	for i, prefix := range prefixes {
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAppendingProcess$", "-test.count=1")
-		cmd.Env = append(os.Environ(), "LIT2_STORE_ROOT="+root, "LIT2_APPENDS=100", "LIT2_PREFIX="+prefix, "LIT2_BARRIER="+barrier)
+		cmd.Env = append(os.Environ(), "LIT2_STORE_ROOT="+root, fmt.Sprintf("LIT2_APPENDS=%d", appends), "LIT2_PREFIX="+prefix, "LIT2_BARRIER="+barrier, fmt.Sprintf("LIT2_FIRST_TURN=%d", i))
 		cmd.Stdout, cmd.Stderr = &outs[i], &outs[i]
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
 		wg.Go(func() {
-			err := cmd.Wait()
-			if err != nil {
+			if err := cmd.Wait(); err != nil {
+				cancel()
 				t.Errorf("the %s appender: %v\n%s", prefix, err, &outs[i])
 			}
-			exited <- err
 		})
 	}
-	// a child that exits before it is ready never will be, so the barrier
-	// stops waiting for it
-	await(t, func() bool {
-		if len(exited) > 0 {
-			return true
-		}
-		return exists(t, filepath.Join(barrier, "ready-first")) && exists(t, filepath.Join(barrier, "ready-second"))
-	})
 	if err := os.WriteFile(filepath.Join(barrier, "go"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -207,27 +227,27 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 	if t.Failed() {
 		return
 	}
-	spans := make([][2]int64, len(prefixes))
-	for i := range prefixes {
-		said := 0
-		for line := range strings.Lines(outs[i].String()) {
-			if span, ok := strings.CutPrefix(line, "appended "); ok {
-				said, _ = fmt.Sscan(span, &spans[i][0], &spans[i][1])
-			}
-		}
-		if said != 2 {
-			t.Fatalf("the %s appender said %q; want when its appends began and ended", prefixes[i], &outs[i])
-		}
+	turns, err := filepath.Glob(filepath.Join(barrier, "turn-*"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("the appenders ran over %v and %v", spans[0], spans[1])
-	if spans[0][0] >= spans[1][1] || spans[1][0] >= spans[0][1] {
-		t.Errorf("the appenders ran over %v and %v, one after the other; want them overlapping", spans[0], spans[1])
+	if len(turns) != 2*appends {
+		t.Errorf("the appenders took %d turns; want one per append, %d", len(turns), 2*appends)
 	}
 	repo := gittest.Runner(t).RepositoryAt(filepath.Join(root, "repo"))
 	s := store.Open(idb, store.Ports{Files: store.FilesAt(root), Objects: repo, Refs: repo, Entropy: storetest.Entropy(3)}, store.DefaultSegmentBound)
 	got := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: ida}))
-	if len(got) != 200 || len(slices.Compact(slices.Sorted(slices.Values(got)))) != 200 {
-		t.Errorf("two processes of 100 appends each left %d records; want 200, each once", len(got))
+	if len(got) != 2*appends || len(slices.Compact(slices.Sorted(slices.Values(got)))) != 2*appends {
+		t.Errorf("two processes of %d appends each left %d records; want %d, each once", appends, len(got), 2*appends)
+	}
+	var alternating []string
+	for i := range appends {
+		for _, prefix := range prefixes {
+			alternating = append(alternating, fmt.Sprintf("%s-%04d", prefix, i))
+		}
+	}
+	if !slices.Equal(got, alternating) {
+		t.Errorf("the log holds %v; want the two processes' appends alternating, %v", got, alternating)
 	}
 }
 

@@ -84,42 +84,55 @@ func TestDoubleDashEndsFlagsAndDashIsAValue(t *testing.T) {
 func TestNotALit2CommandLine(t *testing.T) {
 	for _, tc := range []struct {
 		args, control []string
-		code          ParseCode
 		want          error
 	}{
-		{[]string{"frobnicate"}, []string{"get", "x"}, UnknownVerb, errUnknownVerb},
-		{[]string{"admin", "frobnicate"}, []string{"admin", "init"}, UnknownVerb, errUnknownVerb},
-		{[]string{"get"}, []string{"get", "x"}, Usage, errNoPaths},
-		{[]string{"set", "x/status"}, []string{"set", "x/status", "v"}, Usage, errNotPairs},
-		{[]string{"add", "x/labels", "a", "x/labels"}, []string{"add", "x/labels", "a"}, Usage, errNotPairs},
-		{[]string{"admin"}, []string{"admin", "init"}, Usage, errNoCommand},
-		{[]string{"config"}, []string{"config", "commit"}, Usage, errNoCommand},
-		{[]string{"config", "frobnicate"}, []string{"config", "commit"}, UnknownVerb, errUnknownVerb},
-		{[]string{"config", "commit", "--dry-run"}, []string{"config", "commit"}, Usage, errNoDryRun},
-		{[]string{"admin", "init", "extra"}, []string{"admin", "init"}, Usage, errOperands},
-		{[]string{"get", "x", "--frob"}, []string{"get", "x"}, Usage, errUnknownFlag},
-		{[]string{"get", "x", "--dry-run"}, []string{"get", "x"}, Usage, errNoDryRun},
-		{[]string{"admin", "init", "--dry-run"}, []string{"admin", "init"}, Usage, errNoDryRun},
+		{[]string{"frobnicate"}, []string{"get", "x"}, errUnknownVerb},
+		{[]string{"admin", "frobnicate"}, []string{"admin", "init"}, errUnknownVerb},
+		{[]string{"get"}, []string{"get", "x"}, errNoPaths},
+		{[]string{"set", "x/status"}, []string{"set", "x/status", "v"}, errNotPairs},
+		{[]string{"add", "x/labels", "a", "x/labels"}, []string{"add", "x/labels", "a"}, errNotPairs},
+		{[]string{"admin"}, []string{"admin", "init"}, errNoCommand},
+		{[]string{"config"}, []string{"config", "commit"}, errNoCommand},
+		{[]string{"config", "frobnicate"}, []string{"config", "commit"}, errUnknownVerb},
+		{[]string{"config", "commit", "--dry-run"}, []string{"config", "commit"}, errNoDryRun},
+		{[]string{"admin", "init", "extra"}, []string{"admin", "init"}, errOperands},
+		{[]string{"get", "x", "--frob"}, []string{"get", "x"}, errUnknownFlag},
+		{[]string{"get", "x", "--dry-run"}, []string{"get", "x"}, errNoDryRun},
+		{[]string{"admin", "init", "--dry-run"}, []string{"admin", "init"}, errNoDryRun},
 	} {
 		if _, err := parse(tc.control...); err != nil {
 			t.Errorf("control Parse(%q): %v", tc.control, err)
 		}
 		_, err := parse(tc.args...)
 		var f ParseFailure
-		if !errors.As(err, &f) || f.code != tc.code || f.Class() != reason.ClassUsage || !errors.Is(err, tc.want) {
-			t.Errorf("Parse(%q) failed with %v (code %d); want a usage-class failure with code %d, %v", tc.args, err, f.code, tc.code, tc.want)
+		if !errors.As(err, &f) || f.Class() != reason.ClassUsage || !errors.Is(err, tc.want) {
+			t.Errorf("Parse(%q) failed with %v; want a usage-class failure of %v", tc.args, err, tc.want)
 		}
 	}
 }
 
-func TestEveryParseCodeHasItsOwnWireName(t *testing.T) {
-	seen := map[string]ParseCode{}
-	for _, code := range []ParseCode{UnknownVerb, Usage} {
-		name := refuseParse(code, errUnknownVerb).Reason()
-		if prior, ok := seen[name]; ok || name == "" {
-			t.Errorf("codes %d and %d share the wire name %q", prior, code, name)
+// TestEveryParseRefusalHasItsOwnWireName: a word that names no row is
+// unknown_verb, and a row's operands or a flag that are wrong are usage.
+func TestEveryParseRefusalHasItsOwnWireName(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"frobnicate"}, "unknown_verb"},
+		{[]string{"config", "frobnicate"}, "unknown_verb"},
+		{[]string{"get"}, "usage"},
+		{[]string{"get", "x", "--frob"}, "usage"},
+		{[]string{"config", "commit", "--dry-run"}, "usage"},
+	} {
+		_, err := parse(tc.args...)
+		var f ParseFailure
+		if !errors.As(err, &f) {
+			t.Errorf("Parse(%q) = %v; want a ParseFailure", tc.args, err)
+			continue
 		}
-		seen[name] = code
+		if got := f.Reason(); got != tc.want {
+			t.Errorf("Parse(%q) is reason %q; want %q", tc.args, got, tc.want)
+		}
 	}
 }
 

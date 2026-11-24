@@ -131,7 +131,12 @@ func (a Address) String() string {
 var (
 	errEmptyPath = errors.New("an empty path")
 	errEmptyStep = errors.New("an empty step")
+	errSegments  = errors.New("a name of more than one segment")
 )
+
+// errPrefixedElement is an element named by an id under a prefix: an
+// element's id is its item's, so it is written bare.
+var errPrefixedElement = errors.New("an element id under a prefix")
 
 // Parse reads one path against the state and the schema:
 //
@@ -244,9 +249,15 @@ func keyed(st fold.State, t config.Table, a Address, it fold.Item, path field.Pa
 		a.Target = Member{Path: path, Decl: row.Decl, Name: n}
 		return a, nil
 	case field.Elements:
+		if strings.Contains(key, ".") {
+			return Address{}, Syntax{Text: key, Why: fmt.Errorf("an element of %s is named by its id or its one segment, not %w", path, errSegments)}
+		}
+		if strings.Contains(key, "-") {
+			return Address{}, Syntax{Text: key, Why: fmt.Errorf("an element of %s is named by its bare id or its one segment: %w", path, errPrefixedElement)}
+		}
 		short, err := events.ParseShortID(key, events.Prefixes{})
-		if err != nil || strings.Contains(key, ".") {
-			return Address{}, Syntax{Text: key, Why: fmt.Errorf("an element of %s is named by its id or its one segment", path)}
+		if err != nil {
+			return Address{}, Syntax{Text: key, Why: fmt.Errorf("an element of %s is named by its id or its one segment: %w", path, err)}
 		}
 		id, seg, err := resolveElement(it, events.MustName(string(path)), short)
 		if err != nil {

@@ -110,8 +110,8 @@ func (NoCheckout) place()  {}
 func (Unlocatable) place() {}
 
 // Internal is lit2 failing: an error that answers no class, a panic, a row
-// whose body is not built. Its cause is never absent: it is built from one
-// `[LAW:parse-dont-validate]`.
+// whose body is not built. Outside this package it is built from its
+// cause by Broke.
 type Internal struct {
 	err   error
 	stack []byte

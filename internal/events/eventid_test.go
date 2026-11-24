@@ -15,7 +15,7 @@ func TestAnEventIDFileReadsBackTheIDItWasWrittenFrom(t *testing.T) {
 	}
 	for bad, want := range map[string]error{
 		strings.ToUpper(id.String()) + "\n": errNotAnEventID,
-		id.String() + "\n\n":                wrongSize{What: "an event id file's text before its line ending", Got: 65, Want: 64},
+		id.String() + "\n\n":                wrongSize{What: partEventIDText},
 		id.String()[:62] + "zz\n":           errNotAnEventID,
 	} {
 		if _, err := ReadEventIDFile([]byte(bad)); !errors.Is(err, want) {

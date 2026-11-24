@@ -27,7 +27,8 @@ func NewLog(dir string) Sink { return commandLog{dir: dir} }
 type commandLog struct{ dir string }
 
 // Housekeeping is a write whose event is in the log and whose removal of
-// old day files failed: a fact of its own, not a lost record.
+// old day files failed: a fact of its own, not a lost record. Write builds
+// it from the removal's error.
 type Housekeeping struct{ err error }
 
 func (h Housekeeping) Error() string { return h.err.Error() }

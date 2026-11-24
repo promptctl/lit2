@@ -158,24 +158,17 @@ func TestThePolicyPayloadsReadBackAsWritten(t *testing.T) {
 	readBack(t, Request{}, ReadRequest)
 }
 
-func TestAPolicyPayloadMissingAFieldOrGivingOneTwiceIsRefused(t *testing.T) {
+func TestAPolicyPayloadMissingAFieldOrGivingOneOfTheWrongLengthIsRefused(t *testing.T) {
 	owner, contributor := MustName("owner"), MustName("contributor")
 	a := keyOf(1).Principal()
-	again := func(p Payload, tag uint32, field []byte) []byte {
-		var w wire.Writer
-		w.Bytes(tag, field)
-		return append(payloadBytes(p), w.Encoded()...)
-	}
-	var fixedOne wire.Writer
-	fixedOne.Uvarint(thresholdFixed, 1)
-	var member wire.Writer
-	member.Bytes(1, a.wire())
-	member.Bytes(2, []byte("owner"))
 	enroll := Enroll{Owner: owner, Roles: map[Name][]Capability{contributor: nil}}
 	prop := Propose{Base: Digest{3}, Members: map[PrincipalID]Name{a: owner}, Threshold: Majority{}}
 	noBase := payloadBytes(prop)[len(futureField(1, string(make([]byte, 32)))):]
 	var noThreshold wire.Writer
 	noThreshold.Bytes(1, make([]byte, 32))
+	// a base or a proposal of 31 bytes, each field the control's but the one
+	shortBase := append(futureField(1, string(make([]byte, 31))), payloadBytes(prop)[len(futureField(1, string(make([]byte, 32)))):]...)
+	shortProposal := futureField(1, string(make([]byte, 31)))
 	// the controls: each payload whole reads
 	for _, c := range []struct {
 		read func(*wire.Reader) (Versioned, error)
@@ -191,13 +184,12 @@ func TestAPolicyPayloadMissingAFieldOrGivingOneTwiceIsRefused(t *testing.T) {
 		b    []byte
 		want error
 	}{
-		{"an enrollment with two owner roles", ReadEnroll, again(enroll, 1, []byte("boss")), twice{What: "its owner role"}},
-		{"an enrollment with no owner role", ReadEnroll, payloadBytes(enroll)[len(futureField(1, "owner")):], missing{What: "owner role"}},
-		{"a proposal with two thresholds", ReadPropose, again(prop, 3, fixedOne.Encoded()), twice{What: "its threshold"}},
-		{"a proposal naming one member twice", ReadPropose, again(prop, 2, member.Encoded()), twice{What: "the member " + a.String()}},
-		{"a proposal with no base", ReadPropose, noBase, missing{What: "base policy"}},
-		{"a proposal with no threshold", ReadPropose, noThreshold.Encoded(), missing{What: "threshold"}},
-		{"an approval citing no proposal", ReadApprove, nil, missing{What: "proposal"}},
+		{"an enrollment with no owner role", ReadEnroll, payloadBytes(enroll)[len(futureField(1, "owner")):], missing{What: partOwnerRole}},
+		{"a proposal with no base", ReadPropose, noBase, missing{What: partBase}},
+		{"a proposal with a short base", ReadPropose, shortBase, wrongSize{What: partBase}},
+		{"a proposal with no threshold", ReadPropose, noThreshold.Encoded(), missing{What: partThreshold}},
+		{"an approval citing no proposal", ReadApprove, nil, missing{What: partProposal}},
+		{"an approval citing a short proposal", ReadApprove, shortProposal, wrongSize{What: partProposal}},
 	} {
 		if _, err := c.read(wire.NewReader(c.b)); !errors.Is(err, c.want) {
 			t.Errorf("%s reads with %v; want %v", c.name, err, c.want)

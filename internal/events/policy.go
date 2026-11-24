@@ -558,15 +558,11 @@ func (p Enroll) AppendTo(w *wire.Writer) {
 // that never name it.
 func ReadEnroll(r *wire.Reader) (Versioned, error) {
 	p := Enroll{Roles: map[Name][]Capability{}}
-	var hasOwner bool
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{1: partOwnerRole}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case 1:
-			if hasOwner {
-				return twice{What: "its owner role"}
-			}
 			n, err := ParseName(string(r.Bytes()))
-			p.Owner, hasOwner = n, true
+			p.Owner = n
 			return err
 		case 2:
 			name, caps, err := readRole(r.Bytes())
@@ -574,7 +570,7 @@ func ReadEnroll(r *wire.Reader) (Versioned, error) {
 				return err
 			}
 			if _, ok := p.Roles[name]; ok {
-				return twice{What: "the role " + name.s}
+				return fmt.Errorf("the role %s: %w", name, twice{What: partRole})
 			}
 			p.Roles[name] = caps
 		}
@@ -584,8 +580,8 @@ func ReadEnroll(r *wire.Reader) (Versioned, error) {
 	_, ownerListed := p.Roles[p.Owner]
 	switch {
 	case err != nil:
-	case !hasOwner:
-		err = missing{What: "owner role"}
+	case !seen[1]:
+		err = missing{What: partOwnerRole}
 	case ownerListed:
 		err = fmt.Errorf("the role %s is the owner role, which grants every path and lists none: %w", p.Owner, errOwnerRoleListed)
 	}
@@ -598,7 +594,7 @@ func ReadEnroll(r *wire.Reader) (Versioned, error) {
 func readRole(b []byte) (Name, []Capability, error) {
 	var name Name
 	var caps []Capability
-	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
+	_, err := readOnce(wire.NewReader(b), map[uint32]part{1: partRoleName}, func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
@@ -611,7 +607,7 @@ func readRole(b []byte) (Name, []Capability, error) {
 		return err
 	})
 	if err == nil && name.s == "" {
-		err = missing{What: "name"}
+		err = missing{What: partRoleName}
 	}
 	if err != nil {
 		return Name{}, nil, fmt.Errorf("a role: %w", err)
@@ -661,30 +657,23 @@ func writeChange(w *wire.Writer, members map[PrincipalID]Name, threshold Thresho
 // ReadPropose reads policy.propose at version 1.
 func ReadPropose(r *wire.Reader) (Versioned, error) {
 	p := Propose{Members: map[PrincipalID]Name{}}
-	var hasBase bool
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{1: partBase, 3: partThreshold}, func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			b := r.Bytes()
-			if hasBase || len(b) != len(p.Base) {
-				return errors.New("it names one base policy's 32-byte digest")
-			}
 			copy(p.Base[:], b)
-			hasBase = true
+			err = sized(partBase, b, len(p.Base))
 		case 2:
 			var who PrincipalID
 			var role Name
 			if who, role, err = readMembership(r.Bytes()); err == nil {
 				if _, ok := p.Members[who]; ok {
-					return twice{What: "the member " + who.String()}
+					return fmt.Errorf("the member %s: %w", who, twice{What: partMember})
 				}
 				p.Members[who] = role
 			}
 		case 3:
-			if p.Threshold != nil {
-				return twice{What: "its threshold"}
-			}
 			p.Threshold, err = readThreshold(r.Bytes())
 		}
 		return err
@@ -692,10 +681,10 @@ func ReadPropose(r *wire.Reader) (Versioned, error) {
 	p.unknown = r.Rest()
 	switch {
 	case err != nil:
-	case !hasBase:
-		err = missing{What: "base policy"}
-	case p.Threshold == nil:
-		err = missing{What: "threshold"}
+	case !seen[1]:
+		err = missing{What: partBase}
+	case !seen[3]:
+		err = missing{What: partThreshold}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("a policy.propose: %w", err)
@@ -706,13 +695,11 @@ func ReadPropose(r *wire.Reader) (Versioned, error) {
 func readMembership(b []byte) (PrincipalID, Name, error) {
 	var who PrincipalID
 	var role Name
-	var hasWho bool
-	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(wire.NewReader(b), map[uint32]part{1: partPrincipal, 2: partRole}, func(tag uint32, r *wire.Reader) error {
 		var err error
 		switch tag {
 		case 1:
 			who, err = readPrincipal(r.Bytes())
-			hasWho = true
 		case 2:
 			role, err = ParseName(string(r.Bytes()))
 		}
@@ -720,10 +707,10 @@ func readMembership(b []byte) (PrincipalID, Name, error) {
 	})
 	switch {
 	case err != nil:
-	case !hasWho:
-		err = missing{What: "principal"}
-	case role.s == "":
-		err = missing{What: "role"}
+	case !seen[1]:
+		err = missing{What: partPrincipal}
+	case !seen[2]:
+		err = missing{What: partRole}
 	}
 	if err != nil {
 		return PrincipalID{}, Name{}, fmt.Errorf("a member: %w", err)
@@ -733,7 +720,7 @@ func readMembership(b []byte) (PrincipalID, Name, error) {
 
 func readThreshold(b []byte) (Threshold, error) {
 	var made []Threshold
-	err := wire.NewReader(b).Each(func(tag uint32, r *wire.Reader) error {
+	_, err := readOnce(wire.NewReader(b), map[uint32]part{thresholdMajority: partMajority, thresholdFixed: partFixed}, func(tag uint32, r *wire.Reader) error {
 		switch tag {
 		case thresholdMajority:
 			r.Bytes()
@@ -751,7 +738,7 @@ func readThreshold(b []byte) (Threshold, error) {
 	case err != nil:
 		return nil, fmt.Errorf("a threshold: %w", err)
 	case len(made) != 1:
-		return nil, fmt.Errorf("a threshold is a majority or a number: %w", notOneForm{What: "a threshold", N: len(made)})
+		return nil, fmt.Errorf("a threshold is a majority or a number, and this one is in %d forms: %w", len(made), notOneForm{What: partThreshold})
 	}
 	return made[0], nil
 }
@@ -765,22 +752,17 @@ func (p Approve) AppendTo(w *wire.Writer) {
 // ReadApprove reads policy.approve at version 1.
 func ReadApprove(r *wire.Reader) (Versioned, error) {
 	var p Approve
-	var has bool
-	err := r.Each(func(tag uint32, r *wire.Reader) error {
+	seen, err := readOnce(r, map[uint32]part{1: partProposal}, func(tag uint32, r *wire.Reader) error {
 		if tag != 1 {
 			return nil
 		}
 		b := r.Bytes()
-		if has || len(b) != len(p.Proposal) {
-			return errors.New("it cites one proposal's 32-byte digest")
-		}
 		copy(p.Proposal[:], b)
-		has = true
-		return nil
+		return sized(partProposal, b, len(p.Proposal))
 	})
 	p.unknown = r.Rest()
-	if err == nil && !has {
-		err = missing{What: "proposal"}
+	if err == nil && !seen[1] {
+		err = missing{What: partProposal}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("a policy.approve: %w", err)

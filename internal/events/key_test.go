@@ -155,6 +155,23 @@ var didKeys = [][2]string{
 	{"aa19f750f580107930df0f2b0201c0c7f4210b0e2f4a4493f72dac472ae0e551", "did:key:z6MkhWqdDBPojHA7cprTGTt5yHv5yUi1B8cnXn8ReLumkw6E"},
 }
 
+// A key file of another suite is refused as one, saying what is wrong with
+// it: that it does not start with its suite. The key's own file is the
+// control.
+func TestAKeyFileOfAnotherSuiteSaysItDoesNotStartWithItsSuite(t *testing.T) {
+	file := string(keyOf(7).FileText())
+	if _, err := ParseKeyFile([]byte(file)); err != nil {
+		t.Fatalf("the control key file does not read: %v", err)
+	}
+	_, err := ParseKeyFile([]byte("ed25518" + strings.TrimPrefix(file, "ed25519")))
+	if !errors.Is(err, errKeyFileSuite) {
+		t.Fatalf("a key file of suite ed25518 reads with %v; want errKeyFileSuite", err)
+	}
+	if !strings.Contains(err.Error(), "does not start with its suite, ed25519") {
+		t.Errorf("a key file of another suite is refused as %q; want it to say it does not start with its suite, ed25519", err)
+	}
+}
+
 func TestThePrincipalIsItsDIDKey(t *testing.T) {
 	for _, v := range didKeys {
 		k := keyFrom(t, v[0])

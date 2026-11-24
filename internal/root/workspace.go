@@ -365,7 +365,7 @@ var errNoVersionInForce = errors.New("no version in force")
 
 // commitRefused is a file config commit will not apply until a step is
 // taken, the step named; its cause wraps which file it is of the four.
-// refuseCommit is its one maker, so it always holds its cause.
+// It is built from its cause by refuseCommit.
 type commitRefused struct{ cause error }
 
 // refuseCommit is the refusal caused by cause.
