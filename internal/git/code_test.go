@@ -111,6 +111,22 @@ func TestAHeadNamingAMissingObjectIsAnError(t *testing.T) {
 	}
 }
 
+// A replace ref or graft that cuts HEAD's history short hides no blob from
+// EverAt: the history read is the one the repository holds.
+func TestAGraftHidesNoBlobFromTheHistory(t *testing.T) {
+	repo := gittest.NewRepo(t)
+	repo.Commit(t, map[string][]byte{"f": []byte("one\n")})
+	repo.Commit(t, map[string][]byte{"f": []byte("two\n")})
+	head := gittest.Git(t, repo.Dir, "rev-parse", "HEAD")
+	gittest.Git(t, repo.Dir, "replace", "--graft", head)
+	if err := os.WriteFile(filepath.Join(repo.Dir, ".git", "info", "grafts"), []byte(head+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ever, err := repo.EverAt("f", git.HashBlob(git.SHA1, []byte("one\n"))); err != nil || !ever {
+		t.Errorf("EverAt(the blob before the graft) = %v, %v; want true", ever, err)
+	}
+}
+
 // TestAShallowCloneSaysWhatItCannotKnow: a blob before the boundary is
 // found; one the walk must pass the boundary for is unknown, refused naming
 // the shallow clone, never answered no.

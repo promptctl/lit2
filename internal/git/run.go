@@ -18,19 +18,19 @@ import (
 // under is decided and where each process is recorded
 // `[LAW:single-enforcer]` `[LAW:nothing-unseen]`.
 type Git struct {
+	// bin is the git binary, or "" for none: every spawn then fails with
+	// errNoGit, so a git missing from PATH, and a Git Find never made, is one
+	// loud error, never a fallback `[LAW:no-silent-failure]`.
 	bin string
-	// missing is why there is no git: every spawn fails with it, so a git
-	// missing from PATH is one loud error, never a fallback
-	// `[LAW:no-silent-failure]`.
-	missing error
 	// env is the environment the process was given, which the user's own
 	// repositories are read under, as git reads them there.
 	env []string
 	mu  sync.Mutex
 	log []Spawn
 	// floor is whether this git keeps lit's repository durable, asked once,
-	// before its first write.
-	floor func() error
+	// before its first write, and its answer.
+	floor    sync.Once
+	floorWhy error
 }
 
 // Spawn is one git process as the command's event records it: its
@@ -60,14 +60,7 @@ func (Unstarted) ended() {}
 // the empty one among them, names a directory only relative to wherever
 // lit2 happens to run, so it names no git, as Go's os/exec refuses one.
 func Find(env []string) *Git {
-	g := &Git{env: env, log: []Spawn{}}
-	g.floor = sync.OnceValue(func() error {
-		out, err := g.run("", g.litEnv(), nil, "version")
-		if err != nil {
-			return err
-		}
-		return atFloor(string(out))
-	})
+	g := &Git{env: env}
 	for _, kv := range env {
 		path, ok := strings.CutPrefix(kv, "PATH=")
 		if !ok {
@@ -83,14 +76,24 @@ func Find(env []string) *Git {
 			}
 		}
 	}
-	g.missing = errors.New("git is not in an absolute directory on PATH: lit2 writes its repository and reads the code repository through the user's git")
 	return g
 }
+
+var errNoGit = errors.New("git is not in an absolute directory on PATH: lit2 writes its repository and reads the code repository through the user's git")
 
 // durable refuses a git older than 2.36, which takes core.fsync without a
 // word and fsyncs no ref, so lit's repository would be less durable than
 // it is set to be. Every write of lit's repository asks it first.
-func (g *Git) durable() error { return g.floor() }
+func (g *Git) durable() error {
+	g.floor.Do(func() {
+		out, err := g.run("", g.litEnv(), nil, "version")
+		if err == nil {
+			err = atFloor(string(out))
+		}
+		g.floorWhy = err
+	})
+	return g.floorWhy
+}
 
 // floor is the oldest git that honors core.fsync.
 var floor = [2]int{2, 36}
@@ -109,7 +112,7 @@ func atFloor(version string) error {
 func (g *Git) Spawns() []Spawn {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return slices.Clone(g.log)
+	return append([]Spawn{}, g.log...)
 }
 
 // Refused is a git process that failed: the spawn says what git said.
@@ -126,11 +129,13 @@ func (r Refused) Unwrap() error { return r.Err }
 
 // userEnv is the environment the user's own repositories are read under:
 // the process's, so git finds and reads them as it does for the user;
-// messages in the C locale, so a refusal reads the same everywhere; and no
+// messages in the C locale, so a refusal reads the same everywhere; no
 // lazy fetch, so an object a partial clone lacks is git's error, never a
-// foreground trip to its remote.
+// foreground trip to its remote; and no replace ref or graft, so what is
+// read is the objects and history the repository holds, never one cut
+// short to look whole.
 func (g *Git) userEnv() []string {
-	return append(slices.Clone(g.env), "LC_ALL=C", "GIT_NO_LAZY_FETCH=1")
+	return append(slices.Clone(g.env), "LC_ALL=C", "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1", "GIT_GRAFT_FILE=/dev/null")
 }
 
 // litEnv is the environment lit's repository is written under: no GIT_
@@ -163,9 +168,9 @@ func (g *Git) run(dir string, env []string, stdin []byte, args ...string) ([]byt
 // exec runs one git process on args and fills in how s, their record,
 // ended.
 func (g *Git) exec(dir string, env []string, stdin []byte, args []string, s *Spawn) ([]byte, error) {
-	if g.missing != nil {
-		s.Ended = Unstarted{Why: g.missing.Error()}
-		return nil, g.missing
+	if g.bin == "" {
+		s.Ended = Unstarted{Why: errNoGit.Error()}
+		return nil, errNoGit
 	}
 	cmd := exec.Command(g.bin, args...)
 	cmd.Dir, cmd.Env, cmd.Stdin = dir, env, bytes.NewReader(stdin)

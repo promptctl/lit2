@@ -173,6 +173,22 @@ func TestAGitMissingFromPathIsOneLoudError(t *testing.T) {
 	}
 }
 
+// A Git that Find never made is a git missing from PATH, the same loud
+// error, never a spawn of nothing.
+func TestAZeroGitIsAMissingOne(t *testing.T) {
+	g := &git.Git{}
+	_, errLocate := g.Locate(t.TempDir())
+	_, errPut := gittest.Put(g.RepositoryAt(filepath.Join(t.TempDir(), "repo")), nil)
+	for _, err := range []error{errLocate, errPut} {
+		if err == nil || !strings.Contains(err.Error(), "git is not in an absolute directory on PATH") {
+			t.Errorf("a spawn of a zero Git failed with %v; want the one error naming PATH", err)
+		}
+	}
+	if spawns := g.Spawns(); spawns == nil || len(spawns) != 2 {
+		t.Errorf("a zero Git's record is %#v; want both attempts", spawns)
+	}
+}
+
 // Every git process is on the record: its arguments, how it ended and its
 // stderr. A read of lit's repository is go-git's, in process, and spawns
 // nothing.
