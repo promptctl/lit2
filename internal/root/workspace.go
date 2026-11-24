@@ -77,7 +77,7 @@ func (r body) fields() cli.Fields {
 // workspaceFile is .lit/workspace.toml as this run read it: its bytes, and
 // the file as the board says it. It is never parsed here.
 func (o opened) workspaceFile() ([]byte, verbs.File) {
-	b, err := read(o.p.WorkTree(o.checkout), verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })
+	b, err := read(o.p.WorkTree(o.checkout), verbs.WorkspaceFile(), func(b []byte) ([]byte, error) { return b, nil })
 	var none files.NotFound
 	switch {
 	case errors.As(err, &none):
@@ -190,7 +190,7 @@ func (o opened) found(shared, tree files.Files, drafts []events.Draft, ref git.O
 	if err := writeFoundingFile(tree, founding, pinPath(o.checkout)); err != nil {
 		return failed(err)
 	}
-	return written(fmt.Fprintf(o.p.Out, "%sfounding %s named in %s: commit it, and every clone adopts this store\n", said, founding.Enrollment, foundingPath))
+	return written(fmt.Fprintf(o.p.Out, "%sfounding %s named in %s: commit it, and every clone adopts this store\n", said, founding.Enrollment, foundingPath()))
 }
 
 // judge is the frame m extended onto s, and its failure when the fold
@@ -341,10 +341,10 @@ func (r body) init() cli.Outcome {
 // there first when there is none; read back, so a race to create it
 // applies the winner's.
 func versionOne(tree files.Files) ([]byte, error) {
-	if _, err := tree.CreateOnce(verbs.WorkspaceFile, assets.DefaultWorkspace.Bytes()); err != nil {
+	if _, err := tree.CreateOnce(verbs.WorkspaceFile(), assets.DefaultWorkspace.Bytes()); err != nil {
 		return nil, fmt.Errorf("writing %s: %w", verbs.WorkspacePath(), err)
 	}
-	b, err := read(tree, verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })
+	b, err := read(tree, verbs.WorkspaceFile(), func(b []byte) ([]byte, error) { return b, nil })
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", verbs.WorkspacePath(), err)
 	}

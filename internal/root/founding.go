@@ -3,8 +3,6 @@ package root
 import (
 	"errors"
 	"fmt"
-	"path"
-	"path/filepath"
 
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
@@ -22,19 +20,21 @@ import (
 // command moves it: a clone joins another store only when a person removes
 // the pin.
 var (
-	pinFile = files.MustName("founding")
-	// FoundingFile is the founding file's name in the work tree's .lit.
-	FoundingFile = files.MustName("founding")
+	pinFile      = files.MustName("founding")
+	foundingFile = files.MustName("founding")
 )
+
+// FoundingFile is the founding file's name in the work tree's .lit.
+func FoundingFile() files.Name { return foundingFile }
 
 // foundingPath is FoundingFile's path from the work tree's root, as a
 // message names it.
-var foundingPath = path.Join(verbs.LitDir.String(), FoundingFile.String())
+func foundingPath() string { return verbs.LitPath(foundingFile) }
 
 // pinPath is the pin's path in c, as a failure names it: in the shared
 // dir, beside the principal's key.
 func pinPath(c git.Checkout) string {
-	return filepath.Join(command.DirOf(command.PrincipalFile{}, c).Path(), pinFile.String())
+	return command.DirOf(command.PrincipalFile{}, c).PathOf(pinFile)
 }
 
 // pinned is the founding the clone's pin names, NoFounding before init
@@ -91,13 +91,13 @@ func adopt(shared, tree files.Files) error {
 // foundingFileIn is the founding FoundingFile names in tree, NoFounding
 // when there is none.
 func foundingFileIn(tree files.Files) (fold.Founding, error) {
-	id, err := read(tree, FoundingFile, events.ReadEventIDFile)
+	id, err := read(tree, foundingFile, events.ReadEventIDFile)
 	var none files.NotFound
 	switch {
 	case errors.As(err, &none):
 		return fold.NoFounding{}, nil
 	case err != nil:
-		return nil, workspaceFailure{err: fmt.Errorf("reading %s: %w", foundingPath, err)}
+		return nil, workspaceFailure{err: fmt.Errorf("reading %s: %w", foundingPath(), err)}
 	}
 	return fold.FoundedBy{Enrollment: id}, nil
 }
@@ -107,8 +107,8 @@ func foundingFileIn(tree files.Files) (fold.Founding, error) {
 // another founding: the pin stands, and the file is what the next clone
 // adopts.
 func writeFoundingFile(tree files.Files, f fold.FoundedBy, pin string) error {
-	if _, err := tree.CreateOnce(FoundingFile, f.Enrollment.FileText()); err != nil {
-		return workspaceFailure{err: fmt.Errorf("writing %s: %w", foundingPath, err)}
+	if _, err := tree.CreateOnce(foundingFile, f.Enrollment.FileText()); err != nil {
+		return workspaceFailure{err: fmt.Errorf("writing %s: %w", foundingPath(), err)}
 	}
 	got, err := foundingFileIn(tree)
 	if err != nil {
@@ -116,7 +116,7 @@ func writeFoundingFile(tree files.Files, f fold.FoundedBy, pin string) error {
 	}
 	switch got := got.(type) {
 	case fold.NoFounding:
-		return workspaceFailure{err: fmt.Errorf("%s written is not there", foundingPath)}
+		return workspaceFailure{err: fmt.Errorf("%s written is not there", foundingPath())}
 	case fold.FoundedBy:
 		if got != f {
 			return foundingContradicted{pinned: f, file: got, pin: pin}
@@ -153,7 +153,7 @@ type foundingAbsent struct {
 
 func (f foundingAbsent) Error() string {
 	return fmt.Sprintf("this store was founded by enrollment %s, which it does not hold yet: it arrives when this clone syncs. If %s is not the store this clone joins, remove the pin at %s: %s",
-		f.Enrollment, f.Enrollment, f.pin, afterUnpin)
+		f.Enrollment, f.Enrollment, f.pin, afterUnpin())
 }
 func (foundingAbsent) Class() reason.Class { return reason.ClassEnvironment }
 func (foundingAbsent) Reason() string      { return "policy" }
@@ -178,13 +178,15 @@ type foundingCarried struct {
 
 func (f foundingCarried) Error() string {
 	return fmt.Sprintf("this store's founding, enrollment %s, is carried as %s, so no policy says who may write: if its suite is unknown, upgrade lit2; if the pin at %s names the wrong event, remove it: %s",
-		f.Enrollment, fold.ReasonName(f.Why), f.pin, afterUnpin)
+		f.Enrollment, fold.ReasonName(f.Why), f.pin, afterUnpin())
 }
 func (foundingCarried) Class() reason.Class { return reason.ClassEnvironment }
 func (foundingCarried) Reason() string      { return "policy" }
 
 // afterUnpin is what admin init does in a clone whose pin a person removed.
-var afterUnpin = "lit2 admin init then adopts the founding " + foundingPath + " names, or founds the store when there is no file"
+func afterUnpin() string {
+	return "lit2 admin init then adopts the founding " + foundingPath() + " names, or founds the store when there is no file"
+}
 
 // unwritten is a founding frame whose append failed after its enrollment
 // was pinned: the store does not hold the founding the pin names.
@@ -194,7 +196,7 @@ type unwritten struct {
 }
 
 func (u unwritten) Error() string {
-	return fmt.Sprintf("%v; the pin at %s names the founding this run did not write: remove it, and %s", u.err, u.pin, afterUnpin)
+	return fmt.Sprintf("%v; the pin at %s names the founding this run did not write: remove it, and %s", u.err, u.pin, afterUnpin())
 }
 func (unwritten) Class() reason.Class { return reason.ClassEnvironment }
 func (unwritten) Reason() string      { return "store" }
@@ -219,7 +221,7 @@ type foundingContradicted struct {
 
 func (c foundingContradicted) Error() string {
 	return fmt.Sprintf("this clone's store was founded by enrollment %s, which its pin at %s names, and %s names %s: the pin stands. If %s is the store this clone joins, remove the pin and run lit2 admin init again",
-		c.pinned.Enrollment, c.pin, foundingPath, c.file.Enrollment, c.file.Enrollment)
+		c.pinned.Enrollment, c.pin, foundingPath(), c.file.Enrollment, c.file.Enrollment)
 }
 func (foundingContradicted) Class() reason.Class { return reason.ClassEnvironment }
 func (foundingContradicted) Reason() string      { return "founding" }

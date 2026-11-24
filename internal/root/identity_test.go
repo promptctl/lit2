@@ -9,7 +9,6 @@ import (
 
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/files"
-	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 )
 
@@ -54,7 +53,7 @@ func TestTheIdentityFilesOnDiskAreASecrets(t *testing.T) {
 }
 
 func inMemory(*testing.T) clone {
-	fresh := func() files.Files { return files.NewMemoryMode(identityMode) }
+	fresh := func() files.Files { return files.NewMemory() }
 	return clone{shared: fresh(), worktree: [2]files.Files{fresh(), fresh()}}
 }
 
@@ -105,24 +104,6 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 		}
 		if made[0] != (command.Fresh{Checkout: files.Created, Key: files.Existing}) || made[1] != (command.Fresh{Checkout: files.Created, Key: files.Created}) {
 			t.Errorf("the held mint made %+v and the other %+v; want the other's key created, the held one's found, and each its own checkout id", made[0], made[1])
-		}
-	})
-	t.Run("the identity files are a secret's, -rw-------", func(t *testing.T) {
-		c := fresh(t)
-		if _, _, err := MintIdentity(c.shared, c.worktree[0], entropy(1)); err != nil {
-			t.Fatal(err)
-		}
-		for _, f := range []struct {
-			fs   files.Files
-			file command.File
-		}{{c.shared, command.PrincipalFile{}}, {c.worktree[0], command.IDFile{}}} {
-			moded, ok := f.fs.(filestest.ModedFiles)
-			if !ok {
-				t.Fatalf("%T says no file's mode", f.fs)
-			}
-			if mode, err := moded.Mode(command.NameOf(f.file)); err != nil || mode != 0o600 {
-				t.Errorf("%s is %v, %v; want -rw-------", command.NameOf(f.file), mode, err)
-			}
 		}
 	})
 	t.Run("a second mint returns the first identity", func(t *testing.T) {

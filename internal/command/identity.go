@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
@@ -57,7 +56,7 @@ func DirOf(f File, c git.Checkout) files.Dir {
 
 // PathOf is f's path for c, as the command event names it.
 func PathOf(f File, c git.Checkout) string {
-	return filepath.Join(DirOf(f, c).Path(), NameOf(f).String())
+	return DirOf(f, c).PathOf(NameOf(f))
 }
 
 // Paths is the missing files' paths for c, the id file's first.

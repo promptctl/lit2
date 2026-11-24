@@ -49,7 +49,7 @@ func (s session) file(b []byte) {
 	s.t.Helper()
 	tree := files.NewMemory()
 	if b != nil {
-		if _, err := tree.CreateOnce(verbs.WorkspaceFile, b); err != nil {
+		if _, err := tree.CreateOnce(verbs.WorkspaceFile(), b); err != nil {
 			s.t.Fatal(err)
 		}
 	}
@@ -125,7 +125,7 @@ func TestInitAppliesTheDefaultAsVersionOne(t *testing.T) {
 	if r.status != 0 || !strings.Contains(r.out, enrolled+"workspace "+blob(def).String()+" applied as version one\n") || appends(r.event) != 1 {
 		t.Fatalf("admin init: status %d, out %q, %d appends; want the enrollment and version one in one frame", r.status, r.out, appends(r.event))
 	}
-	if got := must(read(s.twin.Tree, verbs.WorkspaceFile, func(b []byte) ([]byte, error) { return b, nil })); string(got) != string(def) {
+	if got := must(read(s.twin.Tree, verbs.WorkspaceFile(), func(b []byte) ([]byte, error) { return b, nil })); string(got) != string(def) {
 		t.Errorf("init wrote %q; want the default profile", got)
 	}
 	if got := s.ok("get", "/workspace"); !strings.Contains(got, blob(def).String()[:7]+" in force · .lit/workspace.toml matches") {

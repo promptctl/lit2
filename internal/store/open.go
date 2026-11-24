@@ -13,10 +13,10 @@ import (
 
 // Ports is everything the store touches: its logs' files, lit's
 // repository, and entropy for a new log's id. The disk and the twins are
-// two sets of the same ports, and the Store over them is one type. Every
-// field is unexported, so a Ports is made only by DiskPorts and
-// MemoryPorts, and no files handle over the store's logs is taken from
-// outside the store or handed out of it `[LAW:types-are-the-program]`.
+// two sets of the same ports, and the Store over them is one type. No
+// field can be set or read from outside the store, so a store's files
+// handle comes from DiskPorts or MemoryPorts and is never handed out
+// `[LAW:types-are-the-program]`. The zero Ports is no store.
 type Ports struct {
 	files   files.Files
 	objects git.Objects

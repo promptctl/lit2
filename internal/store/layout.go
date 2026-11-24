@@ -17,24 +17,26 @@ import (
 // The store's layout under <git-common-dir>/lit/store/ (D11): log/, a
 // log per writing checkout named by its id, and repo/ for lit's
 // repository. Its one spelling is here.
-const (
-	storeDir = "store"
-	// repoDir is lit's repository's directory, a bare repository git keeps.
-	repoDir = "repo"
+var (
+	storeDir = files.MustName("store")
+	logDir   = files.MustName("log")
 )
 
-var logDir = files.MustName("log")
+// repoDir is lit's repository's directory, a bare repository git keeps
+// and opens by its path, so it is not on the files port.
+const repoDir = "repo"
 
-// location is where the store of at's clone lives: its logs' directory
-// and lit's repository's.
+// location is where the store of at's clone lives: its logs' directory,
+// each element of it checked from the common dir, and lit's repository's
+// path.
 type location struct {
 	logs files.Dir
 	repo string
 }
 
 func locate(at git.Checkout) location {
-	root := filepath.Join(at.Shared().Path(), storeDir)
-	return location{logs: files.DirAt(root, logDir), repo: filepath.Join(root, repoDir)}
+	root := at.Shared().Sub(storeDir)
+	return location{logs: root.Sub(logDir), repo: filepath.Join(root.Path(), repoDir)}
 }
 
 // LogName is the log of the checkout id names, in the logs' directory.

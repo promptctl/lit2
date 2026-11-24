@@ -5,17 +5,18 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // Disk is Files on disk over one directory, every file it makes in one
-// mode. Each call opens the directory inside its base as an os.Root, the
-// one enforcer of containment `[LAW:single-enforcer]`: a name, or a
-// symlink a name holds, that leaves the directory is refused by the open
-// itself.
+// mode. Each call opens the directory's base as an os.Root and walks its
+// elements by the directory step, then reaches a file by the file step:
+// those two steps are the one enforcer of what a name may be on disk
+// `[LAW:single-enforcer]`.
 type Disk struct {
 	dir  Dir
 	mode fs.FileMode
@@ -33,32 +34,70 @@ func At(d Dir) Disk { return AtMode(d, readable) }
 // through this same port.
 func AtMode(d Dir, mode fs.FileMode) Disk { return Disk{dir: d, mode: mode} }
 
-// open is the directory, opened inside its base, made first, with its
-// base, when create says so. A directory that does not exist is
-// fs.ErrNotExist. One whose name in the base is not the directory itself,
-// a symlink to one even inside the base, is NotTheDirectory: the opened
-// directory and what the base holds at its name must be one file.
-func (o Disk) open(create bool) (*os.Root, error) {
-	if create {
-		if err := os.MkdirAll(o.dir.base, 0o755); err != nil {
-			return nil, err
-		}
+// open is d's directory, each element entered by the directory step from
+// its base. An element that does not exist is fs.ErrNotExist.
+func (d Dir) open() (*os.Root, error) {
+	return d.walk(func(*os.Root, Name) error { return nil })
+}
+
+// create is d's directory, its base made when missing, as the git dirs
+// and the work tree a base names are lit2's or git's own, and each
+// missing element made inside its parent before it is entered.
+func (d Dir) create() (*os.Root, error) {
+	if err := d.valid(); err != nil {
+		return nil, err
 	}
-	base, err := os.OpenRoot(o.dir.base)
+	if err := os.MkdirAll(d.base, 0o755); err != nil {
+		return nil, err
+	}
+	return d.walk(func(parent *os.Root, e Name) error {
+		if err := parent.Mkdir(e.s, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		return nil
+	})
+}
+
+// walk opens d's base and enters each element in turn, after before has
+// prepared it in its parent.
+func (d Dir) walk(before func(parent *os.Root, e Name) error) (*os.Root, error) {
+	if err := d.valid(); err != nil {
+		return nil, err
+	}
+	r, err := os.OpenRoot(d.base)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = base.Close() }() // read-only; the directory opened from it outlives it
-	if create {
-		if err := base.Mkdir(o.dir.name.s, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+	for i, e := range d.elems {
+		next, err := d.enter(r, e, i, before)
+		if err = errors.Join(err, r.Close()); err != nil {
+			if next != nil {
+				err = errors.Join(err, next.Close())
+			}
 			return nil, err
 		}
+		r = next
 	}
-	at, err := base.Lstat(o.dir.name.s)
+	return r, nil
+}
+
+// enter is the directory step: element i of d, e, in parent, entered only
+// when it is a directory itself, and the directory opened is the one seen.
+// A symlink, dangling or not, or anything else not a directory is
+// NotTheDirectory.
+func (d Dir) enter(parent *os.Root, e Name, i int, before func(*os.Root, Name) error) (*os.Root, error) {
+	if err := before(parent, e); err != nil {
+		return nil, err
+	}
+	at, err := parent.Lstat(e.s)
 	if err != nil {
 		return nil, err
 	}
-	r, err := base.OpenRoot(o.dir.name.s)
+	refused := NotTheDirectory{Path: d.upTo(i + 1)}
+	if !at.IsDir() {
+		return nil, refused
+	}
+	r, err := parent.OpenRoot(e.s)
 	if err != nil {
 		return nil, err
 	}
@@ -67,13 +106,48 @@ func (o Disk) open(create bool) (*os.Root, error) {
 		return nil, errors.Join(err, r.Close())
 	}
 	if !os.SameFile(opened, at) {
-		return nil, errors.Join(NotTheDirectory{Path: o.dir.Path()}, r.Close())
+		return nil, errors.Join(refused, r.Close())
 	}
 	return r, nil
 }
 
-// missing is err as NotFound when it says the file, or its directory,
-// does not exist.
+// file is the file step: n in r opened with flag, only when it is a
+// regular file and the file opened is the one seen. O_NONBLOCK is added
+// so that no open, of a FIFO swapped in after the look, waits. Anything
+// but a regular file is NotAFile; a missing one is NotFound.
+func (o Disk) file(r *os.Root, n Name, flag int) (*os.File, error) {
+	at, err := r.Lstat(n.s)
+	if err != nil {
+		return nil, missing(n, err)
+	}
+	if err := o.regular(n, at); err != nil {
+		return nil, err
+	}
+	f, err := r.OpenFile(n.s, flag|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, missing(n, err)
+	}
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	if !os.SameFile(opened, at) {
+		return nil, errors.Join(NotAFile{Path: o.dir.PathOf(n), Mode: opened.Mode()}, f.Close())
+	}
+	return f, nil
+}
+
+// regular is nil for a regular file at n, seen without following it, and
+// NotAFile for anything else.
+func (o Disk) regular(n Name, at fs.FileInfo) error {
+	if !at.Mode().IsRegular() {
+		return NotAFile{Path: o.dir.PathOf(n), Mode: at.Mode()}
+	}
+	return nil
+}
+
+// missing is err as NotFound when it says the file, or a directory on its
+// way, does not exist.
 func missing(n Name, err error) error {
 	if errors.Is(err, fs.ErrNotExist) {
 		return NotFound{Name: n}
@@ -81,37 +155,68 @@ func missing(n Name, err error) error {
 	return err
 }
 
-func (o Disk) Append(n Name, b []byte) (end uint64, err error) {
+// with runs do on n's file, opened by the file step with flag in the
+// directory, and closes both.
+func (o Disk) with(n Name, flag int, do func(*os.File) error) (err error) {
 	if err := n.valid(); err != nil {
-		return 0, err
+		return err
 	}
-	r, err := o.open(false)
+	r, err := o.dir.open()
 	if err != nil {
-		return 0, missing(n, err)
+		return missing(n, err)
 	}
 	defer func() { err = errors.Join(err, r.Close()) }()
-	f, err := r.OpenFile(n.s, os.O_APPEND|os.O_WRONLY, 0)
+	f, err := o.file(r, n, flag)
 	if err != nil {
-		return 0, missing(n, err)
+		return err
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
-	if _, err := f.Write(b); err != nil {
-		return 0, err
-	}
-	// a printed echo must survive a power loss, so the append is not done
-	// until it is on disk (the store's decision 11)
-	if err := f.Sync(); err != nil {
-		return 0, err
-	}
-	at, err := f.Seek(0, io.SeekCurrent)
-	return uint64(at), err
+	return do(f)
+}
+
+func (o Disk) Append(n Name, b []byte) (end uint64, err error) {
+	err = o.with(n, os.O_APPEND|os.O_WRONLY, func(f *os.File) error {
+		if _, err := f.Write(b); err != nil {
+			return err
+		}
+		// a printed echo must survive a power loss, so the append is not
+		// done until it is on disk (the store's decision 11)
+		if err := f.Sync(); err != nil {
+			return err
+		}
+		at, err := f.Seek(0, io.SeekCurrent)
+		end = uint64(at)
+		return err
+	})
+	return end, err
+}
+
+func (o Disk) ReadAt(n Name, off, size uint64) (b []byte, err error) {
+	err = o.with(n, os.O_RDONLY, func(f *os.File) error {
+		// a section past math.MaxInt64 ends there, so any size reads to
+		// the end of the file
+		b, err = io.ReadAll(io.NewSectionReader(f, int64(min(off, math.MaxInt64)), int64(min(size, math.MaxInt64))))
+		return err
+	})
+	return b, err
+}
+
+func (o Disk) Size(n Name) (size uint64, err error) {
+	err = o.with(n, os.O_RDONLY, func(f *os.File) error {
+		info, err := f.Stat()
+		if err == nil {
+			size = uint64(info.Size())
+		}
+		return err
+	})
+	return size, err
 }
 
 func (o Disk) CreateOnce(n Name, b []byte) (made Made, err error) {
 	if err := n.valid(); err != nil {
 		return 0, err
 	}
-	r, err := o.open(true)
+	r, err := o.dir.create()
 	if err != nil {
 		return 0, err
 	}
@@ -123,27 +228,20 @@ func (o Disk) CreateOnce(n Name, b []byte) (made Made, err error) {
 	defer func() { err = errors.Join(err, r.Remove(temp)) }()
 	err = r.Link(temp, n.s)
 	if errors.Is(err, fs.ErrExist) {
-		return o.existing(r, n)
+		at, err := r.Lstat(n.s)
+		if err != nil {
+			return 0, err
+		}
+		if err := o.regular(n, at); err != nil {
+			return 0, err
+		}
+		return Existing, nil
 	}
 	if err != nil {
 		return 0, err
 	}
 	// the new name must survive a power loss as the appends to it will
 	return Created, syncDir(r)
-}
-
-// existing is the answer of a create-once whose name is taken: Existing
-// when it holds a regular file, NotAFile when it holds anything else, a
-// symlink among them, read without following it.
-func (o Disk) existing(r *os.Root, n Name) (Made, error) {
-	info, err := r.Lstat(n.s)
-	if err != nil {
-		return 0, err
-	}
-	if !info.Mode().IsRegular() {
-		return 0, NotAFile{Path: filepath.Join(o.dir.Path(), n.s), Mode: info.Mode()}
-	}
-	return Existing, nil
 }
 
 func syncDir(r *os.Root) (err error) {
@@ -156,15 +254,16 @@ func syncDir(r *os.Root) (err error) {
 }
 
 // temp writes b to a new temporary file in r, in the instance's mode, and
-// returns its name, .tmp-<name>-<i>, which List never reports. The bytes are
-// on disk before the file is closed, so a power loss after the link leaves
-// a whole file, never an empty one every append then refuses. os.Root has
-// no CreateTemp, so i counts up from 0 past every name another writer
-// holds; two writers of one name each end with their own temp, and the
-// link decides whose bytes are kept.
+// returns its name, tempPrefix, n and a count, which no Name can be and
+// List never reports. The bytes are on disk before the file is closed, so
+// a power loss after the link leaves a whole file, never an empty one
+// every append then refuses. os.Root has no CreateTemp, so the count runs
+// up from 0 past every name another writer holds; two writers of one
+// name each end with their own temp, and the link decides whose bytes
+// are kept.
 func (o Disk) temp(r *os.Root, n Name, b []byte) (string, error) {
 	for i := 0; ; i++ {
-		name := fmt.Sprintf(".tmp-%s-%d", n.s, i)
+		name := fmt.Sprintf("%s%s-%d", tempPrefix, n.s, i)
 		f, err := r.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, o.mode)
 		if errors.Is(err, fs.ErrExist) {
 			continue
@@ -182,58 +281,8 @@ func (o Disk) temp(r *os.Root, n Name, b []byte) (string, error) {
 	}
 }
 
-func (o Disk) ReadAt(n Name, off, size uint64) (b []byte, err error) {
-	if err := n.valid(); err != nil {
-		return nil, err
-	}
-	r, err := o.open(false)
-	if err != nil {
-		return nil, missing(n, err)
-	}
-	defer func() { err = errors.Join(err, r.Close()) }()
-	f, err := r.Open(n.s)
-	if err != nil {
-		return nil, missing(n, err)
-	}
-	defer func() { err = errors.Join(err, f.Close()) }()
-	return io.ReadAll(io.NewSectionReader(f, int64(off), int64(size)))
-}
-
-func (o Disk) Size(n Name) (uint64, error) {
-	info, err := o.stat(n)
-	if err != nil {
-		return 0, err
-	}
-	return uint64(info.Size()), nil
-}
-
-// Mode is the permission bits of the file n.
-func (o Disk) Mode(n Name) (fs.FileMode, error) {
-	info, err := o.stat(n)
-	if err != nil {
-		return 0, err
-	}
-	return info.Mode().Perm(), nil
-}
-
-func (o Disk) stat(n Name) (info fs.FileInfo, err error) {
-	if err := n.valid(); err != nil {
-		return nil, err
-	}
-	r, err := o.open(false)
-	if err != nil {
-		return nil, missing(n, err)
-	}
-	defer func() { err = errors.Join(err, r.Close()) }()
-	info, err = r.Stat(n.s)
-	if err != nil {
-		return nil, missing(n, err)
-	}
-	return info, nil
-}
-
 func (o Disk) List() (ns []Name, err error) {
-	r, err := o.open(false)
+	r, err := o.dir.open()
 	if errors.Is(err, fs.ErrNotExist) {
 		return []Name{}, nil // nothing is created by a read: no directory yet holds no file
 	}
@@ -252,8 +301,7 @@ func (o Disk) List() (ns []Name, err error) {
 	}
 	ns = []Name{}
 	for _, e := range entries {
-		// a name starting with . is a create-once's temporary file
-		if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), ".") {
+		if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), tempPrefix) {
 			ns = append(ns, Name{s: e.Name()})
 		}
 	}

@@ -93,17 +93,26 @@ func (OnDisk) file()         {}
 func (NoFile) file()         {}
 func (UnreadableFile) file() {}
 
-// The work tree's .lit directory and the workspace file in it. Its path
-// in the work tree, and in the code repository's tree, is derived from
-// these, never written out `[LAW:one-source-of-truth]`.
+// The work tree's .lit directory and the workspace file in it. A path of
+// either, in the work tree or in the code repository's tree, is derived
+// from these, never written out `[LAW:one-source-of-truth]`.
 var (
-	LitDir        = files.MustName(".lit")
-	WorkspaceFile = files.MustName("workspace.toml")
+	litDir        = files.MustName(".lit")
+	workspaceFile = files.MustName("workspace.toml")
 )
 
-// WorkspacePath is the workspace file's path from the work tree's root,
+// LitDir is the work tree's .lit directory's name.
+func LitDir() files.Name { return litDir }
+
+// WorkspaceFile is the workspace file's name in .lit.
+func WorkspaceFile() files.Name { return workspaceFile }
+
+// LitPath is the path of the file n in .lit from the work tree's root,
 // slash-separated, as git's tree and every message name it.
-func WorkspacePath() string { return path.Join(LitDir.String(), WorkspaceFile.String()) }
+func LitPath(n files.Name) string { return path.Join(litDir.String(), n.String()) }
+
+// WorkspacePath is the workspace file's LitPath.
+func WorkspacePath() string { return LitPath(workspaceFile) }
 
 // workspace is the root's workspace row: its one line.
 func workspace(w World, _ address.Node) ([]string, error) {

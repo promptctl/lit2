@@ -67,7 +67,7 @@ func Main(args []string) int {
 // directory at that name in the work tree: a .lit that is a symlink,
 // wherever it points, is refused, so nothing a work tree commits writes
 // into the store or anywhere else.
-func workTree(c git.Checkout) files.Files { return files.At(files.DirAt(c.WorkTree, verbs.LitDir)) }
+func workTree(c git.Checkout) files.Files { return files.At(files.DirAt(c.WorkTree, verbs.LitDir())) }
 
 type systemClock struct{}
 

@@ -35,8 +35,10 @@ func (l *locked) Read(b []byte) (int, error) {
 }
 
 // Clone is one clone's store as the suite reaches it: the ports a Store
-// opens over, the files of its logs behind them, for the subtests that
-// write a log's raw bytes, and lit's repository.
+// opens over, and, read from those ports by the store's own test seams,
+// the files of its logs, for the subtests that write a log's raw bytes,
+// and lit's repository. Its substrate makes it from the Ports alone, so
+// the rest never disagrees with them.
 type Clone struct {
 	Ports   store.Ports
 	Logs    files.Files

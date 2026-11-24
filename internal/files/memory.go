@@ -1,7 +1,6 @@
 package files
 
 import (
-	"io/fs"
 	"maps"
 	"slices"
 	"strings"
@@ -12,19 +11,11 @@ import (
 // suite and safe for concurrent use.
 type Memory struct {
 	mu    sync.Mutex
-	mode  fs.FileMode
 	files map[Name][]byte
 }
 
-// NewMemory is an empty directory in process, every file it makes
-// readable, as At makes them.
-func NewMemory() *Memory { return NewMemoryMode(readable) }
-
-// NewMemoryMode is an empty directory in process, every file it makes in
-// mode, as AtMode makes them.
-func NewMemoryMode(mode fs.FileMode) *Memory {
-	return &Memory{mode: mode, files: map[Name][]byte{}}
-}
+// NewMemory is an empty directory in process.
+func NewMemory() *Memory { return &Memory{files: map[Name][]byte{}} }
 
 func (m *Memory) Append(n Name, b []byte) (uint64, error) {
 	if err := n.valid(); err != nil {
@@ -63,8 +54,9 @@ func (m *Memory) ReadAt(n Name, off, size uint64) ([]byte, error) {
 	if !ok {
 		return nil, NotFound{Name: n}
 	}
+	// by subtraction, so no size overflows the end
 	from := min(off, uint64(len(f)))
-	return slices.Clone(f[from:min(from+size, uint64(len(f)))]), nil
+	return slices.Clone(f[from : from+min(size, uint64(len(f))-from)]), nil
 }
 
 func (m *Memory) Size(n Name) (uint64, error) {
@@ -78,19 +70,6 @@ func (m *Memory) Size(n Name) (uint64, error) {
 		return 0, NotFound{Name: n}
 	}
 	return uint64(len(f)), nil
-}
-
-// Mode is the mode the file n was made in.
-func (m *Memory) Mode(n Name) (fs.FileMode, error) {
-	if err := n.valid(); err != nil {
-		return 0, err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.files[n]; !ok {
-		return 0, NotFound{Name: n}
-	}
-	return m.mode, nil
 }
 
 func (m *Memory) List() ([]Name, error) {

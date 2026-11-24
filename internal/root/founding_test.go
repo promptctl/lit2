@@ -25,7 +25,7 @@ func TestInitFoundsTheStoreAndNamesItsFoundingToCommit(t *testing.T) {
 	pin, named := s.founding()
 	f, founded := pin.(fold.FoundedBy)
 	if r.status != 0 || !founded || named != pin {
-		t.Fatalf("admin init: status %d, stderr %q, pin %#v, %s %#v", r.status, r.err, pin, FoundingFile, named)
+		t.Fatalf("admin init: status %d, stderr %q, pin %#v, %s %#v", r.status, r.err, pin, FoundingFile(), named)
 	}
 	if want := "founding " + f.Enrollment.String() + " named in .lit/founding: commit it"; !strings.Contains(r.out, want) {
 		t.Errorf("admin init printed %q; want it to say %q", r.out, want)
@@ -57,7 +57,7 @@ func TestInitFoundsOverAnEnrollmentNoFileNames(t *testing.T) {
 func TestInitRefusesAFoundingFileNamingAnotherFounding(t *testing.T) {
 	s := newSession(t)
 	tree := files.NewMemory()
-	if _, err := tree.CreateOnce(FoundingFile, events.EventID{1}.FileText()); err != nil {
+	if _, err := tree.CreateOnce(FoundingFile(), events.EventID{1}.FileText()); err != nil {
 		t.Fatal(err)
 	}
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files { return tree }

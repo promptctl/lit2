@@ -12,22 +12,28 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 // Name is a file's name in its directory: one path element, never empty,
-// . or .., and holding no separator or NUL. Only NameOf, MustName and a
-// listing make one `[LAW:parse-dont-validate]`.
+// . or .., holding no separator or NUL, and never starting with the
+// prefix a create-once's temporary files take. Only NameOf, MustName and
+// a listing make one `[LAW:parse-dont-validate]`.
 type Name struct{ s string }
 
 // ErrNotAName is text that is no one file's name in a directory.
 var ErrNotAName = errors.New("not a file's name in one directory")
 
+// tempPrefix starts the name of every temporary file CreateOnce writes,
+// and no Name, so a temp is never a file of the port.
+const tempPrefix = ".tmp-"
+
 // NameOf is s as a name, refused with ErrNotAName when it is empty, . or
-// .., or holds /, \ or NUL, any of which would reach outside the directory
-// or name none of its files.
+// .., holds /, \ or NUL, any of which would reach outside the directory
+// or name none of its files, or starts with the temporary files' prefix.
 func NameOf(s string) (Name, error) {
-	if s == "" || s == "." || s == ".." || strings.ContainsAny(s, "/\\\x00") {
+	if s == "" || s == "." || s == ".." || strings.ContainsAny(s, "/\\\x00") || strings.HasPrefix(s, tempPrefix) {
 		return Name{}, fmt.Errorf("%q: %w", s, ErrNotAName)
 	}
 	return Name{s: s}, nil
@@ -55,19 +61,53 @@ func (n Name) valid() error {
 	return nil
 }
 
-// Dir is a directory a Files is over: the directory name in base. base is
-// a directory lit2 or git knows, and the port opens name inside it, so a
-// name that is not the real directory there is refused.
+// ErrNoDir is a Dir no constructor made: no base, or no directory in it.
+var ErrNoDir = errors.New("no directory: a Dir is made by DirAt")
+
+// Dir is a directory a Files is over: a base lit2 or git knows, trusted,
+// and the elements under it, each a directory checked in turn from the
+// base, so an element that is not the real directory at its name, a
+// symlink among them, is refused.
 type Dir struct {
-	base string
-	name Name
+	base  string
+	elems []Name
 }
 
-// DirAt is the directory name in base.
-func DirAt(base string, name Name) Dir { return Dir{base: base, name: name} }
+// DirAt is the directory first in base.
+func DirAt(base string, first Name) Dir { return Dir{base: base, elems: []Name{first}} }
+
+// Sub is the directory n in d.
+func (d Dir) Sub(n Name) Dir {
+	return Dir{base: d.base, elems: append(slices.Clone(d.elems), n)}
+}
 
 // Path is the directory's path, as a message names it.
-func (d Dir) Path() string { return filepath.Join(d.base, d.name.s) }
+func (d Dir) Path() string { return d.upTo(len(d.elems)) }
+
+// PathOf is the path of the file n in d, as a message names it.
+func (d Dir) PathOf(n Name) string { return filepath.Join(d.Path(), n.s) }
+
+// upTo is the path of d's first i elements under its base.
+func (d Dir) upTo(i int) string {
+	parts := []string{d.base}
+	for _, e := range d.elems[:i] {
+		parts = append(parts, e.s)
+	}
+	return filepath.Join(parts...)
+}
+
+// valid refuses a Dir no constructor made, and one with a zero element.
+func (d Dir) valid() error {
+	if d.base == "" || len(d.elems) == 0 {
+		return fmt.Errorf("base %q, %d elements: %w", d.base, len(d.elems), ErrNoDir)
+	}
+	for _, e := range d.elems {
+		if err := e.valid(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Files appends to, creates once, reads and lists the plain files of one
 // directory.
@@ -84,7 +124,7 @@ type Files interface {
 	// one call that both refuses an existing name and puts whole bytes
 	// under it; a filesystem without them fails the first create, saying
 	// so. A name that holds anything but a regular file is NotAFile, never
-	// Existing.
+	// Existing, as it is for every other call.
 	CreateOnce(n Name, b []byte) (Made, error)
 	// ReadAt reads up to size bytes at off, fewer at the end of the file.
 	ReadAt(n Name, off, size uint64) ([]byte, error)
@@ -109,9 +149,9 @@ type NotFound struct{ Name Name }
 
 func (n NotFound) Error() string { return fmt.Sprintf("%s does not exist", n.Name) }
 
-// NotAFile is a name CreateOnce found holding something other than a
-// regular file, a symlink or a directory, which it never takes for the
-// file it would have made.
+// NotAFile is a name holding something other than a regular file, a
+// symlink, a FIFO or a directory among them: no call reads, appends to or
+// takes it for the file it would have made.
 type NotAFile struct {
 	Path string
 	Mode fs.FileMode
@@ -121,8 +161,9 @@ func (n NotAFile) Error() string {
 	return fmt.Sprintf("%s is a %v, not a regular file", n.Path, n.Mode.Type())
 }
 
-// NotTheDirectory is a directory whose name in its base is not the
-// directory itself: a symlink to one, inside the base or outside it.
+// NotTheDirectory is an element of a Dir that is not a directory itself:
+// a symlink, inside the base, outside it or dangling, or anything else
+// that is not a directory.
 type NotTheDirectory struct{ Path string }
 
 func (n NotTheDirectory) Error() string {

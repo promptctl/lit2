@@ -14,7 +14,6 @@ package git
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/promptctl/lit2/internal/files"
@@ -37,9 +36,7 @@ var (
 
 // Private is the directory of what lit2 keeps for this checkout alone,
 // <git-dir>/lit/checkout, which git deletes with the worktree (D11).
-func (c Checkout) Private() files.Dir {
-	return files.DirAt(filepath.Join(c.GitDir, litDir.String()), checkoutDir)
-}
+func (c Checkout) Private() files.Dir { return files.DirAt(c.GitDir, litDir).Sub(checkoutDir) }
 
 // Shared is the directory of what lit2 keeps once per clone,
 // <git-common-dir>/lit, holding store/, principal and founding, the pin
