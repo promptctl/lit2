@@ -7,6 +7,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
+	"github.com/promptctl/lit2/internal/panics"
 )
 
 func TestANameIsOneElementOfItsDirectory(t *testing.T) {
@@ -30,4 +31,8 @@ func TestFilesContract(t *testing.T) {
 	t.Run("memory", func(t *testing.T) {
 		filestest.Files(t, func(*testing.T) files.Files { return files.NewMemory() })
 	})
+}
+
+func TestAFixedNameThatIsNoNamePanicsWithErrNotAName(t *testing.T) {
+	panics.With(t, files.ErrNotAName, func() { files.MustName("a/b") })
 }

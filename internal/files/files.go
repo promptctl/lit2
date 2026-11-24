@@ -1,7 +1,7 @@
 // Package files is the files of one directory: appended, created once,
 // read and listed. A name holds one path element, so no port reaches a
-// subdirectory, and no port names another port's files by spelling
-// `[LAW:decomposition]`.
+// subdirectory of its directory, nor, by spelling, a file of a port over
+// any other directory `[LAW:decomposition]`.
 //
 // Its layer in ARCHITECTURE.md: below git, importing nothing of lit2's.
 // One Files port has an adapter on disk, At, and a twin in memory, Memory.
@@ -44,7 +44,7 @@ func NameOf(s string) (Name, error) {
 func MustName(s string) Name {
 	n, err := NameOf(s)
 	if err != nil {
-		panic(fmt.Sprintf("files: %v", err))
+		panic(fmt.Errorf("files: %w", err))
 	}
 	return n
 }
@@ -171,7 +171,8 @@ type Files interface {
 
 // Listing is a directory's entries: its files, sorted, and each entry that
 // is no file of the port, refused, so an entry that should have been a
-// file is said, never dropped `[LAW:no-silent-failure]`.
+// file is said, never dropped `[LAW:no-silent-failure]`. A create-once's
+// temporary files, named by the reserved prefix, are neither.
 type Listing struct {
 	Names   []Name
 	Refused []Refused
