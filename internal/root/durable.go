@@ -18,18 +18,14 @@ import (
 // write, says what it wrote, and only then fails, naming each such write
 // `[LAW:dataflow-not-control-flow]`.
 
-// writes is every write a run made, each said on its event and, when it
-// landed with a sync that failed, on its outcome, both from the one value
-// the write returned: the one place a run's writes are judged
-// `[LAW:single-enforcer]`.
-type writes struct {
-	stored   *command.StoreFacts
-	unsynced []unsyncedWrite
-}
+// writes is where a run's writes are said: each on its event, as the one
+// value the write returned, from which its End judges their durability
+// `[LAW:one-source-of-truth]`.
+type writes struct{ stored *command.StoreFacts }
 
 // create creates f holding b, once. The error is a create that placed
 // nothing; one that placed its file is no failure, durable or not.
-func (w *writes) create(f onceFile, b []byte) error {
+func (w writes) create(f onceFile, b []byte) error {
 	p := f.files.CreateOnce(f.name, b)
 	w.created(command.Creation{Path: f.path(), Placing: p})
 	if no, failed := p.(files.NotPlaced); failed {
@@ -38,43 +34,29 @@ func (w *writes) create(f onceFile, b []byte) error {
 	return nil
 }
 
-// created is c, said on the event, and on the outcome when it landed not
-// durable.
-func (w *writes) created(c command.Creation) {
-	w.stored.Creates = append(w.stored.Creates, c)
-	switch p := c.Placing.(type) {
-	case files.PlacedNotDurable:
-		w.unsynced = append(w.unsynced, createdNotDurable{path: c.Path, placed: p})
-	case files.Placed, files.NotPlaced:
-	}
-}
+// created is c, said on the event.
+func (w writes) created(c command.Creation) { w.stored.Creates = append(w.stored.Creates, c) }
 
-// appended is a, said on the event, and on the outcome when it landed not
-// durable, or landed no frame after its log's name's sync failed. The
-// error is an append that landed no frame.
-func (w *writes) appended(a store.Appending) error {
+// appended is a, said on the event. The error is an append that landed no
+// frame.
+func (w writes) appended(a store.Appending) error {
 	w.stored.Appends = append(w.stored.Appends, a)
-	switch a := a.(type) {
-	case store.NotAppended:
-		if l, unsynced := a.Log.(store.LogNotDurable); unsynced {
-			w.unsynced = append(w.unsynced, logNotDurable{l})
-		}
-		return storeFailure{err: fmt.Errorf("no whole frame was written: %w", a.Why)}
-	case store.AppendedNotDurable:
-		w.unsynced = append(w.unsynced, appendedNotDurable{a})
-	case store.Appended:
+	if no, failed := a.(store.NotAppended); failed {
+		return storeFailure{err: fmt.Errorf("no whole frame was written: %w", no.Why)}
 	}
 	return nil
 }
 
-// end is o, with every write that landed not durable: a run that was Done
-// fails notDurable, and one that failed carries both failures, its own
-// class first.
-func (w *writes) end(o cli.Outcome) cli.Outcome {
-	if len(w.unsynced) == 0 {
+// durable is o, with every write stored says landed not durable: a run
+// that was Done fails notDurable, and one that failed carries both
+// failures, its own class first. This is the one place a run's writes are
+// judged `[LAW:single-enforcer]`.
+func durable(stored command.StoreFacts, o cli.Outcome) cli.Outcome {
+	unsynced := unsyncedOf(stored)
+	if len(unsynced) == 0 {
 		return o
 	}
-	nd := notDurable{writes: w.unsynced}
+	nd := notDurable{writes: unsynced}
 	switch o := o.(type) {
 	case cli.Done:
 		return cli.Failed{Failure: nd}
@@ -82,6 +64,32 @@ func (w *writes) end(o cli.Outcome) cli.Outcome {
 		return cli.Failed{Failure: both{Failure: o.Failure, also: nd}}
 	}
 	panic(fmt.Sprintf("root: %T is not an Outcome", o))
+}
+
+// unsyncedOf is every write stored says landed with a sync that failed:
+// each create placed not durable, each frame appended not durable, and
+// each log whose name's sync failed though its append landed no frame.
+func unsyncedOf(stored command.StoreFacts) []unsyncedWrite {
+	var unsynced []unsyncedWrite
+	for _, c := range stored.Creates {
+		switch p := c.Placing.(type) {
+		case files.PlacedNotDurable:
+			unsynced = append(unsynced, createdNotDurable{path: c.Path, placed: p})
+		case files.Placed, files.NotPlaced:
+		}
+	}
+	for _, a := range stored.Appends {
+		switch a := a.(type) {
+		case store.NotAppended:
+			if l, unsyncedLog := a.Log.(store.LogNotDurable); unsyncedLog {
+				unsynced = append(unsynced, logNotDurable{l})
+			}
+		case store.AppendedNotDurable:
+			unsynced = append(unsynced, appendedNotDurable{a})
+		case store.Appended:
+		}
+	}
+	return unsynced
 }
 
 // notDurable is a run whose writes all landed, some of them with a sync

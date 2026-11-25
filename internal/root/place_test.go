@@ -123,16 +123,17 @@ func TestAnUnremovableOldDayFileStillLeavesTheRecord(t *testing.T) {
 		t.Skip("root removes files from a directory whatever its mode")
 	}
 	dir := t.TempDir()
-	// a directory named as a day file is not one, so pruning passes it by;
-	// something in it would make its removal fail
+	// a directory named as a day file is not one, so pruning passes it by
+	// and says so; something in it would make its removal fail
 	if err := os.MkdirAll(filepath.Join(dir, "2026-09-02.jsonl", "held"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	twin := NewTwin()
 	twin.Process.Commands = command.NewLog(dir)
-	if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.Len() != 0 {
+	if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.String() != "lit2: command log: kept 2026-09-02.jsonl: not a day file, so never pruned\n" {
 		t.Fatalf("--help beside a directory named as an old day file: status %d, stderr %q", status, twin.Err)
 	}
+	twin.Err.Reset()
 	if err := os.WriteFile(filepath.Join(dir, "2026-09-01.jsonl"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -145,11 +146,17 @@ func TestAnUnremovableOldDayFileStillLeavesTheRecord(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if status := Run(twin.Process, []string{"--help"}); status != 0 || !strings.HasPrefix(twin.Err.String(), "lit2: command log: pruning failed: ") {
+	if status := Run(twin.Process, []string{"--help"}); status != 0 || !strings.HasPrefix(twin.Err.String(), "lit2: command log: removing 2026-09-01.jsonl, older than its retention, failed: ") {
 		t.Errorf("--help with an unremovable old day file: status %d, stderr %q", status, twin.Err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "2026-11-11.jsonl")); err != nil || strings.Count(string(b), "\n") != 2 {
 		t.Errorf("the log holds %q, %v; want both lines", b, err)
+	}
+	// the event is in the log, so a stderr that will not take what pruning
+	// left changes no status: the next write says it again
+	twin.Process.Err = refusing{errors.New("stderr gone")}
+	if status := Run(twin.Process, []string{"--help"}); status != 0 {
+		t.Errorf("--help with an unremovable old day file and a refusing stderr: status %d; want 0, its event kept", status)
 	}
 }
 

@@ -53,6 +53,12 @@ func status(c reason.Class) int {
 	panic(fmt.Sprintf("cli: %d is not a Class", uint8(c)))
 }
 
+// Unrecorded is the status of a run that left no event and could not say
+// so on stderr, or that never had one to leave: Go's own panic status,
+// which no class is given, so a run lit2 ended unrecorded and one that
+// died read alike (D9).
+const Unrecorded = 2
+
 // Report is the text an outcome puts on stderr: nothing when Done, the error
 // line when Failed.
 func Report(o Outcome) string {
@@ -74,3 +80,7 @@ type Summary struct {
 	Paths  []PathText
 	Values int
 }
+
+// Unparsed is the summary of an argv that did not parse, or has not yet:
+// the name of none of the rows, no paths and no values.
+func Unparsed() Summary { return Summary{Name: commandname.Unparsed()} }

@@ -39,9 +39,9 @@ func enrolledOnly(t *testing.T) session {
 // pins names e the founding of the session's clone.
 func (s session) pins(e events.EventID) {
 	s.t.Helper()
-	w := &writes{stored: &command.StoreFacts{}}
-	if _, err := pin(w, s.twin.Process.onceFiles(twinCheckout).pin, e); err != nil || len(w.unsynced) != 0 {
-		s.t.Fatalf("pinning %s: %v, unsynced %v", e, err, w.unsynced)
+	w := writes{stored: &command.StoreFacts{}}
+	if _, err := pin(w, s.twin.Process.onceFiles(twinCheckout).pin, e); err != nil || len(unsyncedOf(*w.stored)) != 0 {
+		s.t.Fatalf("pinning %s: %v, unsynced %v", e, err, unsyncedOf(*w.stored))
 	}
 }
 

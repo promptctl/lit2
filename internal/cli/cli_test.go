@@ -393,8 +393,8 @@ func TestExitCodeIsTheClassContract(t *testing.T) {
 		reason.ClassInternal:    70,
 		reason.ClassEnvironment: 78,
 	} {
-		if got := ExitCode(Failed{Failure: classed(class)}); got != want {
-			t.Errorf("a %s failure exits %d; want %d", class, got, want)
+		if got := ExitCode(Failed{Failure: classed(class)}); got != want || got == Unrecorded {
+			t.Errorf("a %s failure exits %d; want %d, never %d, which says the run is unrecorded", class, got, want, Unrecorded)
 		}
 	}
 }

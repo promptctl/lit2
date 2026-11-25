@@ -163,8 +163,14 @@ The decisions the layout needed and the design documents did not make.
   kinds and atoms, so neither imports the other for them.
 - **D9 Exit statuses**: 0 ok; 1 refused; 64 usage (`EX_USAGE`); 70 internal
   (`EX_SOFTWARE`); 78 environment (`EX_CONFIG`). Any other status means lit2
-  died unrecorded. stdout carries only the answer asked for; stderr only the
-  error line and the unrecorded line.
+  died unrecorded; lit2 itself ends a run unrecorded with 2, Go's panic
+  status, when it has no event to write (its build has no
+  version to record, or its start or end panicked) or when
+  it lost the event and stderr would not take the loss. stdout carries only
+  the answer asked for; stderr only the error line, the unrecorded line, and
+  the command log's line: an event lost, or each thing pruning left: a
+  listing or a removal that failed, or an entry kept because it is not a
+  day file.
 - **D10 Checkout discovery by git**: `git rev-parse` from the working
   directory, under the process's environment, so `GIT_DIR`,
   `GIT_CEILING_DIRECTORIES` and safe.directory count as they do for git.
@@ -186,7 +192,8 @@ The decisions the layout needed and the design documents did not make.
   refused, never read through or created over.
 - **D12 Command log** `$XDG_STATE_HOME/lit/commands/<UTC date>.jsonl`
   (`~/.local/state` when unset): one line per invocation in one `O_APPEND`
-  write, per machine; every write removes day files older than 30 days.
+  write, per machine; every write removes day files older than 30 days and
+  says, never removes, any entry there that is not a day file.
 - **D13 No OTLP**: no network on a foreground path, so the file is the one
   export edge, and a failed write is said on stderr.
 - **D14 Rows with no body yet** parse, appear in help, and end internal (70)

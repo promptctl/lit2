@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -68,144 +67,167 @@ type Process struct {
 	Out, Err io.Writer
 }
 
-// Run runs one invocation of args: it parses the command and invokes its
-// answer. It puts the outcome's error line on Err before writing the
-// event, so a slow or hung log cannot hold the line back, and returns the
-// outcome's exit status.
+// Run runs one invocation of args: it invokes what args ask of lit2's
+// command line and says how it ended. A recorded run puts its outcome's
+// error line on Err before writing its event, so a slow or hung log cannot
+// hold the line back, and returns the outcome's exit status, unless the
+// event was lost and stderr would not take the loss either. A run with no
+// event says what it said of its outcome, when it had one, and that it
+// went unrecorded, with the panic and its stack, and ends with the
+// unrecorded status `[LAW:nothing-unseen]`.
 func Run(p Process, args []string) int {
-	asked, answer := ask(args)
-	event := invoke(p, asked, answer)
-	// [LAW:no-silent-failure] exception: stderr is where failures are said,
-	// a lost event among them; when writing to it fails there is no channel
-	// left but the exit status, which still carries the outcome.
-	_, _ = io.WriteString(p.Err, cli.Report(event.Outcome))
-	if err := p.Commands.Write(event); err != nil {
-		_, _ = io.WriteString(p.Err, logFailure(err))
+	// [LAW:no-silent-failure] exception: stderr is where failures are said;
+	// when writing to it fails, the exit status is the one channel left. A
+	// stderr that panics crashes the process, which Go ends with the
+	// unrecorded status too.
+	switch e := invoke(p, func() (cli.Summary, func(body) cli.Outcome) { return parsed(cli.Lit2, args) }).(type) {
+	case command.Recorded:
+		_, _ = io.WriteString(p.Err, e.Line)
+		return logged(p, recorded(p.Commands, e.Event), e.Status)
+	case command.Unrecorded:
+		_, _ = io.WriteString(p.Err, e.Said+fmt.Sprintf("lit2: unrecorded: %v\n%s", e.Broke, e.Broke.Stack()))
+		return cli.Unrecorded
 	}
-	return cli.ExitCode(event.Outcome)
+	panic("root: an Ended that is neither Recorded nor Unrecorded")
 }
 
-// invoke is one invocation of answer, asked as asked, the one composition
-// Main's runs and the twin's, its forged writes included, share: it mints
-// the trace id and reads the clock and the place, handing Record each of
-// these facts as an input `[LAW:dataflow-not-control-flow]`; Record then
-// records the answer, every write it made, the place it ended in and the
-// temps left beside the checkout's files as one event.
-func invoke(p Process, asked cli.Summary, answer func(body) command.Ran) command.Event {
-	var trace command.TraceID
-	if _, err := io.ReadFull(p.Entropy, trace[:]); err != nil {
-		// [LAW:no-silent-failure] no trace id, no event: die loudly, as
-		// crypto/rand itself does when the system's entropy fails.
-		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
+// recorded is what writing e to sink did: a sink or an encoding that
+// panicked lost the event, as a write that failed did.
+func recorded(sink command.Sink, e command.Event) command.Written {
+	return command.Caught(func() command.Written { return sink.Write(e) }, func(broke command.Internal) command.Written { return command.Lost{Why: broke} })
+}
+
+// logged is the run's status once what writing its event did, w, is said
+// on stderr: the outcome's, unless the event was lost and stderr would not
+// take the loss, when the status is the last channel left and says the
+// run unrecorded. What pruning left is no loss, its event in the log, so
+// its status is the outcome's whatever stderr took; the next write says
+// it again.
+func logged(p Process, w command.Written, status int) int {
+	switch w := w.(type) {
+	case command.Kept:
+		for _, left := range w.Left {
+			// [LAW:no-silent-failure] exception: the event is in the log and
+			// the next write finds what this one left, so a stderr that will
+			// not take it changes no status.
+			_, _ = io.WriteString(p.Err, "lit2: command log: "+left.String()+"\n")
+		}
+		return status
+	case command.Lost:
+		said := fmt.Sprintf("lit2: command event not recorded: %v\n", w.Why)
+		var broke command.Internal
+		if errors.As(w.Why, &broke) {
+			said += string(broke.Stack())
+		}
+		if _, unsaid := io.WriteString(p.Err, said); unsaid != nil {
+			return cli.Unrecorded
+		}
+		return status
 	}
-	// read before the place, so the run's duration covers its reading
-	started := p.Clock.Now()
-	place := placeOf(p)
-	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Agent: p.Agent, Command: asked, Started: started}
-	return command.Record(p.Clock, p.Git, inv, place, func(rec command.Recorder) command.Ran {
-		w := &writes{stored: rec.Stored}
-		ran := unfinished(func() command.Ran {
-			return answer(body{p: p, now: started, place: place, rec: rec, w: w})
-		})
-		ran.Outcome = w.end(ran.Outcome)
-		// after the body, so the temps its creates reaped are not said
-		rec.Stored.Temps = leftovers(p, ran.Place)
-		return ran
+	panic(fmt.Sprintf("root: %T is not a Written", w))
+}
+
+// invoke is one invocation of what ask asks, the one composition Main's
+// runs and the twin's, its forged writes included, share: the stages
+// Record runs, in its order. It begins with the reads an event is made of,
+// the trace id and the clock; asks, which reads nothing, so what was asked
+// is known before anything else can panic; locates the checkout and reads
+// its identity; runs the answer at that place; and ends with the
+// judgement of its writes and the temps left beside the checkout's files.
+func invoke(p Process, ask func() (cli.Summary, func(body) cli.Outcome)) command.Ended {
+	return command.Record(p.Clock, p.Git, command.Stages[func(body) cli.Outcome]{
+		Begin: func() command.Invocation {
+			var trace command.TraceID
+			if _, err := io.ReadFull(p.Entropy, trace[:]); err != nil {
+				// [LAW:no-silent-failure] no trace id, no event: the run stops
+				// here and Record says it unrecorded.
+				panic(fmt.Sprintf("minting the trace id: %v", err))
+			}
+			// read before the place, so the run's duration covers its reading
+			return command.Invocation{Trace: trace, Version: p.Reader.String(), Agent: p.Agent, Started: p.Clock.Now()}
+		},
+		Ask:      ask,
+		Locate:   p.Locate,
+		Identify: func(l command.Located) command.Place { return identified(p, l) },
+		Answer:   func(answer func(body) cli.Outcome, at command.Run) cli.Outcome { return answer(body{p: p, run: at}) },
+		End: func(at command.Run, o cli.Outcome) cli.Outcome {
+			// after the answer, so the temps its creates reaped are not said;
+			// a scan that panics is a fact of the scan, so the outcome, and
+			// the judgement of the writes, stand
+			at.Stored().Temps = command.Caught(func() []command.Leftovers { return leftovers(p, at.Place()) }, func(broke command.Internal) []command.Leftovers {
+				return []command.Leftovers{command.TempsScanBroke{Broke: broke}}
+			})
+			return durable(*at.Stored(), o)
+		},
 	})
 }
-
-// ask is what args ask of lit2's command line, parsed or not, and its
-// answer: see parsed.
-func ask(args []string) (cli.Summary, func(body) command.Ran) { return parsed(cli.Lit2, args) }
 
 // parsed is what args ask of the command line commands builds, and its
 // answer: answer to the command, or the parse's refusal, one value
 // whatever the parse did, so a run that parsed nothing runs the same
-// steps as one that did. A line that does not build panics, a lit2 bug;
-// that, or a parse that panics, is asked as unparsed and answered with
-// the panic, its value and stack, as Record answers a body's, so the run
-// is recorded `[LAW:nothing-unseen]`.
-func parsed(commands func() cli.Commands, args []string) (asked cli.Summary, run func(body) command.Ran) {
-	// [LAW:single-enforcer] exception: a second recover beside Record's,
-	// since the parse runs before Record so that what was asked is its
-	// input; lit-law-review-xfz.b5u makes one recover cover the whole run
-	// and deletes this one.
-	defer func() {
-		if p := recover(); p != nil {
-			broke := command.Panicked(p, debug.Stack())
-			asked, run = cli.Summary{Name: commandname.Unparsed()}, func(r body) command.Ran { return r.ran(cli.Failed{Failure: broke}) }
+// steps as one that did. A table or a parse that panics, a lit2 bug, is
+// an answer that fails with that panic, so the run still reads its place
+// and ends as every run does.
+func parsed(commands func() cli.Commands, args []string) (cli.Summary, func(body) cli.Outcome) {
+	a := command.Caught(func() asked {
+		c := commands()
+		p, err := cli.Parse(c, args)
+		if err != nil {
+			return asked{cli.Unparsed(), func(body) cli.Outcome { return failed(err) }}
 		}
-	}()
-	c := commands()
-	p, err := cli.Parse(c, args)
-	if err != nil {
-		return cli.Summary{Name: commandname.Unparsed()}, func(r body) command.Ran { return r.ran(failed(err)) }
-	}
-	return p.Asked, func(r body) command.Ran { return dispatch(r, c, p) }
+		return asked{p.Asked, func(r body) cli.Outcome { return dispatch(r, c, p) }}
+	}, func(broke command.Internal) asked {
+		return asked{cli.Unparsed(), func(body) cli.Outcome { return cli.Failed{Failure: broke} }}
+	})
+	return a.summary, a.answer
 }
 
-// unfinished is body's outcome. A body that panics panics on, saying that
-// the run's end steps, the judging of its writes' durability and the scan
-// of its temps, did not run, so the event Record writes after the panic
-// says so in its outcome, never an empty scan that reads as none left
-// `[LAW:no-silent-failure]`.
-func unfinished(body func() command.Ran) command.Ran {
-	defer func() {
-		if r := recover(); r != nil {
-			panic(stoppedBeforeItsEnd{panicked: r})
-		}
-	}()
-	return body()
+// asked is what a command line asked, and its answer.
+type asked struct {
+	summary cli.Summary
+	answer  func(body) cli.Outcome
 }
 
-// stoppedBeforeItsEnd is a body's panic, said with the end steps it kept
-// from running.
-type stoppedBeforeItsEnd struct{ panicked any }
-
-func (s stoppedBeforeItsEnd) String() string {
-	return fmt.Sprintf("%v; the run stopped before its end: the durability of its writes was not judged, and no directory's temps were scanned", s.panicked)
-}
-
-// body is one invocation as its body sees it: the process, the clock's
-// first reading, its place, which says the store it opens, where its facts
-// go, and where its writes are said.
+// body is one invocation as its answer sees it: the process, and the run
+// Record holds, which says when it started, where it is, and where its
+// facts go. Admin init's mint moves the run's place, so the place
+// recorded is the place it moved to.
 type body struct {
-	p     Process
-	now   time.Time
-	place command.Place
-	rec   command.Recorder
-	w     *writes
+	p   Process
+	run command.Run
 }
 
-// ran is o, ended in r's place: every body's but admin init's, whose mint
-// moves it.
-func (r body) ran(o cli.Outcome) command.Ran { return command.Ran{Place: r.place, Outcome: o} }
+// now is the clock's first reading, the run's now.
+func (r body) now() time.Time { return r.run.Started() }
+
+// writes is where the run's writes are said.
+func (r body) writes() writes { return writes{stored: r.run.Stored()} }
 
 // dispatch binds each command to its body. Every verb runs the steps of §5
 // in order on every call: open and fold, the version in force loaded, then
 // its own body. Only the unbuilt row names the command it runs, and by
 // what was asked; a message telling a person which command to run next
 // reads commandname.
-func dispatch(r body, commands cli.Commands, p cli.Parsed) command.Ran {
+func dispatch(r body, commands cli.Commands, p cli.Parsed) cli.Outcome {
 	switch c := p.Command.(type) {
 	case cli.Help:
-		return r.ran(written(io.WriteString(r.p.Out, cli.HelpText(commands, r.fields()))))
+		return written(io.WriteString(r.p.Out, cli.HelpText(commands, r.fields())))
 	case cli.Get:
-		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.get(c.Paths()) }))
+		return r.verb(func(v inForce) cli.Outcome { return v.get(c.Paths()) })
 	case cli.Set:
-		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Set, pairs(c.Pairs()), c.Flags()) }))
+		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Set, pairs(c.Pairs()), c.Flags()) })
 	case cli.Add:
-		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Add, pairs(c.Pairs()), c.Flags()) }))
+		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Add, pairs(c.Pairs()), c.Flags()) })
 	case cli.Rm:
-		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Rm, paths(c.Paths()), c.Flags()) }))
+		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Rm, paths(c.Paths()), c.Flags()) })
 	case cli.Init:
 		return r.init()
 	case cli.Sync:
-		return r.ran(notBuilt(p.Asked.Name, "lit-converge-5eq"))
+		return notBuilt(p.Asked.Name, "lit-converge-5eq")
 	case cli.Commit:
-		return r.ran(r.stored(opened.commit))
+		return r.stored(opened.commit)
 	case cli.Status:
-		return r.ran(r.stored(opened.status))
+		return r.stored(opened.status)
 	}
 	panic(fmt.Sprintf("root: %T is not a Command", p.Command))
 }
@@ -237,17 +259,6 @@ func failed(err error) cli.Outcome {
 		return cli.Failed{Failure: f}
 	}
 	return cli.Failed{Failure: command.Broke(err)}
-}
-
-// logFailure is what a failed command log write says on stderr: an event
-// whose old day files could not be removed is in the log, and any other
-// failure means it is not.
-func logFailure(err error) string {
-	var h command.Housekeeping
-	if errors.As(err, &h) {
-		return fmt.Sprintf("lit2: command log: pruning failed: %v\n", h)
-	}
-	return fmt.Sprintf("lit2: command event not recorded: %v\n", err)
 }
 
 // notBuilt ends a row whose body is not in this binary yet, naming ticket,

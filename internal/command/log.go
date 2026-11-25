@@ -15,7 +15,62 @@ import (
 )
 
 // Sink is where command events go: the one export edge (D13).
-type Sink interface{ Write(Event) error }
+type Sink interface{ Write(Event) Written }
+
+// Written is what writing an event did: Kept, the event in the log, with
+// what pruning left; or Lost, the event not in the log, and why.
+//
+//sumtype:decl
+type Written interface{ written() }
+
+// Kept is an event in the log, and Left, what pruning left beside it,
+// none or some, each said on its own `[LAW:nothing-unseen]`.
+type Kept struct{ Left []Unpruned }
+
+// Lost is an event that is not in the log, and why.
+type Lost struct{ Why error }
+
+func (Kept) written() {}
+func (Lost) written() {}
+
+// Unpruned is something pruning left: a listing of the log's directory
+// that failed, so nothing old was found; an old day file whose removal
+// failed, so the log keeps more than its retention; an entry that is not
+// a day file, which pruning never removes. String says it.
+//
+//sumtype:decl
+type Unpruned interface {
+	unpruned()
+	String() string
+}
+
+// Unlisted is a log directory whose listing failed.
+type Unlisted struct{ Err error }
+
+// Unremoved is an old day file, Name, whose removal failed.
+type Unremoved struct {
+	Name string
+	Err  error
+}
+
+// NotADayFile is an entry, Name, that is not a day file.
+type NotADayFile struct{ Name string }
+
+func (Unlisted) unpruned()    {}
+func (Unremoved) unpruned()   {}
+func (NotADayFile) unpruned() {}
+
+func (u Unlisted) String() string {
+	return "listing it failed, so no old day file was pruned: " + u.Err.Error()
+}
+
+func (u Unremoved) String() string {
+	return fmt.Sprintf("removing %s, older than its retention, failed: %v", u.Name, u.Err)
+}
+
+func (n NotADayFile) String() string {
+	return fmt.Sprintf("kept %s: not a day file, so never pruned", n.Name)
+}
 
 // retention is how long a day file of the command log is kept (D12).
 const retention = 30 * 24 * time.Hour
@@ -26,21 +81,20 @@ func NewLog(dir string) Sink { return commandLog{dir: dir} }
 
 type commandLog struct{ dir string }
 
-// Housekeeping is a write whose event is in the log and whose removal of
-// old day files failed: a fact of its own, not a lost record. Write builds
-// it from the removal's error.
-type Housekeeping struct{ err error }
-
-func (h Housekeeping) Error() string { return h.err.Error() }
-
-func (h Housekeeping) Unwrap() error { return h.err }
-
 // Write appends the event's line in one O_APPEND write, so concurrent
-// invocations never interleave, then removes the day files more than 30
+// invocations never interleave, then prunes the day files more than 30
 // days older than the event's day. The record is the job, so it comes
-// first: a failed removal is a Housekeeping, and any other failure means
-// the event is not in the log.
-func (l commandLog) Write(e Event) error {
+// first: once it is in, the write is Kept, with what pruning left.
+func (l commandLog) Write(e Event) Written {
+	day := e.Started.UTC().Truncate(24 * time.Hour)
+	if err := l.append(e, day); err != nil {
+		return Lost{Why: err}
+	}
+	return Kept{Left: l.prune(day.Add(-retention))}
+}
+
+// append is e's line appended to the file of its day.
+func (l commandLog) append(e Event, day time.Time) error {
 	line, err := encode(e)
 	if err != nil {
 		return err
@@ -48,57 +102,57 @@ func (l commandLog) Write(e Event) error {
 	if err := os.MkdirAll(l.dir, 0o700); err != nil {
 		return err
 	}
-	day := e.Started.UTC().Truncate(24 * time.Hour)
 	f, err := os.OpenFile(filepath.Join(l.dir, day.Format(time.DateOnly)+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	_, werr := f.Write(append(line, '\n'))
-	if err := errors.Join(werr, f.Close()); err != nil {
-		return err
-	}
-	if err := l.prune(day.Add(-retention)); err != nil {
-		return Housekeeping{err: err}
-	}
-	return nil
+	return errors.Join(werr, f.Close())
 }
 
-// prune removes every day file dated before cutoff. A day file is a
-// regular file so named. A file another invocation removed first is gone,
-// which is what pruning asks for.
-func (l commandLog) prune(cutoff time.Time) error {
+// prune removes every day file dated before cutoff, a day file being a
+// regular file so named, and is what it left: a listing that failed, or
+// every removal that failed and every entry that is not a day file. A
+// file another invocation removed first is gone, which is what pruning
+// asks for.
+func (l commandLog) prune(cutoff time.Time) []Unpruned {
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
-		return err
+		return []Unpruned{Unlisted{Err: err}}
 	}
+	var left []Unpruned
 	for _, entry := range entries {
 		day, err := time.Parse(time.DateOnly+".jsonl", entry.Name())
-		if err != nil || !entry.Type().IsRegular() || !day.Before(cutoff) {
-			continue // not a day file, or not yet 30 days old
+		if err != nil || !entry.Type().IsRegular() {
+			left = append(left, NotADayFile{Name: entry.Name()})
+			continue
+		}
+		if !day.Before(cutoff) {
+			continue // not yet 30 days old
 		}
 		if err := os.Remove(filepath.Join(l.dir, entry.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+			left = append(left, Unremoved{Name: entry.Name(), Err: err})
 		}
 	}
-	return nil
+	return left
 }
 
 // Memory is a sink that keeps every event in order, for tests.
 type Memory struct{ Events []Event }
 
 // Write appends e.
-func (m *Memory) Write(e Event) error {
+func (m *Memory) Write(e Event) Written {
 	m.Events = append(m.Events, e)
-	return nil
+	return Kept{}
 }
 
 // Unwritable is the sink of a command log whose directory cannot be
-// resolved: every write fails with Err, so the loss is said on every
+// resolved: every write is Lost for Err, so the loss is said on every
 // invocation rather than once.
 type Unwritable struct{ Err error }
 
-// Write fails with Err.
-func (u Unwritable) Write(Event) error { return u.Err }
+// Write is Lost for Err.
+func (u Unwritable) Write(Event) Written { return Lost{Why: u.Err} }
 
 // line is the command event as one JSON object: the default field set,
 // then lit2's own fields. Counts are written when zero, so a run that did
@@ -209,7 +263,7 @@ func encode(e Event) ([]byte, error) {
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
 		Config:     configBlock(e.Config),
-		Store:      storeBlock(OpeningAt(e.Place), e.Store),
+		Store:      storeBlock(openingOf(e.Place), e.Store),
 		Fold:       foldBlock(e.Store.Folds),
 		Verbs:      verbsBlock(e.Verbs, e.Store.Landed()),
 		Policy:     policyBlock(e.Policy),
@@ -221,11 +275,7 @@ func encode(e Event) ([]byte, error) {
 		l.Outcome = "ok"
 	case cli.Failed:
 		l.Outcome, l.Reason, l.Error = o.Failure.Class().String(), o.Failure.Reason(), o.Failure.Error()
-		// an Internal joined with another failure keeps its stack
-		var in Internal
-		if errors.As(o.Failure, &in) {
-			l.Stack = string(in.Stack())
-		}
+		l.Stack = string(stackOf(o))
 	}
 	switch a := e.Agent.(type) {
 	case events.Labeled:
@@ -239,17 +289,44 @@ func encode(e Event) ([]byte, error) {
 	return b, nil
 }
 
-func placeLine(p Place) any {
-	switch p := p.(type) {
+// placeLine is how far a run got in reading its place, as the line spells
+// it: unread; a checkout found, its identity unread; or the place it read.
+func placeLine(w Where) any {
+	switch w := w.(type) {
+	case PlaceUnread:
+		return unreadLine{}
+	case AtCheckout:
+		return inCheckoutLine{checkoutLineOf(w.Checkout, unreadLine{})}
 	case InCheckout:
-		c := p.Checkout
-		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, ObjectFormat: c.Format.String(), Identity: identityLine(p.Identity, c)}}
+		return inCheckoutLine{checkoutLineOf(w.Checkout, identityLine(w.Identity, w.Checkout))}
 	case NoCheckout:
-		return noCheckoutLine{dirLine(p)}
+		return noCheckoutLine{dirLine(w)}
 	case Unlocatable:
-		return unlocatableLine{dirErrorLine{p.Dir, p.Err.Error()}}
+		return unlocatableLine{dirErrorLine{w.Dir, w.Err.Error()}}
 	}
-	panic(fmt.Sprintf("command: %T is not a Place", p))
+	panic(fmt.Sprintf("command: %T is not a Where", w))
+}
+
+func checkoutLineOf(c git.Checkout, identity any) checkoutLine {
+	return checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, ObjectFormat: c.Format.String(), Identity: identity}
+}
+
+// openingOf is what a run that got as far as w opened: what a place it
+// read opens, and no store where it ended before reading one.
+func openingOf(w Where) Opening {
+	switch w := w.(type) {
+	case PlaceUnread:
+		return NoStore{Why: errors.New("the run ended before git said where it is")}
+	case AtCheckout:
+		return NoStore{Why: errors.New("the run ended before its checkout's identity was read")}
+	case InCheckout:
+		return OpeningAt(w)
+	case NoCheckout:
+		return OpeningAt(w)
+	case Unlocatable:
+		return OpeningAt(w)
+	}
+	panic(fmt.Sprintf("command: %T is not a Where", w))
 }
 
 // identityLine is the writer and its principal as did:key, or the paths
@@ -276,6 +353,9 @@ type (
 	}
 	noCheckoutLine struct {
 		Outside dirLine `json:"outside"`
+	}
+	unreadLine struct {
+		Unread struct{} `json:"unread"`
 	}
 	unlocatableLine struct {
 		Unlocatable dirErrorLine `json:"unlocatable"`

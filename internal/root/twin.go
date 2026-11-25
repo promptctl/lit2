@@ -2,6 +2,7 @@ package root
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -172,11 +173,8 @@ func storesOf(c git.Checkout, ports store.Ports) func(git.Checkout) store.Ports 
 // composition, and its event is kept by no log.
 func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 	var forged error
-	// [LAW:one-source-of-truth] exception: a summary no row parsed, since a
-	// forged write is no command line; its name is the reserved one no row
-	// may take, so it is never read as a person's command.
-	e := invoke(t.Process, cli.Summary{Name: commandname.Forged()}, func(r body) command.Ran {
-		return r.ran(r.verb(func(v inForce) cli.Outcome {
+	forge := func(r body) cli.Outcome {
+		return r.verb(func(v inForce) cli.Outcome {
 			c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
 			if no, refused := c.Refusal(); refused {
 				forged = no.Err()
@@ -188,12 +186,26 @@ func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 			}
 			forged = err
 			return cli.Done{}
-		}))
-	})
-	if f, isFailed := e.Outcome.(cli.Failed); isFailed {
-		return f.Failure
+		})
 	}
-	return forged
+	ended := invoke(t.Process, func() (cli.Summary, func(body) cli.Outcome) {
+		// [LAW:one-source-of-truth] exception: a summary no row parsed, since
+		// a forged write is no command line; its name is the reserved one no
+		// row may take, so it is never read as a person's command.
+		return cli.Summary{Name: commandname.Forged()}, forge
+	})
+	// what the forge did stands whatever came after it: a write that landed,
+	// or a refusal, is said beside a run that then failed or went unrecorded
+	switch e := ended.(type) {
+	case command.Recorded:
+		if f, isFailed := e.Event.Outcome.(cli.Failed); isFailed {
+			return errors.Join(f.Failure, forged)
+		}
+		return forged
+	case command.Unrecorded:
+		return errors.Join(e.Broke, forged)
+	}
+	panic("root: an Ended that is neither Recorded nor Unrecorded")
 }
 
 // Store is the twin's store as a run opens it, from the writer its

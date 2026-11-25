@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -40,19 +42,19 @@ func TestParallelWritersLeaveEveryLineWhole(t *testing.T) {
 	log := NewLog(dir)
 	const n = 64
 	var wg sync.WaitGroup
-	errs := make(chan error, n)
+	wrote := make(chan Written, n)
 	for i := range n {
 		wg.Go(func() {
-			e := Event{Invocation: asked(inv, commandname.Help()), Place: here, Outcome: cli.Done{}}
+			e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
 			e.Trace = TraceID{byte(i)}
-			errs <- log.Write(e)
+			wrote <- log.Write(e)
 		})
 	}
 	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
+	close(wrote)
+	for w := range wrote {
+		if !reflect.DeepEqual(w, Kept{}) {
+			t.Fatalf("a parallel write = %#v; want it kept, nothing left", w)
 		}
 	}
 	traces := map[any]bool{}
@@ -71,8 +73,10 @@ func TestAWriteRemovesDayFilesOlderThan30Days(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := NewLog(dir).Write(Event{Invocation: asked(inv, commandname.Help()), Place: here, Outcome: cli.Done{}}); err != nil {
-		t.Fatal(err)
+	// notes.txt is no day file: pruning keeps it and says so
+	w := NewLog(dir).Write(Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}})
+	if !reflect.DeepEqual(w, Kept{Left: []Unpruned{NotADayFile{Name: "notes.txt"}}}) {
+		t.Fatalf("a write beside notes.txt = %#v; want it kept, saying notes.txt is no day file", w)
 	}
 	for name, kept := range map[string]bool{
 		"2026-10-01.jsonl": false, // 41 days old
@@ -97,13 +101,56 @@ func TestALogUnderARegularFileFailsToWrite(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	later := asked(inv, commandname.Help())
+	later := inv
 	later.Started = t0.Add(time.Hour)
-	e := Event{Invocation: later, Place: here, Outcome: cli.Done{}}
-	if err := NewLog(filepath.Join(filepath.Dir(file), "commands")).Write(e); err != nil {
-		t.Fatalf("control: a log beside the regular file: %v", err)
+	e := Event{Invocation: later, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
+	if w := NewLog(filepath.Join(filepath.Dir(file), "commands")).Write(e); !reflect.DeepEqual(w, Kept{}) {
+		t.Fatalf("control: a log beside the regular file: %#v", w)
 	}
-	if err := NewLog(filepath.Join(file, "commands")).Write(e); !errors.Is(err, syscall.ENOTDIR) {
-		t.Errorf("a log directory under a regular file = %v; want ENOTDIR, the OS refusing a directory there", err)
+	if lost, ok := NewLog(filepath.Join(file, "commands")).Write(e).(Lost); !ok || !errors.Is(lost.Why, syscall.ENOTDIR) {
+		t.Errorf("a log directory under a regular file = %#v; want it lost for ENOTDIR, the OS refusing a directory there", lost)
+	}
+}
+
+// What pruning left is each thing it left: a listing that failed is no
+// failed removal, and every removal that failed is said, not the first.
+func TestPruningSaysEachThingItLeft(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root lists and removes whatever a directory's mode")
+	}
+	e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
+	unlisted := t.TempDir()
+	unremoved := t.TempDir()
+	for _, name := range []string{"2026-09-01.jsonl", "2026-09-02.jsonl", "2026-11-11.jsonl"} {
+		if err := os.WriteFile(filepath.Join(unremoved, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for dir, mode := range map[string]os.FileMode{unlisted: 0o300, unremoved: 0o500} {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := os.Chmod(dir, 0o700); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	kept, ok := NewLog(unlisted).Write(e).(Kept)
+	if !ok || len(kept.Left) != 1 || !strings.HasPrefix(kept.Left[0].String(), "listing it failed") {
+		t.Fatalf("a write to a directory that does not list = %#v; want it kept, saying the listing failed", kept)
+	}
+	if u, isUnlisted := kept.Left[0].(Unlisted); !isUnlisted || !errors.Is(u.Err, fs.ErrPermission) {
+		t.Errorf("what pruning left of a directory that does not list is %#v; want Unlisted, for its permission", kept.Left[0])
+	}
+	kept, ok = NewLog(unremoved).Write(e).(Kept)
+	var names []string
+	for _, left := range kept.Left {
+		if u, isUnremoved := left.(Unremoved); isUnremoved && errors.Is(u.Err, fs.ErrPermission) {
+			names = append(names, u.Name)
+		}
+	}
+	if !ok || !reflect.DeepEqual(names, []string{"2026-09-01.jsonl", "2026-09-02.jsonl"}) || len(kept.Left) != 2 {
+		t.Errorf("a write beside two old day files that will not go = %#v; want both said", kept)
 	}
 }
