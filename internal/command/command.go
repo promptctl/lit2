@@ -89,36 +89,11 @@ type Recorder struct {
 //sumtype:decl
 type Place interface{ place() }
 
-// InCheckout is an invocation inside a git checkout, with its identity,
-// and the temps creates of the checkout's own files left there, which no
-// create of their name has reaped since: a crash's, said on every command
-// until a create reaps them `[LAW:no-silent-failure]`.
+// InCheckout is an invocation inside a git checkout, with its identity.
 type InCheckout struct {
 	Checkout git.Checkout
 	Identity Identity
-	Temps    []Leftovers
 }
-
-// Leftovers is the temps a create-once left beside one file of a
-// checkout, or why they could not be read.
-//
-//sumtype:decl
-type Leftovers interface{ leftovers() }
-
-// TempsBeside is the temps beside the file at Path, one or more.
-type TempsBeside struct {
-	Path  string
-	Temps []string
-}
-
-// TempsUnread is the file at Path whose directory's temps did not read.
-type TempsUnread struct {
-	Path string
-	Why  error
-}
-
-func (TempsBeside) leftovers() {}
-func (TempsUnread) leftovers() {}
 
 // NoCheckout is an invocation whose walk reached / with no .git.
 type NoCheckout struct{ Dir string }

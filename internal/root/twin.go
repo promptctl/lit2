@@ -111,9 +111,7 @@ func NewTwinBeside(t Twin) Twin {
 		panic(err)
 	}
 	if f, founded := named.(fold.FoundedBy); founded {
-		if err := writeFoundingFile(beside.Tree, f, pinPath(besideCheckout)); err != nil {
-			panic(err)
-		}
+		durably(beside.Tree.CreateOnce(foundingFile, f.Enrollment.FileText()))
 	}
 	return beside
 }
@@ -166,7 +164,8 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 	rec := command.Recorder{Asked: func(cli.Summary) {}, Stored: &command.StoreFacts{}, Configured: func(command.ConfigFacts) {}, Told: func(command.VerbsFacts) {}, Policy: &command.PolicyFacts{}}
 	var forged error
-	out := body{p: t.Process, now: t.Process.Clock.Now(), rec: rec}.verb(func(v inForce) cli.Outcome {
+	w := &writes{stored: rec.Stored}
+	out := body{p: t.Process, now: t.Process.Clock.Now(), rec: rec, w: w}.verb(func(v inForce) cli.Outcome {
 		c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
 		if no, refused := c.Refusal(); refused {
 			forged = no.Err()
@@ -179,7 +178,7 @@ func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 		forged = err
 		return cli.Done{}
 	})
-	if f, isFailed := durable(*rec.Stored, out).(cli.Failed); isFailed {
+	if f, isFailed := w.end(out).(cli.Failed); isFailed {
 		return f.Failure
 	}
 	return forged

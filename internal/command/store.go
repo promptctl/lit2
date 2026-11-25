@@ -26,7 +26,32 @@ type StoreFacts struct {
 	Appends   []store.Appending
 	Publishes []store.Publishing
 	Creates   []Creation
+	Temps     []Leftovers
 }
+
+// Leftovers is the temps creates left beside one of the checkout's
+// create-once files, or in its store's logs' directory, which no create of
+// their name has reaped since: a crash's, said on every command until a
+// create reaps them `[LAW:no-silent-failure]`; or why that directory's
+// temps could not be read.
+//
+//sumtype:decl
+type Leftovers interface{ leftovers() }
+
+// TempsBeside is the temps in the directory at Dir, one or more.
+type TempsBeside struct {
+	Dir   string
+	Temps []string
+}
+
+// TempsUnread is the directory at Dir whose temps did not read.
+type TempsUnread struct {
+	Dir string
+	Why error
+}
+
+func (TempsBeside) leftovers() {}
+func (TempsUnread) leftovers() {}
 
 // Creation is one create-once a command ran: the file's path, and what
 // the create did, which a durable write and one whose sync failed say
@@ -39,14 +64,7 @@ type Creation struct {
 // Landed is whether any append the facts hold wrote its frame, durable or
 // not: what the verbs block calls written.
 func (f StoreFacts) Landed() bool {
-	for _, a := range f.Appends {
-		switch a.(type) {
-		case store.Appended, store.AppendedNotDurable:
-			return true
-		case store.NotAppended:
-		}
-	}
-	return false
+	return slices.ContainsFunc(f.Appends, store.Appending.Landed)
 }
 
 // Opening is the store an invocation's checkout opened, once, or why it has
@@ -66,7 +84,7 @@ func (Opened) opening()   {}
 func (Unopened) opening() {}
 
 func (f StoreFacts) empty() bool {
-	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Folds)+len(f.Appends)+len(f.Publishes)+len(f.Creates) == 0
+	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Folds)+len(f.Appends)+len(f.Publishes)+len(f.Creates)+len(f.Temps) == 0
 }
 
 // The store block as the line spells it: one object per step that ran,
@@ -79,6 +97,7 @@ type (
 		Append  []any         `json:"append,omitempty"`
 		Publish []publishLine `json:"publish,omitempty"`
 		Create  []any         `json:"create,omitempty"`
+		Temps   []any         `json:"temps,omitempty"`
 	}
 	// createLine is a create that placed its file, durable or not; a
 	// create that placed none is a notPlacedLine.
@@ -87,18 +106,33 @@ type (
 		Outcome string `json:"outcome"`
 		Made    string `json:"made"`
 		Why     string `json:"why,omitempty"`
-		sweptLine
+		reapLine
 	}
+	// notPlacedLine is a create that placed nothing, and its own temp
+	// when it could not remove it.
 	notPlacedLine struct {
-		Path    string `json:"path"`
-		Outcome string `json:"outcome"`
-		Why     string `json:"why"`
+		Path      string     `json:"path"`
+		Outcome   string     `json:"outcome"`
+		Why       string     `json:"why"`
+		TempsLeft []leftLine `json:"temps_left"`
 	}
-	// sweptLine is what a create did about its name's other temps: those
-	// it removed, and those it could not, and why.
-	sweptLine struct {
+	// reapLine is what a create did about its name's temps: those it
+	// removed, those it could not, and why, and why it could not list them.
+	reapLine struct {
 		TempsReaped []string   `json:"temps_reaped"`
 		TempsLeft   []leftLine `json:"temps_left"`
+		Unlisted    string     `json:"unlisted,omitempty"`
+	}
+	// logLine is how an append came by its log: looked_up; created, its
+	// header the log's; existing, a racing create's header the log's; or
+	// none, and the reap of its create, or the temp its create left.
+	logLine struct {
+		Log string `json:"log"`
+		reapLine
+	}
+	tempsBesideLine struct {
+		Dir   string   `json:"dir"`
+		Temps []string `json:"temps"`
 	}
 	leftLine struct {
 		Name string `json:"name"`
@@ -113,7 +147,6 @@ type (
 		LogsRead   int             `json:"logs_read"`
 		Streams    int             `json:"streams"`
 		Unreadable []badStreamLine `json:"unreadable"`
-		Temps      []string        `json:"temps"`
 	}
 	badStreamLine struct {
 		Name string `json:"name"`
@@ -133,17 +166,17 @@ type (
 	// appendLine is an append that landed its frame, durable or not; an
 	// append that wrote none is a notAppendedLine.
 	appendLine struct {
-		Outcome    string `json:"outcome"`
-		Records    int    `json:"records"`
-		Bytes      int    `json:"bytes"`
-		LogUntil   uint64 `json:"log_until"`
-		LogCreated bool   `json:"log_created"`
-		Why        string `json:"why,omitempty"`
-		sweptLine
+		Outcome  string `json:"outcome"`
+		Records  int    `json:"records"`
+		Bytes    int    `json:"bytes"`
+		LogUntil uint64 `json:"log_until"`
+		Why      string `json:"why,omitempty"`
+		logLine
 	}
 	notAppendedLine struct {
 		Outcome string `json:"outcome"`
 		Why     string `json:"why"`
+		logLine
 	}
 	publishLine struct {
 		Outcome        string `json:"outcome"`
@@ -168,7 +201,7 @@ func storeBlock(f StoreFacts) *storeLine {
 	}
 	l := &storeLine{Open: open(f.Opening)}
 	for _, h := range f.Heads {
-		hl := headsLine{RefsRead: h.RefsRead, LogsRead: h.LogsRead, Streams: len(h.Streams), Unreadable: []badStreamLine{}, Temps: append([]string{}, h.Temps...)}
+		hl := headsLine{RefsRead: h.RefsRead, LogsRead: h.LogsRead, Streams: len(h.Streams), Unreadable: []badStreamLine{}}
 		for _, u := range h.Unreadable {
 			hl.Unreadable = append(hl.Unreadable, badStreamLine{Name: u.Name, Why: u.Why.Error()})
 		}
@@ -186,14 +219,29 @@ func storeBlock(f StoreFacts) *storeLine {
 	for _, c := range f.Creates {
 		l.Create = append(l.Create, createOf(c))
 	}
+	for _, left := range f.Temps {
+		l.Temps = append(l.Temps, tempsOf(left))
+	}
 	return l
 }
 
+// tempsOf is a directory's leftover temps, or why they did not read.
+func tempsOf(l Leftovers) any {
+	switch l := l.(type) {
+	case TempsBeside:
+		return tempsBesideLine(l)
+	case TempsUnread:
+		return dirErrorLine{Dir: l.Dir, Error: l.Why.Error()}
+	}
+	panic(fmt.Sprintf("command: %T is not a Leftovers", l))
+}
+
 // appendOf is an append as the line spells it: appended, not_durable with
-// the failed sync, or not_appended and why.
+// the failed sync, or not_appended and why, each with how it came by its
+// log.
 func appendOf(a store.Appending) any {
 	landed := func(outcome string, a store.Appended, why string) appendLine {
-		return appendLine{Outcome: outcome, Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), LogCreated: created(a.Log), Why: why, sweptLine: swept(a.Swept)}
+		return appendLine{Outcome: outcome, Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), Why: why, logLine: logOf(a.Log)}
 	}
 	switch a := a.(type) {
 	case store.Appended:
@@ -201,9 +249,21 @@ func appendOf(a store.Appending) any {
 	case store.AppendedNotDurable:
 		return landed("not_durable", a.Appended, a.Why.Error())
 	case store.NotAppended:
-		return notAppendedLine{Outcome: "not_appended", Why: a.Why.Error()}
+		return notAppendedLine{Outcome: "not_appended", Why: a.Why.Error(), logLine: logOf(a.Log)}
 	}
 	panic(fmt.Sprintf("command: %T is not an Appending", a))
+}
+
+func logOf(l store.LogAttempt) logLine {
+	switch l := l.(type) {
+	case store.NoLog:
+		return logLine{Log: "none", reapLine: reapLine{TempsReaped: []string{}, TempsLeft: leftOf(l.Left)}}
+	case store.LogLookedUp:
+		return logLine{Log: "looked_up", reapLine: reapOf(files.Reap{})}
+	case store.LogCreated:
+		return logLine{Log: made(l.Made), reapLine: reapOf(l.Reap)}
+	}
+	panic(fmt.Sprintf("command: %T is not a LogAttempt", l))
 }
 
 // createOf is a create as the line spells it: placed, not_durable with the
@@ -211,19 +271,27 @@ func appendOf(a store.Appending) any {
 func createOf(c Creation) any {
 	switch p := c.Placing.(type) {
 	case files.Placed:
-		return createLine{Path: c.Path, Outcome: "placed", Made: made(p.Made), sweptLine: swept(p.Swept)}
+		return createLine{Path: c.Path, Outcome: "placed", Made: made(p.Made), reapLine: reapOf(p.Reap)}
 	case files.PlacedNotDurable:
-		return createLine{Path: c.Path, Outcome: "not_durable", Made: made(p.Made), Why: p.Why.Error(), sweptLine: swept(p.Swept)}
+		return createLine{Path: c.Path, Outcome: "not_durable", Made: made(p.Made), Why: p.Why.Error(), reapLine: reapOf(p.Reap)}
 	case files.NotPlaced:
-		return notPlacedLine{Path: c.Path, Outcome: "not_placed", Why: p.Why.Error()}
+		return notPlacedLine{Path: c.Path, Outcome: "not_placed", Why: p.Why.Error(), TempsLeft: leftOf(p.Left)}
 	}
 	panic(fmt.Sprintf("command: %T is not a Placing", c.Placing))
 }
 
-func swept(s files.Swept) sweptLine {
-	l := sweptLine{TempsReaped: append([]string{}, s.Reaped...), TempsLeft: []leftLine{}}
-	for _, left := range s.Left {
-		l.TempsLeft = append(l.TempsLeft, leftLine{Name: left.Name, Why: left.Why.Error()})
+func reapOf(r files.Reap) reapLine {
+	l := reapLine{TempsReaped: append([]string{}, r.Reaped...), TempsLeft: leftOf(r.Left)}
+	if r.Unlisted != nil {
+		l.Unlisted = r.Unlisted.Error()
+	}
+	return l
+}
+
+func leftOf(ls []files.Leftover) []leftLine {
+	l := []leftLine{}
+	for _, left := range ls {
+		l = append(l, leftLine{Name: left.Name, Why: left.Why.Error()})
 	}
 	return l
 }

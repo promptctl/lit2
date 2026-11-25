@@ -273,15 +273,16 @@ func (o Disk) Append(n Name, b []byte) Appending {
 	// [LAW:no-silent-failure] b has landed: from here every failure, of a
 	// sync or a close, leaves it there, so it is said beside the end, never
 	// as an append that wrote nothing, which a caller would write again.
-	// A printed echo must survive a power loss, so the append is not
-	// durable until the file and the name it is under are on disk (the
-	// store's decision 11).
-	why := errors.Join(o.dir.seams.Sync(o.dir.PathOf(n), f), f.Close(), o.dir.syncDir(r, o.dir.Path()), r.Close())
-	if why != nil {
-		return AppendedNotDurable{End: uint64(at), Why: why}
+	// The name it is under was made durable by the step that established
+	// it, the create or a Sync, so the append fsyncs the file alone.
+	landed := Appended{End: uint64(at)}
+	if why := errors.Join(o.dir.seams.Sync(o.dir.PathOf(n), f), f.Close(), r.Close()); why != nil {
+		return AppendedNotDurable{Appended: landed, Why: why}
 	}
-	return Appended{End: uint64(at)}
+	return landed
 }
+
+func (o Disk) Sync() error { return o.dir.Sync() }
 
 func (o Disk) ReadAt(n Name, off, size uint64) (b []byte, err error) {
 	err = o.with(n, os.O_RDONLY, func(f *os.File) error {
@@ -325,110 +326,239 @@ func (o Disk) CreateOnce(n Name, b []byte) Placing {
 	if err != nil {
 		return NotPlaced{Why: err}
 	}
-	temp, err := o.temp(r, n, b)
-	if err != nil {
-		return NotPlaced{Why: errors.Join(err, r.Close())}
+	var temp string
+	switch t := o.temp(r, n, b).(type) {
+	case tempUnwritten:
+		return NotPlaced{Why: errors.Join(t.why, r.Close()), Left: t.left}
+	case tempWritten:
+		temp = t.name
 	}
 	o.dir.seams.Gate(o.dir.pathIn(temp))
-	made, err := o.link(r, n, temp)
-	if err != nil {
-		// nothing is placed, so nothing is reaped: every other temp of n
-		// may still be a live create's, which may yet win
-		return NotPlaced{Why: errors.Join(err, gone(o.dir.seams.Remove(r, temp)), r.Close())}
+	// nothing is placed until the name is looked at, so a NotPlaced
+	// reaps nothing: every other temp of n may still be a live create's,
+	// which may yet win
+	unplaced := func(why error) Placing {
+		// the temp is removed before the root it is removed through closes
+		left := o.dir.remove(r, temp).left(temp)
+		return NotPlaced{Why: errors.Join(why, r.Close()), Left: left}
 	}
-	swept := o.reap(r, n, temp)
-	if err := gone(o.dir.seams.Remove(r, temp)); err != nil {
-		swept.Left = append(swept.Left, Leftover{Name: temp, Why: err})
+	var placed Placed
+	var own removal
+	switch l := link(r, temp, n).(type) {
+	case unlinked:
+		return unplaced(l.why)
+	case linked:
+		placed.Made, own = Created, o.dir.remove(r, temp)
+	case taken:
+		if err := o.found(r, n); err != nil {
+			return unplaced(errors.Join(l.why, err))
+		}
+		placed.Made, own = Existing, o.dir.remove(r, temp)
+	case tempReaped:
+		// this call's temp is gone, so there is nothing of it to remove
+		if err := o.found(r, n); err != nil {
+			return unplaced(errors.Join(l.why, err))
+		}
+		placed.Made, own = Existing, alreadyGone{}
 	}
+	placed.Reap = o.reap(r, n, temp)
+	placed.Reap.Left = append(placed.Reap.Left, own.left(temp)...)
 	// the name must survive a power loss as the appends to it will, and the
 	// reaps and removals with it
 	if why := errors.Join(o.dir.syncDir(r, o.dir.Path()), r.Close()); why != nil {
-		return PlacedNotDurable{Made: made, Swept: swept, Why: why}
+		return PlacedNotDurable{Placed: placed, Why: why}
 	}
-	return Placed{Made: made, Swept: swept}
+	return placed
 }
 
-// link links temp to n in r: Created when the link made n, and Existing
-// when n holds a regular file already. Two failures of the link find n
-// there: the name taken, fs.ErrExist, and this call's temp gone,
-// fs.ErrNotExist, reaped by a create that placed n first. Either way n is
-// looked at, not followed, and a name that holds anything but a regular
-// file is NotAFile; one that holds nothing is the link's failure.
-func (o Disk) link(r *os.Root, n Name, temp string) (Made, error) {
+// linking is what linking a create's temp to its name did: linked it, so
+// this call made the name; found the name taken; found its own temp gone,
+// reaped by a create that placed the name first; or failed otherwise.
+//
+//sumtype:decl
+type linking interface{ linking() }
+
+type (
+	linked     struct{}
+	taken      struct{ why error }
+	tempReaped struct{ why error }
+	unlinked   struct{ why error }
+)
+
+func (linked) linking()     {}
+func (taken) linking()      {}
+func (tempReaped) linking() {}
+func (unlinked) linking()   {}
+
+// link links temp to n in r.
+func link(r *os.Root, temp string, n Name) linking {
 	err := r.Link(temp, n.s)
-	if err == nil {
-		return Created, nil
+	switch {
+	case err == nil:
+		return linked{}
+	case errors.Is(err, fs.ErrExist):
+		return taken{why: err}
+	case errors.Is(err, fs.ErrNotExist):
+		return tempReaped{why: err}
 	}
-	if !errors.Is(err, fs.ErrExist) && !errors.Is(err, fs.ErrNotExist) {
-		return 0, err
-	}
-	at, lerr := r.Lstat(n.s)
-	if lerr != nil {
-		return 0, errors.Join(err, lerr)
+	return unlinked{why: err}
+}
+
+// found is nil when n in r holds a regular file, looked at, not followed;
+// a name that holds anything else is NotAFile, and one that holds nothing
+// is the Lstat's failure.
+func (o Disk) found(r *os.Root, n Name) error {
+	at, err := r.Lstat(n.s)
+	if err != nil {
+		return err
 	}
 	if refusal, refused := aFile.refusal(o.dir.PathOf(n), at.Mode()); refused {
-		return 0, refusal
+		return refusal
 	}
-	return Existing, nil
+	return nil
 }
 
 // reap removes every temp of n in r but own, once n is placed. Then each
 // is a crash's leftover, the temp of a create that lost, which finds n
 // there when its link fails, or a winner's whose own removal finds it
 // gone; so a reap takes nothing a create still needs, and no lock orders
-// them `[LAW:no-ambient-temporal-coupling]`. A temp another reap removed
-// first is no one's to report.
-func (o Disk) reap(r *os.Root, n Name, own string) Swept {
-	s := Swept{Reaped: []string{}, Left: []Leftover{}}
-	entries, err := readDir(r)
+// them `[LAW:no-ambient-temporal-coupling]`.
+func (o Disk) reap(r *os.Root, n Name, own string) Reap {
+	es, err := o.dir.entries(r)
 	if err != nil {
-		return Swept{Reaped: []string{}, Left: []Leftover{{Name: ".", Why: fmt.Errorf("reading %s for the temps of %s: %w", o.dir.Path(), n, err)}}}
+		return Reap{Unlisted: fmt.Errorf("reading %s for the temps of %s: %w", o.dir.Path(), n, err)}
 	}
-	for _, e := range entries {
-		if e.Name() == own || !isTempOf(e.Name(), n) {
+	var rp Reap
+	for _, t := range es.temps {
+		if t.of != n || t.name == own {
 			continue
 		}
-		err := o.dir.seams.Remove(r, e.Name())
-		switch {
-		case err == nil:
-			s.Reaped = append(s.Reaped, e.Name())
-		case !errors.Is(err, fs.ErrNotExist):
-			s.Left = append(s.Left, Leftover{Name: e.Name(), Why: err})
+		switch rm := o.dir.remove(r, t.name).(type) {
+		case removed:
+			rp.Reaped = append(rp.Reaped, t.name)
+		case alreadyGone:
+			// another reap removed it first: no one's to report
+		case notRemoved:
+			rp.Left = append(rp.Left, Leftover{Name: t.name, Why: rm.why})
 		}
 	}
-	return s
+	return rp
 }
 
-// gone is err, but nil when it says the entry is not there: a temp
-// another create's reap removed is removed.
-func gone(err error) error {
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+// removal is what removing an entry did: removed it, found it already
+// gone, which a temp another create's reap removed is, or failed.
+//
+//sumtype:decl
+type removal interface {
+	removal()
+	// left is the entry name as a leftover when it could not be removed.
+	left(name string) []Leftover
+}
+
+type (
+	removed     struct{}
+	alreadyGone struct{}
+	notRemoved  struct{ why error }
+)
+
+func (removed) removal()                         {}
+func (removed) left(string) []Leftover           { return nil }
+func (alreadyGone) removal()                     {}
+func (alreadyGone) left(string) []Leftover       { return nil }
+func (notRemoved) removal()                      {}
+func (n notRemoved) left(name string) []Leftover { return []Leftover{{Name: name, Why: n.why}} }
+
+// remove removes name in r through the seam: the one place a removal's
+// outcome is decided `[LAW:single-enforcer]`.
+func (d Dir) remove(r *os.Root, name string) removal {
+	err := d.seams.Remove(r, name)
+	switch {
+	case err == nil:
+		return removed{}
+	case errors.Is(err, fs.ErrNotExist):
+		return alreadyGone{}
 	}
-	return err
+	return notRemoved{why: err}
 }
 
-// readDir is r's directory's entries.
-func readDir(r *os.Root) (es []fs.DirEntry, err error) {
-	d, err := r.Open(".")
+// classified is a directory's entries as the port reads them: the one
+// reading of an entry List, Temps and a reap share `[LAW:single-enforcer]`.
+type classified struct {
+	names   []Name
+	temps   []temp
+	refused []Refused
+}
+
+// temp is a create-once's temporary file: its name in the directory, and
+// the name it is a temp of.
+type temp struct {
+	name string
+	of   Name
+}
+
+// entries is r's directory's entries, read through the seam and
+// classified: a temp of a name, a file of the port, or refused.
+func (d Dir) entries(r *os.Root) (c classified, err error) {
+	f, err := r.Open(".")
 	if err != nil {
-		return nil, err
+		return classified{}, err
 	}
-	defer func() { err = errors.Join(err, d.Close()) }()
-	return d.ReadDir(-1)
+	defer func() { err = errors.Join(err, f.Close()) }()
+	es, err := d.seams.List(d.Path(), f)
+	if err != nil {
+		return classified{}, err
+	}
+	for _, e := range es {
+		if of, ok := tempOf(e.Name()); ok {
+			c.temps = append(c.temps, temp{name: e.Name(), of: of})
+			continue
+		}
+		path := d.pathIn(e.Name())
+		n, err := NameOf(e.Name())
+		if err != nil {
+			c.refused = append(c.refused, Refused{Name: e.Name(), Why: fmt.Errorf("%s: %w", path, err)})
+			continue
+		}
+		// the entry's type as the directory holds it, not following a link
+		if r, refused := aFile.refusal(path, e.Type()); refused {
+			c.refused = append(c.refused, Refused{Name: e.Name(), Why: r})
+			continue
+		}
+		c.names = append(c.names, n)
+	}
+	slices.SortFunc(c.names, func(a, b Name) int { return strings.Compare(a.s, b.s) })
+	slices.SortFunc(c.temps, func(a, b temp) int { return strings.Compare(a.name, b.name) })
+	return c, nil
 }
 
 // pathIn is the path of the entry name in d, as a message names it.
 func (d Dir) pathIn(name string) string { return filepath.Join(d.Path(), name) }
 
-// temp writes b to a new temporary file in r, in the instance's mode, and
-// returns its name, tempName's, which no Name can be. The bytes are on
-// disk before the file is closed, so a power loss after the link leaves a
-// whole file, never an empty one every append then refuses. os.Root has
-// no CreateTemp, so the count runs up from 0 past every name another
-// writer holds; two writers of one name each end with their own temp, and
-// the link decides whose bytes are kept.
-func (o Disk) temp(r *os.Root, n Name, b []byte) (string, error) {
+// temping is what writing a create's temporary file did: wrote it, or
+// failed, and what of it the failure left.
+//
+//sumtype:decl
+type temping interface{ temping() }
+
+type (
+	tempWritten   struct{ name string }
+	tempUnwritten struct {
+		why  error
+		left []Leftover
+	}
+)
+
+func (tempWritten) temping()   {}
+func (tempUnwritten) temping() {}
+
+// temp writes b to a new temporary file in r, in the instance's mode,
+// named by tempName, which no Name can be. The bytes are on disk before
+// the file is closed, so a power loss after the link leaves a whole file,
+// never an empty one every append then refuses. os.Root has no
+// CreateTemp, so the count runs up from 0 past every name another writer
+// holds; two writers of one name each end with their own temp, and the
+// link decides whose bytes are kept.
+func (o Disk) temp(r *os.Root, n Name, b []byte) temping {
 	for i := 0; ; i++ {
 		name := tempName(n, i)
 		f, err := r.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, o.mode)
@@ -436,77 +566,57 @@ func (o Disk) temp(r *os.Root, n Name, b []byte) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return tempUnwritten{why: err}
 		}
 		_, werr := f.Write(b)
 		// the mode is the instance's whatever the umask, so a secret's file
 		// is 0600 and a readable one 0644
 		if err := errors.Join(werr, f.Chmod(o.mode), o.dir.seams.Sync(o.dir.pathIn(name), f), f.Close()); err != nil {
-			return "", errors.Join(err, gone(o.dir.seams.Remove(r, name)))
+			return tempUnwritten{why: err, left: o.dir.remove(r, name).left(name)}
 		}
-		return name, nil
+		return tempWritten{name: name}
 	}
 }
 
-func (o Disk) List() (l Listing, err error) {
-	l = Listing{Names: []Name{}, Temps: []string{}, Refused: []Refused{}}
-	r, err := o.dir.walk(opening)
-	if errors.Is(err, fs.ErrNotExist) {
-		return l, nil // nothing is created by a read: no directory yet holds no file
-	}
+func (o Disk) List() (Listing, error) {
+	c, err := o.read()
 	if err != nil {
 		return Listing{}, err
 	}
-	defer func() { err = errors.Join(err, r.Close()) }()
-	entries, err := readDir(r)
-	if err != nil {
-		return Listing{}, err
+	l := Listing{Names: c.names, Refused: c.refused}
+	for _, t := range c.temps {
+		l.Temps = append(l.Temps, t.name)
 	}
-	for _, e := range entries {
-		if _, temp := tempOf(e.Name()); temp {
-			l.Temps = append(l.Temps, e.Name())
-			continue
-		}
-		path := o.dir.pathIn(e.Name())
-		n, err := NameOf(e.Name())
-		if err != nil {
-			l.Refused = append(l.Refused, Refused{Name: e.Name(), Why: fmt.Errorf("%s: %w", path, err)})
-			continue
-		}
-		// the entry's type as the directory holds it, not following a link
-		if r, refused := aFile.refusal(path, e.Type()); refused {
-			l.Refused = append(l.Refused, Refused{Name: e.Name(), Why: r})
-			continue
-		}
-		l.Names = append(l.Names, n)
-	}
-	slices.SortFunc(l.Names, func(a, b Name) int { return strings.Compare(a.s, b.s) })
-	slices.Sort(l.Temps)
 	return l, nil
 }
 
-func (o Disk) Temps(n Name) (ts []string, err error) {
-	ts = []string{}
+func (o Disk) Temps(n Name) ([]string, error) {
 	if err := n.valid(); err != nil {
 		return nil, err
 	}
-	r, err := o.dir.walk(opening)
-	if errors.Is(err, fs.ErrNotExist) {
-		return ts, nil // nothing is created by a read: no directory yet holds no temp
-	}
+	c, err := o.read()
 	if err != nil {
 		return nil, err
 	}
-	defer func() { err = errors.Join(err, r.Close()) }()
-	entries, err := readDir(r)
-	if err != nil {
-		return nil, err
-	}
-	for _, e := range entries {
-		if isTempOf(e.Name(), n) {
-			ts = append(ts, e.Name())
+	var ts []string
+	for _, t := range c.temps {
+		if t.of == n {
+			ts = append(ts, t.name)
 		}
 	}
-	slices.Sort(ts)
 	return ts, nil
+}
+
+// read is the directory's entries, classified; a missing directory holds
+// none, since nothing is created by a read.
+func (o Disk) read() (c classified, err error) {
+	r, err := o.dir.walk(opening)
+	if errors.Is(err, fs.ErrNotExist) {
+		return classified{}, nil
+	}
+	if err != nil {
+		return classified{}, err
+	}
+	defer func() { err = errors.Join(err, r.Close()) }()
+	return o.dir.entries(r)
 }

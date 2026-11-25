@@ -31,7 +31,7 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 	t.Run("appends land in order at the end, durable", func(t *testing.T) {
 		f := fresh(t)
 		if got := f.CreateOnce(n, []byte("head")); !placed(got, files.Created) {
-			t.Fatalf("CreateOnce = %#v; want Placed, Created, sweeping nothing", got)
+			t.Fatalf("CreateOnce = %#v; want Placed, Created, reaping nothing", got)
 		}
 		for i, want := range []uint64{7, 10} {
 			if got := f.Append(n, []byte("abc")); got != (files.Appended{End: want}) {
@@ -69,7 +69,7 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 		f := fresh(t)
 		Create(t, f, n, []byte("first"))
 		if got := f.CreateOnce(n, []byte("second")); !placed(got, files.Existing) {
-			t.Errorf("the second CreateOnce = %#v; want Placed, Existing, sweeping nothing", got)
+			t.Errorf("the second CreateOnce = %#v; want Placed, Existing, reaping nothing", got)
 		}
 		if b, err := f.ReadAll(n); err != nil || string(b) != "first" {
 			t.Errorf("the file holds %q, %v; want the first's bytes", b, err)
@@ -140,10 +140,10 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 	})
 }
 
-// placed is whether p is Placed as made, sweeping nothing.
+// placed is whether p is Placed as made, reaping nothing.
 func placed(p files.Placing, made files.Made) bool {
 	got, ok := p.(files.Placed)
-	return ok && got.Made == made && len(got.Swept.Reaped) == 0 && len(got.Swept.Left) == 0
+	return ok && got.Made == made && len(got.Reap.Reaped) == 0 && len(got.Reap.Left) == 0 && got.Reap.Unlisted == nil
 }
 
 // Create creates n holding b in f, failing t unless it is Placed.
@@ -211,9 +211,9 @@ func Recording(s *Syncs, fail func(path string) error) Seams {
 // Passing is a fail that fails no sync.
 func Passing(string) error { return nil }
 
-// Faults is the sync failure a NotDurable twin answers for each write:
-// an Append's, a CreateOnce's, or none where nil.
-type Faults struct{ Append, CreateOnce error }
+// Faults is the sync failure a NotDurable twin answers for each call that
+// syncs: an Append's, a CreateOnce's, a Sync's, or none where nil.
+type Faults struct{ Append, CreateOnce, Sync error }
 
 // NotDurable is f whose writes land, and then answer the fault their
 // operation is given as a failed sync: the state of a disk whose fsync
@@ -230,7 +230,7 @@ type notDurable struct {
 func (d notDurable) Append(n files.Name, b []byte) files.Appending {
 	got := d.Files.Append(n, b)
 	if a, landed := got.(files.Appended); landed && d.faults.Append != nil {
-		return files.AppendedNotDurable{End: a.End, Why: d.faults.Append}
+		return files.AppendedNotDurable{Appended: a, Why: d.faults.Append}
 	}
 	return got
 }
@@ -238,7 +238,14 @@ func (d notDurable) Append(n files.Name, b []byte) files.Appending {
 func (d notDurable) CreateOnce(n files.Name, b []byte) files.Placing {
 	got := d.Files.CreateOnce(n, b)
 	if p, landed := got.(files.Placed); landed && d.faults.CreateOnce != nil {
-		return files.PlacedNotDurable{Made: p.Made, Swept: p.Swept, Why: d.faults.CreateOnce}
+		return files.PlacedNotDurable{Placed: p, Why: d.faults.CreateOnce}
 	}
 	return got
+}
+
+func (d notDurable) Sync() error {
+	if err := d.Files.Sync(); err != nil || d.faults.Sync == nil {
+		return err
+	}
+	return d.faults.Sync
 }

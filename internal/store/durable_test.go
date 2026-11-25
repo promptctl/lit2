@@ -30,11 +30,11 @@ func over(faults filestest.Faults) *store.Store {
 
 // notDurable is a, failing t unless it is AppendedNotDurable by want's
 // fault and by none of others.
-func notDurable(t *testing.T, a store.Appending, made files.Made, want error, others ...error) store.AppendedNotDurable {
+func notDurable(t *testing.T, a store.Appending, want error, others ...error) store.AppendedNotDurable {
 	t.Helper()
 	got, ok := a.(store.AppendedNotDurable)
-	if !ok || got.Records != 1 || got.Log != made || !errors.Is(got.Why, want) {
-		t.Fatalf("Append = %#v; want AppendedNotDurable, one record, the log %v, by %v", a, made, want)
+	if !ok || got.Records != 1 || !errors.Is(got.Why, want) {
+		t.Fatalf("Append = %#v; want AppendedNotDurable, one record, by %v", a, want)
 	}
 	for _, o := range others {
 		if errors.Is(got.Why, o) {
@@ -44,11 +44,20 @@ func notDurable(t *testing.T, a store.Appending, made files.Made, want error, ot
 	return got
 }
 
+// created fails t unless log is the log's create, its header the log's.
+func created(t *testing.T, log store.LogPlacement) {
+	t.Helper()
+	if c, ok := log.(store.LogCreated); !ok || c.Made != files.Created {
+		t.Errorf("the append's log is %#v; want LogCreated, Created", log)
+	}
+}
+
 func TestAFrameThatLandedIsNeverNotAppended(t *testing.T) {
 	bt := must[store.Batch](t)(store.NewBatch(store.Record("landed")))
 	t.Run("a failed append's sync is AppendedNotDurable, and the frame reads back once", func(t *testing.T) {
 		s := over(filestest.Faults{Append: errAppend})
-		got := notDurable(t, s.Append(bt), files.Created, errAppend, errCreate)
+		got := notDurable(t, s.Append(bt), errAppend, errCreate)
+		created(t, got.Log)
 		scan := storetest.Whole(t, s, store.WriterRef{Checkout: me})
 		if !slices.Equal(storetest.Read(scan), []string{"landed"}) || scan.End != got.Until.At {
 			t.Errorf("the log reads %v, ending at %d; want the one frame, ending where the append said, %d", storetest.Read(scan), scan.End, got.Until.At)
@@ -56,16 +65,54 @@ func TestAFrameThatLandedIsNeverNotAppended(t *testing.T) {
 	})
 	t.Run("a failed sync of the log's create is the frame's, which still lands", func(t *testing.T) {
 		s := over(filestest.Faults{CreateOnce: errCreate})
-		notDurable(t, s.Append(bt), files.Created, errCreate, errAppend)
+		created(t, notDurable(t, s.Append(bt), errCreate, errAppend).Log)
 		if got := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: me})); !slices.Equal(got, []string{"landed"}) {
 			t.Errorf("the log reads %v; want the one frame", got)
 		}
 	})
+	t.Run("a log looked up is synced again, and a failed sync is the frame's", func(t *testing.T) {
+		errName := errors.New("the log's directory's fsync failed")
+		s := over(filestest.Faults{Sync: errName})
+		first, ok := s.Append(bt).(store.Appended)
+		if !ok {
+			t.Fatalf("the first append = %#v; want Appended, its create's sync its own", first)
+		}
+		created(t, first.Log)
+		if got := notDurable(t, s.Append(bt), errName, errAppend, errCreate); got.Log != (store.LogLookedUp{}) {
+			t.Errorf("the second append's log is %#v; want LogLookedUp", got.Log)
+		}
+	})
 }
 
-// A log create's temp that no create of its name reaped is said by Heads,
-// never dropped.
-func TestHeadsSaysTheLogsTemps(t *testing.T) {
+// An append that places no log says what its create left.
+func TestAnAppendThatPlacesNoLogSaysItsCreatesTemp(t *testing.T) {
+	logs := files.DirAt(t.TempDir(), files.MustName("log"))
+	if err := logs.Make(); err != nil {
+		t.Fatal(err)
+	}
+	temp := ".tmp-" + store.LogName(me).String() + "-0"
+	errRemove := errors.New("the directory refused the removal")
+	seams := filestest.Recording(&filestest.Syncs{}, func(path string) error {
+		if path == filepath.Join(logs.Path(), temp) {
+			return errCreate
+		}
+		return nil
+	})
+	seams.Remove = func(*os.Root, string) error { return errRemove }
+	repo := git.NewMemory()
+	s := store.Open(me, store.MemoryPorts(files.At(filestest.Seamed(logs, seams)), repo, repo, storetest.Entropy(4)), store.DefaultSegmentBound)
+	got, ok := s.Append(must[store.Batch](t)(store.NewBatch(store.Record("lost")))).(store.NotAppended)
+	if !ok || !errors.Is(got.Why, errCreate) {
+		t.Fatalf("Append whose create's temp would not sync = %#v; want NotAppended, by that sync", got)
+	}
+	if no, ok := got.Log.(store.NoLog); !ok || len(no.Left) != 1 || no.Left[0].Name != temp || !errors.Is(no.Left[0].Why, errRemove) {
+		t.Errorf("the append's log is %#v; want NoLog, %s Left by the removal", got.Log, temp)
+	}
+}
+
+// A log create's temp that no create of its name reaped is said by the
+// store, never dropped.
+func TestTheStoreSaysTheLogsTemps(t *testing.T) {
 	base := t.TempDir()
 	logs := files.DirAt(base, files.MustName("log"))
 	if err := logs.Make(); err != nil {
@@ -76,9 +123,9 @@ func TestHeadsSaysTheLogsTemps(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := git.NewMemory()
-	h, err := store.Open(me, store.MemoryPorts(files.At(logs), repo, repo, storetest.Entropy(4)), store.DefaultSegmentBound).Heads()
-	if err != nil || !slices.Equal(h.Temps, []string{temp}) {
-		t.Errorf("Heads = %+v, %v; want the temp %s said", h, err, temp)
+	got, err := store.Open(me, store.MemoryPorts(files.At(logs), repo, repo, storetest.Entropy(4)), store.DefaultSegmentBound).Temps()
+	if err != nil || !slices.Equal(got, []string{temp}) {
+		t.Errorf("Temps = %v, %v; want the temp %s said", got, err, temp)
 	}
 }
 

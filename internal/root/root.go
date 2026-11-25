@@ -62,7 +62,9 @@ type Process struct {
 }
 
 // Run runs one invocation: it mints the trace id, records the store's
-// opening, the parse and the command's body as one event, puts the outcome's error line on Err before
+// opening, the parse, the command's body, every write it made and the
+// temps left beside the checkout's files as one event, puts the outcome's
+// error line on Err before
 // writing the event, so a slow or hung log cannot hold the line back, and
 // returns the outcome's exit status.
 func Run(p Process, args []string) int {
@@ -81,7 +83,13 @@ func Run(p Process, args []string) int {
 			return failed(err)
 		}
 		rec.Asked(cli.Summarize(cmd))
-		return durable(*rec.Stored, dispatch(body{p: p, now: now, rec: rec}, table, groups, cmd))
+		w := &writes{stored: rec.Stored}
+		out := w.end(dispatch(body{p: p, now: now, rec: rec, w: w}, table, groups, cmd))
+		// after the body, so the temps its creates reaped are not said
+		if in, ok := p.Place.(command.InCheckout); ok {
+			rec.Stored.Temps = leftovers(p, in.Checkout, rec.Stored.Opening)
+		}
+		return out
 	})
 	// [LAW:no-silent-failure] exception: stderr is where failures are said,
 	// a lost event among them; when writing to it fails there is no channel
@@ -94,11 +102,12 @@ func Run(p Process, args []string) int {
 }
 
 // body is one invocation as its body sees it: the process, the clock's one
-// reading, and where its facts go.
+// reading, where its facts go, and where its writes are said.
 type body struct {
 	p   Process
 	now time.Time
 	rec command.Recorder
+	w   *writes
 }
 
 // dispatch binds each command to its body. Every verb runs the steps of §5

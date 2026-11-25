@@ -2,6 +2,7 @@ package root
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -357,9 +358,14 @@ func TestInitPrintsThePrincipal(t *testing.T) {
 	if r.out != "principal "+twinKey().Principal().String()+"\n" {
 		t.Errorf("admin init printed %q", r.out)
 	}
-	if got := r.event.Store.Creates; len(got) < 2 || !placedAt(got[0], command.PathOf(command.IDFile{}, twinCheckout), files.Existing) ||
-		!placedAt(got[1], command.PathOf(command.PrincipalFile{}, twinCheckout), files.Existing) {
-		t.Errorf("admin init's event records %+v; want both identity files found first, each by its path, durable", got)
+	found := files.Placed{Made: files.Existing}
+	want := []command.Creation{
+		{Path: command.PathOf(command.IDFile{}, twinCheckout), Placing: found},
+		{Path: command.PathOf(command.PrincipalFile{}, twinCheckout), Placing: found},
+		{Path: litDir(twinCheckout).PathOf(foundingFile), Placing: found},
+	}
+	if got := r.event.Store.Creates; !reflect.DeepEqual(got, want) {
+		t.Errorf("admin init's event records %+v; want exactly %+v: both identity files and the founding file found, each by its path, durable", got, want)
 	}
 	if again := s.ok("admin", "init"); again != r.out {
 		t.Errorf("a second init printed %q; want %q", again, r.out)
@@ -483,11 +489,4 @@ func TestAMoveTheGateRefusesWritesNothing(t *testing.T) {
 	if got := r.event.Verbs.Requirements; got != (command.RequirementCounts{Evaluated: 5}) {
 		t.Errorf("the landed move records requirements %+v; want 5 evaluated, none unmet", got)
 	}
-}
-
-// placedAt is whether c is the durable create of the file at path, made
-// as made.
-func placedAt(c command.Creation, path string, made files.Made) bool {
-	p, ok := c.Placing.(files.Placed)
-	return ok && c.Path == path && p.Made == made
 }

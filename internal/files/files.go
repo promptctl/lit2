@@ -49,12 +49,6 @@ func tempOf(entry string) (Name, bool) {
 	return n, err == nil
 }
 
-// isTempOf is whether entry is a temporary file of a create-once of n.
-func isTempOf(entry string, n Name) bool {
-	of, ok := tempOf(entry)
-	return ok && of == n
-}
-
 // NameOf is s as a name, refused with ErrNotAName when it is empty, . or
 // .., holds /, \ or NUL, any of which would reach outside the directory
 // or name none of its files, or starts with the temporary files' prefix.
@@ -178,9 +172,9 @@ func (d Dir) valid() error {
 type Files interface {
 	// Append writes b at the end of the file in one write on an O_APPEND
 	// descriptor, so concurrent appends land whole with no lock, then
-	// fsyncs the file and its directory, so the name an acknowledged append
-	// is under survives a power loss as its bytes do. A missing file is
-	// NotAppended, NotFound.
+	// fsyncs the file. The file's name is made durable by the step that
+	// establishes it, its create or a Sync, never by each append. A
+	// missing file is NotAppended, NotFound.
 	Append(n Name, b []byte) Appending
 	// CreateOnce creates the file holding b unless it exists: b is written
 	// to a temporary file, fsynced and linked into place, so exactly one
@@ -197,6 +191,11 @@ type Files interface {
 	// regular file is NotPlaced, NotAFile, never Existing, as it is for
 	// every other call.
 	CreateOnce(n Name, b []byte) Placing
+	// Sync fsyncs the directory, once, so a name in it that another call
+	// created, and may not have synced yet, survives a power loss. Its
+	// failure is the caller's to carry, never to retry: a sync that failed
+	// may have dropped what it held, and a second may pass over it.
+	Sync() error
 	// ReadAt reads up to size bytes at off, fewer at the end of the file.
 	ReadAt(n Name, off, size uint64) ([]byte, error)
 	// ReadAll reads the whole file, in one open to its end.
@@ -217,14 +216,20 @@ type Files interface {
 // caller reads an end without saying which `[LAW:types-are-the-program]`.
 //
 //sumtype:decl
-type Appending interface{ appending() }
+type Appending interface {
+	appending()
+	// Landed is whether b is at the end of the file, whole.
+	Landed() bool
+	// Durable is whether b landed and every sync on its way passed.
+	Durable() bool
+}
 
 // NotAppended is an append that wrote no whole b: a short write leaves a
 // tail no reader takes for a frame, so writing b again is safe.
 type NotAppended struct{ Why error }
 
 // Appended is b landed whole at the end, the file ending at End, and the
-// file and its directory fsynced.
+// file fsynced.
 type Appended struct{ End uint64 }
 
 // AppendedNotDurable is b landed whole, the file ending at End, and a
@@ -232,52 +237,76 @@ type Appended struct{ End uint64 }
 // a power loss. The sync is never tried again, since one that failed may
 // have dropped the bytes it held and a second may pass over them.
 type AppendedNotDurable struct {
-	End uint64
+	Appended
 	Why error
 }
 
-func (NotAppended) appending()        {}
-func (Appended) appending()           {}
-func (AppendedNotDurable) appending() {}
+func (NotAppended) appending()           {}
+func (NotAppended) Landed() bool         { return false }
+func (NotAppended) Durable() bool        { return false }
+func (Appended) appending()              {}
+func (Appended) Landed() bool            { return true }
+func (Appended) Durable() bool           { return true }
+func (AppendedNotDurable) appending()    {}
+func (AppendedNotDurable) Landed() bool  { return true }
+func (AppendedNotDurable) Durable() bool { return false }
 
 // Placing is what a create-once did: placed no file at the name, or
 // placed or found one, durable or not, and what it did about the name's
 // other temporary files `[LAW:types-are-the-program]`.
 //
 //sumtype:decl
-type Placing interface{ placing() }
+type Placing interface {
+	placing()
+	// Landed is whether the name holds a regular file.
+	Landed() bool
+	// Durable is whether it does and every sync on the way passed.
+	Durable() bool
+}
 
 // NotPlaced is a create-once that linked no file at the name and found
 // none it may take: nothing of it is at the name, and it reaped nothing.
-type NotPlaced struct{ Why error }
+// Left is its own temporary file, when it could not remove it.
+type NotPlaced struct {
+	Why  error
+	Left []Leftover
+}
 
 // Placed is the name holding a regular file, which this call created or
-// found, with every sync on its way passed.
+// found, with every sync on its way passed, and the reap of the name's
+// other temporary files.
 type Placed struct {
-	Made  Made
-	Swept Swept
+	Made Made
+	Reap Reap
 }
 
-// PlacedNotDurable is the name holding a regular file, which this call
-// created or found, and a sync on its way failed: the file is there to
-// every read, and the name may not be after a power loss.
+// PlacedNotDurable is a Placed whose sync on its way failed: the file is
+// there to every read, and the name may not be after a power loss.
 type PlacedNotDurable struct {
-	Made  Made
-	Swept Swept
-	Why   error
+	Placed
+	Why error
 }
 
-func (NotPlaced) placing()        {}
-func (Placed) placing()           {}
-func (PlacedNotDurable) placing() {}
+func (NotPlaced) placing()             {}
+func (NotPlaced) Landed() bool         { return false }
+func (NotPlaced) Durable() bool        { return false }
+func (Placed) placing()                {}
+func (Placed) Landed() bool            { return true }
+func (Placed) Durable() bool           { return true }
+func (PlacedNotDurable) placing()      {}
+func (PlacedNotDurable) Landed() bool  { return true }
+func (PlacedNotDurable) Durable() bool { return false }
 
-// Swept is what a create-once that placed its name did about the name's
-// temporary files: the others it removed, a crash's leftovers or the temps
-// of creates that lost, and each it could not remove, its own among them,
-// so nothing it leaves is silent `[LAW:no-silent-failure]`.
-type Swept struct {
-	Reaped []string
-	Left   []Leftover
+// Reap is what a create-once that placed its name did about the name's
+// temporary files: the others it removed, a crash's leftovers or the
+// temps of creates that lost; each it could not remove, its own among
+// them; and why the directory could not be listed for them, nil when it
+// was. Nothing it leaves is silent `[LAW:no-silent-failure]`. The zero
+// Reap is a reap that found nothing to remove.
+type Reap struct {
+	Reaped   []string
+	Left     []Leftover
+	Unlisted error
 }
 
 // Leftover is a temporary file a create-once could not remove: its name

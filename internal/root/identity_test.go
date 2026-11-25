@@ -2,6 +2,7 @@ package root
 
 import (
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -50,7 +51,7 @@ func onDisk(t *testing.T) clone {
 func TestTheIdentityFilesOnDiskAreASecrets(t *testing.T) {
 	c := worktrees(t, t.TempDir())[1]
 	shared, private := identityFiles(c)
-	if _, err := MintIdentity(shared, private, entropy(1), func(events.Key) {}); err != nil {
+	if _, err := identityOf(mint(shared, private, 1)); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []command.File{command.IDFile{}, command.PrincipalFile{}} {
@@ -87,55 +88,45 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 		// a mint that signs with what the file then holds, keep one key.
 		// [LAW:no-ambient-temporal-coupling] the interleaving is forced by a
 		// gate, not hoped for from two goroutines' timing.
-		var made [2][]command.Creation
-		var fresh [2][]events.Key
-		held := heldAtKeyCreate(creates(c.shared, &made[0]))
-		var got [2]command.Minted
-		first := make(chan error, 1)
+		held := heldAtKeyCreate(c.shared)
+		first := make(chan Minting, 1)
 		go func() {
-			var err error
-			got[0], err = MintIdentity(held, creates(c.worktree[0], &made[0]), entropy(0), keep(&fresh[0]))
-			first <- err
+			first <- MintIdentity(onceIn(c.worktree[0], command.IDFile{}), onceIn(held, command.PrincipalFile{}), entropy(0))
 		}()
 		// a first mint that ends before the gate, failed or not, never
-		// reaches it, so the test fails with its error and does not wait
+		// reaches it, so the test fails with what it did and does not wait
 		select {
 		case <-held.reached:
-		case err := <-first:
-			t.Fatalf("the first mint ended before its key landed, with %v; want it held at the gate", err)
+		case m := <-first:
+			t.Fatalf("the first mint ended before its key landed, as %#v; want it held at the gate", m)
 		}
-		var err error
-		if got[1], err = MintIdentity(creates(c.shared, &made[1]), creates(c.worktree[1], &made[1]), entropy(1), keep(&fresh[1])); err != nil {
-			t.Fatalf("the second mint: %v", err)
-		}
+		second := mint(c.shared, c.worktree[1], 1)
 		close(held.release)
-		if err := <-first; err != nil {
-			t.Fatalf("the first mint: %v", err)
+		heldMint := <-first
+		found, isFound := heldMint.(Found)
+		made, isMade := second.(Made)
+		if !isFound || !isMade {
+			t.Fatalf("the held mint is %#v and the other %#v; want the other's key Made and the held one's Found", heldMint, second)
 		}
-		if got[0].Key.Principal() != got[1].Key.Principal() || got[0].Checkout == got[1].Checkout {
-			t.Errorf("two worktrees minted %v and %v; want one principal and two checkout ids", got[0], got[1])
+		if found.Minted.Key.Principal() != made.Minted.Key.Principal() || found.Minted.Checkout == made.Minted.Checkout {
+			t.Errorf("two worktrees minted %v and %v; want one principal and two checkout ids", found.Minted, made.Minted)
 		}
-		if !placed(made[0], files.Created, files.Existing) || !placed(made[1], files.Created, files.Created) {
-			t.Errorf("the held mint made %+v and the other %+v; want the other's key created, the held one's found, and each its own checkout id", made[0], made[1])
-		}
-		if len(fresh[0]) != 0 || len(fresh[1]) != 1 || fresh[1][0].Principal() != got[1].Key.Principal() {
-			t.Errorf("the held mint had keys %v made and the other %v; want only the other's, the one both sign with", fresh[0], fresh[1])
+		if !placed(found.Creates, files.Created, files.Existing) || !placed(made.Creates, files.Created, files.Created) {
+			t.Errorf("the held mint made %+v and the other %+v; want the other's key created, the held one's found, and each its own checkout id", found.Creates, made.Creates)
 		}
 	})
 	t.Run("a second mint returns the first identity", func(t *testing.T) {
 		c := fresh(t)
-		first, err := MintIdentity(c.shared, c.worktree[0], entropy(1), func(events.Key) {})
+		first, err := identityOf(mint(c.shared, c.worktree[0], 1))
 		if err != nil {
 			t.Fatal(err)
 		}
-		var made []command.Creation
-		var keys []events.Key
-		again, err := MintIdentity(creates(c.shared, &made), creates(c.worktree[0], &made), entropy(2), keep(&keys))
-		if err != nil || again.Checkout != first.Checkout || again.Key.Principal() != first.Key.Principal() {
-			t.Errorf("a second mint is %v, %v; want the first, %v", again, err, first)
+		again, ok := mint(c.shared, c.worktree[0], 2).(Found)
+		if !ok || again.Minted.Checkout != first.Checkout || again.Minted.Key.Principal() != first.Key.Principal() {
+			t.Errorf("a second mint is %#v; want the first, %v, Found", again, first)
 		}
-		if !placed(made, files.Existing, files.Existing) || len(keys) != 0 {
-			t.Errorf("a second mint made %+v and had keys %v made; want both files existing, and no key made", made, keys)
+		if !placed(again.Creates, files.Existing, files.Existing) {
+			t.Errorf("a second mint made %+v; want both files existing", again.Creates)
 		}
 		if read := readIdentity(c.shared, c.worktree[0]); read != command.Identity(first) {
 			t.Errorf("the files read as %#v; want the identity minted, %#v", read, first)
@@ -143,7 +134,7 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 	})
 	t.Run("a damaged key is unreadable and an absent id unminted", func(t *testing.T) {
 		c := fresh(t)
-		if _, err := MintIdentity(c.shared, c.worktree[0], entropy(1), func(events.Key) {}); err != nil {
+		if _, err := identityOf(mint(c.shared, c.worktree[0], 1)); err != nil {
 			t.Fatal(err)
 		}
 		if got := readIdentity(c.shared, c.worktree[1]); got != (command.Unminted{Missing: command.Only{File: command.IDFile{}}}) {
@@ -151,8 +142,8 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 		}
 		damaged := fresh(t)
 		filestest.Create(t, damaged.shared, command.NameOf(command.PrincipalFile{}), []byte("ed25519 cut short\n"))
-		if _, err := MintIdentity(damaged.shared, damaged.worktree[0], entropy(1), func(events.Key) {}); !errors.Is(err, errIdentityUnreadable) {
-			t.Errorf("minting over a damaged key file = %v; want errIdentityUnreadable", err)
+		if no, ok := mint(damaged.shared, damaged.worktree[0], 1).(NotMinted); !ok || !errors.Is(no.Why, errIdentityUnreadable) {
+			t.Errorf("minting over a damaged key file = %#v; want NotMinted, errIdentityUnreadable", no)
 		}
 		if got, ok := readIdentity(damaged.shared, damaged.worktree[0]).(command.Unreadable); !ok || got.File != (command.PrincipalFile{}) {
 			t.Errorf("a damaged key file reads as %#v; want it unreadable", got)
@@ -180,14 +171,33 @@ func (h heldFiles) CreateOnce(p files.Name, b []byte) files.Placing {
 	return h.Files.CreateOnce(p, b)
 }
 
-// creates is fs with each create kept in into, its file named by its name.
-func creates(fs files.Files, into *[]command.Creation) files.Files {
-	return recorded{Files: fs, at: files.Name.String, record: func(c command.Creation) { *into = append(*into, c) }}
+// identityDir is the directory a test's identity files are named in.
+var identityDir = files.DirAt("/", files.MustName("identity"))
+
+// onceIn is the identity file f in fs, named in identityDir.
+func onceIn(fs files.Files, f command.File) onceFile {
+	return onceFile{files: fs, dir: identityDir, name: command.NameOf(f)}
 }
 
-// keep is a mint's made that keeps each key made in into.
-func keep(into *[]events.Key) func(events.Key) {
-	return func(k events.Key) { *into = append(*into, k) }
+// mint is MintIdentity of the id in private and the key in shared, from
+// entropy seeded by seed.
+func mint(shared, private files.Files, seed byte) Minting {
+	return MintIdentity(onceIn(private, command.IDFile{}), onceIn(shared, command.PrincipalFile{}), entropy(seed))
+}
+
+// identityOf is the identity m read back, or why there is none.
+func identityOf(m Minting) (command.Minted, error) {
+	switch m := m.(type) {
+	case Found:
+		return m.Minted, nil
+	case Made:
+		return m.Minted, nil
+	case NotMinted:
+		return command.Minted{}, m.Why
+	case MadeUnread:
+		return command.Minted{}, m.Why
+	}
+	panic(fmt.Sprintf("%T is not a Minting", m))
 }
 
 // placed is whether cs is the id file's durable create, made as id, then
@@ -196,7 +206,7 @@ func placed(cs []command.Creation, id, key files.Made) bool {
 	want := []struct {
 		name string
 		made files.Made
-	}{{command.NameOf(command.IDFile{}).String(), id}, {command.NameOf(command.PrincipalFile{}).String(), key}}
+	}{{identityDir.PathOf(command.NameOf(command.IDFile{})), id}, {identityDir.PathOf(command.NameOf(command.PrincipalFile{})), key}}
 	if len(cs) != len(want) {
 		return false
 	}
@@ -213,7 +223,7 @@ func placed(cs []command.Creation, id, key files.Made) bool {
 // clone's other files are, unlike the identity files beside it.
 func TestThePinOnDiskIsReadable(t *testing.T) {
 	c := worktrees(t, t.TempDir())[1]
-	if _, err := pin(pinFiles(c), events.EventID{0x1}); err != nil {
+	if _, err := pin(&writes{stored: &command.StoreFacts{}}, onceFile{files: pinFiles(c), dir: pinDir(c), name: pinFile}, events.EventID{0x1}); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(pinPath(c))

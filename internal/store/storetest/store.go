@@ -227,8 +227,9 @@ func Store(t *testing.T, sub Substrate) {
 		s := store.Open(a, sub.Fresh(t).Ports, store.DefaultSegmentBound)
 		bs := []store.Batch{batch(t, "one"), batch(t, "two", "three"), batch(t, "four", "five", "six")}
 		appended := AppendAll(t, s, bs...)
-		if appended[0].Log != files.Created || appended[1].Log != files.Existing || appended[2].Records != 3 {
-			t.Errorf("the appends were %+v; want the first to create the log", appended)
+		first, created := appended[0].Log.(store.LogCreated)
+		if !created || first.Made != files.Created || appended[1].Log != (store.LogLookedUp{}) || appended[2].Records != 3 {
+			t.Errorf("the appends were %+v; want the first to create the log and the next to look it up", appended)
 		}
 		scan := Whole(t, s, store.WriterRef{Checkout: a})
 		if len(scan.Frames) != len(bs) || len(scan.Torn) != 0 || scan.End != scan.Until || scan.End != appended[2].Until.At {

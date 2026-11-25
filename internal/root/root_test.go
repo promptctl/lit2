@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -138,7 +137,7 @@ func TestTheEventIsInTheTwinsCheckoutAsItsWriter(t *testing.T) {
 	twin := NewTwin()
 	_, e := run(t, twin, "--help")
 	want := command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}}
-	if !reflect.DeepEqual(e.Place, command.Place(want)) {
+	if e.Place != command.Place(want) {
 		t.Errorf("the event's place is %#v; want %#v", e.Place, want)
 	}
 }

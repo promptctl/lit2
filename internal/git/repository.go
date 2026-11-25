@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-git/go-billy/v5/osfs"
@@ -50,6 +51,10 @@ type onDisk struct {
 	mu    sync.Mutex
 	db    *filesystem.Storage
 	packs time.Time
+	// unsynced is the failure of a sync of the repository's entry, once one
+	// failed: never tried again, since a sync that failed may have dropped
+	// what it held and a second may pass over it (fsyncgate)
+	unsynced atomic.Pointer[error]
 }
 
 // git runs git on the repository at dir: the one place a spawn names
@@ -271,8 +276,8 @@ var kinds = map[plumbing.ObjectType]kind{
 // tree and commit as it would one of its own. The bytes reach git as files
 // in a directory of lit's own beside the repository, never in it, one git
 // process for each kind objs holds, however many objects that is.
-func (d *onDisk) write(objs []object) ([]ObjectID, error) {
-	ids := make([]ObjectID, len(objs))
+func (d *onDisk) write(objs []object) (ids []ObjectID, err error) {
+	ids = make([]ObjectID, len(objs))
 	if len(objs) == 0 {
 		return ids, nil
 	}
@@ -284,7 +289,9 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
+	// the files' removal failing is the write's failure, never dropped
+	// `[LAW:no-silent-failure]`
+	defer func() { err = errors.Join(err, os.RemoveAll(tmp)) }()
 	paths := map[kind][]string{}
 	at := map[kind][]int{}
 	for i, o := range objs {
@@ -321,7 +328,10 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 // fsynced on every path, whether this call renamed it into place, lost the
 // rename to another, or found it there, since one found may be a racing
 // create's, not yet synced: every object written into it is only as
-// durable as the name it is under `[LAW:dataflow-not-control-flow]`.
+// durable as the name it is under `[LAW:dataflow-not-control-flow]`. Once
+// that sync fails, every later write is refused with its failure, never
+// handed a repository whose name a passing sync might hide was lost
+// `[LAW:no-silent-failure]`.
 func (d *onDisk) writable() (string, error) {
 	if err := d.g.durable(); err != nil {
 		return "", err
@@ -329,8 +339,13 @@ func (d *onDisk) writable() (string, error) {
 	if err := d.create(); err != nil {
 		return "", err
 	}
+	if failed := d.unsynced.Load(); failed != nil {
+		return "", *failed
+	}
 	if err := d.at.Parent().Sync(); err != nil {
-		return "", fmt.Errorf("syncing the entry of lit's repository: %w", err)
+		err = fmt.Errorf("syncing the entry of lit's repository: %w", err)
+		d.unsynced.CompareAndSwap(nil, &err)
+		return "", *d.unsynced.Load()
 	}
 	return d.path()
 }

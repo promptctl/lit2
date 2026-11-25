@@ -28,6 +28,9 @@ func (m *Memory) with(n Name, do func() error) error {
 	return do()
 }
 
+// Sync is nothing to do: a directory in process has no power to lose.
+func (m *Memory) Sync() error { return nil }
+
 // file runs do on n's bytes under the lock; a missing file is NotFound.
 func (m *Memory) file(n Name, do func(f []byte) error) error {
 	return m.with(n, func() error {
@@ -54,7 +57,7 @@ func (m *Memory) Append(n Name, b []byte) Appending {
 }
 
 // CreateOnce places n at once, durable; a directory in process writes no
-// temporary file, so it sweeps none.
+// temporary file, so it reaps none.
 func (m *Memory) CreateOnce(n Name, b []byte) Placing {
 	made := Existing
 	if err := m.with(n, func() error {
@@ -65,7 +68,7 @@ func (m *Memory) CreateOnce(n Name, b []byte) Placing {
 	}); err != nil {
 		return NotPlaced{Why: err}
 	}
-	return Placed{Made: made, Swept: Swept{Reaped: []string{}, Left: []Leftover{}}}
+	return Placed{Made: made}
 }
 
 func (m *Memory) ReadAt(n Name, off, size uint64) (b []byte, err error) {
@@ -101,13 +104,10 @@ func (m *Memory) List() (Listing, error) {
 	defer m.mu.Unlock()
 	ns := slices.AppendSeq([]Name{}, maps.Keys(m.files))
 	slices.SortFunc(ns, func(a, b Name) int { return strings.Compare(a.s, b.s) })
-	return Listing{Names: ns, Temps: []string{}, Refused: []Refused{}}, nil
+	return Listing{Names: ns}, nil
 }
 
 // Temps is none: a directory in process writes no temporary file.
 func (m *Memory) Temps(n Name) ([]string, error) {
-	if err := n.valid(); err != nil {
-		return nil, err
-	}
-	return []string{}, nil
+	return nil, m.with(n, func() error { return nil })
 }

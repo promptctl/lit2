@@ -57,13 +57,13 @@ func pinned(pins files.Files) (fold.Founding, error) {
 
 // pin names e the clone's founding unless a pin exists, and reads it
 // back, so a race to pin seeds every fold with the winner's.
-func pin(pins files.Files, e events.EventID) (fold.FoundedBy, error) {
+func pin(w *writes, pins onceFile, e events.EventID) (fold.FoundedBy, error) {
 	// a pin whose sync failed is written: the run reads it back and goes
-	// on, and ends notDurable from its record
-	if no, failed := pins.CreateOnce(pinFile, e.FileText()).(files.NotPlaced); failed {
-		return fold.FoundedBy{}, storeFailure{err: fmt.Errorf("writing the founding pin: %w", no.Why)}
+	// on, and w ends it notDurable
+	if err := w.create(pins, e.FileText()); err != nil {
+		return fold.FoundedBy{}, storeFailure{err: fmt.Errorf("writing the founding pin: %w", err)}
 	}
-	f, err := pinned(pins)
+	f, err := pinned(pins.files)
 	if err != nil {
 		return fold.FoundedBy{}, err
 	}
@@ -76,8 +76,8 @@ func pin(pins files.Files, e events.EventID) (fold.FoundedBy, error) {
 
 // adopt pins the founding FoundingFile in tree names, when the clone pins
 // none: a clone adopts the committed founding once.
-func adopt(pins, tree files.Files) error {
-	f, err := pinned(pins)
+func adopt(w *writes, pins onceFile, tree files.Files) error {
+	f, err := pinned(pins.files)
 	if err != nil {
 		return err
 	}
@@ -89,7 +89,7 @@ func adopt(pins, tree files.Files) error {
 		return err
 	}
 	if n, names := named.(fold.FoundedBy); names {
-		_, err = pin(pins, n.Enrollment)
+		_, err = pin(w, pins, n.Enrollment)
 	}
 	return err
 }
@@ -108,15 +108,15 @@ func foundingFileIn(tree files.Files) (fold.Founding, error) {
 	return fold.FoundedBy{Enrollment: id}, nil
 }
 
-// writeFoundingFile writes FoundingFile naming f, the founding pinned at
-// pin, into tree unless the file exists, and refuses a file that names
+// writeFoundingFile writes FoundingFile, at file, naming f, the founding
+// pinned at pin, unless the file exists, and refuses a file that names
 // another founding: the pin stands, and the file is what the next clone
 // adopts.
-func writeFoundingFile(tree files.Files, f fold.FoundedBy, pin string) error {
-	if no, failed := tree.CreateOnce(foundingFile, f.Enrollment.FileText()).(files.NotPlaced); failed {
-		return workspaceFailure{err: fmt.Errorf("writing %s: %w", foundingPath(), no.Why)}
+func writeFoundingFile(w *writes, file onceFile, f fold.FoundedBy, pin string) error {
+	if err := w.create(file, f.Enrollment.FileText()); err != nil {
+		return workspaceFailure{err: fmt.Errorf("writing %s: %w", foundingPath(), err)}
 	}
-	got, err := foundingFileIn(tree)
+	got, err := foundingFileIn(file.files)
 	if err != nil {
 		return err
 	}

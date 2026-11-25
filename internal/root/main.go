@@ -96,39 +96,7 @@ func place(g *git.Git, dir string) command.Place {
 	if err != nil {
 		return command.Unlocatable{Dir: dir, Err: err}
 	}
-	return command.InCheckout{Checkout: c, Identity: readIdentity(identityFiles(c)), Temps: leftovers(c)}
-}
-
-// leftovers is the temps beside each file of c a create-once writes
-// outside the store, or why they did not read. A create reaps its name's
-// temps once it is placed, and these names are created again only when a
-// person reruns init, so a crash's temp is said on every command until
-// then `[LAW:no-silent-failure]`; the logs' temps are said by the store's
-// heads.
-func leftovers(c git.Checkout) []command.Leftovers {
-	shared, private := identityFiles(c)
-	tree := workTree(c)
-	var ls []command.Leftovers
-	for _, f := range []struct {
-		fs files.Files
-		at files.Dir
-		n  files.Name
-	}{
-		{private, command.DirOf(command.IDFile{}, c), command.NameOf(command.IDFile{})},
-		{shared, command.DirOf(command.PrincipalFile{}, c), command.NameOf(command.PrincipalFile{})},
-		{pinFiles(c), pinDir(c), pinFile},
-		{tree, litDir(c), foundingFile},
-		{tree, litDir(c), verbs.WorkspaceFile()},
-	} {
-		temps, err := f.fs.Temps(f.n)
-		switch {
-		case err != nil:
-			ls = append(ls, command.TempsUnread{Path: f.at.PathOf(f.n), Why: err})
-		case len(temps) > 0:
-			ls = append(ls, command.TempsBeside{Path: f.at.PathOf(f.n), Temps: temps})
-		}
-	}
-	return ls
+	return command.InCheckout{Checkout: c, Identity: readIdentity(identityFiles(c))}
 }
 
 // opening opens the store of a minted checkout through open, the one place

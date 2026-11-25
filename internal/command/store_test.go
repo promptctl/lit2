@@ -59,17 +59,18 @@ func TestAnEventThatNeverUsedItsStoreHasNoStoreBlock(t *testing.T) {
 // placed and why, with the temps each reaped and left.
 func TestACreateSaysWhatItPlacedAndHowDurably(t *testing.T) {
 	block := storeBlockOf(t, StoreFacts{Creates: []Creation{
-		{Path: "/w/.git/lit/id", Placing: files.Placed{Made: files.Created, Swept: files.Swept{Reaped: []string{".tmp-id-0"}, Left: []files.Leftover{}}}},
-		{Path: "/w/.git/lit/key", Placing: files.PlacedNotDurable{Made: files.Existing, Swept: files.Swept{Reaped: []string{}, Left: []files.Leftover{{Name: ".tmp-key-1", Why: errors.New("busy")}}}, Why: errors.New("fsync failed")}},
-		{Path: "/w/.lit/founding", Placing: files.NotPlaced{Why: errors.New("a directory")}},
+		{Path: "/w/.git/lit/id", Placing: files.Placed{Made: files.Created, Reap: files.Reap{Reaped: []string{".tmp-id-0"}}}},
+		{Path: "/w/.git/lit/key", Placing: files.PlacedNotDurable{Placed: files.Placed{Made: files.Existing, Reap: files.Reap{Left: []files.Leftover{{Name: ".tmp-key-1", Why: errors.New("busy")}}}}, Why: errors.New("fsync failed")}},
+		{Path: "/w/.lit/founding", Placing: files.NotPlaced{Why: errors.New("a directory"), Left: []files.Leftover{{Name: ".tmp-founding-0", Why: errors.New("busy")}}}},
+		{Path: "/w/.git/lit/pin", Placing: files.Placed{Made: files.Created, Reap: files.Reap{Unlisted: errors.New("the directory would not read")}}},
 	}})
 	list, _ := block["create"].([]any)
-	if len(list) != 3 {
-		t.Fatalf("the block holds %v; want three creates", block["create"])
+	if len(list) != 4 {
+		t.Fatalf("the block holds %v; want four creates", block["create"])
 	}
-	id, key, founding := list[0].(map[string]any), list[1].(map[string]any), list[2].(map[string]any)
+	id, key, founding, pin := list[0].(map[string]any), list[1].(map[string]any), list[2].(map[string]any), list[3].(map[string]any)
 	if id["path"] != "/w/.git/lit/id" || id["outcome"] != "placed" || id["made"] != "created" || id["why"] != nil ||
-		len(id["temps_reaped"].([]any)) != 1 || len(id["temps_left"].([]any)) != 0 {
+		len(id["temps_reaped"].([]any)) != 1 || len(id["temps_left"].([]any)) != 0 || id["unlisted"] != nil {
 		t.Errorf("a durable create is %v; want placed, created, its one temp reaped and none left", id)
 	}
 	left, _ := key["temps_left"].([]any)
@@ -77,8 +78,13 @@ func TestACreateSaysWhatItPlacedAndHowDurably(t *testing.T) {
 		left[0].(map[string]any)["name"] != ".tmp-key-1" || left[0].(map[string]any)["why"] != "busy" {
 		t.Errorf("a create whose sync failed is %v; want not_durable, existing, the sync's error, its temp left and why", key)
 	}
-	if founding["outcome"] != "not_placed" || founding["why"] != "a directory" || founding["made"] != nil {
-		t.Errorf("a create that placed nothing is %v; want not_placed and why, made by none", founding)
+	ownLeft, _ := founding["temps_left"].([]any)
+	if founding["outcome"] != "not_placed" || founding["why"] != "a directory" || founding["made"] != nil || len(ownLeft) != 1 ||
+		ownLeft[0].(map[string]any)["name"] != ".tmp-founding-0" {
+		t.Errorf("a create that placed nothing is %v; want not_placed and why, made by none, its own temp left", founding)
+	}
+	if pin["outcome"] != "placed" || pin["unlisted"] != "the directory would not read" {
+		t.Errorf("a create whose directory would not list is %v; want placed, and why the reap could not list it", pin)
 	}
 }
 
@@ -87,17 +93,32 @@ func TestAFreshStoresHeadsAreZeros(t *testing.T) {
 	h := must[store.Heads](t)(s.Heads())
 	block := storeBlockOf(t, StoreFacts{Heads: []store.Heads{h}})
 	heads := first(t, block, "heads")
-	if temps, ok := heads["temps"].([]any); heads["refs_read"] != 0.0 || heads["logs_read"] != 0.0 || heads["streams"] != 0.0 || !ok || len(temps) != 0 {
-		t.Errorf("a fresh store's heads are %v; want zero refs, logs and streams, and no temp, present", heads)
+	if heads["refs_read"] != 0.0 || heads["logs_read"] != 0.0 || heads["streams"] != 0.0 {
+		t.Errorf("a fresh store's heads are %v; want zero refs, logs and streams", heads)
 	}
 }
 
-// The heads line says the logs directory's temps, which no create of their
-// name has reaped.
-func TestTheHeadsSayTheLogsTemps(t *testing.T) {
-	heads := first(t, storeBlockOf(t, StoreFacts{Heads: []store.Heads{{Temps: []string{".tmp-0d-0"}}}}), "heads")
-	if temps, _ := heads["temps"].([]any); len(temps) != 1 || temps[0] != ".tmp-0d-0" {
-		t.Errorf("the heads line is %v; want the temp .tmp-0d-0 said", heads)
+// The store block says each directory with temps no create of their name
+// has reaped, and each whose temps did not read, and why; and none when
+// none is left.
+func TestTheStoreBlockSaysTheLeftoverTemps(t *testing.T) {
+	block := storeBlockOf(t, StoreFacts{Temps: []Leftovers{
+		TempsBeside{Dir: "/w/.git/lit/store/log", Temps: []string{".tmp-0d-0"}},
+		TempsUnread{Dir: "/w/.lit", Why: errors.New("a symlink")},
+	}})
+	temps, _ := block["temps"].([]any)
+	if len(temps) != 2 {
+		t.Fatalf("the store block is %v; want two directories' temps", block)
+	}
+	beside, unread := temps[0].(map[string]any), temps[1].(map[string]any)
+	if got, _ := beside["temps"].([]any); beside["dir"] != "/w/.git/lit/store/log" || len(got) != 1 || got[0] != ".tmp-0d-0" {
+		t.Errorf("the logs' temps are %v; want the directory and .tmp-0d-0", beside)
+	}
+	if unread["dir"] != "/w/.lit" || unread["error"] != "a symlink" {
+		t.Errorf("the unread temps are %v; want the directory and why they did not read", unread)
+	}
+	if none := storeBlockOf(t, StoreFacts{Opening: Opened{Store: memoryStore()}}); none["temps"] != nil {
+		t.Errorf("a store block with no temp left says %v", none["temps"])
 	}
 }
 
@@ -114,16 +135,23 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	block := storeBlockOf(t, StoreFacts{
 		Heads: []store.Heads{h}, Reads: []store.Scanned{{Range: store.Range{Stream: h.Streams[0], From: 0}, Scan: scan}},
 		Appends: []store.Appending{appended, store.AppendedNotDurable{Appended: appended, Why: errors.New("fsync failed")},
-			store.NotAppended{Why: errors.New("no space")}},
+			store.NotAppended{Log: store.NoLog{Left: []files.Leftover{{Name: ".tmp-09-0", Why: errors.New("busy")}}}, Why: errors.New("no space")},
+			store.Appended{Records: 1, Log: store.LogCreated{Placed: files.Placed{Made: files.Existing, Reap: files.Reap{Reaped: []string{".tmp-09-1"}}}}}},
 		Publishes: []store.Publishing{published, idle, resealed, nothing},
 	})
 	appends, _ := block["append"].([]any)
-	if len(appends) != 3 {
-		t.Fatalf("the block holds %v; want three appends", block["append"])
+	if len(appends) != 4 {
+		t.Fatalf("the block holds %v; want four appends", block["append"])
 	}
-	durable, landed, none := appends[0].(map[string]any), appends[1].(map[string]any), appends[2].(map[string]any)
-	if durable["outcome"] != "appended" || durable["records"] != 1.0 || durable["log_created"] != true || durable["log_until"] != float64(appended.Until.At) || durable["why"] != nil {
+	durable, landed, none, lost := appends[0].(map[string]any), appends[1].(map[string]any), appends[2].(map[string]any), appends[3].(map[string]any)
+	if durable["outcome"] != "appended" || durable["records"] != 1.0 || durable["log"] != "created" || durable["log_until"] != float64(appended.Until.At) || durable["why"] != nil {
 		t.Errorf("the append is %v; want appended, one record, the log created, its end", durable)
+	}
+	if left, _ := none["temps_left"].([]any); none["log"] != "none" || len(left) != 1 || left[0].(map[string]any)["name"] != ".tmp-09-0" {
+		t.Errorf("an append that placed no log is %v; want no log, and its create's temp left", none)
+	}
+	if reaped, _ := lost["temps_reaped"].([]any); lost["log"] != "existing" || len(reaped) != 1 || reaped[0] != ".tmp-09-1" {
+		t.Errorf("an append whose create lost is %v; want the log existing, a racing create's, and the temp reaped", lost)
 	}
 	if landed["outcome"] != "not_durable" || landed["records"] != 1.0 || landed["log_until"] != float64(appended.Until.At) || landed["why"] != "fsync failed" {
 		t.Errorf("an append whose sync failed is %v; want not_durable, the frame's record and end, and the sync's error", landed)
@@ -155,7 +183,7 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 }
 
 func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
-	appended := store.Appended{Records: 2, Bytes: 40, Log: files.Existing}
+	appended := store.Appended{Records: 2, Bytes: 40, Log: store.LogLookedUp{}}
 	e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
 		r.Stored.Appends = append(r.Stored.Appends, appended)
 		panic("after the append")
@@ -176,34 +204,11 @@ func TestTheOpeningSaysOpenedOrWhyNot(t *testing.T) {
 	}
 }
 
-// The checkout's object format is on the place line, beside its paths,
-// and no temp when none is left.
+// The checkout's object format is on the place line, beside its paths.
 func TestThePlaceSaysTheCheckoutsObjectFormat(t *testing.T) {
 	place, _ := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "get"}, Started: t0, Outcome: cli.Done{}})["place"].(map[string]any)
 	c, _ := place["checkout"].(map[string]any)
-	if temps, ok := c["temps"].([]any); c["object_format"] != "sha256" || c["git_dir"] != "/w/.git" || !ok || len(temps) != 0 {
-		t.Errorf("the place line is %v; want the checkout's paths and its format, sha256, and no temp", place)
-	}
-}
-
-// The place line says each of the checkout's files with temps beside it,
-// and each whose temps did not read, and why.
-func TestThePlaceSaysTheCheckoutsLeftoverTemps(t *testing.T) {
-	in := inv
-	checkout := in.Place.(InCheckout)
-	checkout.Temps = []Leftovers{TempsBeside{Path: "/w/.git/lit/key", Temps: []string{".tmp-key-0"}}, TempsUnread{Path: "/w/.lit/founding", Why: errors.New("a symlink")}}
-	in.Place = checkout
-	place, _ := decode(t, Event{Invocation: in, Command: cli.Summary{Name: "get"}, Started: t0, Outcome: cli.Done{}})["place"].(map[string]any)
-	c, _ := place["checkout"].(map[string]any)
-	temps, _ := c["temps"].([]any)
-	if len(temps) != 2 {
-		t.Fatalf("the place line is %v; want two files' temps", place)
-	}
-	beside, unread := temps[0].(map[string]any), temps[1].(map[string]any)
-	if got, _ := beside["temps"].([]any); beside["path"] != "/w/.git/lit/key" || len(got) != 1 || got[0] != ".tmp-key-0" {
-		t.Errorf("the key's temps are %v; want its path and .tmp-key-0", beside)
-	}
-	if unread["path"] != "/w/.lit/founding" || unread["error"] != "a symlink" {
-		t.Errorf("the founding file's temps are %v; want its path and why they did not read", unread)
+	if c["object_format"] != "sha256" || c["git_dir"] != "/w/.git" {
+		t.Errorf("the place line is %v; want the checkout's paths and its format, sha256", place)
 	}
 }

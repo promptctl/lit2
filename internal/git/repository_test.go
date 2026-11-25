@@ -761,3 +761,34 @@ func TestTheRepositorysEntryIsSyncedOnEveryWrite(t *testing.T) {
 		t.Error("the other create never ran; want it inside this one's creating walk")
 	}
 }
+
+// A sync of the repository's entry that failed is never tried again: every
+// later write in the process is refused with it, since a second sync may
+// pass over what the first dropped.
+func TestAFailedSyncOfTheRepositorysEntryRefusesEveryLaterWrite(t *testing.T) {
+	g := gittest.Runner(t)
+	in := filepath.Join(gittest.Physical(t), "store")
+	errSync := errors.New("the disk refused the fsync")
+	var syncs filestest.Syncs
+	seams := filestest.Recording(&syncs, func(path string) error {
+		if path == in {
+			return errSync
+		}
+		return nil
+	})
+	repo := g.RepositoryAt(filestest.Seamed(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))), seams).Sub(files.MustName("repo")))
+	for _, write := range []string{"first", "second"} {
+		if _, err := gittest.Put(repo, []byte(write)); !errors.Is(err, errSync) {
+			t.Errorf("the %s write failed with %v; want the failed sync", write, err)
+		}
+	}
+	synced := 0
+	for _, p := range syncs.Seen() {
+		if p == in {
+			synced++
+		}
+	}
+	if synced != 1 {
+		t.Errorf("the entry was synced %d times over %v; want once, never again after it failed", synced, syncs.Seen())
+	}
+}
