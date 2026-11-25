@@ -15,7 +15,7 @@ import (
 // get is get's body: the paths read against the folded state.
 func (v inForce) get(ps []cli.PathText) cli.Outcome {
 	got := verbs.Get(v.world(v.folded.State), texts(ps))
-	v.rec.Told(v.facts(verbs.Compiled{Operands: got.Operands}, false, nil))
+	v.run.Told(v.facts(verbs.Compiled{Operands: got.Operands}, false, nil))
 	if no, refused := got.Refusal(); refused {
 		return cli.Failed{Failure: refusal{no}}
 	}
@@ -33,11 +33,11 @@ func (v inForce) write(verb verbs.Verb, ops []verbs.Operand, flags cli.Flags) cl
 		return string(b), err
 	})
 	if no, refused := c.Refusal(); refused {
-		v.rec.Told(v.facts(c, flags.DryRun, nil))
+		v.run.Told(v.facts(c, flags.DryRun, nil))
 		return cli.Failed{Failure: refusal{no}}
 	}
 	if len(c.Drafts) == 0 {
-		v.rec.Told(v.facts(c, flags.DryRun, nil))
+		v.run.Told(v.facts(c, flags.DryRun, nil))
 		if flags.DryRun {
 			return written(io.WriteString(v.p.Out, verbs.Echo(v.world(v.folded.State), c, nil)))
 		}
@@ -45,31 +45,31 @@ func (v inForce) write(verb verbs.Verb, ops []verbs.Operand, flags cli.Flags) cl
 	}
 	m, err := v.mint(c.Drafts, v.ref)
 	if err != nil {
-		v.rec.Told(v.facts(c, flags.DryRun, nil))
+		v.run.Told(v.facts(c, flags.DryRun, nil))
 		return failed(err)
 	}
 	after, c, outcomes := verbs.Folded(v.p.Fold, v.world(v.folded.State), c, m.Events)
-	v.rec.Policy.Verdicts = command.Verdicts(m.Events, outcomes)
+	v.run.Policy().Verdicts = command.Verdicts(m.Events, outcomes)
 	if no, refused := c.Refusal(); refused {
-		v.rec.Told(v.facts(c, flags.DryRun, nil))
+		v.run.Told(v.facts(c, flags.DryRun, nil))
 		return cli.Failed{Failure: refusal{no}}
 	}
 	if flags.DryRun {
-		v.rec.Told(v.facts(c, true, nil))
+		v.run.Told(v.facts(c, true, nil))
 		return written(io.WriteString(v.p.Out, verbs.Echo(after, c, nil)))
 	}
 	// the minted ids are told once the store holds them, so the block never
 	// names an event the store does not
-	v.rec.Told(v.facts(c, false, nil))
+	v.run.Told(v.facts(c, false, nil))
 	if err := v.append(m); err != nil {
 		return failed(err)
 	}
-	v.rec.Told(v.facts(c, false, m.Events))
+	v.run.Told(v.facts(c, false, m.Events))
 	return written(io.WriteString(v.p.Out, verbs.Echo(after, c, m.Events)))
 }
 
 func (v inForce) world(st fold.State) verbs.World {
-	return verbs.World{View: evaluate.Of(st, v.schema, v.now), File: v.file, Me: v.id.Key.Principal()}
+	return verbs.World{View: evaluate.Of(st, v.schema, v.now()), File: v.file, Me: v.id.Key.Principal()}
 }
 
 // facts is the verbs block of what a body did.

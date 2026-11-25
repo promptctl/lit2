@@ -53,13 +53,13 @@ func (r body) open() (opened, error) {
 // a body opens a store, admin init's after its mint included, so the store
 // opened is always the place's `[LAW:one-source-of-truth]`.
 func (r body) openFounded() (opened, error) {
-	switch o := command.OpeningAt(r.place.Place()).(type) {
+	switch o := command.OpeningAt(r.run.Place()).(type) {
 	case command.Opens:
 		return r.openAs(r.p.writerOf(o))
 	case command.NoStore:
 		return opened{}, storeFailure{err: o.Why}
 	}
-	panic(fmt.Sprintf("root: %T is not an Opening", command.OpeningAt(r.place.Place())))
+	panic(fmt.Sprintf("root: %T is not an Opening", command.OpeningAt(r.run.Place())))
 }
 
 // openAs folds w's store, seeded with the founding its clone pinned.
@@ -68,11 +68,11 @@ func (r body) openAs(w writer) (opened, error) {
 	if err != nil {
 		return opened{}, err
 	}
-	folded, err := replay(r.p.Fold, founding, w.store, r.rec.Stored)
+	folded, err := replay(r.p.Fold, founding, w.store, r.run.Stored())
 	if err != nil {
 		return opened{}, storeFailure{err: err}
 	}
-	r.rec.Policy.Founding, r.rec.Policy.Under = founding, folded.State.Policy()
+	r.run.Policy().Founding, r.run.Policy().Under = founding, folded.State.Policy()
 	return opened{body: r, writer: w, founding: founding, folded: folded}, nil
 }
 
@@ -104,7 +104,7 @@ func replay(env fold.Env, founding fold.Founding, s *store.Store, stored *comman
 // written under the version ref names.
 func (o opened) mint(drafts []events.Draft, ref git.ObjectID) (events.Minted, error) {
 	ctx := events.Context{Writer: o.id.Checkout, Agent: o.p.Agent, ConfigRef: ref, Policy: o.folded.State.Cites(),
-		Frontier: o.folded.State.Frontier(), Known: o.folded.State.Known(), Now: o.now}
+		Frontier: o.folded.State.Frontier(), Known: o.folded.State.Known(), Now: o.now()}
 	m, err := events.Mint(ctx, events.NewDrafts(drafts[0], drafts[1:]...), o.id.Key.Signer(), o.p.Entropy)
 	if err != nil {
 		return events.Minted{}, command.Broke(fmt.Errorf("minting: %w", err))
@@ -117,7 +117,7 @@ func (o opened) mint(drafts []events.Draft, ref git.ObjectID) (events.Minted, er
 // which every later read sees, so the caller goes on and says what it
 // wrote, and w then ends the run notDurable.
 func (o opened) append(m events.Minted) error {
-	return o.w.appended(o.store.Append(m.Batch))
+	return o.writes().appended(o.store.Append(m.Batch))
 }
 
 // storeFailure is a verb that has no store to read, or whose store failed

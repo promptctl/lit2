@@ -8,10 +8,9 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// placeOf is where p's invocation runs: the checkout p locates, with the
-// writer its identity files hold, or where no checkout was found. Main
-// and the twin both read it here, over their own ports, so the identity a
-// twin-backed test runs under is read as lit2 reads it on disk.
+// placeOf is where p's invocation runs, read by invoke's two stages,
+// Locate then identified, so the store the twin opens for a test is the
+// one a run at p opens.
 func placeOf(p Process) command.Place { return identified(p, p.Locate()) }
 
 // identified is the place of what git found, l: a checkout with the writer

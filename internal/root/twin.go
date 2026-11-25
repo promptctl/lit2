@@ -2,6 +2,7 @@ package root
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -193,14 +194,16 @@ func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 		// row may take, so it is never read as a person's command.
 		return cli.Summary{Name: commandname.Forged()}, forge
 	})
+	// what the forge did stands whatever came after it: a write that landed,
+	// or a refusal, is said beside a run that then failed or went unrecorded
 	switch e := ended.(type) {
 	case command.Recorded:
 		if f, isFailed := e.Event.Outcome.(cli.Failed); isFailed {
-			return f.Failure
+			return errors.Join(f.Failure, forged)
 		}
 		return forged
 	case command.Unrecorded:
-		return e.Broke
+		return errors.Join(e.Broke, forged)
 	}
 	panic("root: an Ended that is neither Recorded nor Unrecorded")
 }

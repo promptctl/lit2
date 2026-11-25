@@ -65,7 +65,7 @@ func TestIdentityOnDisk(t *testing.T) { identityContract(t, onDisk) }
 // clone's other files are, unlike the identity files beside it.
 func TestThePinOnDiskIsReadable(t *testing.T) {
 	c := worktrees(t, t.TempDir())[1]
-	if _, err := pin(&writes{stored: &command.StoreFacts{}}, onceFile{files: pinFiles(files.NewDurability())(c), name: pinFile}, events.EventID{0x1}); err != nil {
+	if _, err := pin(writes{stored: &command.StoreFacts{}}, onceFile{files: pinFiles(files.NewDurability())(c), name: pinFile}, events.EventID{0x1}); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(pinPath(c))

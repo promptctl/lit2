@@ -15,6 +15,7 @@ import (
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/reason"
+	"github.com/promptctl/lit2/internal/verbs"
 )
 
 // asking is what Run asks of lit2's command line built by commands.
@@ -136,6 +137,21 @@ type refusingReader struct{}
 
 func (refusingReader) Read([]byte) (int, error) { return 0, errors.New("no entropy") }
 
+// What a forge did stands when its run then goes unrecorded: its refusal
+// is said beside the end's panic.
+func TestAForgeThatGoesUnrecordedKeepsWhatItForged(t *testing.T) {
+	twin := NewTwin()
+	refused := twin.Forge(verbs.Set, verbs.Operand{Path: "no/such/path", Value: "x"})
+	if refused == nil {
+		t.Fatal("control: a forged set of no such path was not refused")
+	}
+	twin.Process.Clock = &brokenClock{after: 1}
+	err := twin.Forge(verbs.Set, verbs.Operand{Path: "no/such/path", Value: "x"})
+	if err == nil || !strings.Contains(err.Error(), "the clock broke") || !strings.Contains(err.Error(), refused.Error()) {
+		t.Errorf("a refused forge whose end broke = %v; want the end's panic and %v", err, refused)
+	}
+}
+
 // brokenClock is a clock that reads its first after times and then breaks.
 type brokenClock struct{ after int }
 
@@ -179,7 +195,7 @@ func TestALostEventNeverLooksClean(t *testing.T) {
 
 type panickingSink struct{}
 
-func (panickingSink) Write(command.Event) error { panic("the sink broke") }
+func (panickingSink) Write(command.Event) command.Written { panic("the sink broke") }
 
 // The duration covers reading the place: an identity read that takes a
 // second shows in it.
@@ -316,9 +332,9 @@ type peek struct {
 	saw    string
 }
 
-func (p *peek) Write(command.Event) error {
+func (p *peek) Write(command.Event) command.Written {
 	p.saw = p.stderr.String()
-	return nil
+	return command.Kept{}
 }
 
 func TestTheOutcomeIsSaidBeforeTheEventIsWritten(t *testing.T) {

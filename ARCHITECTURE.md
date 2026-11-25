@@ -167,8 +167,9 @@ The decisions the layout needed and the design documents did not make.
   status, when it has no event to write (its start or end panicked) or when
   it lost the event and stderr would not take the loss. stdout carries only
   the answer asked for; stderr only the error line, the unrecorded line, and
-  the command log's line: an event lost, or what pruning left: a removal
-  that failed, or an entry kept because it is not a day file.
+  the command log's line: an event lost, or each thing pruning left: a
+  listing or a removal that failed, or an entry kept because it is not a
+  day file.
 - **D10 Checkout discovery by git**: `git rev-parse` from the working
   directory, under the process's environment, so `GIT_DIR`,
   `GIT_CEILING_DIRECTORIES` and safe.directory count as they do for git.

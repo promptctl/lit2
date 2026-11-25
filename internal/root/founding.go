@@ -61,7 +61,7 @@ func pinned(pins files.Files) (fold.Founding, error) {
 
 // pin names e the clone's founding unless a pin exists, and reads it
 // back, so a race to pin seeds every fold with the winner's.
-func pin(w *writes, pins onceFile, e events.EventID) (fold.FoundedBy, error) {
+func pin(w writes, pins onceFile, e events.EventID) (fold.FoundedBy, error) {
 	// a pin whose sync failed is written: the run reads it back and goes
 	// on, and w ends it notDurable
 	if err := w.create(pins, e.FileText()); err != nil {
@@ -80,7 +80,7 @@ func pin(w *writes, pins onceFile, e events.EventID) (fold.FoundedBy, error) {
 
 // adopt pins the founding FoundingFile in tree names, when the clone pins
 // none: a clone adopts the committed founding once.
-func adopt(w *writes, pins onceFile, tree files.Files) error {
+func adopt(w writes, pins onceFile, tree files.Files) error {
 	f, err := pinned(pins.files)
 	if err != nil {
 		return err
@@ -116,7 +116,7 @@ func foundingFileIn(tree files.Files) (fold.Founding, error) {
 // pinned at pin, unless the file exists, and refuses a file that names
 // another founding: the pin stands, and the file is what the next clone
 // adopts.
-func writeFoundingFile(w *writes, file onceFile, f fold.FoundedBy, pin string) error {
+func writeFoundingFile(w writes, file onceFile, f fold.FoundedBy, pin string) error {
 	if err := w.create(file, f.Enrollment.FileText()); err != nil {
 		return workspaceFailure{err: fmt.Errorf("writing %s: %w", foundingPath(), err)}
 	}

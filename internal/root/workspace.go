@@ -43,7 +43,7 @@ func (o opened) load() (inForce, error) {
 	if err != nil {
 		return inForce{}, verbs.Unreadable{Blob: in.Active.Blob, Err: err}
 	}
-	o.rec.Configured(command.ConfigFacts{Facts: schema.Facts(), Ref: in.Active.Blob.String()})
+	o.run.Configured(command.ConfigFacts{Facts: schema.Facts(), Ref: in.Active.Blob.String()})
 	_, file := o.workspaceFile()
 	return inForce{opened: o, schema: schema, ref: in.Active.Blob, file: file}, nil
 }
@@ -177,7 +177,7 @@ func (o opened) found(once onceFiles, drafts []events.Draft, ref git.ObjectID, s
 	if refused {
 		return out
 	}
-	won, err := pin(o.w, once.pin, founding.Enrollment)
+	won, err := pin(o.writes(), once.pin, founding.Enrollment)
 	if err != nil {
 		return failed(err)
 	}
@@ -187,8 +187,8 @@ func (o opened) found(once onceFiles, drafts []events.Draft, ref git.ObjectID, s
 	if err := o.append(m); err != nil {
 		return failed(unwritten{err: err, pin: pinPath(o.checkout)})
 	}
-	o.rec.Policy.Founding, o.rec.Policy.Under = won, judged.State.Policy()
-	if err := writeFoundingFile(o.w, once.founding, founding, pinPath(o.checkout)); err != nil {
+	o.run.Policy().Founding, o.run.Policy().Under = won, judged.State.Policy()
+	if err := writeFoundingFile(o.writes(), once.founding, founding, pinPath(o.checkout)); err != nil {
 		return failed(err)
 	}
 	return written(fmt.Fprintf(o.p.Out, "%sfounding %s named in %s: commit it, and every clone adopts this store\n", said, founding.Enrollment, foundingPath()))
@@ -199,9 +199,9 @@ func (o opened) found(once onceFiles, drafts []events.Draft, ref git.ObjectID, s
 // written `[LAW:single-enforcer]`. Its drafts write the root, which names
 // no item or home, so a refusal reads no schema.
 func (o opened) judge(onto fold.State, m events.Minted) (fold.Extended, cli.Outcome, bool) {
-	seen := verbs.World{View: evaluate.Of(o.folded.State, config.Schema{}, o.now)}
+	seen := verbs.World{View: evaluate.Of(o.folded.State, config.Schema{}, o.now())}
 	ext := fold.Extend(o.p.Fold, onto, m.Events)
-	o.rec.Policy.Verdicts = command.Verdicts(m.Events, ext.Outcomes)
+	o.run.Policy().Verdicts = command.Verdicts(m.Events, ext.Outcomes)
 	if no, carried := verbs.Carried(seen, ext.Outcomes); carried {
 		return ext, cli.Failed{Failure: refusal{no}}, true
 	}
@@ -245,7 +245,7 @@ func (o opened) status() cli.Outcome {
 // moves, are that one read's, whatever the mint did, and a panic after the
 // mint is recorded in the minted place.
 func (r body) init() cli.Outcome {
-	in, err := command.CheckoutAt(r.place.Place())
+	in, err := command.CheckoutAt(r.run.Place())
 	if err != nil {
 		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("%s makes a git checkout a writer: %w", commandname.Init(), err)}}
 	}
@@ -253,9 +253,9 @@ func (r body) init() cli.Outcome {
 	minting := MintIdentity(once.id, once.key, r.p.Entropy)
 	// every file init creates is on its event, by path, durable or not
 	for _, c := range minting.creations() {
-		r.w.created(c)
+		r.writes().created(c)
 	}
-	r.place.Move(command.InCheckout{Checkout: in.Checkout, Identity: minting.identity()})
+	r.run.Move(command.InCheckout{Checkout: in.Checkout, Identity: minting.identity()})
 	return r.enroll(in.Checkout, once, minting)
 }
 
@@ -281,7 +281,7 @@ func (r body) enroll(c git.Checkout, once onceFiles, minting Minting) cli.Outcom
 		return cli.Failed{Failure: unread}
 	}
 	tree := r.p.WorkTree(c)
-	if err := adopt(r.w, once.pin, tree); err != nil {
+	if err := adopt(r.writes(), once.pin, tree); err != nil {
 		return failed(err)
 	}
 	o, err := r.openFounded()
@@ -290,7 +290,7 @@ func (r body) enroll(c git.Checkout, once onceFiles, minting Minting) cli.Outcom
 	}
 	// the file names the clone's founding, for the next clone to adopt
 	if f, founded := o.founding.(fold.FoundedBy); founded {
-		if err := writeFoundingFile(r.w, once.founding, f, pinPath(c)); err != nil {
+		if err := writeFoundingFile(r.writes(), once.founding, f, pinPath(c)); err != nil {
 			return failed(err)
 		}
 	}
@@ -300,20 +300,20 @@ func (r body) enroll(c git.Checkout, once onceFiles, minting Minting) cli.Outcom
 	said, owns, founds := "", false, false
 	switch s := verbs.Bootstrap(o.folded.State, me).(type) {
 	case verbs.Found:
-		r.rec.Policy.Bootstrap = "enroll"
+		r.run.Policy().Bootstrap = "enroll"
 		drafts, said, owns, founds = append(drafts, events.Act{About: events.Root{}, Payload: s.Enroll}), fmt.Sprintf("enrolled: policy v1, owner %s\n", me), true, true
 	case verbs.Listed:
-		r.rec.Policy.Bootstrap = "already_member"
+		r.run.Policy().Bootstrap = "already_member"
 		owns = s.Role == verbs.Owner
 	case verbs.Ask:
-		r.rec.Policy.Bootstrap = "request"
+		r.run.Policy().Bootstrap = "request"
 		drafts = append(drafts, events.Act{About: events.Root{}, Payload: events.Request{}})
 		said = fmt.Sprintf("membership requested: an owner admits you with lit2 %s /members '{principal: %q, role: contributor}'\n", commandname.Add(), me.String())
 	case verbs.Unjudged:
-		r.rec.Policy.Bootstrap = "unjudged"
+		r.run.Policy().Bootstrap = "unjudged"
 		return failed(unjudged(s.Policy, c))
 	case verbs.Asked:
-		r.rec.Policy.Bootstrap = "already_requested"
+		r.run.Policy().Bootstrap = "already_requested"
 		return written(fmt.Fprintf(r.p.Out, "membership requested: no owner has admitted %s yet\n", me))
 	}
 	// the version the frame is written under: the one in force; with none,
@@ -332,7 +332,7 @@ func (r body) enroll(c git.Checkout, once onceFiles, minting Minting) cli.Outcom
 		}
 		ref = v.ref
 	case owns:
-		b, err := versionOne(r.w, once.workspace)
+		b, err := versionOne(r.writes(), once.workspace)
 		if err != nil {
 			return cli.Failed{Failure: workspaceFailure{err: err}}
 		}
@@ -356,7 +356,7 @@ func (r body) enroll(c git.Checkout, once onceFiles, minting Minting) cli.Outcom
 // versionOne is the file in the work tree, at file, the default profile
 // created there first when there is none; read back, so a race to create
 // it applies the winner's.
-func versionOne(w *writes, file onceFile) ([]byte, error) {
+func versionOne(w writes, file onceFile) ([]byte, error) {
 	if err := w.create(file, assets.DefaultWorkspace.Bytes()); err != nil {
 		return nil, fmt.Errorf("writing %s: %w", verbs.WorkspacePath(), err)
 	}

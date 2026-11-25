@@ -179,12 +179,12 @@ var (
 // chain, so a caller asking for the errno finds it, whichever write's it
 // was and whatever failure the run ended in first.
 func TestANotDurableRunsChainHoldsEachSyncsError(t *testing.T) {
-	w := &writes{stored: &command.StoreFacts{}}
+	w := writes{stored: &command.StoreFacts{}}
 	w.created(command.Creation{Path: "/twin/.lit/founding", Placing: files.PlacedNotDurable{Why: fmt.Errorf("syncing: %w", syscall.EIO)}})
 	if err := w.appended(store.AppendedNotDurable{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}, Why: syscall.ENOSPC}); err != nil {
 		t.Fatal(err)
 	}
-	for name, o := range map[string]cli.Outcome{"done": w.end(cli.Done{}), "failed first": w.end(failed(errors.New("the body failed")))} {
+	for name, o := range map[string]cli.Outcome{"done": durable(*w.stored, cli.Done{}), "failed first": durable(*w.stored, failed(errors.New("the body failed")))} {
 		f, ok := o.(cli.Failed)
 		if !ok || !errors.Is(f.Failure, syscall.EIO) || !errors.Is(f.Failure, syscall.ENOSPC) {
 			t.Errorf("a %s run is %#v; want failed, its chain holding EIO and ENOSPC", name, o)
@@ -196,13 +196,13 @@ func TestANotDurableRunsChainHoldsEachSyncsError(t *testing.T) {
 // carries that failed sync into the run's outcome, beside its own
 // failure, not only onto the event.
 func TestAnAppendThatLandedNothingCarriesItsLogsFailedSync(t *testing.T) {
-	w := &writes{stored: &command.StoreFacts{}}
+	w := writes{stored: &command.StoreFacts{}}
 	errRead := errors.New("the log's header did not read")
 	err := w.appended(store.NotAppended{Log: store.LogNotDurable{Log: store.LogCreated{}, Why: syscall.EIO}, Why: errRead})
 	if err == nil {
 		t.Fatal("an append that landed nothing answered no error")
 	}
-	f, ok := w.end(failed(err)).(cli.Failed)
+	f, ok := durable(*w.stored, failed(err)).(cli.Failed)
 	if !ok || !errors.Is(f.Failure, syscall.EIO) || !strings.Contains(f.Failure.Error(), errRead.Error()) {
 		t.Errorf("the run is %#v; want failed by the append's failure, its chain holding the log's EIO", f)
 	}
