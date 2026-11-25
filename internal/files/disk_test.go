@@ -3,6 +3,7 @@
 package files_test
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"maps"
@@ -378,5 +379,40 @@ func TestAFileIsMadeInItsPortsMode(t *testing.T) {
 		if info.Mode().Perm() != mode {
 			t.Errorf("a file of a %v port is %v; want %v", mode, info.Mode().Perm(), mode)
 		}
+	}
+}
+
+// An append lands at the file's end as it is when the write runs, not as
+// it was at the open: another writer's whole append lands in that gap, and
+// both are whole where their answers say, the guarantee O_APPEND gives a
+// write, here forced at the step it covers
+// [LAW:no-ambient-temporal-coupling].
+func TestAnAppendLandsAfterAWriteBetweenItsOpenAndItsWrite(t *testing.T) {
+	base := t.TempDir()
+	plain := files.At(files.DirAt(base, dir), files.NewDurability())
+	filestest.Create(t, plain, a, []byte("head"))
+	first, second := []byte(strings.Repeat("a", 64)), []byte(strings.Repeat("b", 64))
+	var between files.Appending
+	gated := files.At(files.Writing(files.DirAt(base, dir), func(p string) {
+		if between == nil && p == filepath.Join(base, dir.String(), a.String()) {
+			between = plain.Append(a, second)
+		}
+	}), files.NewDurability())
+	got := gated.Append(a, first)
+	for _, w := range []struct {
+		name  string
+		got   files.Appending
+		frame []byte
+	}{{"the gated append", got, first}, {"the append in its gap", between, second}} {
+		appended, ok := w.got.(files.Appended)
+		if !ok {
+			t.Fatalf("%s = %#v; want Appended", w.name, w.got)
+		}
+		if b, err := plain.ReadAt(a, appended.End-64, 64); err != nil || !bytes.Equal(b, w.frame) {
+			t.Errorf("%s's bytes before its end %d are %q, %v; want its frame whole", w.name, appended.End, b, err)
+		}
+	}
+	if size, err := plain.Size(a); err != nil || size != 4+2*64 {
+		t.Errorf("the file is %d bytes, %v; want %d, both appends whole", size, err, 4+2*64)
 	}
 }

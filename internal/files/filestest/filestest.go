@@ -119,31 +119,6 @@ func contract(t *testing.T, fresh func(*testing.T) files.Files) {
 			t.Errorf("after 16 creations the directory holds %v, %v; want no temp", l, err)
 		}
 	})
-	t.Run("concurrent appends to one file each land whole where their answer says, and none is lost", func(t *testing.T) {
-		f := fresh(t)
-		Create(t, f, n, []byte("head"))
-		const appenders, size = 16, 64
-		ends := make([]uint64, appenders)
-		var wg sync.WaitGroup
-		for i := range appenders {
-			wg.Go(func() {
-				got, ok := f.Append(n, bytes.Repeat([]byte{byte('a' + i)}, size)).(files.Appended)
-				if !ok {
-					t.Errorf("Append = %#v; want Appended", got)
-				}
-				ends[i] = got.End
-			})
-		}
-		wg.Wait()
-		if s, err := f.Size(n); err != nil || s != 4+appenders*size {
-			t.Errorf("after %d appends of %d bytes the file is %d bytes, %v; want %d", appenders, size, s, err, 4+appenders*size)
-		}
-		for i, end := range ends {
-			if b, err := f.ReadAt(n, end-size, size); err != nil || !bytes.Equal(b, bytes.Repeat([]byte{byte('a' + i)}, size)) {
-				t.Errorf("append %d's bytes before its end %d are %q, %v; want its frame whole", i, end, b, err)
-			}
-		}
-	})
 	t.Run("a list holds the directory's files, a dot-name among them, and no directory holds none", func(t *testing.T) {
 		f := fresh(t)
 		if l, err := f.List(); err != nil || len(l.Names)+len(l.Temps)+len(l.Refused) != 0 {

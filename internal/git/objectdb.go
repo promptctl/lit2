@@ -183,6 +183,13 @@ func (r repo) List(prefix RefName) (Listing, error) {
 // Replace points name at to, an object the repository holds, if name still
 // is what from says.
 func (r repo) Replace(name RefName, from Was, to ObjectID) error {
+	switch from.(type) {
+	case Named, Absent:
+	default:
+		// a Was no writer read is a bug, refused before anything is asked
+		// of either repository `[LAW:single-enforcer]`
+		panic(fmt.Sprintf("git: %T is not what a ref was", from))
+	}
 	if err := parseRefName(name); err != nil {
 		return err
 	}

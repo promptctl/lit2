@@ -50,8 +50,11 @@ func Exit(t testing.TB, dir string, args ...string) int {
 }
 
 // Config is the value git config reads with args, or false when the key
-// is unset, which git config says by exiting 1; any other refusal fails
-// t, so a config git cannot read is never taken as a key with no value.
+// is unset. git config exits 1 both for an unset key and for one its
+// grammar refuses, so an exit 1 is asked again with --default, which
+// answers an unset key and still refuses a malformed one; any other
+// refusal fails t, so a config git cannot read is never taken as a key
+// with no value.
 func Config(t testing.TB, dir string, args ...string) (string, bool) {
 	t.Helper()
 	out, err := Ask(t, dir, append([]string{"config"}, args...)...)
@@ -60,6 +63,9 @@ func Config(t testing.TB, dir string, args ...string) (string, bool) {
 	case err == nil:
 		return out, true
 	case errors.As(err, &exit) && exit.ExitCode() == 1:
+		if _, err := Ask(t, dir, append([]string{"config", "--default="}, args...)...); err != nil {
+			t.Fatalf("git config %q is no key git reads: %v", args, err)
+		}
 		return "", false
 	}
 	t.Fatal(err)

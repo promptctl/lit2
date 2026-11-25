@@ -348,7 +348,7 @@ func (o Disk) Append(n Name, b []byte) Appending {
 	if err != nil {
 		return NotAppended{Why: err}
 	}
-	if _, err := f.Write(b); err != nil {
+	if _, err := o.dir.seams.Write(o.dir.PathOf(n), f, b); err != nil {
 		return NotAppended{Why: errors.Join(err, f.Close(), r.Close())}
 	}
 	at, err := f.Seek(0, io.SeekCurrent)
@@ -667,10 +667,11 @@ func (o Disk) temp(r *os.Root, n Name, b []byte) temping {
 		if err != nil {
 			return tempUnwritten{why: err}
 		}
-		_, werr := f.Write(b)
+		path := o.dir.pathIn(name)
+		_, werr := o.dir.seams.Write(path, f, b)
 		// the mode is the instance's whatever the umask, so a secret's file
 		// is 0600 and a readable one 0644
-		path, chmod := o.dir.pathIn(name), f.Chmod(o.mode)
+		chmod := f.Chmod(o.mode)
 		// a temp is a new file each time, so no earlier sync's failure can
 		// have dropped what it holds, and its own fsync answers for it
 		// alone `[LAW:one-source-of-truth]`; a temp whose fsync failed is

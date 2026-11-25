@@ -13,13 +13,14 @@ import (
 	"github.com/promptctl/lit2/internal/store/storetest"
 )
 
-// gate is logs whose reads of one log, while it is absent, are held until
-// every racer has read it absent, so every racer is past its lookup
-// before any creates the log [LAW:no-ambient-temporal-coupling]: the race
-// of first appends is forced, never left to the scheduler. A wait that
-// outlasts the deadline fails the read, saying how many arrived.
+// gate holds racers at one log's lookup: each racer's logs are an arm of
+// it, and an arm's first read of the log while it is absent is that
+// racer's arrival, held until every racer has arrived, so every racer is
+// past its lookup before any creates the log
+// [LAW:no-ambient-temporal-coupling]: the race of first appends is forced,
+// never left to the scheduler. A wait that outlasts meetWithin fails the
+// read, saying how many arrived.
 type gate struct {
-	files.Files
 	log      files.Name
 	racers   int
 	deadline time.Time
@@ -28,26 +29,46 @@ type gate struct {
 	arrived  int
 }
 
-func newGate(logs files.Files, log files.Name, racers int, deadline time.Time) *gate {
-	return &gate{Files: logs, log: log, racers: racers, deadline: deadline, met: make(chan struct{})}
+// meetWithin is how long racers have to meet, well inside any test
+// binary's timeout, so a racer that never arrives is said by the gate.
+const meetWithin = 10 * time.Second
+
+func newGate(log files.Name, racers int) *gate {
+	return &gate{log: log, racers: racers, deadline: time.Now().Add(meetWithin), met: make(chan struct{})}
 }
 
-func (g *gate) ReadAt(n files.Name, off, size uint64) ([]byte, error) {
-	b, err := g.Files.ReadAt(n, off, size)
-	if n != g.log || !errors.As(err, new(files.NotFound)) {
+// arm is one racer's logs, logs held at the gate.
+func (g *gate) arm(logs files.Files) *arm { return &arm{Files: logs, g: g} }
+
+type arm struct {
+	files.Files
+	g       *gate
+	arrived bool
+}
+
+func (a *arm) ReadAt(n files.Name, off, size uint64) ([]byte, error) {
+	b, err := a.Files.ReadAt(n, off, size)
+	if n != a.g.log || !errors.As(err, new(files.NotFound)) {
 		return b, err
 	}
+	if !a.arrived {
+		a.arrived = true
+		a.g.arrive()
+	}
+	select {
+	case <-a.g.met:
+		return b, err
+	case <-time.After(time.Until(a.g.deadline)):
+		return nil, fmt.Errorf("the racers did not meet within %v: %d of %d arrived", meetWithin, a.g.count(), a.g.racers)
+	}
+}
+
+func (g *gate) arrive() {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.arrived++
 	if g.arrived == g.racers {
 		close(g.met)
-	}
-	g.mu.Unlock()
-	select {
-	case <-g.met:
-		return b, err
-	case <-time.After(time.Until(g.deadline)):
-		return nil, fmt.Errorf("the racers did not meet by %v: %d of %d read the log absent", g.deadline, g.count(), g.racers)
 	}
 }
 
@@ -57,15 +78,6 @@ func (g *gate) count() int {
 	return g.arrived
 }
 
-// deadline is when a test's wait gives up: its own deadline, or a minute
-// from now when it has none.
-func deadline(t *testing.T) time.Time {
-	if d, ok := t.Deadline(); ok {
-		return d
-	}
-	return time.Now().Add(time.Minute)
-}
-
 // Appenders racing to one log's first append, every one held until all
 // have read the log absent, make one log: one create's header is the
 // log's, every other create finds it Existing, and every record reads
@@ -73,18 +85,18 @@ func deadline(t *testing.T) time.Time {
 func TestRacingFirstAppendsMakeOneLog(t *testing.T) {
 	firsts := storetest.Numbered(t, 8, "first") // one per racer
 	p := fresh()
-	g := newGate(p.logs, store.LogName(ida), len(firsts), deadline(t))
-	ports := store.WithFiles(p.ports, g)
+	g := newGate(store.LogName(ida), len(firsts))
 	appended := make([]store.Appending, len(firsts))
 	var wg sync.WaitGroup
 	for i, bt := range firsts {
+		ports := store.WithFiles(p.ports, g.arm(p.logs))
 		wg.Go(func() { appended[i] = store.Open(ida, ports, store.DefaultSegmentBound).Append(bt) })
 	}
 	wg.Wait()
 	select {
 	case <-g.met:
 	default:
-		t.Fatalf("the racers never met at the log's lookup: %d of %d read it absent", g.count(), len(firsts))
+		t.Fatalf("the racers never met at the log's lookup: %d of %d arrived", g.count(), g.racers)
 	}
 	made := map[files.Made]int{}
 	for i, a := range appended {

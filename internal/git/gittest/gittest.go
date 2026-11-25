@@ -332,18 +332,20 @@ func refs(t *testing.T, fresh func(*testing.T) repository) {
 			was = git.Named{Target: to}
 		}
 	})
-	t.Run("a replace from no Was is a bug, and moves nothing", func(t *testing.T) {
+	t.Run("a replace from no Was is a bug, to a target held or not, and moves nothing", func(t *testing.T) {
 		refs := fresh(t)
 		a, _ := objects(t, refs)
 		const name git.RefName = "refs/lit/log/w"
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("Replace(%s, nil, %s) returned; want a panic", name, a)
-				}
+		for _, to := range []git.ObjectID{a, ID(t, "0123456789abcdef0123456789abcdef01234567")} {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Errorf("Replace(%s, nil, %s) returned; want a panic", name, to)
+					}
+				}()
+				_ = refs.Replace(name, nil, to)
 			}()
-			_ = refs.Replace(name, nil, a)
-		}()
+		}
 		if heads := list(t, refs, "refs/lit/"); len(heads) != 0 {
 			t.Errorf("after a replace from no Was the refs are %v; want none", heads)
 		}
