@@ -37,7 +37,7 @@ func HelpText(c Commands, fields Fields) string {
 		fmt.Fprintf(&b, "   lit2 %s <command>", g.word)
 	}
 	fmt.Fprintf(&b, "   lit2 %s\n", helpFlag)
-	fmt.Fprintf(&b, "lit2 alone is %s: %s\n", strings.Join(c.bareWords, " "), c.bare.Shows)
+	fmt.Fprintf(&b, "lit2 alone is %s: %s\n", strings.Join(c.bare.line(), " "), c.bare.Shows)
 	for _, f := range theFlags() {
 		fmt.Fprintf(&b, "%s %s; ", f.name, f.does)
 	}

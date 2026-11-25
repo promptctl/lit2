@@ -72,9 +72,6 @@ func isFlag(word string) bool { return strings.HasPrefix(word, flagPrefix) }
 type Commands struct {
 	rows []Row
 	bare Bare
-	// bareWords is the bare line as scan read it, the words a bare lit2
-	// routes as a typed line's
-	bareWords []string
 }
 
 // Row is one command: its name, the operands it takes, and its line in
@@ -94,6 +91,10 @@ type Bare struct {
 	Operands []string
 	Shows    string
 }
+
+// line is the words a bare lit2 runs, as if typed: its name, then its
+// operands, which NewCommands holds scan to reading word for word.
+func (b Bare) line() []string { return append(b.Name.Words(), b.Operands...) }
 
 // NewCommands is the command line of rows, run bare as bare. It refuses
 // a line that does not parse one way `[LAW:single-enforcer]`: a row with
@@ -123,16 +124,16 @@ func NewCommands(rows []Row, bare Bare) (Commands, error) {
 			}
 		}
 	}
-	typed := append(bare.Name.Words(), bare.Operands...)
+	typed := bare.line()
 	s, err := scan(typed)
 	if err != nil || s.help || s.flags != (Flags{}) || !slices.Equal(s.words, typed) {
 		return Commands{}, fmt.Errorf("%w: %q", errBareNotAsTyped, typed)
 	}
 	bare.Operands = slices.Clone(bare.Operands)
-	c := Commands{rows: slices.Clone(rows), bare: bare, bareWords: s.words}
+	c := Commands{rows: slices.Clone(rows), bare: bare}
 	// %v, not %w: the row's refusal is this line's bug, never a usage
 	// failure a caller could take for the person's
-	if p, err := c.route(s.words, Flags{}); err != nil || p.Asked.Name != bare.Name {
+	if p, err := c.route(typed, Flags{}); err != nil || p.Asked.Name != bare.Name {
 		return Commands{}, fmt.Errorf("%w: %q: %v", errBareUnrouted, typed, err)
 	}
 	return c, nil
@@ -317,9 +318,9 @@ func Parse(c Commands, args []string) (Parsed, error) {
 	}
 	words := s.words
 	if len(words) == 0 {
-		// a bare lit2 is its bare line, read by scan as a typed one is, so
-		// the flags typed with it are judged as its row's are
-		words = c.bareWords
+		// a bare lit2 routes its bare line as a typed one, so the flags
+		// typed with it are judged as its row's are
+		words = c.bare.line()
 	}
 	return c.route(words, s.flags)
 }
