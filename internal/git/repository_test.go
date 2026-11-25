@@ -21,7 +21,7 @@ import (
 // checked from the directory above.
 func repositoryAt(g *git.Git, path string) git.Repository {
 	in := filepath.Dir(path)
-	return g.RepositoryAt(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))).Sub(files.MustName(filepath.Base(path))))
+	return g.RepositoryAt(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))).Sub(files.MustName(filepath.Base(path))), files.NewDurability())
 }
 
 func TestObjectsContract(t *testing.T) {
@@ -732,7 +732,7 @@ func TestTheRepositorysEntryIsSyncedOnEveryWrite(t *testing.T) {
 	synced := func(t *testing.T, path string, seams func(*filestest.Syncs) filestest.Seams) {
 		t.Helper()
 		var syncs filestest.Syncs
-		gittest.PutBlob(t, g.RepositoryAt(at(seams(&syncs))), []byte(path))
+		gittest.PutBlob(t, g.RepositoryAt(at(seams(&syncs)), files.NewDurability()), []byte(path))
 		if seen := syncs.Seen(); len(seen) == 0 || seen[len(seen)-1] != in {
 			t.Errorf("a write %s synced %v; want %s, the directory the repository is in, last", path, seen, in)
 		}
@@ -752,7 +752,7 @@ func TestTheRepositorysEntryIsSyncedOnEveryWrite(t *testing.T) {
 		seams.Gate = func(path string) {
 			if path == in && !other {
 				other = true
-				gittest.PutBlob(t, g.RepositoryAt(at(filestest.OS())), []byte("the other create"))
+				gittest.PutBlob(t, g.RepositoryAt(at(filestest.OS()), files.NewDurability()), []byte("the other create"))
 			}
 		}
 		return seams
@@ -776,7 +776,7 @@ func TestAFailedSyncOfTheRepositorysEntryRefusesEveryLaterWrite(t *testing.T) {
 		}
 		return nil
 	})
-	repo := g.RepositoryAt(filestest.Seamed(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))), seams).Sub(files.MustName("repo")))
+	repo := g.RepositoryAt(filestest.Seamed(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))), seams).Sub(files.MustName("repo")), files.NewDurability())
 	for _, write := range []string{"first", "second"} {
 		if _, err := gittest.Put(repo, []byte(write)); !errors.Is(err, errSync) {
 			t.Errorf("the %s write failed with %v; want the failed sync", write, err)
@@ -790,5 +790,33 @@ func TestAFailedSyncOfTheRepositorysEntryRefusesEveryLaterWrite(t *testing.T) {
 	}
 	if synced != 1 {
 		t.Errorf("the entry was synced %d times over %v; want once, never again after it failed", synced, syncs.Seen())
+	}
+}
+
+// A failed sync of the directory lit's repository is entered in, through
+// another port of the process, refuses the repository's next write: the
+// process's one keeper answers it, though the repository's own fsync of
+// that directory would pass.
+func TestAFailedSyncOfTheEntrysDirectoryThroughAnotherPortRefusesAWrite(t *testing.T) {
+	g := gittest.Runner(t)
+	in := filepath.Join(gittest.Physical(t), "store")
+	store := files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in)))
+	errSync := errors.New("the disk refused the fsync, once")
+	u := files.NewDurability()
+	logs := files.At(filestest.Seamed(store, filestest.Recording(&filestest.Syncs{}, func(path string) error {
+		if path == in {
+			return errSync
+		}
+		return nil
+	})), u)
+	if err := u.Make(store); err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.Sync(); !errors.Is(err, errSync) {
+		t.Fatalf("the other port's Sync = %v; want the seam's failure", err)
+	}
+	repo := g.RepositoryAt(store.Sub(files.MustName("repo")), u)
+	if _, err := gittest.Put(repo, []byte("after")); !errors.Is(err, errSync) {
+		t.Errorf("the write after the other port's failed sync failed with %v; want that failure", err)
 	}
 }

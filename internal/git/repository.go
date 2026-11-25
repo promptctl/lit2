@@ -34,9 +34,10 @@ import (
 type Repository struct{ repo }
 
 // RepositoryAt is lit's repository, the directory at, which need not
-// exist yet, written by g.
-func (g *Git) RepositoryAt(at files.Dir) Repository {
-	return Repository{repo{b: &onDisk{g: g, at: at, entry: files.NewDurability()}}}
+// exist yet, written by g, the syncs of its entry kept by u, the
+// process's, which its directories' other ports share.
+func (g *Git) RepositoryAt(at files.Dir, u *files.Durability) Repository {
+	return Repository{repo{b: &onDisk{g: g, at: at, entry: u}}}
 }
 
 type onDisk struct {
@@ -50,8 +51,9 @@ type onDisk struct {
 	mu    sync.Mutex
 	db    *filesystem.Storage
 	packs time.Time
-	// entry is the syncs of the repository's entry and the directories on
-	// its way: once one fails, every later one answers it
+	// entry is the process's keeper of the syncs of the repository's entry
+	// and the directories on its way: once one of a directory fails, every
+	// later one of it answers that failure, whichever port asks
 	entry *files.Durability
 }
 
@@ -327,8 +329,9 @@ func (d *onDisk) write(objs []object) (ids []ObjectID, err error) {
 // rename to another, or found it there, since one found may be a racing
 // create's, not yet synced: every object written into it is only as
 // durable as the name it is under `[LAW:dataflow-not-control-flow]`. Once
-// that sync fails, every later write of this repository in this process
-// is refused with its failure, never handed a repository whose name a
+// a sync of that directory fails, through this repository or any port of
+// the process, every later write of this repository in this process is
+// refused with its failure, never handed a repository whose name a
 // passing sync might hide was lost `[LAW:no-silent-failure]`; a later run
 // knows nothing of it, so the run that saw it is the run that says it.
 func (d *onDisk) writable() (string, error) {

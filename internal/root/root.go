@@ -84,7 +84,7 @@ func Run(p Process, args []string) int {
 		}
 		rec.Asked(cli.Summarize(cmd))
 		w := &writes{stored: rec.Stored}
-		out := w.end(dispatch(body{p: p, now: now, rec: rec, w: w}, table, groups, cmd))
+		out := w.end(unfinished(func() cli.Outcome { return dispatch(body{p: p, now: now, rec: rec, w: w}, table, groups, cmd) }))
 		// after the body, so the temps its creates reaped are not said
 		rec.Stored.Temps = leftovers(p, p.Place, rec.Stored)
 		return out
@@ -97,6 +97,28 @@ func Run(p Process, args []string) int {
 		_, _ = io.WriteString(p.Err, logFailure(err))
 	}
 	return cli.ExitCode(event.Outcome)
+}
+
+// unfinished is body's outcome. A body that panics panics on, saying that
+// the run's end steps, the judging of its writes' durability and the scan
+// of its temps, did not run, so the event Record writes after the panic
+// says so in its outcome, never an empty scan that reads as none left
+// `[LAW:no-silent-failure]`.
+func unfinished(body func() cli.Outcome) cli.Outcome {
+	defer func() {
+		if r := recover(); r != nil {
+			panic(stoppedBeforeItsEnd{panicked: r})
+		}
+	}()
+	return body()
+}
+
+// stoppedBeforeItsEnd is a body's panic, said with the end steps it kept
+// from running.
+type stoppedBeforeItsEnd struct{ panicked any }
+
+func (s stoppedBeforeItsEnd) String() string {
+	return fmt.Sprintf("%v; the run stopped before its end: the durability of its writes was not judged, and no directory's temps were scanned", s.panicked)
 }
 
 // body is one invocation as its body sees it: the process, the clock's one

@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"syscall"
 )
 
@@ -22,8 +22,8 @@ import (
 type Disk struct {
 	dir  Dir
 	mode fs.FileMode
-	// durability is the port's syncs, shared by every copy of the port:
-	// once one fails, every later one answers it
+	// durability is the process's keeper of failed syncs, which every
+	// port and lit's repository share
 	durability *Durability
 }
 
@@ -32,41 +32,64 @@ type Disk struct {
 const readable fs.FileMode = 0o644
 
 // At is the files of d, which need not exist yet, every file made
-// readable.
-func At(d Dir) Disk { return AtMode(d, readable) }
+// readable, its syncs kept by u, the process's.
+func At(d Dir, u *Durability) Disk { return AtMode(d, readable, u) }
 
 // AtMode is the files of d, each made in mode: a secret's files are 0600
 // through this same port.
-func AtMode(d Dir, mode fs.FileMode) Disk {
-	return Disk{dir: d, mode: mode, durability: NewDurability()}
+func AtMode(d Dir, mode fs.FileMode, u *Durability) Disk {
+	return Disk{dir: d, mode: mode, durability: u}
 }
 
-// Durability is what one process knows of the syncs a writer's files
-// rely on: that none has failed, or the first that did, which every later
-// sync answers without syncing, since a sync that failed may have dropped
-// what it held and a second may pass over it. It is the one keeper of
-// that rule `[LAW:single-enforcer]`: a Disk holds one for the syncs of its
-// port, and lit's repository one for its entry. Its state is shared by
-// the pointer, never by a Dir, which is a value
-// `[LAW:no-shared-mutable-globals]`. It knows nothing across processes: a
-// later run whose sync passes cannot know an earlier one failed, so the
-// run that saw the failure is the run that says it.
-type Durability struct{ failed atomic.Pointer[error] }
+// Durability is what one process knows of its fsyncs: for each directory
+// or file, by its path, that none has failed, or the first that did,
+// which every later sync of that path answers without syncing, since a
+// sync that failed may have dropped what it held and a second may pass
+// over it. A failure of one path marks no other. It is the one keeper of
+// that rule `[LAW:single-enforcer]`: the composition root builds one per
+// process and hands it to every disk port and to lit's repository, so two
+// ports over one directory answer one failure. Its state is shared by the
+// pointer, never by a Dir, which is a value, nor by a package variable
+// `[LAW:no-shared-mutable-globals]`; its map is a sync.Map, whose lock is
+// never held across an fsync. It knows nothing across processes: a later
+// run whose sync passes cannot know an earlier one failed, so the run
+// that saw the failure is the run that says it.
+type Durability struct {
+	// failed is each path's first failed fsync, an error by its path
+	failed sync.Map
+}
 
-// NewDurability is the syncs of a writer none of whose syncs has failed.
+// NewDurability is a process's keeper, none of whose syncs has failed:
+// built once, by the composition root.
 func NewDurability() *Durability { return &Durability{} }
 
-// sync runs do, one fsync, unless a sync failed before, and keeps the
-// first failure for every later sync to answer.
-func (u *Durability) sync(do func() error) error {
-	if failed := u.failed.Load(); failed != nil {
-		return *failed
+// sync runs do, the fsync of the directory or file at path, unless a sync
+// of it failed before, and keeps the first failure for every later sync
+// of it to answer. A failure another sync of path kept while do ran is
+// answered too, so a sync that passed beside a failed one never says the
+// path durable.
+func (u *Durability) sync(path string, do func() error) error {
+	key := filepath.Clean(path)
+	if why, failed := u.failure(key); failed {
+		return why
 	}
 	if err := do(); err != nil {
-		u.failed.CompareAndSwap(nil, &err)
-		return *u.failed.Load()
+		kept, _ := u.failed.LoadOrStore(key, err)
+		return kept.(error)
+	}
+	if why, failed := u.failure(key); failed {
+		return why
 	}
 	return nil
+}
+
+// failure is the failed sync kept for key, if one is.
+func (u *Durability) failure(key string) (error, bool) {
+	why, failed := u.failed.Load(key)
+	if !failed {
+		return nil, false
+	}
+	return why.(error), true
 }
 
 // syncDir fsyncs r's directory, d's at path, through the seam.
@@ -76,7 +99,7 @@ func (u *Durability) syncDir(d Dir, r *os.Root, path string) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
-	return u.sync(func() error { return d.seams.Sync(path, f) })
+	return u.sync(path, func() error { return d.seams.Sync(path, f) })
 }
 
 // walk is d's directory, opened from its base, each element entered in
@@ -343,7 +366,7 @@ func (o Disk) Append(n Name, b []byte) Appending {
 	// The name it is under was made durable by the step that established
 	// it, the create or a Sync, so the append fsyncs the file alone.
 	landed := Appended{End: uint64(at)}
-	synced := o.durability.sync(func() error { return o.dir.seams.Sync(o.dir.PathOf(n), f) })
+	synced := o.durability.sync(o.dir.PathOf(n), func() error { return o.dir.seams.Sync(o.dir.PathOf(n), f) })
 	if why := errors.Join(synced, f.Close(), r.Close()); why != nil {
 		return AppendedNotDurable{Appended: landed, Why: why}
 	}
@@ -650,7 +673,12 @@ func (o Disk) temp(r *os.Root, n Name, b []byte) temping {
 		_, werr := f.Write(b)
 		// the mode is the instance's whatever the umask, so a secret's file
 		// is 0600 and a readable one 0644
-		if err := errors.Join(werr, f.Chmod(o.mode), o.dir.seams.Sync(o.dir.pathIn(name), f), f.Close()); err != nil {
+		path, chmod := o.dir.pathIn(name), f.Chmod(o.mode)
+		// a temp is a new file each time, so no earlier sync's failure can
+		// have dropped what it holds, and its own fsync answers for it
+		// alone `[LAW:one-source-of-truth]`; a temp whose fsync failed is
+		// removed, never linked
+		if err := errors.Join(werr, chmod, o.dir.seams.Sync(path, f), f.Close()); err != nil {
 			return tempUnwritten{why: err, left: o.dir.remove(r, name).left(name)}
 		}
 		return tempWritten{name: name}

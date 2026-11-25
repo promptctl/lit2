@@ -195,7 +195,8 @@ type Files interface {
 	CreateOnce(n Name, b []byte) Placing
 	// Sync fsyncs the directory, so a name in it that another call
 	// created, and may not have synced yet, survives a power loss. Once a
-	// sync of the port's has failed, every later one answers that failure,
+	// sync of the directory has failed, through any port of the process,
+	// every later one answers that failure,
 	// since the failed one may have dropped what it held and a second may
 	// pass over it; that is what one process knows, and a later run that
 	// syncs again may pass, so the run that saw the failure is the run
@@ -232,7 +233,8 @@ type Appended struct{ End uint64 }
 
 // AppendedNotDurable is b landed whole, the file ending at End, and a
 // sync on its way failed: b is there to every read, and may not be after
-// a power loss. No later sync of the port's is trusted over it, since one
+// a power loss. No later sync of the file in the process is trusted over
+// it, since one
 // that failed may have dropped the bytes it held and a second may pass
 // over them.
 type AppendedNotDurable struct {

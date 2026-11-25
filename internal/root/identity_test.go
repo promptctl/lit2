@@ -43,14 +43,15 @@ func worktrees(t *testing.T, root string) [2]git.Checkout {
 
 func onDisk(t *testing.T) clone {
 	cs := worktrees(t, t.TempDir())
-	shared, a := identityFiles(cs[0])
-	_, b := identityFiles(cs[1])
+	u := files.NewDurability()
+	shared, a := identityFiles(u)(cs[0])
+	_, b := identityFiles(u)(cs[1])
 	return clone{shared: shared, worktree: [2]files.Files{a, b}}
 }
 
 func TestTheIdentityFilesOnDiskAreASecrets(t *testing.T) {
 	c := worktrees(t, t.TempDir())[1]
-	shared, private := identityFiles(c)
+	shared, private := identityFiles(files.NewDurability())(c)
 	if _, err := identityOf(mint(shared, private, 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +221,7 @@ func placed(cs []command.Creation, id, key files.Made) bool {
 // clone's other files are, unlike the identity files beside it.
 func TestThePinOnDiskIsReadable(t *testing.T) {
 	c := worktrees(t, t.TempDir())[1]
-	if _, err := pin(&writes{stored: &command.StoreFacts{}}, onceFile{files: pinFiles(c), name: pinFile}, events.EventID{0x1}); err != nil {
+	if _, err := pin(&writes{stored: &command.StoreFacts{}}, onceFile{files: pinFiles(files.NewDurability())(c), name: pinFile}, events.EventID{0x1}); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(pinPath(c))

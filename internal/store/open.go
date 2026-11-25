@@ -26,12 +26,13 @@ type Ports struct {
 
 // DiskPorts is the store of at's clone on disk, rooted at
 // <git-common-dir>/lit/store/ (D11), lit's repository at repo/ beneath it,
-// kept by g. It reads nothing; every worktree of a clone builds the same
-// ports.
-func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader) Ports {
+// kept by g, the logs' syncs and the repository's entry's kept by u, the
+// process's one keeper. It reads nothing; every worktree of a clone builds
+// the same ports.
+func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader, u *files.Durability) Ports {
 	l := locate(at)
-	repo := g.RepositoryAt(l.repo)
-	return Ports{files: files.At(l.logs), objects: repo, refs: repo, entropy: entropy}
+	repo := g.RepositoryAt(l.repo, u)
+	return Ports{files: files.At(l.logs, u), objects: repo, refs: repo, entropy: entropy}
 }
 
 // MemoryPorts is a store in process: its logs in logs, the in-memory
@@ -293,19 +294,27 @@ type Unreadable struct {
 
 // Heads is every stream of the clone, sorted by ref name, and everything
 // that should have been one and is not. RefsRead and LogsRead count what
-// was listed, so a fresh store reads zero of each. Temps is the
-// temporary files of log creates the listing found in the logs'
-// directory: a create's that never ran again, or one in flight, for the
-// command to say `[LAW:no-silent-failure]`.
+// was listed, so a fresh store reads zero of each.
 type Heads struct {
 	Streams            []Stream
 	Unreadable         []Unreadable
 	RefsRead, LogsRead int
-	Temps              []string
 }
 
 // Logs is the directory this store's logs are in, as its port names it.
 func (s *Store) Logs() files.Dir { return s.ports.files.Dir() }
+
+// Temps is the temporary files of log creates in the logs' directory,
+// listed now: a create's that never ran again, or one in flight, for the
+// command to say once its work is done, so a temp its own create reaped
+// is not said as left `[LAW:no-silent-failure]`.
+func (s *Store) Temps() ([]string, error) {
+	logs, err := s.ports.files.List()
+	if err != nil {
+		return nil, err
+	}
+	return logs.Temps, nil
+}
 
 // Heads lists refs/lit/ and every log under this common dir. A writer with
 // a log here is read from its log, of which its own publication is a
@@ -322,7 +331,7 @@ func (s *Store) Heads() (Heads, error) {
 	if err != nil {
 		return Heads{}, err
 	}
-	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs.Names) + len(logs.Refused), Temps: logs.Temps}
+	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs.Names) + len(logs.Refused)}
 	unreadable := func(name string, why error) { h.Unreadable = append(h.Unreadable, Unreadable{Name: name, Why: why}) }
 	// an entry of the logs' directory that is no file is a log that will
 	// not read, said as one whose header will not

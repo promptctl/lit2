@@ -31,7 +31,13 @@ var errSync = errors.New("the fsync failed")
 // unsynced is a session over a fresh twin whose store's logs answer
 // faults, its workspace committed as admin init applies it.
 func unsynced(t *testing.T, faults filestest.Faults) session {
-	twin := freshTwinOver(filestest.NotDurable(files.NewMemory(store.LogsDir(twinCheckout)), faults))
+	return sessionOver(t, filestest.NotDurable(files.NewMemory(store.LogsDir(twinCheckout)), faults))
+}
+
+// sessionOver is a session over a fresh twin whose store's logs are logs,
+// its workspace committed as admin init applies it.
+func sessionOver(t *testing.T, logs files.Files) session {
+	twin := freshTwinOver(logs)
 	twin.Code.Commit(map[string][]byte{verbs.WorkspacePath(): assets.DefaultWorkspace.Bytes()})
 	return session{t: t, twin: &twin}
 }
@@ -171,7 +177,8 @@ func TestAWorkTreeFileWhoseSyncFailedEndsInitNotDurable(t *testing.T) {
 func TestLeftoversSaysTheCheckoutsTemps(t *testing.T) {
 	dir := checkout(t, minted)
 	c := git.Checkout{WorkTree: dir, GitDir: filepath.Join(dir, ".git"), CommonDir: filepath.Join(dir, ".git")}
-	disk := Process{IdentityFiles: identityFiles, Pin: pinFiles, WorkTree: workTree}
+	u := files.NewDurability()
+	disk := Process{IdentityFiles: identityFiles(u), Pin: pinFiles(u), WorkTree: workTree(u)}
 	unminted := command.Unopened{Why: errors.New("unminted")}
 	var want []command.Leftovers
 	at := map[string]int{}
@@ -239,35 +246,51 @@ func plant(t *testing.T, dir, name string) string {
 }
 
 // A run's event says the temps its Process's ports hold, the key's and
-// the store's logs', by the directories the ports are of, the logs' as the
-// run's heads listed them: the twin runs the one scan Main's runs do. A
-// directory with no temp is said scanned and empty, and the logs of a run
-// none of whose steps read the heads are said not scanned.
+// the store's logs', by the directories the ports are of, each listed
+// once the run's work is done: the twin runs the one scan Main's runs do.
+// A directory with no temp is said scanned and empty.
 func TestARunsEventSaysTheTempsOfItsPorts(t *testing.T) {
 	shared, logs := t.TempDir(), t.TempDir()
+	u := files.NewDurability()
 	logsDir := files.DirAt(logs, files.MustName("log"))
-	twin := freshTwinOver(files.At(logsDir))
+	twin := freshTwinOver(files.At(logsDir, u))
 	sharedDir := files.DirAt(shared, files.MustName("lit"))
 	key := plant(t, sharedDir.Path(), command.NameOf(command.PrincipalFile{}).String())
 	log := plant(t, logsDir.Path(), store.LogName(twinID).String())
 	private := filestest.Memory()
-	twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return files.At(sharedDir), private }
-	ports := func(logs command.Leftovers) []command.Leftovers {
-		return []command.Leftovers{
-			command.TempsScanned{Dir: private.Dir().Path()},
-			command.TempsScanned{Dir: sharedDir.Path(), Temps: []string{key}},
-			command.TempsScanned{Dir: pinDir(twinCheckout).Path()},
-			command.TempsScanned{Dir: litDir(twinCheckout).Path()},
-			logs,
-		}
-	}
+	twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return files.At(sharedDir, u), private }
 	_, e := run(t, twin, "get", "lit-abc/title")
-	if want := ports(command.TempsScanned{Dir: logsDir.Path(), Temps: []string{log}}); !reflect.DeepEqual(e.Store.Temps, want) {
+	want := []command.Leftovers{
+		command.TempsScanned{Dir: private.Dir().Path()},
+		command.TempsScanned{Dir: sharedDir.Path(), Temps: []string{key}},
+		command.TempsScanned{Dir: pinDir(twinCheckout).Path()},
+		command.TempsScanned{Dir: litDir(twinCheckout).Path()},
+		command.TempsScanned{Dir: logsDir.Path(), Temps: []string{log}},
+	}
+	if !reflect.DeepEqual(e.Store.Temps, want) {
 		t.Errorf("the event's temps are %#v; want each port's, by its own directory: %#v", e.Store.Temps, want)
 	}
-	noHeads := leftovers(twin.Process, twin.Process.Place, &command.StoreFacts{Opening: twin.Process.Store})
-	if want := ports(command.TempsNotScanned{Dir: logsDir.Path(), Why: errNoHeads}); !reflect.DeepEqual(noHeads, want) {
-		t.Errorf("a run that read no heads says the temps %#v; want the logs not scanned: %#v", noHeads, want)
+}
+
+// A log temp the run's own create reaped is said as reaped, and not as
+// left: the logs are listed after the append, never from a listing taken
+// before it.
+func TestALogTempTheRunReapedIsNotSaidAsLeft(t *testing.T) {
+	logsDir := files.DirAt(t.TempDir(), files.MustName("log"))
+	s := sessionOver(t, files.At(logsDir, files.NewDurability()))
+	temp := plant(t, logsDir.Path(), store.LogName(twinID).String())
+	r := s.lit("admin", "init")
+	if len(r.event.Store.Appends) == 0 {
+		t.Fatalf("init appended nothing: %+v", r.event.Store)
+	}
+	a, ok := r.event.Store.Appends[0].(store.Appended)
+	c, created := a.Log.(store.LogCreated)
+	if !ok || !created || !slices.Equal(c.Reap.Reaped, []string{temp}) {
+		t.Fatalf("init's first append is %#v; want Appended, its log created, reaping %s", r.event.Store.Appends[0], temp)
+	}
+	logs := r.event.Store.Temps[len(r.event.Store.Temps)-1]
+	if got, ok := logs.(command.TempsScanned); !ok || got.Dir != logsDir.Path() || len(got.Temps) != 0 {
+		t.Errorf("the logs' temps are %#v; want %s scanned, %s not left", logs, logsDir.Path(), temp)
 	}
 }
 
@@ -285,6 +308,42 @@ func TestANotDurableRunsChainHoldsEachSyncsError(t *testing.T) {
 		if !ok || !errors.Is(f.Failure, syscall.EIO) || !errors.Is(f.Failure, syscall.ENOSPC) {
 			t.Errorf("a %s run is %#v; want failed, its chain holding EIO and ENOSPC", name, o)
 		}
+	}
+}
+
+// An append that landed no frame after its log's name's sync failed
+// carries that failed sync into the run's outcome, beside its own
+// failure, not only onto the event.
+func TestAnAppendThatLandedNothingCarriesItsLogsFailedSync(t *testing.T) {
+	w := &writes{stored: &command.StoreFacts{}}
+	errRead := errors.New("the log's header did not read")
+	err := w.appended(store.NotAppended{Log: store.LogNotDurable{Log: store.LogCreated{}, Why: syscall.EIO}, Why: errRead})
+	if err == nil {
+		t.Fatal("an append that landed nothing answered no error")
+	}
+	f, ok := w.end(failed(err)).(cli.Failed)
+	if !ok || !errors.Is(f.Failure, syscall.EIO) || !strings.Contains(f.Failure.Error(), errRead.Error()) {
+		t.Errorf("the run is %#v; want failed by the append's failure, its chain holding the log's EIO", f)
+	}
+	if reason := f.Failure.Reason(); reason == "durability" {
+		t.Errorf("the run's reason is %q; want the append's own failure first", reason)
+	}
+}
+
+// A body that panics still leaves its event, which says the run's end
+// steps did not run, its writes' durability unjudged and its temps
+// unscanned, never an empty scan read as nothing left.
+func TestAPanickingBodysEventSaysItsEndStepsDidNotRun(t *testing.T) {
+	s := sessionOver(t, files.NewMemory(store.LogsDir(twinCheckout)))
+	s.twin.Process.WorkTree = func(git.Checkout) files.Files { panic("the work tree is gone") }
+	r := s.lit("admin", "init")
+	f, ok := r.event.Outcome.(cli.Failed)
+	if !ok || !strings.Contains(f.Failure.Error(), "the work tree is gone") || !strings.Contains(f.Failure.Error(), "no directory's temps were scanned") ||
+		!strings.Contains(f.Failure.Error(), "durability of its writes was not judged") {
+		t.Errorf("the panicking run's outcome is %#v; want the panic, and that its end steps did not run", r.event.Outcome)
+	}
+	if r.event.Store.Temps != nil {
+		t.Errorf("the panicking run's temps are %#v; want none scanned", r.event.Store.Temps)
 	}
 }
 

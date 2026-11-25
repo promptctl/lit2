@@ -3,6 +3,7 @@ package store_test
 import (
 	"testing"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
@@ -25,7 +26,7 @@ func memory(*testing.T) storetest.Clone {
 // gitdir is a fresh clone's common dir on disk, made by git init, and its
 // store's ports as the composition root builds them.
 func gitdir(t *testing.T) storetest.Clone {
-	return cloneOf(store.DiskPorts(gittest.Runner(t), gittest.Clone(t), storetest.Entropy(2)))
+	return cloneOf(store.DiskPorts(gittest.Runner(t), gittest.Clone(t), storetest.Entropy(2), files.NewDurability()))
 }
 
 // fetchedBy is the store of a fresh clone of fresh's that fetched c's lit

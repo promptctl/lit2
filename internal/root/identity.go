@@ -15,9 +15,11 @@ import (
 
 // identityFiles is c's two identity directories on disk, each a port of
 // its own, each file 0600: the principal's key is a secret, and the
-// checkout id is no one else's.
-func identityFiles(c git.Checkout) (shared, private files.Files) {
-	return files.AtMode(command.DirOf(command.PrincipalFile{}, c), identityMode), files.AtMode(command.DirOf(command.IDFile{}, c), identityMode)
+// checkout id is no one else's. Their syncs are kept by u.
+func identityFiles(u *files.Durability) func(git.Checkout) (shared, private files.Files) {
+	return func(c git.Checkout) (shared, private files.Files) {
+		return files.AtMode(command.DirOf(command.PrincipalFile{}, c), identityMode, u), files.AtMode(command.DirOf(command.IDFile{}, c), identityMode, u)
+	}
 }
 
 // identityMode is the mode of both identity files on disk.

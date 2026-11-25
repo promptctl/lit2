@@ -35,8 +35,11 @@ func foundingPath() string { return verbs.LitPath(foundingFile) }
 // It is the pin's own, whatever directory the principal's key is in.
 func pinDir(c git.Checkout) files.Dir { return c.Shared() }
 
-// pinFiles is the files of c's pin on disk, a port of its own.
-func pinFiles(c git.Checkout) files.Files { return files.At(pinDir(c)) }
+// pinFiles is the files of c's pin on disk, a port of its own, its syncs
+// kept by u, which the identity's ports over the same directory share.
+func pinFiles(u *files.Durability) func(git.Checkout) files.Files {
+	return func(c git.Checkout) files.Files { return files.At(pinDir(c), u) }
+}
 
 // pinPath is the pin's path in c, as a failure names it.
 func pinPath(c git.Checkout) string { return pinDir(c).PathOf(pinFile) }

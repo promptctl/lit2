@@ -175,7 +175,7 @@ func TestAnAppendThatPlacesNoLogSaysItsCreatesTemp(t *testing.T) {
 	})
 	seams.Remove = func(*os.Root, string) error { return errRemove }
 	repo := git.NewMemory()
-	s := store.Open(me, store.MemoryPorts(files.At(filestest.Seamed(logs, seams)), repo, repo, storetest.Entropy(4)), store.DefaultSegmentBound)
+	s := store.Open(me, store.MemoryPorts(files.At(filestest.Seamed(logs, seams), files.NewDurability()), repo, repo, storetest.Entropy(4)), store.DefaultSegmentBound)
 	got, ok := s.Append(must[store.Batch](t)(store.NewBatch(store.Record("lost")))).(store.NotAppended)
 	if !ok || !errors.Is(got.Why, errCreate) {
 		t.Fatalf("Append whose create's temp would not sync = %#v; want NotAppended, by that sync", got)
@@ -185,9 +185,9 @@ func TestAnAppendThatPlacesNoLogSaysItsCreatesTemp(t *testing.T) {
 	}
 }
 
-// A log create's temp that no create of its name reaped is in the heads
-// the listing read, never dropped.
-func TestTheHeadsSayTheLogsTemps(t *testing.T) {
+// A log create's temp that no create of its name reaped is said by the
+// store, never dropped.
+func TestTheStoreSaysTheLogsTemps(t *testing.T) {
 	base := t.TempDir()
 	logs := files.DirAt(base, files.MustName("log"))
 	if err := files.NewDurability().Make(logs); err != nil {
@@ -198,9 +198,9 @@ func TestTheHeadsSayTheLogsTemps(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := git.NewMemory()
-	got, err := store.Open(me, store.MemoryPorts(files.At(logs), repo, repo, storetest.Entropy(4)), store.DefaultSegmentBound).Heads()
-	if err != nil || !slices.Equal(got.Temps, []string{temp}) {
-		t.Errorf("Heads().Temps = %v, %v; want the temp %s said", got.Temps, err, temp)
+	got, err := store.Open(me, store.MemoryPorts(files.At(logs, files.NewDurability()), repo, repo, storetest.Entropy(4)), store.DefaultSegmentBound).Temps()
+	if err != nil || !slices.Equal(got, []string{temp}) {
+		t.Errorf("Temps = %v, %v; want the temp %s said", got, err, temp)
 	}
 }
 

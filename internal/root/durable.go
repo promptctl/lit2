@@ -1,7 +1,6 @@
 package root
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -51,11 +50,15 @@ func (w *writes) created(c command.Creation) {
 }
 
 // appended is a, said on the event, and on the outcome when it landed not
-// durable. The error is an append that landed no frame.
+// durable, or landed no frame after its log's name's sync failed. The
+// error is an append that landed no frame.
 func (w *writes) appended(a store.Appending) error {
 	w.stored.Appends = append(w.stored.Appends, a)
 	switch a := a.(type) {
 	case store.NotAppended:
+		if l, unsynced := a.Log.(store.LogNotDurable); unsynced {
+			w.unsynced = append(w.unsynced, logNotDurable{l})
+		}
 		return storeFailure{err: fmt.Errorf("no whole frame was written: %w", a.Why)}
 	case store.AppendedNotDurable:
 		w.unsynced = append(w.unsynced, appendedNotDurable{a})
@@ -84,9 +87,9 @@ func (w *writes) end(o cli.Outcome) cli.Outcome {
 // notDurable is a run whose writes all landed, some of them with a sync
 // that failed: written, but a power loss may undo them. A failed sync is
 // never retried, since after one the kernel may already have dropped what
-// it did not write, and a later sync can succeed falsely; the port that
-// saw it answers it to every later sync in this process, and this run is
-// the one that says it. Each write is kept as the value its call returned,
+// it did not write, and a later sync can succeed falsely; the process's
+// one keeper answers it to every later sync of that directory or file,
+// whichever port asks, and this run is the one that says it. Each write is kept as the value its call returned,
 // and spelled only by Error, so its sync's error stays in the chain
 // `[LAW:types-are-the-program]`.
 type notDurable struct{ writes []unsyncedWrite }
@@ -111,12 +114,19 @@ type createdNotDurable struct {
 // appendedNotDurable is an append whose frame landed not durable.
 type appendedNotDurable struct{ appended store.AppendedNotDurable }
 
+// logNotDurable is a log an append looked up or created, whose name's sync
+// failed, though the append then landed no frame: the log is there, and a
+// power loss may take it.
+type logNotDurable struct{ log store.LogNotDurable }
+
 func (createdNotDurable) unsyncedWrite()  {}
 func (appendedNotDurable) unsyncedWrite() {}
+func (logNotDurable) unsyncedWrite()      {}
 func (c createdNotDurable) why() error    { return c.placed.Why }
 func (a appendedNotDurable) why() error {
 	return a.appended.Why
 }
+func (l logNotDurable) why() error { return l.log.Why }
 
 // spelled is u as the outcome names it.
 func spelled(u unsyncedWrite) (s string) {
@@ -125,6 +135,8 @@ func spelled(u unsyncedWrite) (s string) {
 		s = fmt.Sprintf("%s landed, and that it survives a power loss cannot be confirmed: a sync after it failed: %v", u.path, u.placed.Why)
 	case appendedNotDurable:
 		s = fmt.Sprintf("a frame of %d records landed in the store, and that it survives a power loss cannot be confirmed: a sync after it failed: %v; every later command reads it, so running this command again writes it twice", u.appended.Records, u.appended.Why)
+	case logNotDurable:
+		s = fmt.Sprintf("this checkout's log in the store is there, and that it survives a power loss cannot be confirmed: a sync of its name failed: %v", u.log.Why)
 	}
 	return s
 }
@@ -193,9 +205,9 @@ func (o onceFiles) all() []onceFile { return []onceFile{o.id, o.key, o.pin, o.fo
 
 // leftovers is, for each directory of place's once files, through p's
 // ports, and its store's logs' directory, the temps creates left there, or
-// that it was not scanned, and why. Each port's directory is listed once,
-// however many once files it holds; the logs' temps are those the last
-// Heads of the run listed, read where its listing found them. A create
+// that it was not scanned, and why, each listed once the run's work is
+// done, so a temp a create of the run reaped is not said as left. Each
+// port's directory is listed once, however many once files it holds. A create
 // reaps its name's temps once it is placed, and the once files are
 // created again only when a person reruns init, so a crash's temp is said
 // on every command until then `[LAW:no-silent-failure]`. Outside a
@@ -230,21 +242,19 @@ func beside(fs []onceFile) []command.Leftovers {
 	return ls
 }
 
-// logTemps is the temps of c's store's logs as the run's last Heads
-// listed them, or why no listing of them was read.
+// logTemps is the temps of c's store's logs, listed now, or why they
+// were not: no store opened, or a listing that failed.
 func logTemps(c git.Checkout, stored *command.StoreFacts) (l command.Leftovers) {
 	switch o := stored.Opening.(type) {
 	case command.Opened:
 		dir := o.Store.Logs().Path()
-		if len(stored.Heads) == 0 {
-			return command.TempsNotScanned{Dir: dir, Why: errNoHeads}
+		if temps, err := o.Store.Temps(); err != nil {
+			l = command.TempsNotScanned{Dir: dir, Why: err}
+		} else {
+			l = command.TempsScanned{Dir: dir, Temps: temps}
 		}
-		l = command.TempsScanned{Dir: dir, Temps: stored.Heads[len(stored.Heads)-1].Temps}
 	case command.Unopened:
 		l = command.TempsNotScanned{Dir: store.LogsDir(c).Path(), Why: o.Why}
 	}
 	return l
 }
-
-// errNoHeads is a run none of whose steps listed its store's logs.
-var errNoHeads = errors.New("no step of this command read the store's heads")

@@ -24,7 +24,7 @@ func TestANameIsOneElementOfItsDirectory(t *testing.T) {
 func TestFilesContract(t *testing.T) {
 	t.Run("disk", func(t *testing.T) {
 		filestest.Files(t, func(t *testing.T) files.Files {
-			return files.At(files.DirAt(t.TempDir(), files.MustName("dir")))
+			return files.At(files.DirAt(t.TempDir(), files.MustName("dir")), files.NewDurability())
 		})
 	})
 	t.Run("memory", func(t *testing.T) {

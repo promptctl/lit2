@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
@@ -22,7 +23,7 @@ func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 	c := gittest.Clone(b)
 	setup := gittest.Runner(b)
 	for w := range writers {
-		s := store.Open(store.CheckoutID{byte(w + 1)}, store.DiskPorts(setup, c, storetest.Entropy(byte(w))), store.DefaultSegmentBound)
+		s := store.Open(store.CheckoutID{byte(w + 1)}, store.DiskPorts(setup, c, storetest.Entropy(byte(w)), files.NewDurability()), store.DefaultSegmentBound)
 		for i := range batches {
 			records := make([]store.Record, perBatch)
 			for r := range records {
@@ -43,7 +44,7 @@ func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 		}
 	}
 	open := func() *store.Store {
-		ports := store.WithFiles(store.DiskPorts(gittest.Runner(b), c, storetest.Entropy(0)), filestest.Memory())
+		ports := store.WithFiles(store.DiskPorts(gittest.Runner(b), c, storetest.Entropy(0), files.NewDurability()), filestest.Memory())
 		return store.Open(store.CheckoutID{0xff}, ports, store.DefaultSegmentBound)
 	}
 	heads := func(s *store.Store) store.Heads {
