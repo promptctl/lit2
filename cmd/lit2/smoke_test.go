@@ -50,8 +50,9 @@ func TestMain(m *testing.M) {
 // toolchain is the go command of the toolchain go env reports, and an
 // environment for its build made from nothing: where that toolchain, its
 // module cache and its build cache are, the git it stamps the module's
-// version from, which the binary reads, no go env file, and no cgo, so no
-// GOFLAGS, GOWORK or other variable of the caller's shapes the build.
+// version from, which the binary reads, no go env file, no workspace and
+// no cgo, so no variable of the caller's, and no go.work above the module,
+// shapes the build.
 func toolchain() (string, []string, error) {
 	out, err := exec.Command("go", "env", "-json", "GOROOT", "GOPATH", "GOMODCACHE", "GOCACHE").Output()
 	if err != nil {
@@ -66,7 +67,7 @@ func toolchain() (string, []string, error) {
 		return "", nil, err
 	}
 	return filepath.Join(at.GOROOT, "bin", "go"), append(env, "GOROOT="+at.GOROOT, "GOPATH="+at.GOPATH,
-		"GOMODCACHE="+at.GOMODCACHE, "GOCACHE="+at.GOCACHE, "GOENV=off", "CGO_ENABLED=0"), nil
+		"GOMODCACHE="+at.GOMODCACHE, "GOCACHE="+at.GOCACHE, "GOENV=off", "GOWORK=off", "CGO_ENABLED=0"), nil
 }
 
 // sandbox is where a smoke test runs the built lit2: tmp, outside every
@@ -109,7 +110,7 @@ func TestSmoke(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hostile, ".gitconfig"), []byte("[init]\n\tdefaultBranch = hostile\n[alias]\n\tinit = status\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GIT_DIR", filepath.Join(hostile, ".git"))
+	t.Setenv("GIT_DIR", gittest.GitPath(t, hostile, "."))
 	t.Setenv("HOME", hostile)
 	broken := checkout(t, filepath.Join(tmp, "broken"), "prefix = [unclosed\n")
 	parses := checkout(t, filepath.Join(tmp, "parses"), oneLevel)

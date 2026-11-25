@@ -20,6 +20,19 @@ import (
 // directory or a file of it should be. Each asserts with os, an oracle
 // beside the port, that nothing was read or written at the link's target.
 
+func TestTheZeroDirIsRefused(t *testing.T) {
+	f := files.At(files.Dir{}, files.NewDurability())
+	if err := notPlaced(t, f.CreateOnce(a, []byte("x"))); !errors.Is(err, files.ErrNoDir) {
+		t.Errorf("CreateOnce failed with %v; want ErrNoDir", err)
+	}
+	if l, err := f.List(); !errors.Is(err, files.ErrNoDir) {
+		t.Errorf("List = %v, %v; want ErrNoDir", l, err)
+	}
+	if err := files.NewDurability().Make(files.Dir{}); !errors.Is(err, files.ErrNoDir) {
+		t.Errorf("Make failed with %v; want ErrNoDir", err)
+	}
+}
+
 // holds fails t unless the file at path holds want.
 func holds(t *testing.T, path, want string) {
 	t.Helper()
@@ -336,11 +349,11 @@ func TestADirIsCheckedAndMadeByTheStep(t *testing.T) {
 	base, outside := t.TempDir(), t.TempDir()
 	symlink(t, outside, filepath.Join(base, dir.String()))
 	linked := files.DirAt(base, dir).Sub(a)
-	notTheDirectory(t, "Check", linked.Check())
+	notTheDirectory(t, "Check", files.Check(linked))
 	notTheDirectory(t, "Make", files.NewDurability().Make(linked))
 	empty(t, outside)
 	missing := files.DirAt(t.TempDir(), a).Sub(dir)
-	if err := missing.Check(); !errors.Is(err, fs.ErrNotExist) {
+	if err := files.Check(missing); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Check of a missing Dir failed with %v; want fs.ErrNotExist", err)
 	}
 	if _, err := os.Lstat(missing.Path()); !errors.Is(err, fs.ErrNotExist) {
@@ -349,7 +362,7 @@ func TestADirIsCheckedAndMadeByTheStep(t *testing.T) {
 	if err := files.NewDurability().Make(missing); err != nil {
 		t.Fatal(err)
 	}
-	if err := missing.Check(); err != nil {
+	if err := files.Check(missing); err != nil {
 		t.Errorf("Check of the Dir Make made failed with %v", err)
 	}
 }

@@ -100,7 +100,8 @@ func TestAHeadNamingAMissingObjectIsAnError(t *testing.T) {
 		t.Fatalf("AtHead over a whole HEAD = %#v, %v", got, err)
 	}
 	const missing = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-	if err := os.WriteFile(filepath.Join(repo.Dir, ".git", "refs", "heads", "main"), []byte(missing+"\n"), 0o644); err != nil {
+	head := gittest.LooseRef(gittest.GitPath(t, repo.Dir, "."), "refs/heads/main")
+	if err := os.WriteFile(head, []byte(missing+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := repo.AtHead("f"); !errors.Is(err, git.ErrHeadMissing) || !strings.Contains(err.Error(), missing) {
@@ -119,7 +120,7 @@ func TestAGraftHidesNoBlobFromTheHistory(t *testing.T) {
 	repo.Commit(t, map[string][]byte{"f": []byte("two\n")})
 	head := gittest.Git(t, repo.Dir, "rev-parse", "HEAD")
 	gittest.Git(t, repo.Dir, "replace", "--graft", head)
-	if err := os.WriteFile(filepath.Join(repo.Dir, ".git", "info", "grafts"), []byte(head+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(gittest.GitPath(t, repo.Dir, "info/grafts"), []byte(head+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if ever, err := repo.EverAt("f", git.HashBlob(git.SHA1, []byte("one\n"))); err != nil || !ever {

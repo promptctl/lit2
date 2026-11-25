@@ -62,14 +62,13 @@ func GitIn(t testing.TB, dir, stdin string, args ...string) string {
 
 func ask(t testing.TB, dir, stdin string, args ...string) (string, error) {
 	t.Helper()
-	bin, err := exec.LookPath("git")
+	bin, env, err := found()
 	if err != nil {
-		t.Fatalf("these tests need the git binary as their oracle: %v", err)
+		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Dir, cmd.Stdin = dir, strings.NewReader(stdin)
-	cmd.Env = []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t"}
+	cmd.Env = append(env, "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s in %s: %w\n%s", strings.Join(args, " "), dir, err, out)
@@ -91,11 +90,18 @@ func Env(t testing.TB) []string {
 
 // Environ is Env for a caller with no test to fail, as TestMain is.
 func Environ() ([]string, error) {
+	_, env, err := found()
+	return env, err
+}
+
+// found is the git binary on PATH and the environment it runs under, for
+// the oracle and a test's lit2 alike: one recipe `[LAW:one-source-of-truth]`.
+func found() (string, []string, error) {
 	bin, err := exec.LookPath("git")
 	if err != nil {
-		return nil, fmt.Errorf("these tests need the git binary: %w", err)
+		return "", nil, fmt.Errorf("these tests need the git binary: %w", err)
 	}
-	return []string{"PATH=" + filepath.Dir(bin), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}, nil
+	return bin, []string{"PATH=" + filepath.Dir(bin), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}, nil
 }
 
 // Runner is lit2's git as a test runs it.
@@ -142,6 +148,14 @@ func NoCheckout(t testing.TB) (dir string, g *git.Git) {
 		t.Fatal(err)
 	}
 	return dir, Runner(t, Ceiling(dir))
+}
+
+// GitPath is the absolute path git keeps path at in the repository of
+// dir, as git resolves it, so a test names git's layout by git's own
+// answer.
+func GitPath(t testing.TB, dir, path string) string {
+	t.Helper()
+	return Git(t, dir, "rev-parse", "--path-format=absolute", "--git-path", path)
 }
 
 // Ceiling is the variable that stops git's walk up from dir at the

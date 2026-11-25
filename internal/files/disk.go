@@ -103,8 +103,8 @@ func (u *Durability) syncDir(d Dir, r *os.Root, path string) (err error) {
 
 // walk is d's directory, opened from its base, each element entered in
 // turn by the step. A base or an element missing is fs.ErrNotExist.
-func (d Dir) walk() (*os.Root, error) {
-	return d.enter(func(*os.Root, string, string) error { return nil })
+func walk(d Dir) (*os.Root, error) {
+	return enter(d, func(*os.Root, string, string) error { return nil })
 }
 
 // walking is what walking a Dir to create in it did: failed, or reached
@@ -136,9 +136,9 @@ func (walkedUnsynced) walking() {}
 // the walk goes on and says it. The base is never made: it is a git dir
 // or a work tree, git's, which exists before lit2 runs, and its parent is
 // outside any root, so an entry made for it could not be synced.
-func (d Dir) walkMaking(u *Durability) walking {
+func walkMaking(d Dir, u *Durability) walking {
 	var unsynced error
-	r, err := d.enter(func(parent *os.Root, name, parentPath string) error {
+	r, err := enter(d, func(parent *os.Root, name, parentPath string) error {
 		if err := parent.Mkdir(name, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 			return err
 		}
@@ -156,7 +156,10 @@ func (d Dir) walkMaking(u *Durability) walking {
 
 // enter is d's directory, opened from its base, each element entered in
 // turn by the step once made has run on it in its parent, at parentPath.
-func (d Dir) enter(made func(parent *os.Root, name, parentPath string) error) (*os.Root, error) {
+// A Dir is a name and holds no way onto the disk; these functions of the
+// disk side open it `[LAW:effects-at-boundaries]`, so making a Dir reaches
+// nothing.
+func enter(d Dir, made func(parent *os.Root, name, parentPath string) error) (*os.Root, error) {
 	if err := d.valid(); err != nil {
 		return nil, err
 	}
@@ -190,8 +193,8 @@ func (d Dir) enter(made func(parent *os.Root, name, parentPath string) error) (*
 // git's repository is renamed into place, survives a power loss. All
 // three are for a user handed a path, as git is, which checks the
 // directory, then names it by its path.
-func (d Dir) Check() error {
-	r, err := d.walk()
+func Check(d Dir) error {
+	r, err := walk(d)
 	if err != nil {
 		return err
 	}
@@ -199,8 +202,8 @@ func (d Dir) Check() error {
 }
 
 func (u *Durability) Make(d Dir) error {
-	walk := d.walkMaking(u)
-	switch w := walk.(type) {
+	got := walkMaking(d, u)
+	switch w := got.(type) {
 	case walkFailed:
 		return w.why
 	case walked:
@@ -208,11 +211,11 @@ func (u *Durability) Make(d Dir) error {
 	case walkedUnsynced:
 		return errors.Join(w.why, w.r.Close())
 	}
-	panic(fmt.Sprintf("files: %T is no walking", walk))
+	panic(fmt.Sprintf("files: %T is no walking", got))
 }
 
 func (u *Durability) Sync(d Dir) error {
-	r, err := d.walk()
+	r, err := walk(d)
 	if err != nil {
 		return err
 	}
@@ -322,7 +325,7 @@ func (o Disk) open(n Name, flag int) (*os.Root, *os.File, error) {
 	if err := n.valid(); err != nil {
 		return nil, nil, err
 	}
-	r, err := o.dir.walk()
+	r, err := walk(o.dir)
 	if err != nil {
 		return nil, nil, missing(n, err)
 	}
@@ -415,7 +418,7 @@ func (o Disk) CreateOnce(n Name, b []byte) Placing {
 	var r *os.Root
 	// a sync on the way that failed, which stops no create
 	var unsynced error
-	switch w := o.dir.walkMaking(o.durability).(type) {
+	switch w := walkMaking(o.dir, o.durability).(type) {
 	case walkFailed:
 		return NotPlaced{Why: w.why}
 	case walked:
@@ -697,7 +700,7 @@ func (o Disk) List() (Listing, error) {
 // read is the directory's entries, classified; a missing directory holds
 // none, since nothing is created by a read.
 func (o Disk) read() (c classified, err error) {
-	r, err := o.dir.walk()
+	r, err := walk(o.dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return classified{}, nil
 	}

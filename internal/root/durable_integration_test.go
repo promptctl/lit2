@@ -23,7 +23,7 @@ import (
 // store's logs. Never relying on git to show them.
 func TestLeftoversSaysTheCheckoutsTemps(t *testing.T) {
 	dir := checkout(t, minted)
-	c := git.Checkout{WorkTree: dir, GitDir: filepath.Join(dir, ".git"), CommonDir: filepath.Join(dir, ".git")}
+	c := located(t, dir)
 	u := files.NewDurability()
 	disk := Process{IdentityFiles: identityFiles(u), Pin: pinFiles(u), WorkTree: workTree(u)}
 	unminted := command.Unopened{Why: errors.New("unminted")}

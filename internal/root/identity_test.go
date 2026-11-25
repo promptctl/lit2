@@ -10,6 +10,8 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
+	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/git/gittest"
 )
 
 // clone is one clone's shared identity dir and two worktrees' private
@@ -27,6 +29,32 @@ func inMemory(*testing.T) clone {
 func entropy(seed byte) *rand.ChaCha8 { return rand.NewChaCha8([32]byte{'i', 'd', seed}) }
 
 func TestIdentity(t *testing.T) { identityContract(t, inMemory) }
+
+// TestIdentityOnDisk holds the disk adapter to the identity's behavior
+// over the twin.
+func TestIdentityOnDisk(t *testing.T) { identityContract(t, onDisk) }
+
+// worktrees is a main worktree and a linked one of one clone, made by
+// git and located as lit2 locates them: a create never makes the
+// directory its Dir is based in.
+func worktrees(t *testing.T) [2]git.Checkout {
+	main := gittest.Clone(t)
+	linked := filepath.Join(gittest.Physical(t), "linked")
+	gittest.Git(t, main.WorkTree, "worktree", "add", "-q", linked)
+	second, err := gittest.Runner(t).Locate(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return [2]git.Checkout{main, second}
+}
+
+func onDisk(t *testing.T) clone {
+	cs := worktrees(t)
+	u := files.NewDurability()
+	shared, a := identityFiles(u)(cs[0])
+	_, b := identityFiles(u)(cs[1])
+	return clone{shared: shared, worktree: [2]files.Files{a, b}}
+}
 
 func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 	t.Run("two worktrees minting at once sign with one key", func(t *testing.T) {

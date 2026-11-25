@@ -25,7 +25,7 @@ func checkout(t *testing.T, files map[command.File]string) string {
 	t.Helper()
 	dir := gittest.Physical(t)
 	gittest.Git(t, dir, "init", "-q")
-	c := git.Checkout{WorkTree: dir, GitDir: filepath.Join(dir, ".git"), CommonDir: filepath.Join(dir, ".git")}
+	c := located(t, dir)
 	for f, text := range files {
 		path := command.PathOf(f, c)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -36,6 +36,16 @@ func checkout(t *testing.T, files map[command.File]string) string {
 		}
 	}
 	return dir
+}
+
+// located is the checkout at dir, as lit2 locates it.
+func located(t *testing.T, dir string) git.Checkout {
+	t.Helper()
+	c, err := gittest.Runner(t).Locate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 func identityAt(t *testing.T, dir string) command.Identity {

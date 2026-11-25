@@ -8,14 +8,15 @@ depend on which, and the decisions the design documents left to the layout.
 ```
 CGO_ENABLED=0 go build ./cmd/lit2     # writes ./lit2
 go test ./...                         # the fast loop: unit tests, and each port's contract over its fake and its adapter
-go test -tags integration ./...       # and every test reaching the disk, git or a process outside a contract's factory
+go test -tags integration ./...       # and every test reaching the disk, git or a process outside a contract suite
 go tool golangci-lint run             # lints the integration tests too
 ```
 
 ## Units, downhill
 
 `cmd/lit2` is the program and imports only `root`; its test, which drives
-the built binary, is not the program. Every other unit is a
+the built binary, imports besides `root` only a test kit, a package of the
+module the program does not build. Every other unit is a
 directory under `internal/`, and a unit's subdirectories belong to it. A unit
 imports only units below it in this block `[LAW:one-way-deps]`; `root` and
 `command` sit beside the stack of architecture.md §6, importing from it with
@@ -124,11 +125,15 @@ The decisions the layout needed and the design documents did not make.
   `events` for the signature check; the TOML parser and `x/mod` in
   `config`. Tests are
   the standard `testing` package. A test file that reaches the real disk,
-  git or another process carries `//go:build integration`, but for a
-  function literal it gives a port's contract suite, a function of a
-  `*test` package, as the factory of the real adapter: the suite holds the
-  fake and the adapter to one behavior side by side, so the fast loop keeps
-  every fake honest. `internal/architecture` is the rule's one enforcer.
+  git or another process carries `//go:build integration`, but for a call
+  of a port's contract suite: a function of a test kit or of the test's
+  own package that takes the test and the port's factory, a function of a
+  test to one value. The suite holds the fake and the real adapter to one
+  behavior side by side, so the fast loop keeps every fake honest. Reach
+  is derived: the standard library's calls that write, open a root or
+  start a process, a test's `TempDir`, and every function or type of the
+  module that uses one. `internal/architecture` is the rule's one
+  enforcer.
   Lint is golangci-lint
   v2 as a `tool` directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums

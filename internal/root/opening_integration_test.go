@@ -5,7 +5,6 @@ package root
 import (
 	"crypto/rand"
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -25,7 +24,7 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 	} {
 		dir := checkout(t, minted)
 		if config != "" {
-			if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte(config), 0o600); err != nil {
+			if err := os.WriteFile(gittest.GitPath(t, dir, "config"), []byte(config), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -60,7 +59,7 @@ func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
 		"an unminted one": place(gittest.Runner(t), unminted, files.NewDurability()),
 		"a config that does not parse": place(gittest.Runner(t), func() string {
 			d := checkout(t, minted)
-			if err := os.WriteFile(filepath.Join(d, ".git", "config"), []byte("[core\n"), 0o600); err != nil {
+			if err := os.WriteFile(gittest.GitPath(t, d, "config"), []byte("[core\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			return d

@@ -125,11 +125,12 @@ func TestLocateWithNoGitIsNotFoundAndARefusalIsGits(t *testing.T) {
 	gittest.Git(t, root, "init", "-q", "-b", "main", main)
 	gittest.Git(t, main, "commit", "-q", "--allow-empty", "-m", "first")
 	gittest.Git(t, main, "worktree", "add", "-q", linked)
-	if _, err := gittest.Runner(t).Locate(linked); err != nil {
+	live, err := gittest.Runner(t).Locate(linked)
+	if err != nil {
 		t.Fatalf("control: Locate in a live linked worktree failed with %v", err)
 	}
 	// pruned: its .git names a git dir that is gone
-	gone := filepath.Join(main, ".git", "worktrees", "linked")
+	gone := live.GitDir
 	if err := os.RemoveAll(gone); err != nil {
 		t.Fatal(err)
 	}
@@ -145,11 +146,15 @@ func TestLitsRepositoryIsCreatedPinned(t *testing.T) {
 	if _, err := gittest.Put(repositoryAt(gittest.Runner(t), dir), nil); err != nil {
 		t.Fatal(err)
 	}
-	for k, want := range map[string]string{"core.fsync": "objects,reference", "core.fsyncMethod": "fsync", "gc.auto": "0", "maintenance.auto": "false", "extensions.objectFormat": "", "core.repositoryFormatVersion": "0"} {
-		got, _ := gittest.Ask(t, dir, "config", "--file", "config", k)
-		if strings.TrimSpace(got) != want {
-			t.Errorf("lit's repository has %s = %q; want %q", k, strings.TrimSpace(got), want)
+	for k, want := range map[string]string{"core.fsync": "objects,reference", "core.fsyncMethod": "fsync", "gc.auto": "0", "maintenance.auto": "false", "core.repositoryFormatVersion": "0"} {
+		if got := strings.TrimSpace(gittest.Git(t, dir, "config", "--file", "config", k)); got != want {
+			t.Errorf("lit's repository has %s = %q; want %q", k, got, want)
 		}
+	}
+	// git config exits 1 for a key the file does not set; any other status
+	// is a failure
+	if status := gittest.Exit(t, dir, "config", "--file", "config", "extensions.objectFormat"); status != 1 {
+		t.Errorf("git config extensions.objectFormat in lit's repository exits %d; want 1, unset, so the format is SHA-1", status)
 	}
 	if format := strings.TrimSpace(gittest.Git(t, dir, "rev-parse", "--show-ref-format")); format != "files" {
 		t.Errorf("lit's repository keeps its refs as %s; want files", format)
@@ -202,8 +207,7 @@ func TestAZeroGitIsAMissingOne(t *testing.T) {
 // stderr. A read of lit's repository is go-git's, in process, and spawns
 // nothing.
 func TestEverySpawnIsRecorded(t *testing.T) {
-	g := gittest.Runner(t)
-	dir := gittest.Physical(t)
+	dir, g := gittest.NoCheckout(t)
 	if _, err := g.Locate(dir); err != (git.NotFound{Dir: dir}) {
 		t.Fatalf("Locate outside a repository = %v; want NotFound", err)
 	}

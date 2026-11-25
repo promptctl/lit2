@@ -42,19 +42,6 @@ func TestAFixedNameThatIsNoNamePanicsWithErrNotAName(t *testing.T) {
 	panics.With(t, files.ErrNotAName, func() { files.MustName("a/b") })
 }
 
-func TestTheZeroDirIsRefused(t *testing.T) {
-	f := files.At(files.Dir{}, files.NewDurability())
-	if err := notPlaced(t, f.CreateOnce(a, []byte("x"))); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("CreateOnce failed with %v; want ErrNoDir", err)
-	}
-	if l, err := f.List(); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("List = %v, %v; want ErrNoDir", l, err)
-	}
-	if err := files.NewDurability().Make(files.Dir{}); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("Make failed with %v; want ErrNoDir", err)
-	}
-}
-
 // A base that is not absolute is a bug: no Dir is made from it.
 func TestADirFromNoAbsoluteBaseIsABug(t *testing.T) {
 	for _, base := range []string{"", "relative"} {

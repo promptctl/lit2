@@ -184,7 +184,7 @@ func TestAPublicationOfNoSegmentIsUnreadableAndResealed(t *testing.T) {
 // record, the frames, and the log's id.
 func appended(t *testing.T, me CheckoutID, records ...string) (*Store, Ports, [][]byte, LogID) {
 	t.Helper()
-	p := MemoryPorts(filestest.Memory(), bytes.NewReader(make([]byte, 64)))
+	p := MemoryRepositoryPorts(filestest.Memory(), bytes.NewReader(make([]byte, 64)))
 	s := Open(me, p, DefaultSegmentBound)
 	var frames [][]byte
 	for _, r := range records {

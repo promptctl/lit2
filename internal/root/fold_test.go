@@ -80,7 +80,7 @@ func TestEveryOpenFoldsEveryRecord(t *testing.T) {
 func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 	twin := NewFreshTwin()
 	logs := filestest.Memory()
-	ports := store.MemoryPorts(logs, rand.NewChaCha8([32]byte{5}))
+	ports := store.MemoryRepositoryPorts(logs, rand.NewChaCha8([32]byte{5}))
 	opened := command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound)}
 	twin.Process.Store, twin.Process.Open = opened, func(git.Checkout, command.Minted) command.Opening { return opened }
 	if status := Run(twin.Process, []string{"admin", "init"}); status != 0 {

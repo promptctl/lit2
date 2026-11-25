@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/verbs"
 )
 
@@ -29,9 +30,9 @@ func initOnDisk(t *testing.T, c git.Checkout) (int, command.Event) {
 
 // treeOnDisk is a checkout whose work tree is a fresh directory.
 func treeOnDisk(t *testing.T) git.Checkout {
-	tree := t.TempDir()
-	dotGit := filepath.Join(tree, ".git")
-	return git.Checkout{WorkTree: tree, GitDir: dotGit, CommonDir: dotGit, Format: git.SHA1}
+	tree := gittest.Physical(t)
+	gittest.Git(t, tree, "init", "-q")
+	return located(t, tree)
 }
 
 // A work tree's .lit that is a symlink is refused wherever it points, and

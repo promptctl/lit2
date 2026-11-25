@@ -14,7 +14,7 @@ import (
 )
 
 func memoryStore() *store.Store {
-	return store.Open(store.CheckoutID{9}, store.MemoryPorts(filestest.Memory(), storetest.Entropy(1)), store.DefaultSegmentBound)
+	return store.Open(store.CheckoutID{9}, store.MemoryRepositoryPorts(filestest.Memory(), storetest.Entropy(1)), store.DefaultSegmentBound)
 }
 
 func storeBlockOf(t *testing.T, f StoreFacts) map[string]any {

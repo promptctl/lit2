@@ -22,7 +22,7 @@ var (
 
 // over is a store of me whose logs are a twin answering faults.
 func over(faults filestest.Faults) *store.Store {
-	return store.Open(me, store.MemoryPorts(filestest.NotDurable(filestest.Memory(), faults), storetest.Entropy(3)), store.DefaultSegmentBound)
+	return store.Open(me, store.MemoryRepositoryPorts(filestest.NotDurable(filestest.Memory(), faults), storetest.Entropy(3)), store.DefaultSegmentBound)
 }
 
 // notDurable is a, failing t unless it is AppendedNotDurable by want's
@@ -127,7 +127,7 @@ func (b *broken) Append(n files.Name, data []byte) files.Appending {
 func TestAFailedSyncOfTheLogsNameIsInAnAppendThatLandedNothing(t *testing.T) {
 	bt := must[store.Batch](t)(store.NewBatch(store.Record("lost")))
 	open := func(f files.Files) *store.Store {
-		return store.Open(me, store.MemoryPorts(f, storetest.Entropy(3)), store.DefaultSegmentBound)
+		return store.Open(me, store.MemoryRepositoryPorts(f, storetest.Entropy(3)), store.DefaultSegmentBound)
 	}
 	notAppended := func(t *testing.T, a store.Appending, want error) store.NotAppended {
 		t.Helper()

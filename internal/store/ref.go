@@ -68,7 +68,7 @@ func ParseRef(n git.RefName) (Ref, error) {
 			return InboxRef{Inbox: id}, nil
 		}
 	}
-	return nil, fmt.Errorf("%s is neither refs/lit/log/<checkout-id> nor refs/lit/inbox/<inbox-id>: %w", n, errNotARef)
+	return nil, fmt.Errorf("%s is neither %s<checkout-id> nor %s<inbox-id>: %w", n, writerNS, inboxNS, errNotARef)
 }
 
 // token reads a 128-bit token in its one spelling, 32 lowercase hex digits.

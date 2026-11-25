@@ -73,7 +73,7 @@ func (d *onDisk) git(dir string, stdin []byte, args ...string) (string, error) {
 // named by its path; this is the one place every use of it starts
 // `[LAW:single-enforcer]`.
 func (d *onDisk) path() (string, error) {
-	return d.at.Path(), d.at.Check()
+	return d.at.Path(), files.Check(d.at)
 }
 
 // create makes the repository, once, as its own step: git init in a

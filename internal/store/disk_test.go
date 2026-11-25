@@ -31,9 +31,10 @@ var (
 )
 
 // Each worktree of a clone builds its own DiskPorts from its own
-// checkout, and both land on the clone's one store: what no store over one
-// set of ports can show.
-func TestTwoWorktreesOfOneCloneAppendToOneStore(t *testing.T) {
+// checkout, and both land on the clone's one store, each writer's log
+// beside the other's and its publication under its own ref of the one
+// repository: what no store over one set of ports can show.
+func TestTwoWorktreesOfOneClonePublishToOneRepositoryEachUnderItsOwnRef(t *testing.T) {
 	main := gittest.Clone(t)
 	linked := filepath.Join(filepath.Dir(main.WorkTree), "linked")
 	gittest.Git(t, main.WorkTree, "worktree", "add", "-q", linked)
@@ -44,21 +45,35 @@ func TestTwoWorktreesOfOneCloneAppendToOneStore(t *testing.T) {
 	if second.CommonDir != main.CommonDir || second.GitDir == main.GitDir {
 		t.Fatalf("the linked worktree is %+v; want the main's common dir and its own git dir", second)
 	}
+	written := map[store.CheckoutID][]string{}
+	var stores []*store.Store
 	for i, w := range []struct {
 		id store.CheckoutID
 		at git.Checkout
 	}{{ida, main}, {idb, second}} {
 		s := store.Open(w.id, store.DiskPorts(gittest.Runner(t), w.at, storetest.Entropy(byte(i+1)), files.NewDurability()), store.DefaultSegmentBound)
-		storetest.AppendAll(t, s, store.BatchOf(t, "from "+w.id.String()))
+		bs := numbered(t, 3-i, "from "+w.id.String())
+		storetest.AppendAll(t, s, bs...)
+		publishOwn(t, s)
+		written[w.id], stores = texts(bs...), append(stores, s)
 	}
-	reader := store.Open(store.CheckoutID{0xc}, store.DiskPorts(gittest.Runner(t), main, storetest.Entropy(3), files.NewDurability()), store.DefaultSegmentBound)
-	if h := headsOf(t, reader); h.LogsRead != 2 || len(h.Streams) != 2 {
-		t.Fatalf("the main checkout's store holds %+v; want both worktrees' logs", h)
+	// a store of the clone with no log of its own reads each stream
+	// through its ref
+	refsOnly := store.Open(store.CheckoutID{0xc}, store.WithFiles(store.DiskPorts(gittest.Runner(t), main, storetest.Entropy(3), files.NewDurability()), filestest.Memory()), store.DefaultSegmentBound)
+	if h := headsOf(t, refsOnly); h.RefsRead != 2 || h.LogsRead != 0 {
+		t.Errorf("a store with no logs holds %+v; want both worktrees' refs", h)
 	}
-	for _, id := range []store.CheckoutID{ida, idb} {
-		if got := store.RecordsOf(whole(t, reader, store.WriterRef{Checkout: id})); !slices.Equal(got, []string{"from " + id.String()}) {
-			t.Errorf("%s's stream reads %v; want its one record", id, got)
+	for _, s := range append(stores, refsOnly) {
+		for id, want := range written {
+			if got := store.RecordsOf(whole(t, s, store.WriterRef{Checkout: id})); !slices.Equal(got, want) {
+				t.Errorf("%s's stream reads %v; want %v", id, got, want)
+			}
 		}
+	}
+	refs := strings.Fields(gittest.Git(t, store.RepositoryDir(main), "for-each-ref", "--format=%(refname)", string(store.Namespace)))
+	want := []string{string(store.WriterRef{Checkout: ida}.Name()), string(store.WriterRef{Checkout: idb}.Name())}
+	if !slices.Equal(refs, want) {
+		t.Errorf("lit's repository holds the refs %v; want one per worktree, %v", refs, want)
 	}
 }
 

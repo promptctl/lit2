@@ -34,7 +34,9 @@ func cloneOf(p store.Ports) clone {
 }
 
 // fresh is a fresh clone's store in process, empty.
-func fresh() clone { return cloneOf(store.MemoryPorts(filestest.Memory(), storetest.Entropy(1))) }
+func fresh() clone {
+	return cloneOf(store.MemoryRepositoryPorts(filestest.Memory(), storetest.Entropy(1)))
+}
 
 // fetched is a fresh clone's store that fetched c's lit repository and
 // holds none of c's logs.
@@ -388,15 +390,16 @@ func isAppended(a store.Appending) bool {
 	return ok
 }
 
-// meeting is logs whose first reads of a log that is not there, one per
-// racing append, wait until all have read, so every racer finds no log
-// and creates one: the race forced, never left to the scheduler
+// meeting is logs whose reads of the racing log while it is not there,
+// one per racing append, wait until all have read, so every racer finds
+// no log and creates one: the race forced, never left to the scheduler
 // `[LAW:no-ambient-temporal-coupling]`. A racer that waits past meetBy,
 // a bound on a failure and no part of the order, fails the test, saying
 // how many of the racers read, and goes on.
 type meeting struct {
 	files.Files
 	t       *testing.T
+	log     files.Name
 	racers  int32
 	arrived atomic.Int32
 	met     chan struct{}
@@ -404,13 +407,13 @@ type meeting struct {
 
 const meetBy = 10 * time.Second
 
-func newMeeting(t *testing.T, racers int) *meeting {
-	return &meeting{Files: filestest.Memory(), t: t, racers: int32(racers), met: make(chan struct{})}
+func newMeeting(t *testing.T, log files.Name, racers int) *meeting {
+	return &meeting{Files: filestest.Memory(), t: t, log: log, racers: int32(racers), met: make(chan struct{})}
 }
 
 func (m *meeting) ReadAt(n files.Name, off, size uint64) ([]byte, error) {
 	b, err := m.Files.ReadAt(n, off, size)
-	if !errors.As(err, new(files.NotFound)) {
+	if n != m.log || !errors.As(err, new(files.NotFound)) {
 		return b, err
 	}
 	switch arrived := m.arrived.Add(1); {
@@ -432,13 +435,24 @@ func TestFirstAppendsRacingKeepOneLog(t *testing.T) {
 	for i, r := range records {
 		batches[i] = store.BatchOf(t, r)
 	}
-	p := store.MemoryPorts(newMeeting(t, len(records)), storetest.Entropy(1))
+	meet := newMeeting(t, store.LogName(a), len(records))
+	p := store.MemoryRepositoryPorts(meet, storetest.Entropy(1))
 	got := make([]store.Appending, len(records))
 	var wg sync.WaitGroup
 	for i, bt := range batches {
 		wg.Go(func() { got[i] = store.Open(a, p, store.DefaultSegmentBound).Append(bt) })
 	}
 	wg.Wait()
+	// the outcome below says nothing of the race unless the racers met
+	met := false
+	select {
+	case <-meet.met:
+		met = true
+	default:
+	}
+	if arrived := meet.arrived.Load(); arrived != meet.racers || !met {
+		t.Fatalf("%d of the %d racing appends read %s while it was not there, and they met: %v; want each, met, so every one raced to create it", arrived, meet.racers, meet.log, met)
+	}
 	s := store.Open(a, p, store.DefaultSegmentBound)
 	h := headsOf(t, s)
 	if len(h.Streams) != 1 {
@@ -450,6 +464,7 @@ func TestFirstAppendsRacingKeepOneLog(t *testing.T) {
 		created, isCreate := appended.Log.(store.LogCreated)
 		if !ok || !isCreate || appended.Until.Log != h.Streams[0].Until.Log {
 			t.Errorf("append %d = %#v; want Appended, by a create, at the log the header names, %v", i, g, h.Streams[0].Until.Log)
+			continue
 		}
 		made[created.Made]++
 	}

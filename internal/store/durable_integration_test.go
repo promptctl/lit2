@@ -30,7 +30,7 @@ func TestAnAppendThatPlacesNoLogSaysItsCreatesTemp(t *testing.T) {
 		return nil
 	})
 	seams.Remove = func(*os.Root, string) error { return errRemove }
-	s := store.Open(me, store.MemoryPorts(files.At(filestest.Seamed(logs, seams), files.NewDurability()), storetest.Entropy(4)), store.DefaultSegmentBound)
+	s := store.Open(me, store.MemoryRepositoryPorts(files.At(filestest.Seamed(logs, seams), files.NewDurability()), storetest.Entropy(4)), store.DefaultSegmentBound)
 	appending := s.Append(must[store.Batch](t)(store.NewBatch(store.Record("lost"))))
 	got, ok := appending.(store.NotAppended)
 	if !ok || !errors.Is(got.Why, errCreate) {
@@ -53,7 +53,7 @@ func TestTheStoreSaysTheLogsTemps(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(logs.Path(), temp), []byte("a crash's"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.Open(me, store.MemoryPorts(files.At(logs, files.NewDurability()), storetest.Entropy(4)), store.DefaultSegmentBound).Temps()
+	got, err := store.Open(me, store.MemoryRepositoryPorts(files.At(logs, files.NewDurability()), storetest.Entropy(4)), store.DefaultSegmentBound).Temps()
 	if err != nil || !slices.Equal(got, []string{temp}) {
 		t.Errorf("Temps = %v, %v; want the temp %s said", got, err, temp)
 	}
