@@ -25,50 +25,46 @@ func foldEnv(workers int) fold.Env {
 }
 
 // opened is a run whose store opened and folded, §5 steps 1 and 3: the
-// store, the checkout it is minted for, and the state.
+// writer and its store, the founding, and the state.
 type opened struct {
 	body
-	store    command.Opened
+	writer
 	founding fold.Founding
-	checkout git.Checkout
-	id       command.Minted
 	folded   fold.Folded
 }
 
-// open opens the run's store and folds it, or fails as an environment that
-// has none, or whose store no enrollment founded: only admin init, which
-// founds it, reads such a store.
+// open folds the run's store, or fails as an environment that has none,
+// or whose store no enrollment founded: only admin init, which founds it,
+// reads such a store.
 func (r body) open() (opened, error) {
-	switch o := r.p.Store.(type) {
-	case command.Opened:
-		in := r.p.Place.(command.InCheckout) // a store opens only for a minted checkout
-		op, err := r.openAs(o, in.Checkout, in.Identity.(command.Minted))
+	switch at := r.at.(type) {
+	case held:
+		op, err := r.openAs(at.writer)
 		if err != nil {
 			return opened{}, err
 		}
-		if err := unjudged(op.folded.State.Policy(), in.Checkout); err != nil {
+		if err := unjudged(op.folded.State.Policy(), at.checkout); err != nil {
 			return opened{}, err
 		}
 		return op, nil
-	case command.Unopened:
-		return opened{}, storeFailure{err: o.Why}
+	case noStore:
+		return opened{}, storeFailure{err: at.why}
 	}
-	panic(fmt.Sprintf("root: %T is not an Opening", r.p.Store))
+	panic(fmt.Sprintf("root: %T is not a situation", r.at))
 }
 
-// openAs folds o, the store of c minted as id, seeded with the founding
-// its clone pinned.
-func (r body) openAs(o command.Opened, c git.Checkout, id command.Minted) (opened, error) {
-	founding, err := pinned(r.p.Pin(c))
+// openAs folds w's store, seeded with the founding its clone pinned.
+func (r body) openAs(w writer) (opened, error) {
+	founding, err := pinned(r.p.Pin(w.checkout))
 	if err != nil {
 		return opened{}, err
 	}
-	folded, err := replay(r.p.Fold, founding, o.Store, r.rec.Stored)
+	folded, err := replay(r.p.Fold, founding, w.store, r.rec.Stored)
 	if err != nil {
 		return opened{}, storeFailure{err: err}
 	}
 	r.rec.Policy.Founding, r.rec.Policy.Under = founding, folded.State.Policy()
-	return opened{body: r, store: o, founding: founding, checkout: c, id: id, folded: folded}, nil
+	return opened{body: r, writer: w, founding: founding, folded: folded}, nil
 }
 
 // stored runs do on the run's store, opened and folded.
@@ -112,7 +108,7 @@ func (o opened) mint(drafts []events.Draft, ref git.ObjectID) (events.Minted, er
 // which every later read sees, so the caller goes on and says what it
 // wrote, and w then ends the run notDurable.
 func (o opened) append(m events.Minted) error {
-	return o.w.appended(o.store.Store.Append(m.Batch))
+	return o.w.appended(o.store.Append(m.Batch))
 }
 
 // storeFailure is a verb that has no store to read, or whose store failed

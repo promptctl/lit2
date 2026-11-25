@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/store/storetest"
 )
 
 // An append that places no log says what its create left.
@@ -51,7 +52,7 @@ func TestTheStoreSaysTheLogsTemps(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(logs.Path(), temp), []byte("a crash's"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := openOver(files.At(logs, files.NewDurability())).Temps()
+	got, err := store.RepositoryInMemory(files.At(logs, files.NewDurability()), storetest.Entropy(3)).Temps()
 	if err != nil || !slices.Equal(got, []string{temp}) {
 		t.Errorf("Temps = %v, %v; want the temp %s said", got, err, temp)
 	}

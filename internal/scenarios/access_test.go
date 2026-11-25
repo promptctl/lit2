@@ -33,7 +33,7 @@ func isUnauthorized(why fold.Reason) bool {
 }
 
 func principal(tw root.Twin) string {
-	return tw.Process.Place.(command.InCheckout).Identity.(command.Minted).Key.Principal().String()
+	return tw.Principal().String()
 }
 
 // TestScenario15AccessControlFromTheFirstEvent walks scenario 15's steps

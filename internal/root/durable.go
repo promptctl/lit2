@@ -204,18 +204,19 @@ func (p Process) onceFiles(c git.Checkout) onceFiles {
 func (o onceFiles) all() []onceFile { return []onceFile{o.id, o.key, o.pin, o.founding, o.workspace} }
 
 // leftovers is, for each directory of place's once files, through p's
-// ports, and its store's logs' directory, the temps creates left there, or
-// that it was not scanned, and why, each listed once the run's work is
-// done, so a temp a create of the run reaped is not said as left. Each
-// port's directory is listed once, however many once files it holds. A create
-// reaps its name's temps once it is placed, and the once files are
-// created again only when a person reruns init, so a crash's temp is said
-// on every command until then `[LAW:no-silent-failure]`. Outside a
-// checkout there is no directory to scan.
-func leftovers(p Process, place command.Place, stored *command.StoreFacts) (ls []command.Leftovers) {
+// ports, and its clone's store's logs' directory, the temps creates left
+// there, or that it was not scanned, and why, each listed once the run's
+// work is done, so a temp a create of the run reaped is not said as left.
+// Each port's directory is listed once, however many once files it holds.
+// A create reaps its name's temps once it is placed, and the once files
+// are created again only when a person reruns init, so a crash's temp is
+// said on every command until then `[LAW:no-silent-failure]`. The logs are
+// every writer's, so they are scanned whether or not this checkout is
+// minted. Outside a checkout there is no directory to scan.
+func leftovers(p Process, place command.Place) (ls []command.Leftovers) {
 	switch at := place.(type) {
 	case command.InCheckout:
-		ls = append(beside(p.onceFiles(at.Checkout).all()), logTemps(at.Checkout, stored))
+		ls = append(beside(p.onceFiles(at.Checkout).all()), logTemps(p.Stores(at.Checkout)))
 	case command.NoCheckout:
 	case command.Unlocatable:
 	}
@@ -242,19 +243,13 @@ func beside(fs []onceFile) []command.Leftovers {
 	return ls
 }
 
-// logTemps is the temps of c's store's logs, listed now, or why they
-// were not: no store opened, or a listing that failed.
-func logTemps(c git.Checkout, stored *command.StoreFacts) (l command.Leftovers) {
-	switch o := stored.Opening.(type) {
-	case command.Opened:
-		dir := o.Store.Logs().Path()
-		if temps, err := o.Store.Temps(); err != nil {
-			l = command.TempsNotScanned{Dir: dir, Why: err}
-		} else {
-			l = command.TempsScanned{Dir: dir, Temps: temps}
-		}
-	case command.Unopened:
-		l = command.TempsNotScanned{Dir: store.LogsDir(c).Path(), Why: o.Why}
+// logTemps is the temps of the logs ports hold, listed now, or why they
+// were not.
+func logTemps(ports store.Ports) command.Leftovers {
+	dir := ports.Logs().Path()
+	temps, err := ports.Temps()
+	if err != nil {
+		return command.TempsNotScanned{Dir: dir, Why: err}
 	}
-	return l
+	return command.TempsScanned{Dir: dir, Temps: temps}
 }

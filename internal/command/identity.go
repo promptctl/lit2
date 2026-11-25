@@ -2,6 +2,7 @@ package command
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
@@ -120,4 +121,47 @@ func (u Unminted) Files() []File {
 		return []File{IDFile{}, PrincipalFile{}}
 	}
 	panic(fmt.Sprintf("command: %T is not a Missing", u.Missing))
+}
+
+// Opening is what a place opens: a minted checkout's store, for its
+// writer, or none, and why, in the words of what the place holds. It is
+// the place's, derived by OpeningAt and never set beside it, so whether an
+// invocation's store opened is said once `[LAW:one-source-of-truth]`: the
+// root opens the store by it and the line says its opening by it.
+//
+//sumtype:decl
+type Opening interface{ opening() }
+
+// Opens is a minted checkout, whose store opens for its writer.
+type Opens struct {
+	Checkout git.Checkout
+	Writer   Minted
+}
+
+// NoStore is a place that opens no store: outside a checkout, in one not
+// yet minted, or one whose writer cannot be read.
+type NoStore struct{ Why error }
+
+func (Opens) opening()   {}
+func (NoStore) opening() {}
+
+// OpeningAt is what p opens.
+func OpeningAt(p Place) Opening {
+	switch p := p.(type) {
+	case InCheckout:
+		switch id := p.Identity.(type) {
+		case Minted:
+			return Opens{Checkout: p.Checkout, Writer: id}
+		case Unminted:
+			return NoStore{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(p.Checkout), " and "))}
+		case Unreadable:
+			return NoStore{Why: fmt.Errorf("reading %s: %w", PathOf(id.File, p.Checkout), id.Err)}
+		}
+		panic(fmt.Sprintf("command: %T is not an Identity", p.Identity))
+	case NoCheckout:
+		return NoStore{Why: fmt.Errorf("no git checkout at or above %s", p.Dir)}
+	case Unlocatable:
+		return NoStore{Why: p.Err}
+	}
+	panic(fmt.Sprintf("command: %T is not a Place", p))
 }

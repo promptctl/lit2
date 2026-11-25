@@ -72,12 +72,10 @@ type Event struct {
 }
 
 // Recorder is where a body says what it did, each fact as soon as it is
-// known, so a panic keeps the facts given before it: what was asked, each
-// store step, the version in force, and what the verb did, the last of
-// each kept; and the policy the store folded under, set as each part of
-// it is known.
+// known, so a panic keeps the facts given before it: each store step, the
+// version in force, and what the verb did, the last of each kept; and the
+// policy the store folded under, set as each part of it is known.
 type Recorder struct {
-	Asked      func(cli.Summary)
 	Stored     *StoreFacts
 	Configured func(ConfigFacts)
 	Told       func(VerbsFacts)
@@ -134,34 +132,33 @@ func (Internal) Class() reason.Class { return reason.ClassInternal }
 func (Internal) Reason() string { return "internal" }
 
 // Record runs work as one invocation and returns its event on every path.
-// The first clock reading is now, handed to work and recorded as Started;
-// the second is only the duration. What was asked is Unparsed until work
-// says otherwise through asked, as soon as it knows, before its body runs,
-// so the event keeps the last summary given even when the body panics
-// `[LAW:nothing-unseen]`; the panic becomes an Internal outcome carrying
-// its value and stack. Each store step's result goes on Stored as the step
-// returns it, so the facts of the steps that ran survive a panic too. The
-// version in force arrives through Configured once the fold has read it,
-// and a verb's body says what it did through Told. Every git process the
-// invocation ran, before work as well as in it, is read from spawns once
-// work has returned, so the event is whole when Record returns.
-func Record(c Clock, spawns func() []git.Spawn, inv Invocation, work func(now time.Time, r Recorder) cli.Outcome) Event {
-	started := c.Now()
-	summary := cli.Summary{Name: cli.Unparsed}
+// What was known before work runs is given, not reported by it
+// `[LAW:dataflow-not-control-flow]`: the invocation, the command it asked
+// for, parsed or not, and started, the clock's reading before the place
+// was read, so the duration covers every step of the run; the clock is
+// read again only for the duration. A panic in work becomes an Internal
+// outcome carrying its value and stack, and the event keeps what was
+// asked `[LAW:nothing-unseen]`. Each store step's result goes on Stored as
+// the step returns it, so the facts of the steps that ran survive a panic
+// too. The version in force arrives through Configured once the fold has
+// read it, and a verb's body says what it did through Told. Every git
+// process the invocation ran, before work as well as in it, is read from
+// spawns once work has returned, so the event is whole when Record
+// returns.
+func Record(c Clock, spawns func() []git.Spawn, inv Invocation, asked cli.Summary, started time.Time, work func(r Recorder) cli.Outcome) Event {
 	var facts StoreFacts
 	var config *ConfigFacts
 	var did *VerbsFacts
 	var policy PolicyFacts
 	outcome := recovered(func() cli.Outcome {
-		return work(started, Recorder{
-			Asked:      func(s cli.Summary) { summary = s },
+		return work(Recorder{
 			Stored:     &facts,
 			Configured: func(c ConfigFacts) { config = &c },
 			Told:       func(v VerbsFacts) { did = &v },
 			Policy:     &policy,
 		})
 	})
-	return Event{Invocation: inv, Command: summary, Started: started, Duration: c.Now().Sub(started), Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: outcome}
+	return Event{Invocation: inv, Command: asked, Started: started, Duration: c.Now().Sub(started), Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: outcome}
 }
 
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {

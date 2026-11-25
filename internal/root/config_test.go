@@ -31,7 +31,7 @@ func enrolledOnly(t *testing.T) session {
 	s := freshSession(t)
 	m := must(events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: blob(noPlan), Policy: 1, Now: s.twin.Process.Clock.Now()},
 		events.NewDrafts(events.Act{About: events.Root{}, Payload: events.Enroll{Owner: verbs.Owner, Roles: verbs.DefaultRoles()}}), twinKey().Signer(), rand.NewChaCha8([32]byte{9})))
-	storetest.AppendAll(s.t, s.twin.Process.Store.(command.Opened).Store, m.Batch)
+	storetest.AppendAll(s.t, s.twin.Store(), m.Batch)
 	s.pins(m.Events[0].ID())
 	return s
 }
@@ -258,7 +258,7 @@ func TestASecondReplicaRunsTheModelFromTheEventsAlone(t *testing.T) {
 	s.ok("admin", "init")
 	feature := filed(t, s.ok("add", "unfiled/children", "{title: f}"))
 	other := NewFreshTwin()
-	other.Process.Store = s.twin.Process.Store
+	other.Process.Stores = s.twin.Process.Stores
 	replica := session{t: t, twin: &other}
 	replica.pins(must(foundingFileIn(s.twin.Process.WorkTree(git.Checkout{}))).(fold.FoundedBy).Enrollment)
 	if got, want := replica.ok("get", feature), s.ok("get", feature); got != want {

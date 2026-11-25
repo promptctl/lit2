@@ -22,7 +22,7 @@ func initOnDisk(t *testing.T, c git.Checkout) (int, command.Event) {
 	t.Helper()
 	twin := NewFreshTwin()
 	twin.Code.Commit(map[string][]byte{verbs.WorkspacePath(): assets.DefaultWorkspace.Bytes()})
-	twin.Process.Place = command.InCheckout{Checkout: c, Identity: twin.Process.Place.(command.InCheckout).Identity}
+	twin.Process.Locate = func() (string, git.Checkout, error) { return c.WorkTree, c, nil }
 	twin.Process.WorkTree = workTree(files.NewDurability())
 	return run(t, twin, "admin", "init")
 }

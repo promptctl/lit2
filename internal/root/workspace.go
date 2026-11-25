@@ -240,7 +240,7 @@ func (o opened) status() cli.Outcome {
 // version one: the file in the work tree, or the default profile written
 // there when there is none.
 func (r body) init() cli.Outcome {
-	in, ok := r.p.Place.(command.InCheckout)
+	in, ok := r.place.(command.InCheckout)
 	if !ok {
 		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer, and this is none")}}
 	}
@@ -273,17 +273,11 @@ func (r body) init() cli.Outcome {
 		}
 		return cli.Failed{Failure: unread}
 	}
-	opening := r.p.Open(in.Checkout, minted)
-	r.rec.Stored.Opening = opening
-	so, ok := opening.(command.Opened)
-	if !ok {
-		return cli.Failed{Failure: storeFailure{err: opening.(command.Unopened).Why}}
-	}
 	tree := r.p.WorkTree(c)
 	if err := adopt(r.w, once.pin, tree); err != nil {
 		return failed(err)
 	}
-	o, err := r.openAs(so, in.Checkout, minted)
+	o, err := r.openAs(r.p.writerOf(c, minted))
 	if err != nil {
 		return failed(err)
 	}

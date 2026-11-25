@@ -15,6 +15,7 @@ import (
 	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/store/storetest"
 )
 
 // Every command in a checkout says, for each directory of its own files,
@@ -25,8 +26,12 @@ func TestLeftoversSaysTheCheckoutsTemps(t *testing.T) {
 	dir := checkout(t, minted)
 	c := git.Checkout{WorkTree: dir, GitDir: filepath.Join(dir, ".git"), CommonDir: filepath.Join(dir, ".git")}
 	u := files.NewDurability()
-	disk := Process{IdentityFiles: identityFiles(u), Pin: pinFiles(u), WorkTree: workTree(u)}
-	unminted := command.Unopened{Why: errors.New("unminted")}
+	// the logs on disk, under the clone's lit repository held in memory:
+	// listing them reads only the directory
+	stores := func(c git.Checkout) store.Ports {
+		return store.RepositoryInMemory(files.At(store.LogsDir(c), u), storetest.Entropy(1))
+	}
+	disk := Process{IdentityFiles: identityFiles(u), Pin: pinFiles(u), WorkTree: workTree(u), Stores: stores}
 	var want []command.Leftovers
 	at := map[string]int{}
 	for _, f := range disk.onceFiles(c).all() {
@@ -45,9 +50,12 @@ func TestLeftoversSaysTheCheckoutsTemps(t *testing.T) {
 	if len(want) == len(disk.onceFiles(c).all()) {
 		t.Fatalf("the checkout's once files are in %d directories; want some sharing one, to show it listed once", len(want))
 	}
-	want = append(want, command.TempsNotScanned{Dir: store.LogsDir(c).Path(), Why: unminted.Why})
-	if got := leftovers(disk, command.InCheckout{Checkout: c}, &command.StoreFacts{Opening: unminted}); !reflect.DeepEqual(got, want) {
-		t.Errorf("the checkout's temps are %#v; want each directory's temps, once, and the logs not scanned: %#v", got, want)
+	// the logs are the clone's, every writer's, so they are scanned in a
+	// checkout not yet minted too
+	logs := plant(t, store.LogsDir(c).Path(), "another writer's log")
+	want = append(want, command.TempsScanned{Dir: store.LogsDir(c).Path(), Temps: []string{logs}})
+	if got := leftovers(disk, command.InCheckout{Checkout: c}); !reflect.DeepEqual(got, want) {
+		t.Errorf("the checkout's temps are %#v; want each directory's temps, once, and the logs': %#v", got, want)
 	}
 	t.Run("a .lit that is no directory is not scanned, once", func(t *testing.T) {
 		if err := os.RemoveAll(litDir(c).Path()); err != nil {
@@ -56,7 +64,7 @@ func TestLeftoversSaysTheCheckoutsTemps(t *testing.T) {
 		if err := os.Symlink(t.TempDir(), litDir(c).Path()); err != nil {
 			t.Fatal(err)
 		}
-		got := leftovers(disk, command.InCheckout{Checkout: c}, &command.StoreFacts{Opening: unminted})
+		got := leftovers(disk, command.InCheckout{Checkout: c})
 		if len(got) != len(want) {
 			t.Fatalf("the checkout's temps are %#v; want one row per directory, as before", got)
 		}
@@ -66,7 +74,7 @@ func TestLeftoversSaysTheCheckoutsTemps(t *testing.T) {
 		}
 	})
 	t.Run("outside a checkout no directory is scanned", func(t *testing.T) {
-		if got := leftovers(disk, command.NoCheckout{Dir: dir}, &command.StoreFacts{Opening: unminted}); got != nil {
+		if got := leftovers(disk, command.NoCheckout{Dir: dir}); got != nil {
 			t.Errorf("outside a checkout the temps are %#v; want none", got)
 		}
 	})

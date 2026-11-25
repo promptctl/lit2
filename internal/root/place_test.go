@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
-	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 )
@@ -40,9 +39,9 @@ func checkout(t *testing.T, files map[command.File]string) string {
 
 func identityAt(t *testing.T, dir string) command.Identity {
 	t.Helper()
-	in, ok := place(gittest.Runner(t), dir, files.NewDurability()).(command.InCheckout)
+	in, ok := placeAt(gittest.Runner(t), dir).(command.InCheckout)
 	if !ok {
-		t.Fatalf("%s is not in a checkout: %#v", dir, place(gittest.Runner(t), dir, files.NewDurability()))
+		t.Fatalf("%s is not in a checkout: %#v", dir, placeAt(gittest.Runner(t), dir))
 	}
 	return in.Identity
 }
@@ -88,15 +87,15 @@ func TestACwdReachedThroughASymlinkFindsItsCheckout(t *testing.T) {
 	if err := os.Symlink(sub, link); err != nil {
 		t.Fatal(err)
 	}
-	if in, ok := place(gittest.Runner(t), link, files.NewDurability()).(command.InCheckout); !ok || in.Checkout.WorkTree != dir {
-		t.Errorf("place(%s), a link to %s, = %#v; want the checkout at %s", link, sub, place(gittest.Runner(t), link, files.NewDurability()), dir)
+	if in, ok := placeAt(gittest.Runner(t), link).(command.InCheckout); !ok || in.Checkout.WorkTree != dir {
+		t.Errorf("placeAt(%s), a link to %s, = %#v; want the checkout at %s", link, sub, placeAt(gittest.Runner(t), link), dir)
 	}
 }
 
 func TestOutsideACheckoutIsNoCheckout(t *testing.T) {
 	dir, ceilingEnv := gittest.Outside(t)
-	if got := place(gittest.Runner(t, ceilingEnv), dir, files.NewDurability()); got != (command.NoCheckout{Dir: dir}) {
-		t.Errorf("place(%s) = %#v; want NoCheckout", dir, got)
+	if got := placeAt(gittest.Runner(t, ceilingEnv), dir); got != (command.NoCheckout{Dir: dir}) {
+		t.Errorf("placeAt(%s) = %#v; want NoCheckout", dir, got)
 	}
 }
 

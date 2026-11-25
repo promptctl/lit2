@@ -14,12 +14,11 @@ import (
 // returned during one invocation, in the order they ran. Neither the store
 // nor the fold emits anything itself: their results carry their facts, and
 // the body that called them hands them here, so the event keeps one
-// emitter `[LAW:single-enforcer]`. The root records the store's opening
-// for every invocation, opened or why not; any other step that did not run
-// left nothing, and a fresh store's heads are a block of zeros
-// `[LAW:nothing-unseen]`.
+// emitter `[LAW:single-enforcer]`. A step that did not run left nothing,
+// and a fresh store's heads are a block of zeros `[LAW:nothing-unseen]`.
+// Whether the store opened is the invocation's place, not a step's
+// result: see OpeningAt.
 type StoreFacts struct {
-	Opening   Opening
 	Heads     []store.Heads
 	Reads     []store.Scanned
 	Folds     []fold.FoldFacts
@@ -82,31 +81,11 @@ func landed(a store.Appending) (frame bool) {
 	return frame
 }
 
-// Opening is the store an invocation's checkout opened, once, or why it has
-// none.
-//
-//sumtype:decl
-type Opening interface{ opening() }
-
-// Opened is a minted checkout's store.
-type Opened struct{ Store *store.Store }
-
-// Unopened is a place with no store: outside a checkout, in one not yet
-// minted, or one whose writer cannot be read.
-type Unopened struct{ Why error }
-
-func (Opened) opening()   {}
-func (Unopened) opening() {}
-
-func (f StoreFacts) empty() bool {
-	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Folds)+len(f.Appends)+len(f.Publishes)+len(f.Creates)+len(f.Temps) == 0
-}
-
-// The store block as the line spells it: one object per step that ran,
-// and the reads summed, with torn bytes per ref.
+// The store block as the line spells it: the opening, one object per step
+// that ran, and the reads summed, with torn bytes per ref.
 type (
 	storeLine struct {
-		Open    *openLine     `json:"open,omitempty"`
+		Open    openLine      `json:"open"`
 		Heads   []headsLine   `json:"heads,omitempty"`
 		Read    *readLine     `json:"read,omitempty"`
 		Append  []appendRow   `json:"append,omitempty"`
@@ -175,9 +154,10 @@ type (
 		Name string `json:"name"`
 		Why  string `json:"why"`
 	}
+	// openLine is the store's opening. Why a store did not open is the
+	// place block's to say, so it is said once.
 	openLine struct {
 		State string `json:"state"`
-		Why   string `json:"why,omitempty"`
 	}
 	headsLine struct {
 		RefsRead   int             `json:"refs_read"`
@@ -267,13 +247,9 @@ func (notPlacedLine) createRow()          {}
 func (scannedLine) tempsRow()             {}
 func (notScannedLine) tempsRow()          {}
 
-// storeBlock is the facts as the line's store block, or nil when no store
-// step ran.
-func storeBlock(f StoreFacts) *storeLine {
-	if f.empty() {
-		return nil
-	}
-	l := &storeLine{Open: open(f.Opening)}
+// storeBlock is the facts as the line's store block, opened at p or not.
+func storeBlock(p Place, f StoreFacts) storeLine {
+	l := storeLine{Open: open(p)}
 	for _, h := range f.Heads {
 		hl := headsLine{RefsRead: h.RefsRead, LogsRead: h.LogsRead, Streams: len(h.Streams), Unreadable: []badStreamLine{}}
 		for _, u := range h.Unreadable {
@@ -467,15 +443,13 @@ func prior(p store.Prior) (kept, commit, why string) {
 	panic(fmt.Sprintf("command: %T is not a Prior", p))
 }
 
-// open is the opening as the line spells it, absent when none was recorded.
-func open(o Opening) *openLine {
-	switch o := o.(type) {
-	case nil:
-		return nil
-	case Opened:
-		return &openLine{State: "opened"}
-	case Unopened:
-		return &openLine{State: "unopened", Why: o.Why.Error()}
+// open is the opening of a store at p as the line spells it.
+func open(p Place) (line openLine) {
+	switch OpeningAt(p).(type) {
+	case Opens:
+		line = openLine{State: "opened"}
+	case NoStore:
+		line = openLine{State: "unopened"}
 	}
-	panic(fmt.Sprintf("command: %T is not an Opening", o))
+	return line
 }
