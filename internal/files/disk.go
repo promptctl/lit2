@@ -1,7 +1,6 @@
 package files
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -143,14 +142,12 @@ func (d Dir) walkMaking(u *Durability) walking {
 		if err := parent.Mkdir(name, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 			return err
 		}
-		if err := u.syncDir(d, parent, parentPath); err != nil && unsynced == nil {
-			unsynced = err
-		}
+		unsynced = errors.Join(unsynced, u.syncDir(d, parent, parentPath))
 		return nil
 	})
 	switch {
 	case err != nil:
-		return walkFailed{why: err}
+		return walkFailed{why: errors.Join(err, unsynced)}
 	case unsynced != nil:
 		return walkedUnsynced{r: r, why: unsynced}
 	}
@@ -429,7 +426,7 @@ func (o Disk) CreateOnce(n Name, b []byte) Placing {
 	var temp string
 	switch t := o.temp(r, n, b).(type) {
 	case tempUnwritten:
-		return NotPlaced{Why: errors.Join(t.why, r.Close()), Left: t.left}
+		return NotPlaced{Why: errors.Join(t.why, unsynced, r.Close()), Left: t.left}
 	case tempWritten:
 		temp = t.name
 	}
@@ -440,7 +437,7 @@ func (o Disk) CreateOnce(n Name, b []byte) Placing {
 	unplaced := func(why error) Placing {
 		// the temp is removed before the root it is removed through closes
 		left := o.dir.remove(r, temp).left(temp)
-		return NotPlaced{Why: errors.Join(why, r.Close()), Left: left}
+		return NotPlaced{Why: errors.Join(why, unsynced, r.Close()), Left: left}
 	}
 	var placed Placed
 	var own removal
@@ -460,10 +457,10 @@ func (o Disk) CreateOnce(n Name, b []byte) Placing {
 	placed.Reap = o.reap(r, n, temp)
 	placed.Reap.Left = append(placed.Reap.Left, own.left(temp)...)
 	// the name must survive a power loss as the appends to it will, and the
-	// reaps and removals with it; after a sync on the way failed, the
-	// directory's answers that same failure, so it is said once
+	// reaps and removals with it; a parent's failed sync and the
+	// directory's own are of two paths, so each is said
 	synced := o.durability.syncDir(o.dir, r, o.dir.Path())
-	if why := errors.Join(cmp.Or(unsynced, synced), r.Close()); why != nil {
+	if why := errors.Join(unsynced, synced, r.Close()); why != nil {
 		return PlacedNotDurable{Placed: placed, Why: why}
 	}
 	return placed

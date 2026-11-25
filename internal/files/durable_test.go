@@ -549,3 +549,37 @@ func TestADirIsSyncedByTheStep(t *testing.T) {
 		t.Errorf("Sync through a link synced %v; want nothing", got)
 	}
 }
+
+// Every failed sync of a create is in its answer: a parent's and the
+// directory's are of two paths, and a create that places nothing still
+// says the parent's.
+func TestACreateSaysEveryFailedSync(t *testing.T) {
+	d := func(base string) files.Dir {
+		return files.DirAt(base, files.MustName("lit")).Sub(files.MustName("log"))
+	}
+	errDir := errors.New("the disk refused a second fsync")
+	fail := func(base string, also map[string]error) func(string) error {
+		return func(p string) error {
+			if p == filepath.Join(base, "lit") {
+				return errSync
+			}
+			return also[p]
+		}
+	}
+	t.Run("placed", func(t *testing.T) {
+		base := t.TempDir()
+		f := filestest.Seamed(d(base), filestest.Recording(&filestest.Syncs{}, fail(base, map[string]error{d(base).Path(): errDir})))
+		got := files.At(f, files.NewDurability()).CreateOnce(a, []byte("x"))
+		if p, ok := got.(files.PlacedNotDurable); !ok || !errors.Is(p.Why, errSync) || !errors.Is(p.Why, errDir) {
+			t.Errorf("CreateOnce whose parent and directory syncs failed = %#v; want PlacedNotDurable, by both", got)
+		}
+	})
+	t.Run("not placed", func(t *testing.T) {
+		base := t.TempDir()
+		f := filestest.Seamed(d(base), filestest.Recording(&filestest.Syncs{}, fail(base, map[string]error{filepath.Join(d(base).Path(), ".tmp-a-0"): errDir})))
+		got := files.At(f, files.NewDurability()).CreateOnce(a, []byte("x"))
+		if p, ok := got.(files.NotPlaced); !ok || !errors.Is(p.Why, errSync) || !errors.Is(p.Why, errDir) {
+			t.Errorf("CreateOnce whose parent and temp syncs failed = %#v; want NotPlaced, by both", got)
+		}
+	})
+}
