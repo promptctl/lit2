@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -46,7 +47,7 @@ func TestAPanicInAnyStageIsRecorded(t *testing.T) {
 		asked commandname.Name
 		where func(command.Where) bool
 	}{
-		{"building the command table", func(t Twin) Twin { return t }, asking(func() cli.Commands { panic("the table broke") }, "get", "x"), commandname.Unparsed(), is(command.PlaceUnread{})},
+		{"building the command table", func(t Twin) Twin { return t }, asking(func() cli.Commands { panic("the table broke") }, "get", "x"), commandname.Unparsed(), func(w command.Where) bool { _, read := w.(command.Place); return read }},
 		{"locating the checkout", func(t Twin) Twin {
 			t.Process.Locate = func() command.Located { panic("the walk broke") }
 			return t
@@ -75,15 +76,21 @@ func TestAPanicInAnyStageIsRecorded(t *testing.T) {
 // A command that panics still ends with its end steps: the temps beside
 // its checkout's files are scanned and said.
 func TestACommandThatPanicsStillScansItsTemps(t *testing.T) {
-	twin := NewTwin()
-	twin.Process.Out = panicking{}
-	e := recordedOf(t, invoke(twin.Process, asking(cli.Lit2, "--help"))).Event
-	if _, failed := e.Outcome.(cli.Failed); !failed || len(e.Store.Temps) == 0 {
-		t.Errorf("a panicking help ended %#v with temps %#v; want it failed, every directory scanned", e.Outcome, e.Store.Temps)
-	}
-	for _, l := range e.Store.Temps {
-		if _, scanned := l.(command.TempsScanned); !scanned {
-			t.Errorf("a panicking help left %#v; want each directory scanned", l)
+	for name, tc := range map[string]struct {
+		twin func(Twin) Twin
+		ask  func() (cli.Summary, func(body) cli.Outcome)
+	}{
+		"its answer": {func(t Twin) Twin { t.Process.Out = panicking{}; return t }, asking(cli.Lit2, "--help")},
+		"its parse":  {func(t Twin) Twin { return t }, asking(func() cli.Commands { panic("the table broke") }, "--help")},
+	} {
+		e := recordedOf(t, invoke(tc.twin(NewTwin()).Process, tc.ask)).Event
+		if _, failed := e.Outcome.(cli.Failed); !failed || len(e.Store.Temps) == 0 {
+			t.Errorf("a run whose %s panicked ended %#v with temps %#v; want it failed, every directory scanned", name, e.Outcome, e.Store.Temps)
+		}
+		for _, l := range e.Store.Temps {
+			if _, scanned := l.(command.TempsScanned); !scanned {
+				t.Errorf("a run whose %s panicked left %#v; want each directory scanned", name, l)
+			}
 		}
 	}
 }
@@ -182,6 +189,29 @@ func (c *brokenClock) Now() time.Time {
 // A sink that fails or panics loses the event, said on stderr, with the
 // panic's stack; when stderr refuses that too, the status says the run
 // unrecorded.
+// An event that panics to encode is lost to the log, said with its
+// panic: the line never reached the file.
+func TestAnEventThatPanicsToEncodeIsLost(t *testing.T) {
+	dir := t.TempDir()
+	e := recordedOf(t, invoke(NewTwin().Process, asking(cli.Lit2, "--help"))).Event
+	e.Outcome = cli.Failed{Failure: unsayable{}}
+	lost, ok := recorded(command.NewLog(dir), e).(command.Lost)
+	var in command.Internal
+	if !ok || !errors.As(lost.Why, &in) || !strings.Contains(in.Error(), "no words for it") || len(in.Stack()) == 0 {
+		t.Errorf("an event that panics to encode = %#v; want it lost for its panic", lost)
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Errorf("the log holds %v, %v; want nothing written", entries, err)
+	}
+}
+
+// unsayable is a failure whose message panics.
+type unsayable struct{}
+
+func (unsayable) Error() string       { panic("no words for it") }
+func (unsayable) Class() reason.Class { return reason.ClassRefused }
+func (unsayable) Reason() string      { return "unsayable" }
+
 func TestALostEventNeverLooksClean(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

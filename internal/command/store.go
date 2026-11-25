@@ -34,7 +34,7 @@ type StoreFacts struct {
 // every command until a create reaps them `[LAW:no-silent-failure]`. A
 // directory is scanned, its temps none or some, or not scanned, and why,
 // so a directory with no temp is never said as one nobody looked in; a
-// scan that broke before it named its directories is TempsScanBroke.
+// scan that panicked is TempsScanBroke.
 //
 //sumtype:decl
 type Leftovers interface{ leftovers() }
@@ -53,8 +53,8 @@ type TempsNotScanned struct {
 	Why error
 }
 
-// TempsScanBroke is a scan that panicked, Broke, before it said each
-// directory it scans, so no directory's temps are known.
+// TempsScanBroke is a scan that panicked, Broke, so no directory's temps
+// are known, those it had listed before the panic included.
 type TempsScanBroke struct{ Broke Internal }
 
 func (TempsScanned) leftovers()    {}

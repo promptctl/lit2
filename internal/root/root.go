@@ -165,15 +165,27 @@ func invoke(p Process, ask func() (cli.Summary, func(body) cli.Outcome)) command
 // parsed is what args ask of the command line commands builds, and its
 // answer: answer to the command, or the parse's refusal, one value
 // whatever the parse did, so a run that parsed nothing runs the same
-// steps as one that did. A line that does not build panics, a lit2 bug,
-// recorded as any panic in a run is.
+// steps as one that did. A table or a parse that panics, a lit2 bug, is
+// an answer that fails with that panic, so the run still reads its place
+// and ends as every run does.
 func parsed(commands func() cli.Commands, args []string) (cli.Summary, func(body) cli.Outcome) {
-	c := commands()
-	p, err := cli.Parse(c, args)
-	if err != nil {
-		return cli.Unparsed(), func(body) cli.Outcome { return failed(err) }
-	}
-	return p.Asked, func(r body) cli.Outcome { return dispatch(r, c, p) }
+	a := command.Caught(func() asked {
+		c := commands()
+		p, err := cli.Parse(c, args)
+		if err != nil {
+			return asked{cli.Unparsed(), func(body) cli.Outcome { return failed(err) }}
+		}
+		return asked{p.Asked, func(r body) cli.Outcome { return dispatch(r, c, p) }}
+	}, func(broke command.Internal) asked {
+		return asked{cli.Unparsed(), func(body) cli.Outcome { return cli.Failed{Failure: broke} }}
+	})
+	return a.summary, a.answer
+}
+
+// asked is what a command line asked, and its answer.
+type asked struct {
+	summary cli.Summary
+	answer  func(body) cli.Outcome
 }
 
 // body is one invocation as its answer sees it: the process, and the run
