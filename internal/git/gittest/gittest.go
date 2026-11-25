@@ -1,7 +1,8 @@
 // Package gittest is the contract suites of lit's repository's two ports,
 // Objects and Refs, and of the code repository, Code, each run over the
 // repository on disk and its twin in memory side by side, so a test over
-// the twin is a test over the repository (D2). The helpers that make a
+// the twin is a test over the repository: one contract is what both
+// arms are `[LAW:one-source-of-truth]`, written down as D2. The helpers that make a
 // repository, run git or plant a directory are built with the integration
 // tag alone, so a fast test cannot call one; the suites' real arms are
 // built from this package's own unexported ones.
@@ -329,6 +330,22 @@ func refs(t *testing.T, fresh func(*testing.T) repository) {
 				t.Errorf("after Replace(%s, %s) the refs are %v", name, to, heads)
 			}
 			was = git.Named{Target: to}
+		}
+	})
+	t.Run("a replace from no Was is a bug, and moves nothing", func(t *testing.T) {
+		refs := fresh(t)
+		a, _ := objects(t, refs)
+		const name git.RefName = "refs/lit/log/w"
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Replace(%s, nil, %s) returned; want a panic", name, a)
+				}
+			}()
+			_ = refs.Replace(name, nil, a)
+		}()
+		if heads := list(t, refs, "refs/lit/"); len(heads) != 0 {
+			t.Errorf("after a replace from no Was the refs are %v; want none", heads)
 		}
 	})
 	t.Run("a replace from what the ref no longer is is refused, so a racing writer is never undone", func(t *testing.T) {

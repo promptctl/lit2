@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +62,7 @@ var toolchain = []string{"GOROOT", "GOPATH", "GOMODCACHE", "GOCACHE"}
 // file, workspace, GOFLAGS or toolchain switch of the developer's reaches
 // it, and git is there for the version stamp lit2 refuses to run without.
 func build(bin string) (string, error) {
-	git, err := exec.LookPath("git")
+	isolated, err := gittest.Isolated()
 	if err != nil {
 		return "", fmt.Errorf("the smoke build stamps lit2's version from git: %w", err)
 	}
@@ -73,7 +74,7 @@ func build(bin string) (string, error) {
 	if err := json.Unmarshal(out, &reported); err != nil {
 		return "", fmt.Errorf("go env -json: %w", err)
 	}
-	env := append(gittest.Isolated(git), "GOENV=off", "GOWORK=off", "GOTOOLCHAIN=local", "GOPROXY=off", "CGO_ENABLED=0")
+	env := append(isolated, "GOENV=off", "GOWORK=off", "GOTOOLCHAIN=local", "GOPROXY=off", "CGO_ENABLED=0")
 	for _, k := range toolchain {
 		if reported[k] == "" {
 			return "", fmt.Errorf("go env reports no %s", k)
@@ -92,16 +93,16 @@ func build(bin string) (string, error) {
 // whatever the machine holds above it, with the runs' home and state under
 // it. Every run's environment is made from it, never inherited.
 type sandbox struct {
-	dir     string
-	ceiling string // the variable that keeps dir in no checkout
+	dir        string
+	ceilingEnv string // the variable that keeps dir in no checkout
 }
 
 // newSandbox is a fresh sandbox. The test's own GIT_DIR and HOME name a
 // place no run may read, so a run that inherited them would fail.
 func newSandbox(t *testing.T) sandbox {
 	t.Helper()
-	dir, ceiling := gittest.Outside(t)
-	sb := sandbox{dir: dir, ceiling: ceiling}
+	dir, ceilingEnv := gittest.Outside(t)
+	sb := sandbox{dir: dir, ceilingEnv: ceilingEnv}
 	t.Setenv("GIT_DIR", filepath.Join(dir, "not-a-repository"))
 	t.Setenv("HOME", filepath.Join(dir, "not-a-home"))
 	if err := os.Mkdir(sb.home(), 0o755); err != nil {
@@ -117,25 +118,33 @@ func (sb sandbox) state() string { return filepath.Join(sb.dir, "state") }
 // ceiling, and the git the oracle runs.
 func (sb sandbox) env(t *testing.T) []string {
 	t.Helper()
-	return append([]string{"HOME=" + sb.home(), "XDG_STATE_HOME=" + sb.state(), sb.ceiling}, gittest.Env(t)...)
+	return append([]string{"HOME=" + sb.home(), "XDG_STATE_HOME=" + sb.state(), sb.ceilingEnv}, gittest.Env(t)...)
 }
 
 // run runs the built lit2 in dir and is its status and what it wrote,
 // failing t when it does not run.
 func (sb sandbox) run(t *testing.T, dir string, args ...string) (int, string, string) {
 	t.Helper()
+	var stdout bytes.Buffer
+	status, stderr := sb.runTo(t, &stdout, dir, args...)
+	return status, stdout.String(), stderr
+}
+
+// runTo is run with lit2's stdout given, and is its status and stderr.
+func (sb sandbox) runTo(t *testing.T, stdout io.Writer, dir string, args ...string) (int, string) {
+	t.Helper()
 	cmd := exec.Command(built(t), args...)
 	cmd.Dir, cmd.Env = dir, sb.env(t)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = stdout, &stderr
 	var exit *exec.ExitError
 	switch err := cmd.Run(); {
 	case errors.As(err, &exit):
-		return exit.ExitCode(), stdout.String(), stderr.String()
+		return exit.ExitCode(), stderr.String()
 	case err != nil:
 		t.Fatalf("lit2 %q did not run: %v", args, err)
 	}
-	return 0, stdout.String(), stderr.String()
+	return 0, stderr.String()
 }
 
 // want is run's stdout, failing t unless lit2 exits status.
@@ -150,7 +159,10 @@ func (sb sandbox) want(t *testing.T, dir string, status int, args ...string) str
 
 // TestSmoke runs the built lit2 as a person would, outside any checkout
 // and inside two not yet minted, whose workspace drafts are not in force,
-// one that does not parse and one that does.
+// one that does not parse and one that does; and once into a stdout whose
+// reader left, as `lit2 --help | head -0` leaves it, which only a process
+// whose fd 1 is that pipe can show: Go's runtime kills it by SIGPIPE
+// unless lit2 asked for the signal.
 func TestSmoke(t *testing.T) {
 	sb := newSandbox(t)
 	broken := checkout(t, sb, "broken", "prefix = [unclosed\n")
@@ -179,6 +191,11 @@ func TestSmoke(t *testing.T) {
 		if status != tc.status || !holds(stdout, tc.stdout) || !strings.HasPrefix(stderr, tc.errs) || (tc.errs == "") != (stderr == "") {
 			t.Errorf("lit2 %q: status %d, stdout %q, stderr %q", tc.args, status, stdout, stderr)
 		}
+	}
+	status, stderr := sb.runTo(t, gone(t), sb.dir, "--help")
+	statuses = append(statuses, status)
+	if status != 0 || stderr != "" {
+		t.Errorf("lit2 --help into a stdout whose reader left: status %d, stderr %q; want 0 and nothing said", status, stderr)
 	}
 
 	var recorded []int
@@ -220,6 +237,25 @@ func TestSmoke(t *testing.T) {
 			t.Errorf("run %d records config %+v; want none, no version being applied", i, *c)
 		}
 	}
+}
+
+// gone is a stdout whose reader left: a pipe whose read end is closed, so
+// lit2's first write to it meets EPIPE and, unasked for, SIGPIPE.
+func gone(t *testing.T) *os.File {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := w.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return w
 }
 
 // holds is whether stdout is what a row expects of it: a row's text appears

@@ -572,28 +572,6 @@ func TestAnObjectLitDidNotWriteIsRefused(t *testing.T) {
 	}
 }
 
-// held is every file under dir with its size and modification time, so a
-// test sees whether anything was written there.
-func held(t *testing.T, dir string) []string {
-	t.Helper()
-	var held []string
-	err := filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		info, err := e.Info()
-		if err != nil {
-			return err
-		}
-		held = append(held, fmt.Sprintf("%s %d %v", p, info.Size(), info.ModTime()))
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return held
-}
-
 // A repository directory that is a link is not lit's repository, wherever
 // it points: every read and write through it is refused, and nothing is
 // written where it points.
@@ -604,7 +582,7 @@ func TestARepositoryDirThatIsALinkIsRefused(t *testing.T) {
 		if _, err := gittest.Put(gittest.RepositoryAt(g, other), []byte("theirs")); err != nil {
 			t.Fatal(err)
 		}
-		before := held(t, other)
+		before := gittest.Entries(t, other)
 		at := filepath.Join(gittest.Physical(t), "repo")
 		if err := os.Symlink(other, at); err != nil {
 			t.Fatal(err)
@@ -616,7 +594,7 @@ func TestARepositoryDirThatIsALinkIsRefused(t *testing.T) {
 		if _, err := gittest.Put(repo, []byte("mine")); !errors.As(err, new(files.NotTheDirectory)) {
 			t.Errorf("a write through the link failed with %v; want NotTheDirectory", err)
 		}
-		if after := held(t, other); !slices.Equal(after, before) {
+		if after := gittest.Entries(t, other); !slices.Equal(after, before) {
 			t.Errorf("the repository the link points to holds %v; want %v, as it was", after, before)
 		}
 	})

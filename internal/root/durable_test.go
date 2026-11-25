@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/assets"
@@ -179,15 +180,14 @@ var (
 // was and whatever failure the run ended in first.
 func TestANotDurableRunsChainHoldsEachSyncsError(t *testing.T) {
 	w := &writes{stored: &command.StoreFacts{}}
-	errIO, errNoSpace := errors.New("input/output error"), errors.New("no space left on device")
-	w.created(command.Creation{Path: "/twin/.lit/founding", Placing: files.PlacedNotDurable{Why: fmt.Errorf("syncing: %w", errIO)}})
-	if err := w.appended(store.AppendedNotDurable{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}, Why: errNoSpace}); err != nil {
+	w.created(command.Creation{Path: "/twin/.lit/founding", Placing: files.PlacedNotDurable{Why: fmt.Errorf("syncing: %w", syscall.EIO)}})
+	if err := w.appended(store.AppendedNotDurable{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}, Why: syscall.ENOSPC}); err != nil {
 		t.Fatal(err)
 	}
 	for name, o := range map[string]cli.Outcome{"done": w.end(cli.Done{}), "failed first": w.end(failed(errors.New("the body failed")))} {
 		f, ok := o.(cli.Failed)
-		if !ok || !errors.Is(f.Failure, errIO) || !errors.Is(f.Failure, errNoSpace) {
-			t.Errorf("a %s run is %#v; want failed, its chain holding both syncs' errors", name, o)
+		if !ok || !errors.Is(f.Failure, syscall.EIO) || !errors.Is(f.Failure, syscall.ENOSPC) {
+			t.Errorf("a %s run is %#v; want failed, its chain holding EIO and ENOSPC", name, o)
 		}
 	}
 }
@@ -198,13 +198,13 @@ func TestANotDurableRunsChainHoldsEachSyncsError(t *testing.T) {
 func TestAnAppendThatLandedNothingCarriesItsLogsFailedSync(t *testing.T) {
 	w := &writes{stored: &command.StoreFacts{}}
 	errRead := errors.New("the log's header did not read")
-	err := w.appended(store.NotAppended{Log: store.LogNotDurable{Log: store.LogCreated{}, Why: errSync}, Why: errRead})
+	err := w.appended(store.NotAppended{Log: store.LogNotDurable{Log: store.LogCreated{}, Why: syscall.EIO}, Why: errRead})
 	if err == nil {
 		t.Fatal("an append that landed nothing answered no error")
 	}
 	f, ok := w.end(failed(err)).(cli.Failed)
-	if !ok || !errors.Is(f.Failure, errSync) || !strings.Contains(f.Failure.Error(), errRead.Error()) {
-		t.Errorf("the run is %#v; want failed by the append's failure, its chain holding the log's failed sync", f)
+	if !ok || !errors.Is(f.Failure, syscall.EIO) || !strings.Contains(f.Failure.Error(), errRead.Error()) {
+		t.Errorf("the run is %#v; want failed by the append's failure, its chain holding the log's EIO", f)
 	}
 	if reason := f.Failure.Reason(); reason == "durability" {
 		t.Errorf("the run's reason is %q; want the append's own failure first", reason)
@@ -298,6 +298,11 @@ func (u unreadWorkspace) ReadAll(n files.Name) ([]byte, error) {
 	return u.Files.ReadAll(n)
 }
 
+// gone is a stdout whose reader left.
+type gone struct{}
+
+func (gone) Write([]byte) (int, error) { return 0, syscall.EPIPE }
+
 // A key this run created whose phrase could not be written fails the run,
 // EPIPE too, which a plain answer's write takes as Done: no one saw the
 // phrase, and it is shown only once.
@@ -305,7 +310,7 @@ func TestAPhraseThatCouldNotBeShownFailsTheRun(t *testing.T) {
 	fresh := func(t *testing.T, shared files.Files) said {
 		s := unsynced(t, filestest.Faults{})
 		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared, files.NewMemory(twinPrivate) }
-		s.twin.Process.Out = gone(t)
+		s.twin.Process.Out = gone{}
 		return s.lit("admin", "init")
 	}
 	keyPath := command.PathOf(command.PrincipalFile{}, twinCheckout)

@@ -36,21 +36,18 @@ const (
 	drawing    rule = "is not the layers block's order from cli to git"
 	noBlock    rule = "is missing from ARCHITECTURE.md"
 	opened     rule = "opens an envelope below the verbs, which no layer there may read (INV:opaque-envelope)"
-	reaches    rule = "is a test the fast loop builds, outside a contract suite's run, and imports os/exec or syscall"
+	reaches    rule = "is a test the fast loop builds and imports os/exec"
 )
 
 // The fast loop's split, as the source declares it (D2): a file built
-// only with the integration tag is outside the fast loop, and a port's
-// contract suite runs in its package's contract file, which holds the
-// fake and the real adapter side by side.
+// only with the integration tag is outside the fast loop, and a test the
+// fast loop builds starts no process, which its import of spawn declares
+// `[LAW:single-enforcer]`. What a contract suite's real arm runs is in its
+// kit, whose own files say what they reach.
 const (
-	integration  = "integration"
-	contractFile = "contract_test.go"
+	integration = "integration"
+	spawn       = "os/exec"
 )
-
-// worldly is the packages a test the fast loop builds outside a contract
-// suite's run never imports: a process, or the system calls.
-var worldly = []string{"os/exec", "syscall"}
 
 // readers is the units that may open an envelope or name the keyring that
 // does, its type or its constructor: events, which defines them, the root,
@@ -182,7 +179,7 @@ func checkCode(tree fs.FS, mod string, rank map[string]int, declared map[string]
 				return fmt.Errorf("%s: %w", path, err)
 			}
 			vs = append(vs, checkFile(path, owner, f, mod, rank, declared)...)
-			if fast && strings.HasSuffix(path, "_test.go") && filepath.Base(path) != contractFile {
+			if fast && strings.HasSuffix(path, "_test.go") {
 				vs = append(vs, checkFastTest(path, f)...)
 			}
 			return nil
@@ -249,16 +246,23 @@ func holdsWithout(expr constraint.Expr, unset string) bool {
 	return false
 }
 
-// checkFastTest holds a test the fast loop builds, outside a contract
-// suite's run, to reaching no process and no system call by its imports.
+// checkFastTest holds a test the fast loop builds to starting no process
+// by its imports.
 func checkFastTest(path string, f *ast.File) []violation {
 	var vs []violation
 	for _, imp := range f.Imports {
-		if ip := strings.Trim(imp.Path.Value, "`\""); slices.Contains(worldly, ip) {
+		if ip := strings.Trim(imp.Path.Value, "`\""); ip == spawn {
 			vs = append(vs, violation{path + ": import " + ip, reaches})
 		}
 	}
 	return vs
+}
+
+// kit is whether rest, a path below internal/, is a unit's test kit: the
+// unit's subdirectory named for it with test after, as gittest is git's.
+func kit(rest string) bool {
+	unit, sub, _ := strings.Cut(rest, "/")
+	return sub == unit+"test"
 }
 
 // ignored is whether the go tool passes a file or directory by, as it does
@@ -290,7 +294,7 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 			to, listed := rank[unit]
 			from, owned := rank[owner]
 			switch {
-			case owner == "cmd" && unit != "root" && !test:
+			case owner == "cmd" && unit != "root" && (!test || !kit(rest)):
 				at.rule = program
 			case owner != "cmd" && listed && owned && unit != owner && to <= from:
 				at.rule = upward
@@ -549,11 +553,12 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"a keyring literal in fold", "internal/fold/fold.go", "package fold\n\nimport \"example.com/m/internal/events\"\n\nvar K = events.Keyring{}\n", opened},
 		{"events dot-imported in fold", "internal/fold/fold.go", "package fold\n\nimport . \"example.com/m/internal/events\"\n\nvar Read = Open\n", opened},
 		{"os/exec in a test with no build line", "internal/git/git_test.go", "package git\n\nimport _ \"os/exec\"\n", reaches},
-		{"syscall in a test of the program", "cmd/lit2/main_test.go", "package main\n\nimport _ \"syscall\"\n", reaches},
-		{"syscall in a test built on unix", "internal/git/fifo_test.go", "//go:build unix\n\npackage git\n\nimport _ \"syscall\"\n", reaches},
+		{"os/exec in a test of the program", "cmd/lit2/main_test.go", "package main\n\nimport _ \"os/exec\"\n", reaches},
+		{"os/exec in a test built on unix", "internal/git/fifo_test.go", "//go:build unix\n\npackage git\n\nimport _ \"os/exec\"\n", reaches},
 		{"os/exec in a test built without integration", "internal/git/git_test.go", "//go:build !integration\n\npackage git\n\nimport _ \"os/exec\"\n", reaches},
 		{"os/exec in a test built with integration or unix", "internal/git/git_test.go", "//go:build integration || unix\n\npackage git\n\nimport _ \"os/exec\"\n", reaches},
-		{"os/exec in a contract file's neighbor", "internal/git/contract_kit_test.go", "package git\n\nimport _ \"os/exec\"\n", reaches},
+		{"os/exec in a contract suite's run", "internal/git/contract_test.go", "package git\n\nimport _ \"os/exec\"\n", reaches},
+		{"a test of the program importing a unit, not its kit", "cmd/lit2/smoke_test.go", "//go:build integration\n\npackage main\n\nimport _ \"example.com/m/internal/git\"\n", program},
 	} {
 		tree := synthetic()
 		tree[tc.path] = file(tc.text)
@@ -618,10 +623,9 @@ func TestTheReadersOpenEnvelopes(t *testing.T) {
 func TestTheFastLoopsTestsReachTheWorldOnlyAsDeclared(t *testing.T) {
 	for _, tc := range []struct{ name, path, text string }{
 		{"os/exec in a test built only with integration", "internal/git/git_test.go", "//go:build integration\n\npackage git\n\nimport _ \"os/exec\"\n"},
-		{"syscall in a test built with integration on unix", "internal/git/fifo_test.go", "//go:build integration && unix\n\npackage git\n\nimport _ \"syscall\"\n"},
-		{"os/exec in a contract suite's run", "internal/git/contract_test.go", "package git\n\nimport _ \"os/exec\"\n"},
+		{"os/exec in a test built with integration on unix", "internal/git/fifo_test.go", "//go:build integration && unix\n\npackage git\n\nimport _ \"os/exec\"\n"},
 		{"os/exec in the code a test kit builds", "internal/git/gittest/oracle.go", "package gittest\n\nimport _ \"os/exec\"\n"},
-		{"a test of the program importing a unit's kit", "cmd/lit2/smoke_test.go", "//go:build integration\n\npackage main\n\nimport _ \"example.com/m/internal/git\"\n"},
+		{"a test of the program importing a unit's kit", "cmd/lit2/smoke_test.go", "//go:build integration\n\npackage main\n\nimport _ \"example.com/m/internal/git/gittest\"\n"},
 	} {
 		tree := synthetic()
 		tree[tc.path] = file(tc.text)

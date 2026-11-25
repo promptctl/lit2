@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/cli"
@@ -89,40 +89,20 @@ func (r refusing) Write([]byte) (int, error) { return 0, r.err }
 
 func TestAnAnswerStdoutRefusesIsTheEnvironments(t *testing.T) {
 	twin := NewTwin()
-	full := errors.New("no space left on device")
-	twin.Process.Out = refusing{fmt.Errorf("write /dev/stdout: %w", full)}
+	twin.Process.Out = refusing{fmt.Errorf("write /dev/stdout: %w", syscall.ENOSPC)}
 	status, e := run(t, twin, "--help")
 	var out output
-	if status != 78 || !errors.As(failure(t, e), &out) || !errors.Is(out, full) || !strings.Contains(twin.Err.String(), "no space left") {
+	if status != 78 || !errors.As(failure(t, e), &out) || !errors.Is(out, syscall.ENOSPC) || !strings.Contains(twin.Err.String(), "no space left") {
 		t.Errorf("--help into a full stdout: status %d, stderr %q", status, twin.Err)
 	}
 }
 
 func TestAReaderLeavingIsDone(t *testing.T) {
 	twin := NewTwin()
-	twin.Process.Out = gone(t)
+	twin.Process.Out = refusing{fmt.Errorf("write /dev/stdout: %w", syscall.EPIPE)}
 	if status, e := run(t, twin, "--help"); status != 0 || e.Outcome != (cli.Done{}) || twin.Err.Len() != 0 {
 		t.Errorf("--help into a pipe whose reader left: status %d, outcome %#v, stderr %q", status, e.Outcome, twin.Err)
 	}
-}
-
-// gone is a stdout whose reader left: a pipe whose read end is closed, so
-// a write to it gets the EPIPE the kernel gives, with no timing involved.
-func gone(t *testing.T) *os.File {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Close(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := w.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	return w
 }
 
 // peek is a command log that keeps what stderr held when the event came.

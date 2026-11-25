@@ -7,7 +7,7 @@ depend on which, and the decisions the design documents left to the layout.
 
 ```
 CGO_ENABLED=0 go build ./cmd/lit2     # writes ./lit2
-go test ./...                         # the fast loop: in process
+go test ./...                         # the fast loop: unit tests and port contracts
 go test -tags integration ./...       # and every test of git, the disk and the binary
 go tool golangci-lint run
 ```
@@ -15,8 +15,9 @@ go tool golangci-lint run
 ## Units, downhill
 
 `cmd/lit2` is the program and imports only `root`; its tests may import a
-unit's test kit. Every other unit is a
-directory under `internal/`, and a unit's subdirectories belong to it. A unit
+unit's test kit, the unit's subdirectory named for it with `test` after.
+Every other unit is a directory under `internal/`, and a unit's
+subdirectories belong to it. A unit
 imports only units below it in this block `[LAW:one-way-deps]`; `root` and
 `command` sit beside the stack of architecture.md §6, importing from it with
 nothing in it importing them, and `architecture` and `scenarios` are test
@@ -124,13 +125,13 @@ The decisions the layout needed and the design documents did not make.
   `events` for the signature check; the TOML parser and `x/mod` in
   `config`. Tests are
   the standard `testing` package, in two loops. The fast loop, `go test
-  ./...`, is in process: a `_test.go` file it builds imports neither
-  `os/exec` nor `syscall` unless it is a `contract_test.go`, where a port's
-  contract suite runs over its fake and its real adapter side by side. A
-  file it builds is one with no `//go:build` line or one whose line holds
-  with `integration` unset; a test of git, the disk or the built binary is
-  `//go:build integration`, and so is a test kit's file exporting what
-  makes a repository, runs git or plants a directory. Lint is golangci-lint v2 as a `tool`
+  ./...`, holds unit tests and each port's contract suite, which runs in
+  its package's `contract_test.go` over the port's twin and its real
+  adapter side by side; a `_test.go` file it builds imports no `os/exec`.
+  A file it builds is one with no `//go:build` line or one whose line
+  holds with `integration` unset; a test of git, the disk or the built
+  binary is `//go:build integration`, and so is a test kit's file
+  exporting what makes a repository, runs git or plants a directory. Lint is golangci-lint v2 as a `tool`
   directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums
   make a missing case a lint failure.

@@ -27,17 +27,27 @@ func isolation(t testing.TB) []string {
 
 // isolated is the isolation for the git binary at bin.
 func isolated(bin string) []string {
-	return []string{"PATH=" + filepath.Dir(bin), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}
+	return append([]string{"PATH=" + filepath.Dir(bin)}, git.NoConfig()...)
 }
 
 // binary is the git binary on the test's PATH, failing t without one.
 func binary(t testing.TB) string {
 	t.Helper()
-	bin, err := exec.LookPath("git")
+	bin, err := lookGit()
 	if err != nil {
-		t.Fatalf("these tests need the git binary: %v", err)
+		t.Fatal(err)
 	}
 	return bin
+}
+
+// lookGit is the git binary on PATH, the one git every test and the
+// smoke build run.
+func lookGit() (string, error) {
+	bin, err := exec.LookPath("git")
+	if err != nil {
+		return "", fmt.Errorf("these tests need the git binary: %w", err)
+	}
+	return bin, nil
 }
 
 // ask runs the git binary in dir, under the isolation and a fixed

@@ -473,7 +473,7 @@ func (d *onDisk) replace(name RefName, from Was, to ObjectID) error {
 	case Absent:
 		old = strings.Repeat("0", 2*SHA1.size())
 	default:
-		panic(fmt.Sprintf("git: %T is not what a ref was", from))
+		panic(notAWas(from))
 	}
 	if err := d.g.durable(); err != nil {
 		return err

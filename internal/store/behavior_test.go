@@ -3,6 +3,7 @@ package store_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/files"
@@ -52,6 +53,23 @@ func stale(t *testing.T, err error, ref store.Ref, now git.ObjectID) {
 	if !errors.As(err, &moved) || moved.Name != ref.Name() || moved.Now != (git.Named{Target: now}) {
 		t.Errorf("the stale publish failed with %v; want git.Moved naming %s at %s", err, ref.Name(), now)
 	}
+}
+
+// torn is lit's repository's refs with one ref broken, as a ref file git
+// cannot read lists: Broken under every prefix it is under, and in no
+// listing's Heads.
+type torn struct {
+	git.Refs
+	broken git.BrokenRef
+}
+
+func (r torn) List(prefix git.RefName) (git.Listing, error) {
+	l, err := r.Refs.List(prefix)
+	l.Heads = slices.DeleteFunc(l.Heads, func(h git.RefHead) bool { return h.Name == r.broken.Name })
+	if strings.HasPrefix(string(r.broken.Name), string(prefix)) {
+		l.Broken = append(l.Broken, r.broken)
+	}
+	return l, err
 }
 
 // segments is the publication a commit holds, as its tree's entries.
@@ -324,6 +342,26 @@ func TestTheStoresBehavior(t *testing.T) {
 		}
 	})
 
+	t.Run("a broken ref is one unreadable stream that hides no other, and its writer's seal says it", func(t *testing.T) {
+		t.Parallel()
+		p := fresh()
+		for _, id := range []store.CheckoutID{ida, idb} {
+			s := store.Open(id, p.ports, store.DefaultSegmentBound)
+			storetest.AppendAll(t, s, storetest.Batch(t, "from "+id.String()))
+			storetest.PublishOwn(t, s)
+		}
+		broken := git.BrokenRef{Name: store.WriterRef{Checkout: ida}.Name(), Why: `it holds "torn", no object id`}
+		refs := torn{Refs: p.refs, broken: broken}
+		reader := store.Open(store.CheckoutID{0xff}, store.WithRefs(fetched(p).ports, refs), store.DefaultSegmentBound)
+		h, read, err := reader.ReadAll()
+		if err != nil || len(h.Unreadable) != 1 || h.Unreadable[0].Name != string(broken.Name) || !errors.As(h.Unreadable[0].Why, new(git.BrokenRef)) || h.RefsRead != 2 ||
+			len(read) != 1 || read[0].Range.Stream.Ref != (store.WriterRef{Checkout: idb}) || !slices.Equal(storetest.Read(read[0].Scan), []string{"from " + idb.String()}) {
+			t.Errorf("with a's ref broken a reader's heads are %+v and reads %d, %v; want a's ref unreadable, by it, and b's stream read whole", h, len(read), err)
+		}
+		if _, err := store.Open(ida, store.WithRefs(p.ports, refs), store.DefaultSegmentBound).SealOwn(); !errors.As(err, new(git.BrokenRef)) {
+			t.Errorf("a's seal over its broken ref = %v; want the BrokenRef", err)
+		}
+	})
 	t.Run("two checkouts over one common dir write their own logs and refs and read each other", func(t *testing.T) {
 		t.Parallel()
 		p := fresh()

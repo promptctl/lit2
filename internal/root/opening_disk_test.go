@@ -30,9 +30,10 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 		}
 		p := place(gittest.Runner(t), dir, files.NewDurability())
 		in, located := p.(command.InCheckout)
-		opened, ok := opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability())).(command.Opened)
+		o := opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability()))
+		opened, ok := o.(command.Opened)
 		if !located || !ok || in.Checkout.Format != want {
-			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability())), want)
+			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, o, want)
 		}
 		if got := appendOne(t, opened.Store, twinID); !slices.Equal(got, []string{"an event"}) {
 			t.Errorf("the opened store reads back %v", got)
@@ -49,9 +50,9 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 
 func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
 	unminted := checkout(t, nil)
-	outside, ceiling := gittest.Outside(t)
+	outside, ceilingEnv := gittest.Outside(t)
 	for name, p := range map[string]command.Place{
-		"outside a checkout": place(gittest.Runner(t, ceiling), outside, files.NewDurability()),
+		"outside a checkout": place(gittest.Runner(t, ceilingEnv), outside, files.NewDurability()),
 		"an unminted one":    place(gittest.Runner(t), unminted, files.NewDurability()),
 		"a config that does not parse": place(gittest.Runner(t), func() string {
 			d := checkout(t, minted)
@@ -61,8 +62,9 @@ func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
 			return d
 		}(), files.NewDurability()),
 	} {
-		if got, ok := opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability())).(command.Unopened); !ok || got.Why == nil {
-			t.Errorf("%s opens %#v; want no store, and why", name, opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability())))
+		o := opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability()))
+		if got, ok := o.(command.Unopened); !ok || got.Why == nil {
+			t.Errorf("%s opens %#v; want no store, and why", name, o)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package store_test
 import (
 	"errors"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/files"
@@ -17,12 +18,16 @@ import (
 var (
 	me                   = store.CheckoutID{0xd}
 	errAppend, errCreate = errors.New("the append's fsync failed"), errors.New("the create's fsync failed")
-	errSync              = errors.New("an fsync failed")
 )
 
 // over is a store of me whose logs are a twin answering faults.
 func over(faults filestest.Faults) *store.Store {
-	return store.Open(me, store.RepositoryInMemory(filestest.NotDurable(filestest.Memory(), faults), storetest.Entropy(3)), store.DefaultSegmentBound)
+	return openOver(filestest.NotDurable(filestest.Memory(), faults))
+}
+
+// openOver is a store of me whose logs are f.
+func openOver(f files.Files) *store.Store {
+	return store.Open(me, store.RepositoryInMemory(f, storetest.Entropy(3)), store.DefaultSegmentBound)
 }
 
 // notDurable is a, failing t unless it is AppendedNotDurable by want's
@@ -125,9 +130,6 @@ func (b *broken) Append(n files.Name, data []byte) files.Appending {
 // log itself may not survive a power loss.
 func TestAFailedSyncOfTheLogsNameIsInAnAppendThatLandedNothing(t *testing.T) {
 	bt := must[store.Batch](t)(store.NewBatch(store.Record("lost")))
-	open := func(f files.Files) *store.Store {
-		return store.Open(me, store.RepositoryInMemory(f, storetest.Entropy(3)), store.DefaultSegmentBound)
-	}
 	notAppended := func(t *testing.T, a store.Appending, want error) store.NotAppended {
 		t.Helper()
 		got, ok := a.(store.NotAppended)
@@ -138,17 +140,17 @@ func TestAFailedSyncOfTheLogsNameIsInAnAppendThatLandedNothing(t *testing.T) {
 	}
 	t.Run("the create's sync fails, then the log's id does not read", func(t *testing.T) {
 		errRead := errors.New("the log's header did not read")
-		s := open(&broken{Files: filestest.NotDurable(filestest.Memory(), filestest.Faults{CreateOnce: errSync}), read: errRead})
-		created(t, unsynced(t, notAppended(t, s.Append(bt), errRead).Log, errSync))
+		s := openOver(&broken{Files: filestest.NotDurable(filestest.Memory(), filestest.Faults{CreateOnce: syscall.EIO}), read: errRead})
+		created(t, unsynced(t, notAppended(t, s.Append(bt), errRead).Log, syscall.EIO))
 	})
 	t.Run("the lookup's sync fails, then the frame does not land", func(t *testing.T) {
 		errWrite := errors.New("the frame did not write")
 		logs := filestest.Memory()
-		if _, ok := open(logs).Append(bt).(store.Appended); !ok {
+		if _, ok := openOver(logs).Append(bt).(store.Appended); !ok {
 			t.Fatal("the append that makes the log did not land")
 		}
-		s := open(&broken{Files: filestest.NotDurable(logs, filestest.Faults{Sync: errSync}), appended: errWrite})
-		if got := unsynced(t, notAppended(t, s.Append(bt), errWrite).Log, errSync); got != (store.LogLookedUp{}) {
+		s := openOver(&broken{Files: filestest.NotDurable(logs, filestest.Faults{Sync: syscall.EIO}), appended: errWrite})
+		if got := unsynced(t, notAppended(t, s.Append(bt), errWrite).Log, syscall.EIO); got != (store.LogLookedUp{}) {
 			t.Errorf("the append's log is %#v; want LogLookedUp", got)
 		}
 	})

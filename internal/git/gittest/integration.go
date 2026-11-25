@@ -83,9 +83,15 @@ func Env(t testing.TB) []string {
 	return isolation(t)
 }
 
-// Isolated is Env for the git binary at bin, for whatever runs git with no
-// test to fail, as a TestMain does.
-func Isolated(bin string) []string { return isolated(bin) }
+// Isolated is Env for whatever runs git with no test to fail, as a
+// TestMain does, or why the git binary is not there.
+func Isolated() ([]string, error) {
+	bin, err := lookGit()
+	if err != nil {
+		return nil, err
+	}
+	return isolated(bin), nil
+}
 
 // Runner is lit2's git as a test runs it, under Env and env.
 func Runner(t testing.TB, env ...string) *git.Git {
@@ -117,23 +123,20 @@ func Clone(t testing.TB) git.Checkout {
 	return c
 }
 
-// Repo is a code repository on disk with no commit, committed to through
-// the git binary.
-type Repo = repo
-
-// NewRepo is an empty code repository on disk, read as lit2 reads one.
-func NewRepo(t *testing.T) Repo {
+// NewRepo is an empty code repository on disk, read as lit2 reads one,
+// committed to through the git binary.
+func NewRepo(t *testing.T) repo {
 	t.Helper()
 	return newRepo(t)
 }
 
 // Outside is a directory in no checkout, whatever the machine holds above
-// the temporary directory, and the variable that keeps it there: a
-// repository is planted above dir and GIT_CEILING_DIRECTORIES set between
-// the two, so git's walk up from dir stops before the planted repository,
-// as it stops before any other. A test passes ceiling to whatever runs git
-// from dir.
-func Outside(t testing.TB) (dir, ceiling string) {
+// the temporary directory, and the environment variable that keeps it
+// there: a repository is planted above dir and GIT_CEILING_DIRECTORIES set
+// between the two, so git's walk up from dir stops before the planted
+// repository, as it stops before any other. A test passes ceilingEnv to
+// whatever runs git from dir.
+func Outside(t testing.TB) (dir, ceilingEnv string) {
 	t.Helper()
 	above := Physical(t)
 	Git(t, above, "init", "-q")
@@ -166,26 +169,33 @@ func LooseRef(gitDir string, name git.RefName) string {
 }
 
 // Stored is what the repository at gitDir holds: its refs as git lists
-// them, and every file under objects/ and refs/ with its size and
-// modification time, so two calls differ when anything git keeps changed.
+// them, and the Entries of objects/ and refs/, so two calls differ when
+// anything git keeps changed.
 func Stored(t testing.TB, gitDir string) string {
 	t.Helper()
-	var held []string
-	for _, dir := range []string{looseObjects, looseRefs} {
-		err := filepath.WalkDir(filepath.Join(gitDir, dir), func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			held = append(held, fmt.Sprintf("%s %d %v", p, info.Size(), info.ModTime()))
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	held := append(Entries(t, filepath.Join(gitDir, looseObjects)), Entries(t, filepath.Join(gitDir, looseRefs))...)
 	return Git(t, gitDir, "for-each-ref") + "\n" + strings.Join(held, "\n")
+}
+
+// Entries is every entry under dir, dir itself among them, with its mode,
+// size and modification time, so two calls differ when anything there was
+// made, removed, written or had its permissions changed.
+func Entries(t testing.TB, dir string) []string {
+	t.Helper()
+	var held []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		held = append(held, fmt.Sprintf("%s %v %d %v", p, info.Mode(), info.Size(), info.ModTime()))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held
 }

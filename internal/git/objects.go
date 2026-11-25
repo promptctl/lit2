@@ -210,6 +210,10 @@ type Absent struct{}
 func (Named) was()  {}
 func (Absent) was() {}
 
+// notAWas is the bug a replace from a Was that is neither panics with, in
+// either repository, so the twin admits no replace the disk refuses.
+func notAWas(from Was) string { return fmt.Sprintf("git: %T is not what a ref was", from) }
+
 // String is the object the ref names.
 func (n Named) String() string { return n.Target.String() }
 

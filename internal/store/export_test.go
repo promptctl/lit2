@@ -19,6 +19,12 @@ func WithFiles(p Ports, f files.Files) Ports {
 	return p
 }
 
+// WithRefs is p with lit's repository's refs read and replaced through r.
+func WithRefs(p Ports, r git.Refs) Ports {
+	p.refs = r
+	return p
+}
+
 // RepositoryDir is lit's repository of at's clone, as DiskPorts opens it.
 func RepositoryDir(at git.Checkout) string { return locate(at).repo.Path() }
 

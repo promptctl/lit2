@@ -41,8 +41,9 @@ func TestTwoWorktreesOfOneClonePublishIntoItsOneRepository(t *testing.T) {
 	}
 	sa := store.Open(ida, store.DiskPorts(gittest.Runner(t), main, storetest.Entropy(1), files.NewDurability()), store.DefaultSegmentBound)
 	sb := store.Open(idb, store.DiskPorts(gittest.Runner(t), second, storetest.Entropy(2), files.NewDurability()), store.DefaultSegmentBound)
+	storetest.AppendAll(t, sa, storetest.Batch(t, "from main"))
+	storetest.AppendAll(t, sb, storetest.Batch(t, "from linked"))
 	for _, s := range []*store.Store{sa, sb} {
-		storetest.AppendAll(t, s, storetest.Numbered(t, 1, "event")...)
 		storetest.PublishOwn(t, s)
 	}
 	want := []string{string(store.WriterRef{Checkout: ida}.Name()), string(store.WriterRef{Checkout: idb}.Name())}
@@ -52,8 +53,10 @@ func TestTwoWorktreesOfOneClonePublishIntoItsOneRepository(t *testing.T) {
 	}
 	for _, s := range []*store.Store{sa, sb} {
 		h := storetest.Heads(t, s)
-		if h.LogsRead != 2 || h.RefsRead != 2 || len(h.Streams) != 2 {
-			t.Errorf("a worktree's heads are %+v; want both logs and both refs read", h)
+		if h.LogsRead != 2 || h.RefsRead != 2 || len(h.Streams) != 2 ||
+			!slices.Equal(storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: ida})), []string{"from main"}) ||
+			!slices.Equal(storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: idb})), []string{"from linked"}) {
+			t.Errorf("a worktree's heads are %+v; want both logs and both refs read, each stream its writer's record", h)
 		}
 	}
 }

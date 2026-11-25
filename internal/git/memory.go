@@ -76,6 +76,11 @@ func (m *memory) list(prefix RefName) (Listing, error) {
 // from says, and a name that is a directory of another ref, or has one as
 // its directory, as git's refs, which are paths, cannot hold both.
 func (m *memory) replace(name RefName, from Was, to ObjectID) error {
+	switch from.(type) {
+	case Named, Absent:
+	default:
+		panic(notAWas(from))
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	target, ok := m.refs[name]
