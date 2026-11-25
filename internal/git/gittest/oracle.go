@@ -3,6 +3,7 @@ package gittest
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -116,4 +117,34 @@ func Clone(t testing.TB) git.Checkout {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// NoCheckout is a directory outside every checkout, and the git that
+// sees it so: a repository is planted above it, and a ceiling between
+// them, so it is outside a checkout whatever holds the test's temporary
+// directory, and a git that ignored the ceiling would find the planted
+// one.
+func NoCheckout(t testing.TB) (dir string, g *git.Git) {
+	t.Helper()
+	planted := Physical(t)
+	Git(t, planted, "init", "-q")
+	dir = filepath.Join(planted, "outside")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir, Runner(t, "GIT_CEILING_DIRECTORIES="+planted)
+}
+
+// LooseObject is where git's files backend keeps id loose in the
+// repository at repo: objects/, then the id's first two hex digits, then
+// the rest. It is the oracle's one spelling of that layout.
+func LooseObject(repo string, id git.ObjectID) string {
+	hex := id.String()
+	return filepath.Join(repo, "objects", hex[:2], hex[2:])
+}
+
+// LooseRef is where git's files backend keeps the ref n loose in the
+// repository at repo.
+func LooseRef(repo string, n git.RefName) string {
+	return filepath.Join(repo, filepath.FromSlash(string(n)))
 }

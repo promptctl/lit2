@@ -7,8 +7,9 @@ depend on which, and the decisions the design documents left to the layout.
 
 ```
 CGO_ENABLED=0 go build ./cmd/lit2     # writes ./lit2
-go test ./...
-go tool golangci-lint run
+go test ./...                         # the fast loop: unit and port-contract tests
+go test -tags integration ./...       # and every test whose code reaches the disk, git or a process
+go tool golangci-lint run             # lints the integration tests too
 ```
 
 ## Units, downhill
@@ -121,8 +122,12 @@ The decisions the layout needed and the design documents did not make.
   so none of its transport packages is linked; edwards25519 in
   `events` for the signature check; the TOML parser and `x/mod` in
   `config`. Tests are
-  the standard `testing` package. Lint is golangci-lint v2 as a `tool`
-  directive: `default: standard` plus exhaustive and gochecksumtype, and
+  the standard `testing` package. A test whose code under test reaches
+  the real disk, git or another process is an integration or end-to-end
+  test and carries `//go:build integration`; a port's contract suite, which
+  holds its fake and its real adapter to one behavior side by side, is not
+  tagged, so the fast loop keeps every fake honest. Lint is golangci-lint
+  v2 as a `tool` directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums
   make a missing case a lint failure.
 - **D3 Build** `CGO_ENABLED=0 go build ./cmd/lit2`, one command, a static

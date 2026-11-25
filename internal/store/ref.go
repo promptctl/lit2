@@ -34,11 +34,14 @@ type InboxRef struct{ Inbox InboxID }
 func (WriterRef) ref() {}
 func (InboxRef) ref()  {}
 
-// The namespaces under refs/lit/, and refs/lit/ itself.
+// Namespace is refs/lit/, the prefix every ref of lit's repository is
+// under, and the one spelling of it.
+const Namespace git.RefName = "refs/lit/"
+
+// The namespaces under Namespace.
 const (
-	litRefs  git.RefName = "refs/lit/"
-	writerNS             = litRefs + "log/"
-	inboxNS              = litRefs + "inbox/"
+	writerNS = Namespace + "log/"
+	inboxNS  = Namespace + "inbox/"
 )
 
 // Name is refs/lit/log/<checkout-id>.

@@ -1,3 +1,5 @@
+//go:build integration
+
 package store_test
 
 import (
@@ -28,7 +30,10 @@ var (
 	idb = store.CheckoutID{0xb}
 )
 
-func TestTwoWorktreesOfOneCloneShareOneStoreEachWithItsOwnLogAndRef(t *testing.T) {
+// Each worktree of a clone builds its own DiskPorts from its own
+// checkout, and both land on the clone's one store: what no store over one
+// set of ports can show.
+func TestTwoWorktreesOfOneCloneAppendToOneStore(t *testing.T) {
 	main := gittest.Clone(t)
 	linked := filepath.Join(filepath.Dir(main.WorkTree), "linked")
 	gittest.Git(t, main.WorkTree, "worktree", "add", "-q", linked)
@@ -39,27 +44,21 @@ func TestTwoWorktreesOfOneCloneShareOneStoreEachWithItsOwnLogAndRef(t *testing.T
 	if second.CommonDir != main.CommonDir || second.GitDir == main.GitDir {
 		t.Fatalf("the linked worktree is %+v; want the main's common dir and its own git dir", second)
 	}
-	sa := store.Open(ida, store.DiskPorts(gittest.Runner(t), main, storetest.Entropy(1), files.NewDurability()), store.DefaultSegmentBound)
-	sb := store.Open(idb, store.DiskPorts(gittest.Runner(t), second, storetest.Entropy(2), files.NewDurability()), store.DefaultSegmentBound)
-	ba, bb := storetest.Numbered(t, 3, "a"), storetest.Numbered(t, 2, "b")
-	storetest.AppendAll(t, sa, ba...)
-	storetest.AppendAll(t, sb, bb...)
-	storetest.PublishOwn(t, sa)
-	storetest.PublishOwn(t, sb)
-	fromA, fromB := storetest.All(ba), storetest.All(bb)
-	for _, s := range []*store.Store{sa, sb} {
-		if got := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: ida})); !slices.Equal(got, fromA) {
-			t.Errorf("a worktree reads a's stream as %v; want %v", got, fromA)
-		}
-		if got := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: idb})); !slices.Equal(got, fromB) {
-			t.Errorf("a worktree reads b's stream as %v; want %v", got, fromB)
-		}
+	for i, w := range []struct {
+		id store.CheckoutID
+		at git.Checkout
+	}{{ida, main}, {idb, second}} {
+		s := store.Open(w.id, store.DiskPorts(gittest.Runner(t), w.at, storetest.Entropy(byte(i+1)), files.NewDurability()), store.DefaultSegmentBound)
+		storetest.AppendAll(t, s, storetest.Batch(t, "from "+w.id.String()))
 	}
-	repo := store.RepositoryDir(main)
-	refs := strings.Fields(gittest.Git(t, repo, "for-each-ref", "--format=%(refname)", "refs/lit/"))
-	want := []string{string(store.WriterRef{Checkout: ida}.Name()), string(store.WriterRef{Checkout: idb}.Name())}
-	if !slices.Equal(refs, want) {
-		t.Errorf("lit's repository holds the refs %v; want one per worktree, %v", refs, want)
+	reader := store.Open(store.CheckoutID{0xc}, store.DiskPorts(gittest.Runner(t), main, storetest.Entropy(3), files.NewDurability()), store.DefaultSegmentBound)
+	if h := storetest.Heads(t, reader); h.LogsRead != 2 || len(h.Streams) != 2 {
+		t.Fatalf("the main checkout's store holds %+v; want both worktrees' logs", h)
+	}
+	for _, id := range []store.CheckoutID{ida, idb} {
+		if got := storetest.Read(storetest.Whole(t, reader, store.WriterRef{Checkout: id})); !slices.Equal(got, []string{"from " + id.String()}) {
+			t.Errorf("%s's stream reads %v; want its one record", id, got)
+		}
 	}
 }
 
@@ -278,7 +277,7 @@ func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 	repo := store.RepositoryDir(c)
 	cut := func(id git.ObjectID, keep int) {
 		t.Helper()
-		path := filepath.Join(repo, "objects", id.String()[:2], id.String()[2:])
+		path := gittest.LooseObject(repo, id)
 		b, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -290,7 +289,7 @@ func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ref := filepath.Join(repo, filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name())))
+	ref := gittest.LooseRef(repo, store.WriterRef{Checkout: ida}.Name())
 	if err := os.WriteFile(ref, []byte("torn"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +332,7 @@ func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "event")...)
 	out := storetest.PublishOwn(t, s)
 	repo := store.RepositoryDir(c)
-	object, err := os.Stat(filepath.Join(repo, "objects", out.Commit.String()[:2], out.Commit.String()[2:]))
+	object, err := os.Stat(gittest.LooseObject(repo, out.Commit))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +340,7 @@ func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	if objectPerm&0o444 == 0 {
 		t.Fatalf("git made the commit's object file %v, readable by no one", objectPerm)
 	}
-	log, err := os.Stat(filepath.Join(store.LogDir(c).Path(), store.LogName(ida).String()))
+	log, err := os.Stat(filepath.Join(store.LogsDir(c).Path(), store.LogName(ida).String()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +350,7 @@ func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	}
 	// git writes the ref, so its write bits are git's; its read bits are
 	// the objects'
-	ref, err := os.Stat(filepath.Join(repo, filepath.FromSlash(string(store.WriterRef{Checkout: ida}.Name()))))
+	ref, err := os.Stat(gittest.LooseRef(repo, store.WriterRef{Checkout: ida}.Name()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +366,7 @@ func TestAnEntryOfTheLogsThatIsNoFileIsAnUnreadableLog(t *testing.T) {
 	c := gittest.Clone(t)
 	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(9), files.NewDurability()), store.DefaultSegmentBound)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "a")...)
-	logs := store.LogDir(c).Path()
+	logs := store.LogsDir(c).Path()
 	if err := os.Symlink(store.LogName(ida).String(), filepath.Join(logs, "link")); err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-//go:build unix
+//go:build unix && integration
 
 package files_test
 

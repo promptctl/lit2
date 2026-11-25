@@ -1,5 +1,11 @@
 version: "2"
 
+run:
+  # the integration tests are linted with the rest, so no gated file can
+  # stop compiling unseen
+  build-tags:
+    - integration
+
 linters:
   default: standard
   enable:

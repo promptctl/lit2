@@ -37,9 +37,11 @@ func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader, u *files.Durabili
 
 // MemoryPorts is a store in process: its logs in logs, the in-memory
 // twin or a twin over it, which whoever builds the store keeps, and lit's
-// repository's objects and refs.
-func MemoryPorts(logs files.Files, objects git.Objects, refs git.Refs, entropy io.Reader) Ports {
-	return Ports{files: logs, objects: objects, refs: refs, entropy: entropy}
+// repository in memory, made here, so its objects and refs are one
+// repository by construction `[LAW:types-are-the-program]`.
+func MemoryPorts(logs files.Files, entropy io.Reader) Ports {
+	repo := git.NewMemory()
+	return Ports{files: logs, objects: repo, refs: repo, entropy: entropy}
 }
 
 // Store is one clone's store as one checkout sees it: every writer's
@@ -323,7 +325,7 @@ func (s *Store) Temps() ([]string, error) {
 // writes visible whether or not its sync has run
 // `[LAW:no-ambient-temporal-coupling]`.
 func (s *Store) Heads() (Heads, error) {
-	refs, err := s.ports.refs.List(litRefs)
+	refs, err := s.ports.refs.List(Namespace)
 	if err != nil {
 		return Heads{}, err
 	}

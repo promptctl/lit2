@@ -95,8 +95,7 @@ func freshTwinOver(logs files.Files) Twin {
 	// the store draws from its own source, so a log it creates moves no
 	// trace id the twin mints
 	stored := rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 's', 't', 'o', 'r', 'e'})
-	repo := git.NewMemory()
-	ports := store.MemoryPorts(logs, repo, repo, stored)
+	ports := store.MemoryPorts(logs, stored)
 	return twinOver(ports, twinCheckout, twinID, twinKey(), [32]byte{'l', 'i', 't', '2', ' ', 't', 'w', 'i', 'n'})
 }
 

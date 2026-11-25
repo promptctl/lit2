@@ -14,8 +14,7 @@ import (
 )
 
 func memoryStore() *store.Store {
-	repo := git.NewMemory()
-	return store.Open(store.CheckoutID{9}, store.MemoryPorts(filestest.Memory(), repo, repo, storetest.Entropy(1)), store.DefaultSegmentBound)
+	return store.Open(store.CheckoutID{9}, store.MemoryPorts(filestest.Memory(), storetest.Entropy(1)), store.DefaultSegmentBound)
 }
 
 func storeBlockOf(t *testing.T, f StoreFacts) map[string]any {

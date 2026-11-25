@@ -1,3 +1,5 @@
+//go:build integration
+
 package root
 
 import (
@@ -92,8 +94,8 @@ func TestACwdReachedThroughASymlinkFindsItsCheckout(t *testing.T) {
 }
 
 func TestOutsideACheckoutIsNoCheckout(t *testing.T) {
-	dir := t.TempDir()
-	if got := place(gittest.Runner(t), dir, files.NewDurability()); got != (command.NoCheckout{Dir: dir}) {
+	dir, g := gittest.NoCheckout(t)
+	if got := place(g, dir, files.NewDurability()); got != (command.NoCheckout{Dir: dir}) {
 		t.Errorf("place(%s) = %#v; want NoCheckout", dir, got)
 	}
 }

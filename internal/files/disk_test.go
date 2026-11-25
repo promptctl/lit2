@@ -1,3 +1,5 @@
+//go:build integration
+
 package files_test
 
 import (
@@ -12,17 +14,11 @@ import (
 
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
-	"github.com/promptctl/lit2/internal/panics"
 )
 
 // The rows only the disk faces: a symlink, or anything else, where a
 // directory or a file of it should be. Each asserts with os, an oracle
 // beside the port, that nothing was read or written at the link's target.
-
-var (
-	dir = files.MustName("dir")
-	a   = files.MustName("a")
-)
 
 // holds fails t unless the file at path holds want.
 func holds(t *testing.T, path, want string) {
@@ -75,16 +71,6 @@ func notTheDirectory(t *testing.T, call string, err error) {
 	if !errors.As(err, new(files.NotTheDirectory)) {
 		t.Errorf("%s failed with %v; want NotTheDirectory", call, err)
 	}
-}
-
-// notPlaced is why p placed nothing, failing t unless it is NotPlaced.
-func notPlaced(t *testing.T, p files.Placing) error {
-	t.Helper()
-	no, ok := p.(files.NotPlaced)
-	if !ok {
-		t.Errorf("CreateOnce = %#v; want NotPlaced", p)
-	}
-	return no.Why
 }
 
 // notAppended is why a appended nothing, failing t unless it is
@@ -220,26 +206,6 @@ func TestADirectoryThatIsNotItselfIsRefused(t *testing.T) {
 		refusesEveryCall(t, f, notTheDirectory)
 		empty(t, filepath.Join(outside, dir.String()))
 	})
-}
-
-func TestTheZeroDirIsRefused(t *testing.T) {
-	f := files.At(files.Dir{}, files.NewDurability())
-	if err := notPlaced(t, f.CreateOnce(a, []byte("x"))); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("CreateOnce failed with %v; want ErrNoDir", err)
-	}
-	if l, err := f.List(); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("List = %v, %v; want ErrNoDir", l, err)
-	}
-	if err := files.NewDurability().Make(files.Dir{}); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("Make failed with %v; want ErrNoDir", err)
-	}
-}
-
-// A base that is not absolute is a bug: no Dir is made from it.
-func TestADirFromNoAbsoluteBaseIsABug(t *testing.T) {
-	for _, base := range []string{"", "relative"} {
-		panics.With(t, files.ErrNotABase, func() { files.DirAt(base, dir) })
-	}
 }
 
 // Every entry of a listed directory that is no file of the port is
@@ -386,16 +352,6 @@ func TestADirIsCheckedAndMadeByTheStep(t *testing.T) {
 	if err := missing.Check(); err != nil {
 		t.Errorf("Check of the Dir Make made failed with %v", err)
 	}
-}
-
-// A Dir's parent is it without its last element; a Dir of one element has
-// none, and asking for it is a bug.
-func TestADirsParentIsItWithoutItsLastElement(t *testing.T) {
-	base := t.TempDir()
-	if got, want := files.DirAt(base, dir).Sub(a).Parent().Path(), filepath.Join(base, dir.String()); got != want {
-		t.Errorf("the parent of dir/a is %s; want %s", got, want)
-	}
-	panics.With(t, files.ErrNoParent, func() { files.DirAt(base, dir).Parent() })
 }
 
 // A file is made in the port's mode, whatever the umask, and its

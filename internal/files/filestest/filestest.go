@@ -7,6 +7,7 @@ package filestest
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"slices"
@@ -52,6 +53,38 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 		}
 		if b, err := f.ReadAt(n, math.MaxUint64, 1); err != nil || len(b) != 0 {
 			t.Errorf("ReadAt(MaxUint64, 1) = %q, %v; want nothing, past the end", b, err)
+		}
+	})
+	t.Run("concurrent appends to one file each land whole where they say, and none is lost", func(t *testing.T) {
+		f := fresh(t)
+		Create(t, f, n, []byte("head"))
+		const writers, each = 8, 25
+		const size = uint64(len("w0-0000"))
+		ends := make([][]uint64, writers)
+		var wg sync.WaitGroup
+		for w := range writers {
+			wg.Go(func() {
+				for i := range each {
+					got, ok := f.Append(n, fmt.Appendf(nil, "w%d-%04d", w, i)).(files.Appended)
+					if !ok {
+						t.Errorf("Append = %#v; want Appended", got)
+						return
+					}
+					ends[w] = append(ends[w], got.End)
+				}
+			})
+		}
+		wg.Wait()
+		all, err := f.ReadAll(n)
+		if err != nil || uint64(len(all)) != uint64(len("head"))+writers*each*size {
+			t.Fatalf("after %d appends of %d bytes the file holds %d bytes, %v; want the header and every append", writers*each, size, len(all), err)
+		}
+		for w, es := range ends {
+			for i, end := range es {
+				if want := fmt.Sprintf("w%d-%04d", w, i); end < size || end > uint64(len(all)) || string(all[end-size:end]) != want {
+					t.Errorf("append %s says it ended at %d; want its bytes, whole, just before", want, end)
+				}
+			}
 		}
 	})
 	t.Run("a read of all is the whole file, and of no file is NotFound", func(t *testing.T) {
