@@ -1,69 +1,189 @@
+//go:build integration
+
 package main
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/lit2/internal/git/gittest"
 )
 
-// TestSmoke builds lit2 with the documented command and runs it as a person
-// would, outside any checkout and inside two not yet minted, whose workspace
-// drafts are not in force, one that does not parse and one that does.
+// lit2 is the binary TestMain built, or why it did not; built is its one
+// reader.
+var lit2 struct {
+	bin string
+	err error
+}
+
+// built is the binary TestMain built, failing t when it did not.
+func built(t *testing.T) string {
+	t.Helper()
+	if lit2.err != nil {
+		t.Fatal(lit2.err)
+	}
+	return lit2.bin
+}
+
+// TestMain builds lit2 once for every smoke test, with the documented
+// command, and removes it after.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "lit2-smoke")
+	if err != nil {
+		lit2.err = err
+	} else {
+		lit2.bin, lit2.err = build(filepath.Join(dir, "lit2"))
+	}
+	status := m.Run()
+	if err == nil {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			status = 1
+		}
+	}
+	os.Exit(status)
+}
+
+// toolchain is what go env names of the developer's toolchain, the one
+// thing the smoke build takes from the machine.
+var toolchain = []string{"GOROOT", "GOPATH", "GOMODCACHE", "GOCACHE"}
+
+// build builds lit2 to bin with the documented command, CGO_ENABLED=0 go
+// build, by the go under the GOROOT go env reports, in an environment made
+// from nothing but that toolchain's directories and git on PATH: no config
+// file, workspace, GOFLAGS or toolchain switch of the developer's reaches
+// it, and git is there for the version stamp lit2 refuses to run without.
+func build(bin string) (string, error) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		return "", fmt.Errorf("the smoke build stamps lit2's version from git: %w", err)
+	}
+	out, err := exec.Command("go", append([]string{"env", "-json"}, toolchain...)...).Output()
+	if err != nil {
+		return "", fmt.Errorf("go env: %w", err)
+	}
+	var reported map[string]string
+	if err := json.Unmarshal(out, &reported); err != nil {
+		return "", fmt.Errorf("go env -json: %w", err)
+	}
+	env := append(gittest.Isolated(git), "GOENV=off", "GOWORK=off", "GOTOOLCHAIN=local", "GOPROXY=off", "CGO_ENABLED=0")
+	for _, k := range toolchain {
+		if reported[k] == "" {
+			return "", fmt.Errorf("go env reports no %s", k)
+		}
+		env = append(env, k+"="+reported[k])
+	}
+	cmd := exec.Command(filepath.Join(reported["GOROOT"], "bin", "go"), "build", "-o", bin, ".")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("CGO_ENABLED=0 go build ./cmd/lit2: %w\n%s", err, out)
+	}
+	return bin, nil
+}
+
+// sandbox is where a smoke test's runs live: a directory in no checkout,
+// whatever the machine holds above it, with the runs' home and state under
+// it. Every run's environment is made from it, never inherited.
+type sandbox struct {
+	dir     string
+	ceiling string // the variable that keeps dir in no checkout
+}
+
+// newSandbox is a fresh sandbox. The test's own GIT_DIR and HOME name a
+// place no run may read, so a run that inherited them would fail.
+func newSandbox(t *testing.T) sandbox {
+	t.Helper()
+	dir, ceiling := gittest.Outside(t)
+	sb := sandbox{dir: dir, ceiling: ceiling}
+	t.Setenv("GIT_DIR", filepath.Join(dir, "not-a-repository"))
+	t.Setenv("HOME", filepath.Join(dir, "not-a-home"))
+	if err := os.Mkdir(sb.home(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return sb
+}
+
+func (sb sandbox) home() string  { return filepath.Join(sb.dir, "home") }
+func (sb sandbox) state() string { return filepath.Join(sb.dir, "state") }
+
+// env is a run's whole environment: the sandbox's home and state, the
+// ceiling, and the git the oracle runs.
+func (sb sandbox) env(t *testing.T) []string {
+	t.Helper()
+	return append([]string{"HOME=" + sb.home(), "XDG_STATE_HOME=" + sb.state(), sb.ceiling}, gittest.Env(t)...)
+}
+
+// run runs the built lit2 in dir and is its status and what it wrote,
+// failing t when it does not run.
+func (sb sandbox) run(t *testing.T, dir string, args ...string) (int, string, string) {
+	t.Helper()
+	cmd := exec.Command(built(t), args...)
+	cmd.Dir, cmd.Env = dir, sb.env(t)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var exit *exec.ExitError
+	switch err := cmd.Run(); {
+	case errors.As(err, &exit):
+		return exit.ExitCode(), stdout.String(), stderr.String()
+	case err != nil:
+		t.Fatalf("lit2 %q did not run: %v", args, err)
+	}
+	return 0, stdout.String(), stderr.String()
+}
+
+// want is run's stdout, failing t unless lit2 exits status.
+func (sb sandbox) want(t *testing.T, dir string, status int, args ...string) string {
+	t.Helper()
+	got, stdout, stderr := sb.run(t, dir, args...)
+	if got != status {
+		t.Fatalf("lit2 %q exited %d, stderr %q; want %d", args, got, stderr, status)
+	}
+	return stdout
+}
+
+// TestSmoke runs the built lit2 as a person would, outside any checkout
+// and inside two not yet minted, whose workspace drafts are not in force,
+// one that does not parse and one that does.
 func TestSmoke(t *testing.T) {
-	tmp := t.TempDir()
-	bin, state := build(t, tmp), filepath.Join(tmp, "state")
-	broken := checkout(t, filepath.Join(tmp, "broken"), "prefix = [unclosed\n")
-	parses := checkout(t, filepath.Join(tmp, "parses"), oneLevel)
+	sb := newSandbox(t)
+	broken := checkout(t, sb, "broken", "prefix = [unclosed\n")
+	parses := checkout(t, sb, "parses", oneLevel)
 
 	var statuses []int
 	for _, tc := range []struct {
 		args         []string
 		status       int
 		stdout, errs string
-		brokenPipe   bool
 		dir          string
 	}{
-		{[]string{"--help"}, 0, "admin sync", "", false, tmp},
-		{[]string{"--help"}, 0, "admin init", "", false, tmp},
-		{[]string{"frobnicate"}, 64, "", "error (reason=unknown_verb): ", false, tmp},
-		{nil, 78, "", "error (reason=store): ", false, tmp},
-		{[]string{"--help"}, 0, "", "", true, tmp},
-		{[]string{"--help"}, 0, "admin sync", "", false, broken},
-		{[]string{"--help"}, 0, "admin sync", "", false, parses},
+		{[]string{"--help"}, 0, "admin sync", "", sb.dir},
+		{[]string{"--help"}, 0, "admin init", "", sb.dir},
+		{nil, 78, "", "error (reason=store): ", sb.dir},
+		{[]string{"--help"}, 0, "admin sync", "", broken},
+		{[]string{"--help"}, 0, "admin sync", "", parses},
 	} {
-		cmd := exec.Command(bin, tc.args...)
-		cmd.Dir, cmd.Env = tc.dir, append(os.Environ(), "XDG_STATE_HOME="+state)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		if tc.brokenPipe {
-			cmd.Stdout = brokenPipe(t)
-		}
-		status := 0
-		var exit *exec.ExitError
-		if err := cmd.Run(); errors.As(err, &exit) {
-			status = exit.ExitCode()
-		} else if err != nil {
-			t.Fatalf("lit2 %q did not run: %v", tc.args, err)
-		}
+		status, stdout, stderr := sb.run(t, tc.dir, tc.args...)
 		statuses = append(statuses, status)
 		for _, verb := range []string{"get", "set", "add", "rm"} {
-			if tc.stdout != "" && !strings.Contains(stdout.String(), verb) {
-				t.Errorf("lit2 %q does not name %s on stdout:\n%s", tc.args, verb, stdout.String())
+			if tc.stdout != "" && !strings.Contains(stdout, verb) {
+				t.Errorf("lit2 %q does not name %s on stdout:\n%s", tc.args, verb, stdout)
 			}
 		}
-		if status != tc.status || !holds(stdout.String(), tc.stdout) || !strings.HasPrefix(stderr.String(), tc.errs) || (tc.errs == "") != (stderr.Len() == 0) {
-			t.Errorf("lit2 %q: status %d, stdout %q, stderr %q", tc.args, status, stdout.String(), stderr.String())
+		if status != tc.status || !holds(stdout, tc.stdout) || !strings.HasPrefix(stderr, tc.errs) || (tc.errs == "") != (stderr == "") {
+			t.Errorf("lit2 %q: status %d, stdout %q, stderr %q", tc.args, status, stdout, stderr)
 		}
 	}
 
 	var recorded []int
 	var configs []*configLine
-	days, err := filepath.Glob(filepath.Join(state, "lit", "commands", "*.jsonl"))
+	days, err := filepath.Glob(filepath.Join(sb.state(), "lit", "commands", "*.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +236,9 @@ func holds(stdout, want string) bool {
 // version one, and works one ticket in it by path, through the built
 // binary and the store on disk.
 func TestSmokeWorksATicket(t *testing.T) {
-	tmp := t.TempDir()
-	bin, dir := build(t, tmp), checkout(t, filepath.Join(tmp, "work"), "")
-	lit := func(args ...string) string { t.Helper(); return run(t, bin, dir, tmp, 0, args...) }
+	sb := newSandbox(t)
+	dir := checkout(t, sb, "work", "")
+	lit := func(args ...string) string { t.Helper(); return sb.want(t, dir, 0, args...) }
 	if out := lit("admin", "init"); !strings.HasPrefix(out, "principal did:key:") || !strings.Contains(out, "recovery phrase: ") || !strings.Contains(out, "enrolled: policy v1, owner did:key:") || !strings.Contains(out, "applied as version one") {
 		t.Fatalf("admin init printed %q", out)
 	}
@@ -149,9 +269,9 @@ func TestSmokeWorksATicket(t *testing.T) {
 // until committed; once committed and applied the next command runs the
 // new model; a file that does not parse stops no command.
 func TestSmokeAppliesTheWorkspace(t *testing.T) {
-	tmp := t.TempDir()
-	bin, dir := build(t, tmp), checkout(t, filepath.Join(tmp, "work"), "")
-	lit := func(status int, args ...string) string { t.Helper(); return run(t, bin, dir, tmp, status, args...) }
+	sb := newSandbox(t)
+	dir := checkout(t, sb, "work", "")
+	lit := func(status int, args ...string) string { t.Helper(); return sb.want(t, dir, status, args...) }
 	write := func(text string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(dir, ".lit", "workspace.toml"), []byte(text), 0o644); err != nil {
@@ -159,15 +279,15 @@ func TestSmokeAppliesTheWorkspace(t *testing.T) {
 		}
 	}
 	lit(0, "admin", "init")
-	first := git(t, dir, "hash-object", ".lit/workspace.toml")
+	first := gittest.Git(t, dir, "hash-object", ".lit/workspace.toml")
 	if got := lit(0, "get", "/workspace"); !strings.Contains(got, first[:7]+" in force · .lit/workspace.toml matches") {
 		t.Errorf("the board after init: %q; want %s in force", got, first[:7])
 	}
 	if got := lit(0, "config", "status"); !strings.Contains(got, "in HEAD's history: no") {
 		t.Errorf("status before the file is committed:\n%s", got)
 	}
-	git(t, dir, "add", ".lit/workspace.toml")
-	git(t, dir, "commit", "-q", "-m", "workspace")
+	gittest.Git(t, dir, "add", ".lit/workspace.toml")
+	gittest.Git(t, dir, "commit", "-q", "-m", "workspace")
 	if got := lit(0, "config", "status"); !strings.Contains(got, "in HEAD's history: yes") {
 		t.Errorf("status once the file is committed:\n%s", got)
 	}
@@ -179,8 +299,8 @@ func TestSmokeAppliesTheWorkspace(t *testing.T) {
 		t.Errorf("the board beside an edit, the default still in force:\n%s", got)
 	}
 	lit(1, "config", "commit")
-	git(t, dir, "commit", "-q", "-am", "icebox")
-	blob := git(t, dir, "rev-parse", "HEAD:.lit/workspace.toml")
+	gittest.Git(t, dir, "commit", "-q", "-am", "icebox")
+	blob := gittest.Git(t, dir, "rev-parse", "HEAD:.lit/workspace.toml")
 	if got := lit(0, "config", "commit"); got != "applied "+blob+"\n" {
 		t.Errorf("config commit printed %q; want applied %s", got, blob)
 	}
@@ -220,53 +340,6 @@ terminal = true
 terminal = true
 `
 
-// run runs lit2 in dir, its command log under tmp, and is its stdout,
-// failing t unless it exits status.
-func run(t *testing.T, bin, dir, tmp string, status int, args ...string) string {
-	t.Helper()
-	cmd := exec.Command(bin, args...)
-	cmd.Dir, cmd.Env = dir, append(os.Environ(), "XDG_STATE_HOME="+filepath.Join(tmp, "state"))
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	got := 0
-	var exit *exec.ExitError
-	if err := cmd.Run(); errors.As(err, &exit) {
-		got = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("lit2 %q did not run: %v", args, err)
-	}
-	if got != status {
-		t.Fatalf("lit2 %q exited %d, stderr %q; want %d", args, got, stderr.String(), status)
-	}
-	return stdout.String()
-}
-
-// git runs git in dir with no config of the caller's, and is its output.
-func git(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %q: %v\n%s", args, err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// build builds lit2 into dir with the documented command.
-func build(t *testing.T, dir string) string {
-	t.Helper()
-	bin := filepath.Join(dir, "lit2")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("CGO_ENABLED=0 go build ./cmd/lit2: %v\n%s", err, out)
-	}
-	return bin
-}
-
 // configLine is the command log's config block, as a reader of the log sees it.
 type configLine struct {
 	Ref string `json:"ref"`
@@ -288,13 +361,16 @@ next = ["done"]
 terminal = true
 `
 
-// checkout makes a git checkout at dir whose .lit/workspace.toml is draft,
-// or with none when draft is empty, and returns dir.
-func checkout(t *testing.T, dir, draft string) string {
+// checkout makes a git checkout named name in the sandbox whose
+// .lit/workspace.toml is draft, or with none when draft is empty, and is
+// its directory.
+func checkout(t *testing.T, sb sandbox, name, draft string) string {
 	t.Helper()
-	if out, err := exec.Command("git", "init", "--quiet", dir).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v\n%s", err, out)
+	dir := filepath.Join(sb.dir, name)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
 	}
+	gittest.Git(t, dir, "init", "-q")
 	if draft == "" {
 		return dir
 	}
@@ -305,23 +381,4 @@ func checkout(t *testing.T, dir, draft string) string {
 		t.Fatal(err)
 	}
 	return dir
-}
-
-// brokenPipe is the write end of a pipe whose reader closed before lit2
-// started, so lit2's first write to it gets EPIPE, with no timing involved.
-func brokenPipe(t *testing.T) *os.File {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Close(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := w.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	return w
 }

@@ -34,11 +34,13 @@ type InboxRef struct{ Inbox InboxID }
 func (WriterRef) ref() {}
 func (InboxRef) ref()  {}
 
-// The namespaces under refs/lit/, and refs/lit/ itself.
+// Namespace is refs/lit/, where every stream's ref is, in one of the two
+// namespaces under it.
+const Namespace git.RefName = "refs/lit/"
+
 const (
-	litRefs  git.RefName = "refs/lit/"
-	writerNS             = litRefs + "log/"
-	inboxNS              = litRefs + "inbox/"
+	writerNS = Namespace + "log/"
+	inboxNS  = Namespace + "inbox/"
 )
 
 // Name is refs/lit/log/<checkout-id>.

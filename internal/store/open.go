@@ -15,7 +15,7 @@ import (
 // repository, and entropy for a new log's id. The disk and the twins are
 // two sets of the same ports, and the Store over them is one type. No
 // field can be set or read from outside the store, so a store's files
-// handle comes from DiskPorts or MemoryPorts and is never handed out
+// handle comes from DiskPorts or RepositoryInMemory and is never handed out
 // `[LAW:types-are-the-program]`. The zero Ports is no store.
 type Ports struct {
 	files   files.Files
@@ -35,11 +35,11 @@ func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader, u *files.Durabili
 	return Ports{files: files.At(l.logs, u), objects: repo, refs: repo, entropy: entropy}
 }
 
-// MemoryPorts is a store in process: its logs in logs, the in-memory
-// twin or a twin over it, which whoever builds the store keeps, and lit's
-// repository's objects and refs.
-func MemoryPorts(logs files.Files, objects git.Objects, refs git.Refs, entropy io.Reader) Ports {
-	return Ports{files: logs, objects: objects, refs: refs, entropy: entropy}
+// RepositoryInMemory is a store whose lit's repository is a fresh twin in
+// process, its logs in logs, which whoever builds the store keeps.
+func RepositoryInMemory(logs files.Files, entropy io.Reader) Ports {
+	repo := git.NewMemory()
+	return Ports{files: logs, objects: repo, refs: repo, entropy: entropy}
 }
 
 // Store is one clone's store as one checkout sees it: every writer's
@@ -51,9 +51,9 @@ type Store struct {
 	bound SegmentBound
 }
 
-// ErrNoPorts is a Ports neither DiskPorts nor MemoryPorts made, which
-// holds no store.
-var ErrNoPorts = errors.New("no store's ports: Ports are made by DiskPorts or MemoryPorts")
+// ErrNoPorts is a Ports neither DiskPorts nor RepositoryInMemory made,
+// which holds no store.
+var ErrNoPorts = errors.New("no store's ports: Ports are made by DiskPorts or RepositoryInMemory")
 
 // Open is the store over p for the checkout me, sealing segments within
 // bound. It performs no I/O. Ports no constructor made are a bug, so they
@@ -323,7 +323,7 @@ func (s *Store) Temps() ([]string, error) {
 // writes visible whether or not its sync has run
 // `[LAW:no-ambient-temporal-coupling]`.
 func (s *Store) Heads() (Heads, error) {
-	refs, err := s.ports.refs.List(litRefs)
+	refs, err := s.ports.refs.List(Namespace)
 	if err != nil {
 		return Heads{}, err
 	}

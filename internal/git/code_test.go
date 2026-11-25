@@ -1,3 +1,5 @@
+//go:build integration
+
 package git_test
 
 import (
@@ -10,15 +12,6 @@ import (
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 )
-
-func TestCodeContract(t *testing.T) {
-	t.Run("repository", func(t *testing.T) {
-		gittest.Code(t, func(t *testing.T) gittest.Commits { return gittest.NewRepo(t) })
-	})
-	t.Run("memory", func(t *testing.T) {
-		gittest.Code(t, func(*testing.T) gittest.Commits { return gittest.Memory{CodeMemory: &git.CodeMemory{}} })
-	})
-}
 
 // TestALinkedWorktreeReadsItsOwnHead: a linked worktree's HEAD is its own
 // branch, read through its git dir, its objects through the common dir.
@@ -107,7 +100,7 @@ func TestAHeadNamingAMissingObjectIsAnError(t *testing.T) {
 		t.Fatalf("AtHead over a whole HEAD = %#v, %v", got, err)
 	}
 	const missing = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-	if err := os.WriteFile(filepath.Join(repo.Dir, ".git", "refs", "heads", "main"), []byte(missing+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(gittest.LooseRef(filepath.Join(repo.Dir, ".git"), "refs/heads/main"), []byte(missing+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := repo.AtHead("f"); !errors.Is(err, git.ErrHeadMissing) || !strings.Contains(err.Error(), missing) {
