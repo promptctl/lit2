@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,10 +29,10 @@ var (
 		return k
 	}()
 	inv = Invocation{
-		Trace:   TraceID{1, 2, 3},
-		Version: "test",
-		Agent:   events.Unlabeled{},
-		Started: t0,
+		Trace:    TraceID{1, 2, 3},
+		Version:  "test",
+		LitAgent: Unset{},
+		Started:  t0,
 	}
 	here = InCheckout{Checkout: checkout, Identity: Minted{Checkout: store.CheckoutID{9}, Key: key}}
 )
@@ -43,7 +44,8 @@ func beginning(inv Invocation) func() Invocation { return func() Invocation { re
 func summary(name commandname.Name) cli.Summary { return cli.Summary{Name: name} }
 
 // stages is a run begun as inv, asked s, its checkout found and placed at
-// at, answering answer and ending with the answer's outcome.
+// at, answering answer and ending with the answer's outcome, its line
+// taken by a say that keeps nothing.
 func stages(s cli.Summary, at Place, answer func(Run) cli.Outcome) Stages[struct{}] {
 	return Stages[struct{}]{
 		Begin:    beginning(inv),
@@ -52,6 +54,7 @@ func stages(s cli.Summary, at Place, answer func(Run) cli.Outcome) Stages[struct
 		Identify: func(Located) Place { return at },
 		Answer:   func(_ struct{}, r Run) cli.Outcome { return answer(r) },
 		End:      func(_ Run, o cli.Outcome) cli.Outcome { return o },
+		Say:      func(string) error { return nil },
 	}
 }
 
@@ -163,12 +166,66 @@ func TestAPanickedErrorStaysInTheChain(t *testing.T) {
 // The line and the status are the outcome's, said under the recover: a
 // failure whose rendering panics ends as the Internal of that panic.
 func TestALineThatPanicsToRenderEndsInternal(t *testing.T) {
-	ended := recordedOf(t, Record(&FixedClock{At: t0}, noGit, stages(summary(commandname.Get()), here, func(Run) cli.Outcome {
-		return cli.Failed{Failure: unsayable{}}
-	})))
+	s := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { return cli.Failed{Failure: unsayable{}} })
+	var line string
+	s.Say = func(l string) error { line += l; return nil }
+	ended := recordedOf(t, Record(&FixedClock{At: t0}, noGit, s))
 	in, ok := ended.Event.Outcome.(cli.Failed).Failure.(Internal)
-	if !ok || !strings.Contains(in.Error(), "no words for it") || ended.Status != 70 || !strings.Contains(ended.Line, "no words for it") {
-		t.Errorf("a failure that cannot be said ended %#v; want an Internal of its panic, said, exit 70", ended)
+	if !ok || !strings.Contains(in.Error(), "no words for it") || ended.Status != 70 || !strings.Contains(line, "no words for it") {
+		t.Errorf("a failure that cannot be said ended %#v, saying %q; want an Internal of its panic, said, exit 70", ended, line)
+	}
+}
+
+// What became of the error line is the event's: a line Say took, one it
+// refused or panicked on, and an outcome with no line make events that
+// differ in that alone.
+func TestTheEventSaysWhetherItsErrorLineWasDelivered(t *testing.T) {
+	refused := cli.Failed{Failure: Broke(errors.New("refused"))}
+	run := func(o cli.Outcome, say func(string) error) Event {
+		s := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { return o })
+		s.Say = say
+		return recordedOf(t, Record(&FixedClock{At: t0}, noGit, s)).Event
+	}
+	stderrGone := errors.New("stderr is closed")
+	var said []string
+	taking := func(l string) error { said = append(said, l); return nil }
+	took := run(refused, taking)
+	refusedLine := run(refused, func(string) error { return stderrGone })
+	panicked := run(refused, func(string) error { panic("stderr broke") })
+	done := run(cli.Done{}, taking)
+	if !slices.Equal(said, []string{cli.Report(refused)}) {
+		t.Errorf("say was handed %q; want the refused run's line once and nothing for the done one", said)
+	}
+	if took.ErrorLine != (LineDelivered{}) || done.ErrorLine != (NoErrorLine{}) {
+		t.Errorf("a taken line is %#v and no line is %#v; want delivered and none", took.ErrorLine, done.ErrorLine)
+	}
+	if u, ok := refusedLine.ErrorLine.(LineUndelivered); !ok || !errors.Is(u.Why, stderrGone) {
+		t.Errorf("a refused line is %#v; want undelivered, and why", refusedLine.ErrorLine)
+	}
+	if u, ok := panicked.ErrorLine.(LineUndelivered); !ok || !strings.Contains(u.Why.Error(), "stderr broke") {
+		t.Errorf("a say that panicked is %#v; want undelivered, with its panic", panicked.ErrorLine)
+	}
+	refusedLine.ErrorLine = took.ErrorLine
+	if !reflect.DeepEqual(took, refusedLine) {
+		t.Errorf("a taken and a refused line differ beyond their delivery:\n%#v\n%#v", took, refusedLine)
+	}
+	for _, tc := range []struct {
+		e    Event
+		want map[string]any
+	}{
+		{took, map[string]any{"error_line": "delivered"}},
+		{run(refused, func(string) error { return stderrGone }), map[string]any{"error_line": "undelivered", "error_line_undelivered": "stderr is closed"}},
+		{done, map[string]any{"error_line": "none"}},
+	} {
+		m := decode(t, tc.e)
+		for k, v := range tc.want {
+			if m[k] != v {
+				t.Errorf("the line's %s is %v; want %v", k, m[k], v)
+			}
+		}
+		if _, has := tc.want["error_line_undelivered"]; !has && m["error_line_undelivered"] != nil {
+			t.Errorf("a line that was not refused says %v", m["error_line_undelivered"])
+		}
 	}
 }
 
@@ -196,9 +253,12 @@ func TestAReadTheEventIsMadeOfThatPanicsIsUnrecorded(t *testing.T) {
 			return strings.Contains(s, "the answer broke") && strings.Contains(s, "goroutine")
 		}},
 	} {
+		// the Unrecorded says the line, so Say is never handed it
+		var told []string
+		tc.stages.Say = func(l string) error { told = append(told, l); return nil }
 		e, ok := Record(tc.clock, tc.spawns, tc.stages).(Unrecorded)
-		if !ok || !tc.said(e.Said) || !strings.Contains(e.Broke.Error(), "broke") || len(e.Broke.Stack()) == 0 {
-			t.Errorf("%s panicking ended %#v; want unrecorded with its panic and stack, and what it said", tc.name, e)
+		if !ok || !tc.said(e.Said) || !strings.Contains(e.Broke.Error(), "broke") || len(e.Broke.Stack()) == 0 || len(told) != 0 {
+			t.Errorf("%s panicking ended %#v, Say handed %q; want unrecorded with its panic and stack, and what it said, said once", tc.name, e, told)
 		}
 	}
 }
@@ -348,13 +408,35 @@ func TestAFailedLineSaysWhy(t *testing.T) {
 
 func TestTheLineSaysWhereAndWho(t *testing.T) {
 	m := decode(t, Event{Invocation: Invocation{
-		Agent:   events.AgentFrom("claude"),
-		Started: t0,
+		LitAgent: Set{Value: "claude"},
+		Started:  t0,
 	}, Command: summary(commandname.Help()), Place: Unlocatable{Dir: "/gone", Err: errors.New("permission denied")}, Outcome: cli.Done{}})
 	place, _ := m["place"].(map[string]any)
 	unlocatable, _ := place["unlocatable"].(map[string]any)
 	if unlocatable["dir"] != "/gone" || unlocatable["error"] != "permission denied" || m["agent"] != "claude" {
 		t.Errorf("the line is %v; want the unlocatable dir and its error, agent claude", m)
+	}
+}
+
+// LIT_AGENT unset and set empty both leave a run unlabeled, and its line
+// says which; a label is said as the agent, with no why.
+func TestTheLineSaysWhyARunIsUnlabeled(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		v         Variable
+		agent     events.Agent
+		said, why any
+	}{
+		{"unset", Unset{}, events.Unlabeled{}, nil, "unset"},
+		{"set empty", Set{Value: ""}, events.Unlabeled{}, nil, "empty"},
+		{"set", Set{Value: "claude"}, events.AgentFrom("claude"), "claude", nil},
+	} {
+		in := inv
+		in.LitAgent = tc.v
+		m := decode(t, Event{Invocation: in, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}})
+		if AgentOf(tc.v) != tc.agent || m["agent"] != tc.said || m["agent_unlabeled"] != tc.why {
+			t.Errorf("LIT_AGENT %s labels %#v, and the line says agent %v, unlabeled %v; want %#v, %v, %v", tc.name, AgentOf(tc.v), m["agent"], m["agent_unlabeled"], tc.agent, tc.said, tc.why)
+		}
 	}
 }
 

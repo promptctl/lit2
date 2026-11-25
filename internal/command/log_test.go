@@ -37,9 +37,70 @@ func lines(t *testing.T, path string) []map[string]any {
 	return out
 }
 
+// stateLog is the log an XDG_STATE_HOME of a fresh directory chooses, and
+// the directory it writes, made.
+func stateLog(t *testing.T) (Sink, string) {
+	t.Helper()
+	state := t.TempDir()
+	dir := filepath.Join(state, "lit", "commands")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return NewLog(Set{Value: state}, noHome), dir
+}
+
+var errNoHome = errors.New("this test has no home")
+
+func noHome() (string, error) { return "", errNoHome }
+
+// How the log's directory was chosen is on every line it writes: an
+// absolute XDG_STATE_HOME used; unset, empty or relative, each ignored for
+// home's .local/state, a relative value said; and a home that does not
+// read is a loss naming which.
+func TestEachLineSaysHowItsLogWasChosen(t *testing.T) {
+	e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
+	state := t.TempDir()
+	for _, tc := range []struct {
+		name  string
+		v     Variable
+		under func(home string) string
+		chose map[string]any
+	}{
+		{"absolute", Set{Value: state}, func(string) string { return state }, map[string]any{"xdg_state_home": "used"}},
+		{"unset", Unset{}, func(home string) string { return filepath.Join(home, ".local", "state") }, map[string]any{"xdg_state_home": "unset"}},
+		{"empty", Set{Value: ""}, func(home string) string { return filepath.Join(home, ".local", "state") }, map[string]any{"xdg_state_home": "empty"}},
+		{"relative", Set{Value: "relative-state"}, func(home string) string { return filepath.Join(home, ".local", "state") }, map[string]any{"xdg_state_home": "relative", "ignored": "relative-state"}},
+	} {
+		home := t.TempDir()
+		if w := NewLog(tc.v, func() (string, error) { return home, nil }).Write(e); !reflect.DeepEqual(w, Kept{}) {
+			t.Fatalf("%s: the write = %#v; want it kept", tc.name, w)
+		}
+		file := filepath.Join(tc.under(home), "lit", "commands", "2026-11-11.jsonl")
+		ls := lines(t, file)
+		if got := ls[len(ls)-1]["command_log"]; !reflect.DeepEqual(got, tc.chose) {
+			t.Errorf("XDG_STATE_HOME %s: the line in %s says the log was chosen %v; want %v", tc.name, file, got, tc.chose)
+		}
+	}
+	for _, tc := range []struct {
+		v    Variable
+		says string
+	}{
+		{Unset{}, "XDG_STATE_HOME is unset"},
+		{Set{Value: ""}, "XDG_STATE_HOME is empty"},
+		{Set{Value: "relative-state"}, `XDG_STATE_HOME is relative ("relative-state")`},
+	} {
+		lost, ok := NewLog(tc.v, noHome).Write(e).(Lost)
+		if !ok || !errors.Is(lost.Why, errNoHome) || !strings.Contains(lost.Why.Error(), tc.says) {
+			t.Errorf("a log with no home = %#v; want it lost for the home, saying %q", lost, tc.says)
+		}
+	}
+	if lost, ok := NewLog(Set{Value: state}, noHome).Write(e).(Lost); ok {
+		t.Errorf("a used XDG_STATE_HOME read the home: %v", lost.Why)
+	}
+}
+
 func TestParallelWritersLeaveEveryLineWhole(t *testing.T) {
-	dir := t.TempDir()
-	log := NewLog(dir)
+	log, dir := stateLog(t)
 	const n = 64
 	var wg sync.WaitGroup
 	wrote := make(chan Written, n)
@@ -67,14 +128,14 @@ func TestParallelWritersLeaveEveryLineWhole(t *testing.T) {
 }
 
 func TestAWriteRemovesDayFilesOlderThan30Days(t *testing.T) {
-	dir := t.TempDir()
+	log, dir := stateLog(t)
 	for _, name := range []string{"2026-10-01.jsonl", "2026-10-11.jsonl", "2026-10-12.jsonl", "2026-10-13.jsonl", "notes.txt"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// notes.txt is no day file: pruning keeps it and says so
-	w := NewLog(dir).Write(Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}})
+	w := log.Write(Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}})
 	if !reflect.DeepEqual(w, Kept{Left: []Unpruned{NotADayFile{Name: "notes.txt"}}}) {
 		t.Fatalf("a write beside notes.txt = %#v; want it kept, saying notes.txt is no day file", w)
 	}
@@ -104,10 +165,10 @@ func TestALogUnderARegularFileFailsToWrite(t *testing.T) {
 	later := inv
 	later.Started = t0.Add(time.Hour)
 	e := Event{Invocation: later, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
-	if w := NewLog(filepath.Join(filepath.Dir(file), "commands")).Write(e); !reflect.DeepEqual(w, Kept{}) {
+	if w := NewLog(Set{Value: filepath.Dir(file)}, noHome).Write(e); !reflect.DeepEqual(w, Kept{}) {
 		t.Fatalf("control: a log beside the regular file: %#v", w)
 	}
-	if lost, ok := NewLog(filepath.Join(file, "commands")).Write(e).(Lost); !ok || !errors.Is(lost.Why, syscall.ENOTDIR) {
+	if lost, ok := NewLog(Set{Value: file}, noHome).Write(e).(Lost); !ok || !errors.Is(lost.Why, syscall.ENOTDIR) {
 		t.Errorf("a log directory under a regular file = %#v; want it lost for ENOTDIR, the OS refusing a directory there", lost)
 	}
 }
@@ -119,8 +180,8 @@ func TestPruningSaysEachThingItLeft(t *testing.T) {
 		t.Skip("root lists and removes whatever a directory's mode")
 	}
 	e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
-	unlisted := t.TempDir()
-	unremoved := t.TempDir()
+	unlistedLog, unlisted := stateLog(t)
+	unremovedLog, unremoved := stateLog(t)
 	for _, name := range []string{"2026-09-01.jsonl", "2026-09-02.jsonl", "2026-11-11.jsonl"} {
 		if err := os.WriteFile(filepath.Join(unremoved, name), nil, 0o600); err != nil {
 			t.Fatal(err)
@@ -136,14 +197,14 @@ func TestPruningSaysEachThingItLeft(t *testing.T) {
 			}
 		})
 	}
-	kept, ok := NewLog(unlisted).Write(e).(Kept)
+	kept, ok := unlistedLog.Write(e).(Kept)
 	if !ok || len(kept.Left) != 1 || !strings.HasPrefix(kept.Left[0].String(), "listing it failed") {
 		t.Fatalf("a write to a directory that does not list = %#v; want it kept, saying the listing failed", kept)
 	}
 	if u, isUnlisted := kept.Left[0].(Unlisted); !isUnlisted || !errors.Is(u.Err, fs.ErrPermission) {
 		t.Errorf("what pruning left of a directory that does not list is %#v; want Unlisted, for its permission", kept.Left[0])
 	}
-	kept, ok = NewLog(unremoved).Write(e).(Kept)
+	kept, ok = unremovedLog.Write(e).(Kept)
 	var names []string
 	for _, left := range kept.Left {
 		if u, isUnremoved := left.(Unremoved); isUnremoved && errors.Is(u.Err, fs.ErrPermission) {

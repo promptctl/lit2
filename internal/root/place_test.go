@@ -3,10 +3,13 @@
 package root
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -105,7 +108,7 @@ func TestAnUnwritableLogIsSaidAndTheStatusStands(t *testing.T) {
 		t.Fatal(err)
 	}
 	twin := NewTwin()
-	twin.Process.Commands = command.NewLog(filepath.Join(file, "commands"))
+	twin.Process.Commands = command.NewLog(command.Set{Value: file}, noHome)
 	if status := Run(twin.Process, []string{"--help"}); status != 0 {
 		t.Errorf("--help with an unwritable log exited %d; want 0", status)
 	}
@@ -122,14 +125,15 @@ func TestAnUnremovableOldDayFileStillLeavesTheRecord(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root removes files from a directory whatever its mode")
 	}
-	dir := t.TempDir()
+	state := t.TempDir()
+	dir := filepath.Join(state, "lit", "commands")
 	// a directory named as a day file is not one, so pruning passes it by
 	// and says so; something in it would make its removal fail
 	if err := os.MkdirAll(filepath.Join(dir, "2026-09-02.jsonl", "held"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	twin := NewTwin()
-	twin.Process.Commands = command.NewLog(dir)
+	twin.Process.Commands = command.NewLog(command.Set{Value: state}, noHome)
 	if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.String() != "lit2: command log: kept 2026-09-02.jsonl: not a day file, so never pruned\n" {
 		t.Fatalf("--help beside a directory named as an old day file: status %d, stderr %q", status, twin.Err)
 	}
@@ -160,19 +164,66 @@ func TestAnUnremovableOldDayFileStillLeavesTheRecord(t *testing.T) {
 	}
 }
 
-func TestARelativeXDGStateHomeCountsAsUnset(t *testing.T) {
+// A relative XDG_STATE_HOME is ignored as an unset one is, for
+// ~/.local/state, and the line says which it was, the relative value with
+// it.
+func TestARelativeXDGStateHomeIsIgnoredAndSaidApartFromAnUnsetOne(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_STATE_HOME", "relative-state")
-	twin := NewTwin()
-	twin.Process.Commands = commandLog()
-	if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.Len() != 0 {
-		t.Fatalf("--help: status %d, stderr %q", status, twin.Err)
+	file := filepath.Join(home, ".local", "state", "lit", "commands", "2026-11-11.jsonl")
+	chose := func(set func()) any {
+		set()
+		twin := NewTwin()
+		twin.Process.Commands = commandLog()
+		if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.Len() != 0 {
+			t.Fatalf("--help: status %d, stderr %q", status, twin.Err)
+		}
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("the event is not under ~/.local/state: %v", err)
+		}
+		ls := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
+		var m map[string]any
+		if err := json.Unmarshal(ls[len(ls)-1], &m); err != nil {
+			t.Fatal(err)
+		}
+		return m["command_log"]
 	}
-	if _, err := os.Stat(filepath.Join(home, ".local", "state", "lit", "commands", "2026-11-11.jsonl")); err != nil {
-		t.Errorf("the event is not under ~/.local/state: %v", err)
+	relative := chose(func() { t.Setenv("XDG_STATE_HOME", "relative-state") })
+	unset := chose(func() {
+		t.Setenv("XDG_STATE_HOME", "")
+		if err := os.Unsetenv("XDG_STATE_HOME"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if want := map[string]any{"xdg_state_home": "relative", "ignored": "relative-state"}; !reflect.DeepEqual(relative, want) {
+		t.Errorf("a relative XDG_STATE_HOME's line says %v; want %v", relative, want)
+	}
+	if want := map[string]any{"xdg_state_home": "unset"}; !reflect.DeepEqual(unset, want) {
+		t.Errorf("an unset XDG_STATE_HOME's line says %v; want %v", unset, want)
 	}
 	if _, err := os.Stat("relative-state"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a relative XDG_STATE_HOME was used: %v", err)
+	}
+}
+
+// LIT_AGENT unset and set empty, as Main reads them, are two facts of the
+// event that label a run alike.
+func TestAnUnsetAndAnEmptyLitAgentAreRecordedApart(t *testing.T) {
+	read := func(set func()) command.Event {
+		set()
+		twin := NewTwin()
+		twin.Process.LitAgent = variable("LIT_AGENT")
+		_, e := run(t, twin, "--help")
+		return e
+	}
+	empty := read(func() { t.Setenv("LIT_AGENT", "") })
+	unset := read(func() {
+		if err := os.Unsetenv("LIT_AGENT"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if empty.LitAgent != (command.Set{Value: ""}) || unset.LitAgent != (command.Unset{}) || command.AgentOf(empty.LitAgent) != command.AgentOf(unset.LitAgent) {
+		t.Errorf("LIT_AGENT empty is %#v and unset is %#v; want them apart, labelling alike", empty.LitAgent, unset.LitAgent)
 	}
 }

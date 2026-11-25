@@ -193,10 +193,13 @@ type (
 		IncompleteTailBytes uint64     `json:"incomplete_tail_bytes"`
 		Torn                []tornLine `json:"torn"`
 	}
+	// tornLine is a ref's torn spans, a torn tail among them, and how many
+	// were torn for each reason.
 	tornLine struct {
-		Ref   string `json:"ref"`
-		Spans int    `json:"torn_spans"`
-		Bytes uint64 `json:"torn_bytes"`
+		Ref   string         `json:"ref"`
+		Spans int            `json:"torn_spans"`
+		Bytes uint64         `json:"torn_bytes"`
+		Why   map[string]int `json:"why"`
 	}
 	// appendedLine is an append that landed its frame, durable: outcome
 	// appended.
@@ -418,13 +421,26 @@ func reads(rs []store.Scanned) *readLine {
 	torn := map[string]tornLine{}
 	for _, r := range rs {
 		l.FramesRead += len(r.Scan.Frames)
-		l.BytesRead += uint64(r.Scan.Until - r.Range.From)
-		l.IncompleteTailBytes += uint64(r.Scan.Until - r.Scan.End)
+		l.BytesRead += uint64(r.Scan.Until() - r.Range.From)
 		name := string(r.Range.Stream.Ref.Name())
 		t := torn[name]
-		for _, s := range r.Scan.Torn {
+		tore := func(s store.Span, why store.Refusal) {
+			if t.Why == nil {
+				t.Why = map[string]int{}
+			}
 			t.Spans++
 			t.Bytes += s.Len()
+			t.Why[refusal(why)]++
+		}
+		for _, s := range r.Scan.Torn {
+			tore(s.Span, s.Why)
+		}
+		switch tail := r.Scan.Tail.(type) {
+		case store.NoTail:
+		case store.InFlight:
+			l.IncompleteTailBytes += tail.Span.Len()
+		case store.TornTail:
+			tore(tail.Span, tail.Why)
 		}
 		if t.Spans > 0 {
 			t.Ref = name
@@ -435,6 +451,25 @@ func reads(rs []store.Scanned) *readLine {
 		l.Torn = append(l.Torn, torn[name])
 	}
 	return l
+}
+
+// refusal is why a frame was refused, as the line spells it.
+func refusal(r store.Refusal) string {
+	switch r.(type) {
+	case store.Truncated:
+		return "truncated"
+	case store.NoMagic:
+		return "no_magic"
+	case store.OverBound:
+		return "over_bound"
+	case store.CRCMismatch:
+		return "crc_mismatch"
+	case store.BadRecordLength:
+		return "bad_record_length"
+	case store.NoRecords:
+		return "no_records"
+	}
+	panic(fmt.Sprintf("command: %T is not a Refusal", r))
 }
 
 func created(o files.Made) bool {

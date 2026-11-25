@@ -195,7 +195,7 @@ func TestAnEventThatPanicsToEncodeIsLost(t *testing.T) {
 	dir := t.TempDir()
 	e := recordedOf(t, invoke(NewTwin().Process, asking(cli.Lit2, "--help"))).Event
 	e.Outcome = cli.Failed{Failure: unsayable{}}
-	lost, ok := recorded(command.NewLog(dir), e).(command.Lost)
+	lost, ok := recorded(command.NewLog(command.Set{Value: dir}, noHome), e).(command.Lost)
 	var in command.Internal
 	if !ok || !errors.As(lost.Why, &in) || !strings.Contains(in.Error(), "no words for it") || len(in.Stack()) == 0 {
 		t.Errorf("an event that panics to encode = %#v; want it lost for its panic", lost)
@@ -204,6 +204,10 @@ func TestAnEventThatPanicsToEncodeIsLost(t *testing.T) {
 		t.Errorf("the log holds %v, %v; want nothing written", entries, err)
 	}
 }
+
+// noHome is a home that does not read, for a log whose XDG_STATE_HOME is
+// used.
+func noHome() (string, error) { return "", errors.New("this test has no home") }
 
 // unsayable is a failure whose message panics.
 type unsayable struct{}
@@ -390,6 +394,20 @@ func TestTheOutcomeIsSaidBeforeTheEventIsWritten(t *testing.T) {
 	Run(twin.Process, []string{"frobnicate"})
 	if !strings.HasPrefix(log.saw, "error (reason=unknown_verb): ") {
 		t.Errorf("stderr held %q when the event was written; want the outcome's line", log.saw)
+	}
+}
+
+// A stderr that refuses the outcome's line is a fact of the event, beside
+// the same run whose stderr took it; the status is the outcome's either way.
+func TestAnErrorLineStderrRefusedIsRecorded(t *testing.T) {
+	took := NewTwin()
+	tookStatus, delivered := run(t, took, "frobnicate")
+	refused := NewTwin()
+	refused.Process.Err = refusing{fmt.Errorf("write /dev/stderr: %w", syscall.EPIPE)}
+	refusedStatus, undelivered := run(t, refused, "frobnicate")
+	u, ok := undelivered.ErrorLine.(command.LineUndelivered)
+	if delivered.ErrorLine != (command.LineDelivered{}) || !ok || !errors.Is(u.Why, syscall.EPIPE) || tookStatus != refusedStatus || tookStatus == 0 {
+		t.Errorf("stderr taking the line records %#v, status %d; refusing it records %#v, status %d; want delivered and undelivered with EPIPE, one failing status", delivered.ErrorLine, tookStatus, undelivered.ErrorLine, refusedStatus)
 	}
 }
 

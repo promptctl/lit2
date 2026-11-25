@@ -75,11 +75,57 @@ func (n NotADayFile) String() string {
 // retention is how long a day file of the command log is kept (D12).
 const retention = 30 * 24 * time.Hour
 
-// NewLog is the command log in dir: one file per UTC day, <date>.jsonl,
-// one line per event (D12).
-func NewLog(dir string) Sink { return commandLog{dir: dir} }
+// NewLog is the command log in lit/commands under the state directory
+// XDG_STATE_HOME, stateHome, names, or home's .local/state when it names
+// none: one file per UTC day, <date>.jsonl, one line per event (D12). The
+// XDG spec makes a relative value invalid, to be ignored, so an empty or a
+// relative value is ignored as an unset one is, and each line the log
+// writes says which it was. A home that does not read is a log every write
+// loses, saying why.
+func NewLog(stateHome Variable, home func() (string, error)) Sink {
+	state, chose := "", stateHomeLine{XDGStateHome: "used"}
+	switch v := stateHome.(type) {
+	case Unset:
+		chose.XDGStateHome = "unset"
+	case Set:
+		switch {
+		case v.Value == "":
+			chose.XDGStateHome = "empty"
+		case !filepath.IsAbs(v.Value):
+			chose = stateHomeLine{XDGStateHome: "relative", Ignored: v.Value}
+		default:
+			state = v.Value
+		}
+	}
+	if chose.XDGStateHome != "used" {
+		h, err := home()
+		if err != nil {
+			return Unwritable{Err: fmt.Errorf("no directory for the command log: XDG_STATE_HOME is %s, and %w", chose, err)}
+		}
+		state = filepath.Join(h, ".local", "state")
+	}
+	return commandLog{dir: filepath.Join(state, "lit", "commands"), chose: chose}
+}
 
-type commandLog struct{ dir string }
+// stateHomeLine is how the log's directory was chosen, as each line it
+// writes says it: XDG_STATE_HOME used, or unset, empty or relative, and so
+// ignored, a relative value said with it.
+type stateHomeLine struct {
+	XDGStateHome string `json:"xdg_state_home"`
+	Ignored      string `json:"ignored,omitempty"`
+}
+
+func (s stateHomeLine) String() string {
+	if s.Ignored != "" {
+		return fmt.Sprintf("%s (%q)", s.XDGStateHome, s.Ignored)
+	}
+	return s.XDGStateHome
+}
+
+type commandLog struct {
+	dir   string
+	chose stateHomeLine
+}
 
 // Write appends the event's line in one O_APPEND write, so concurrent
 // invocations never interleave, then prunes the day files more than 30
@@ -93,9 +139,10 @@ func (l commandLog) Write(e Event) Written {
 	return Kept{Left: l.prune(day.Add(-retention))}
 }
 
-// append is e's line appended to the file of its day.
+// append is e's line, which says how the log was chosen, appended to the
+// file of its day.
 func (l commandLog) append(e Event, day time.Time) error {
-	line, err := encode(e)
+	line, err := encodeIn(e, &l.chose)
 	if err != nil {
 		return err
 	}
@@ -155,31 +202,38 @@ type Unwritable struct{ Err error }
 func (u Unwritable) Write(Event) Written { return Lost{Why: u.Err} }
 
 // line is the command event as one JSON object: the default field set,
-// then lit2's own fields. Counts are written when zero, so a run that did
+// then lit2's own fields; the error line's delivery, with why when it was
+// not delivered; the agent, or why there is none, LIT_AGENT unset or set
+// empty; and how the log that wrote it was chosen, which a sink that
+// writes no line has none of. Counts are written when zero, so a run that did
 // nothing is a line with zeros and a run that never happened is no line
 // `[LAW:nothing-unseen]`.
 type line struct {
-	Event      string       `json:"event"`
-	TraceID    string       `json:"trace_id"`
-	Service    string       `json:"service"`
-	StartedAt  string       `json:"started_at"`
-	DurationMS float64      `json:"duration_ms"`
-	Outcome    string       `json:"outcome"`
-	Error      string       `json:"error,omitempty"`
-	Reason     string       `json:"reason,omitempty"`
-	Stack      string       `json:"stack,omitempty"`
-	ExitCode   int          `json:"exit_code"`
-	Version    string       `json:"version"`
-	Command    commandFacts `json:"command"`
-	Counts     counts       `json:"counts"`
-	Config     *configLine  `json:"config,omitempty"`
-	Store      storeLine    `json:"store"`
-	Fold       []foldLine   `json:"fold,omitempty"`
-	Verbs      *verbsLine   `json:"verbs,omitempty"`
-	Policy     *policyLine  `json:"policy,omitempty"`
-	Git        []spawnLine  `json:"git"`
-	Place      any          `json:"place"`
-	Agent      string       `json:"agent,omitempty"`
+	Event                string         `json:"event"`
+	TraceID              string         `json:"trace_id"`
+	Service              string         `json:"service"`
+	StartedAt            string         `json:"started_at"`
+	DurationMS           float64        `json:"duration_ms"`
+	Outcome              string         `json:"outcome"`
+	Error                string         `json:"error,omitempty"`
+	Reason               string         `json:"reason,omitempty"`
+	Stack                string         `json:"stack,omitempty"`
+	ExitCode             int            `json:"exit_code"`
+	ErrorLine            string         `json:"error_line"`
+	ErrorLineUndelivered string         `json:"error_line_undelivered,omitempty"`
+	Version              string         `json:"version"`
+	Command              commandFacts   `json:"command"`
+	Counts               counts         `json:"counts"`
+	Config               *configLine    `json:"config,omitempty"`
+	Store                storeLine      `json:"store"`
+	Fold                 []foldLine     `json:"fold,omitempty"`
+	Verbs                *verbsLine     `json:"verbs,omitempty"`
+	Policy               *policyLine    `json:"policy,omitempty"`
+	Git                  []spawnLine    `json:"git"`
+	Place                any            `json:"place"`
+	Agent                string         `json:"agent,omitempty"`
+	AgentUnlabeled       string         `json:"agent_unlabeled,omitempty"`
+	CommandLog           *stateHomeLine `json:"command_log,omitempty"`
 }
 
 // spawnLine is one git process the invocation ran; the block is empty,
@@ -251,8 +305,12 @@ func configBlock(c *ConfigFacts) *configLine {
 	}
 }
 
-func encode(e Event) ([]byte, error) {
+func encode(e Event) ([]byte, error) { return encodeIn(e, nil) }
+
+// encodeIn is e's line as the log chosen as chose writes it.
+func encodeIn(e Event, chose *stateHomeLine) ([]byte, error) {
 	l := line{
+		CommandLog: chose,
 		Event:      "lit2 " + e.Command.Name.String(),
 		TraceID:    e.Trace.String(),
 		Service:    "lit2",
@@ -277,10 +335,24 @@ func encode(e Event) ([]byte, error) {
 		l.Outcome, l.Reason, l.Error = o.Failure.Class().String(), o.Failure.Reason(), o.Failure.Error()
 		l.Stack = string(stackOf(o))
 	}
-	switch a := e.Agent.(type) {
-	case events.Labeled:
-		l.Agent = a.String()
-	case events.Unlabeled:
+	switch d := e.ErrorLine.(type) {
+	case NoErrorLine:
+		l.ErrorLine = "none"
+	case LineDelivered:
+		l.ErrorLine = "delivered"
+	case LineUndelivered:
+		l.ErrorLine, l.ErrorLineUndelivered = "undelivered", d.Why.Error()
+	}
+	switch v := e.LitAgent.(type) {
+	case Unset:
+		l.AgentUnlabeled = "unset"
+	case Set:
+		switch a := events.AgentFrom(v.Value).(type) {
+		case events.Labeled:
+			l.Agent = a.String()
+		case events.Unlabeled:
+			l.AgentUnlabeled = "empty"
+		}
 	}
 	b, err := json.Marshal(l)
 	if err != nil {

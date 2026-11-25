@@ -148,6 +148,24 @@ func TestTheStoreBlockSaysEachDirectoryScannedOrWhyNot(t *testing.T) {
 	}
 }
 
+func TestAReadSaysWhyEachSpanWasTornAndOnlyAnAppendInFlightIsAnIncompleteTail(t *testing.T) {
+	s := memoryStore()
+	s.Append(must[store.Batch](t)(store.NewBatch(store.Record("event"))))
+	st := must[store.Heads](t)(s.Heads()).Streams[0]
+	span := func(from, to store.Offset) store.Span { return store.Span{From: from, To: to} }
+	tornTail := store.Scan{End: 20, Tail: store.TornTail{Span: span(20, 25), Why: store.NoMagic{}},
+		Torn: []store.Torn{{Span: span(0, 5), Why: store.NoRecords{}}, {Span: span(10, 12), Why: store.CRCMismatch{}}}}
+	inFlight := store.Scan{End: 20, Tail: store.InFlight{Span: span(20, 30)},
+		Torn: []store.Torn{{Span: span(3, 4), Why: store.Truncated{}}}}
+	block := storeBlockOf(t, StoreFacts{Reads: []store.Scanned{{Range: store.Range{Stream: st, From: 0}, Scan: tornTail}, {Range: store.Range{Stream: st, From: 0}, Scan: inFlight}}})
+	want := map[string]any{"frames_read": 0.0, "bytes_read": 55.0, "incomplete_tail_bytes": 10.0, "torn": []any{map[string]any{
+		"ref": string(st.Ref.Name()), "torn_spans": 4.0, "torn_bytes": 13.0,
+		"why": map[string]any{"no_records": 1.0, "crc_mismatch": 1.0, "no_magic": 1.0, "truncated": 1.0}}}}
+	if !reflect.DeepEqual(block["read"], want) {
+		t.Errorf("the read is %v; want %v", block["read"], want)
+	}
+}
+
 func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	s := memoryStore()
 	appended := s.Append(must[store.Batch](t)(store.NewBatch(store.Record("event")))).(store.Appended)

@@ -189,7 +189,7 @@ func units(s Scan) []Span {
 	torn := s.Torn
 	for _, f := range s.Frames {
 		if len(torn) > 0 && torn[0].To == f.At {
-			us = append(us, torn[0])
+			us = append(us, torn[0].Span)
 			torn = torn[1:]
 		}
 		us = append(us, Span{From: f.At, To: f.At + Offset(frameHeader+f.Batch.bodySize())})

@@ -156,8 +156,9 @@ The decisions the layout needed and the design documents did not make.
   hands that instant down as `now`; the second reading is only the
   duration. Entropy is an `io.Reader` in the process: `crypto/rand.Reader`,
   seeded ChaCha8 in the twin.
-- **D7 Agent label** `LIT_AGENT`: empty is no label, anything else is the
-  label, opaque.
+- **D7 Agent label** `LIT_AGENT`: unset or empty is no label, anything
+  else is the label, opaque; the command event says which of unset and
+  empty it was.
 - **D8 `config` above `fold`, `field` below `config`.** The fold reads no
   configuration (decision H); config and address both stand on field's
   kinds and atoms, so neither imports the other for them.
@@ -191,7 +192,8 @@ The decisions the layout needed and the design documents did not make.
   `repo/` by its path. A `repo/` that is a symlink, dangling or not, is
   refused, never read through or created over.
 - **D12 Command log** `$XDG_STATE_HOME/lit/commands/<UTC date>.jsonl`
-  (`~/.local/state` when unset): one line per invocation in one `O_APPEND`
+  (`~/.local/state` when it is unset, empty or relative, each line saying
+  which): one line per invocation in one `O_APPEND`
   write, per machine; every write removes day files older than 30 days and
   says, never removes, any entry there that is not a day file.
 - **D13 No OTLP**: no network on a foreground path, so the file is the one

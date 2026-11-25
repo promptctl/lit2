@@ -131,7 +131,7 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 		Process: Process{
 			Clock:         &command.FixedClock{At: time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)},
 			Entropy:       entropy,
-			Agent:         events.Unlabeled{},
+			LitAgent:      command.Unset{},
 			Locate:        func() command.Located { return command.AtCheckout{Checkout: c} },
 			Stores:        storesOf(c, ports),
 			WorkTree:      func(git.Checkout) files.Files { return tree },
