@@ -1,8 +1,11 @@
 package command
 
 import (
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/cli"
@@ -20,7 +23,7 @@ func memoryStore() *store.Store {
 
 func storeBlockOf(t *testing.T, f StoreFacts) map[string]any {
 	t.Helper()
-	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Store: f, Outcome: cli.Done{}})
+	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Store: f, Ending: Succeeded{}})
 	block, ok := m["store"].(map[string]any)
 	if !ok {
 		t.Fatalf("the line has no store block: %v", m)
@@ -65,7 +68,7 @@ func TestEveryLineSaysItsStoresOpening(t *testing.T) {
 		{"outside a checkout", NoCheckout{Dir: "/"}, unopened},
 		{"an unlocatable one", Unlocatable{Dir: "/", Err: errors.New("git broke")}, unopened},
 	} {
-		block, _ := decode(t, Event{Invocation: inv, Command: summary(commandname.Help()), Place: tc.place, Outcome: cli.Done{}})["store"].(map[string]any)
+		block, _ := decode(t, Event{Invocation: inv, Command: summary(commandname.Help()), Place: tc.place, Ending: Succeeded{}})["store"].(map[string]any)
 		if o, _ := block["open"].(map[string]any); !reflect.DeepEqual(o, tc.want) {
 			t.Errorf("%s: the store block is %v; want its open block %v", tc.name, block, tc.want)
 		}
@@ -145,6 +148,48 @@ func TestTheStoreBlockSaysEachDirectoryScannedOrWhyNot(t *testing.T) {
 	broken := storeBlockOf(t, StoreFacts{Temps: []Leftovers{TempsScanBroke{Broke: Panicked("the scan broke", []byte("goroutine 1"))}}})
 	if rows, _ := broken["temps"].([]any); len(rows) != 1 || !reflect.DeepEqual(rows[0], map[string]any{"scan": "broke", "error": "panic: the scan broke", "stack": "goroutine 1"}) {
 		t.Errorf("a scan that broke is %v; want it broke, with its panic and stack", broken["temps"])
+	}
+}
+
+// framed is a frame of length and body under a CRC that holds for them,
+// in the store's frame format: magic, length, CRC-32C over the length and
+// the body, then the body.
+func framed(length uint32, body []byte) []byte {
+	f := binary.BigEndian.AppendUint32([]byte{0xf1, 'l', 'i', 't'}, length)
+	c := crc32.MakeTable(crc32.Castagnoli)
+	f = binary.BigEndian.AppendUint32(f, crc32.Update(crc32.Checksum(f[4:8], c), c, body))
+	return append(f, body...)
+}
+
+func TestAReadSaysWhyEachSpanWasTornAndOnlyAnAppendInFlightIsAnIncompleteTail(t *testing.T) {
+	s := memoryStore()
+	s.Append(must[store.Batch](t)(store.NewBatch(store.Record("event"))))
+	st := must[store.Heads](t)(s.Heads()).Streams[0]
+	good := store.Encode(must[store.Batch](t)(store.NewBatch(store.Record("good"))))
+	crc := slices.Clone(good)
+	crc[len(crc)-1] ^= 1
+	torn := [][]byte{
+		[]byte("zz"),                            // no magic
+		framed(1<<20, []byte("cut")),            // a length past every byte: truncated
+		framed(1<<24+1, nil),                    // over the bound
+		crc,                                     // a CRC that disagrees
+		framed(6, []byte{0, 0, 0, 9, 'a', 'b'}), // a record longer than its body
+		framed(0, nil),                          // no records
+	}
+	var log []byte
+	tornBytes := 0
+	for _, b := range torn {
+		log = slices.Concat(log, good, b)
+		tornBytes += len(b)
+	}
+	log = slices.Concat(log, good, good[:6]) // an append in flight
+	scan := store.ScanFrames(0, log)
+	block := storeBlockOf(t, StoreFacts{Reads: []store.Scanned{{Range: store.Range{Stream: st, From: 0}, Scan: scan}}})
+	want := map[string]any{"frames_read": 7.0, "bytes_read": float64(len(log)), "incomplete_tail_bytes": 6.0, "torn": []any{map[string]any{
+		"ref": string(st.Ref.Name()), "torn_spans": 6.0, "torn_bytes": float64(tornBytes),
+		"why": map[string]any{"truncated": 1.0, "no_magic": 1.0, "over_bound": 1.0, "crc_mismatch": 1.0, "bad_record_length": 1.0, "no_records": 1.0}}}}
+	if !reflect.DeepEqual(block["read"], want) {
+		t.Errorf("the read is %v; want %v", block["read"], want)
 	}
 }
 
@@ -239,14 +284,14 @@ func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 		r.Stored().Appends = append(r.Stored().Appends, appended)
 		panic("after the append")
 	})
-	if len(e.Store.Appends) != 1 || e.Store.Appends[0].(store.Appended).Bytes != appended.Bytes || cli.ExitCode(e.Outcome) != 70 {
-		t.Errorf("a panic after an append recorded %+v, exit %d; want the append kept, exit 70", e.Store, cli.ExitCode(e.Outcome))
+	if len(e.Store.Appends) != 1 || e.Store.Appends[0].(store.Appended).Bytes != appended.Bytes || cli.ExitCode(e.Outcome()) != 70 {
+		t.Errorf("a panic after an append recorded %+v, exit %d; want the append kept, exit 70", e.Store, cli.ExitCode(e.Outcome()))
 	}
 }
 
 // The checkout's object format is on the place line, beside its paths.
 func TestThePlaceSaysTheCheckoutsObjectFormat(t *testing.T) {
-	place, _ := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Outcome: cli.Done{}})["place"].(map[string]any)
+	place, _ := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Ending: Succeeded{}})["place"].(map[string]any)
 	c, _ := place["checkout"].(map[string]any)
 	if c["object_format"] != "sha256" || c["git_dir"] != "/w/.git" {
 		t.Errorf("the place line is %v; want the checkout's paths and its format, sha256", place)

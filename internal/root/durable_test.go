@@ -218,10 +218,10 @@ func TestAPanickingBodyStillEnds(t *testing.T) {
 	s := sessionOver(t, files.NewMemory(store.LogsDir(twinCheckout)))
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files { panic("the work tree is gone") }
 	r := s.lit("admin", "init")
-	f, ok := r.event.Outcome.(cli.Failed)
+	f, ok := r.event.Outcome().(cli.Failed)
 	var in command.Internal
 	if !ok || !errors.As(f.Failure, &in) || !strings.Contains(in.Error(), "the work tree is gone") {
-		t.Errorf("the panicking run's outcome is %#v; want the body's panic", r.event.Outcome)
+		t.Errorf("the panicking run's outcome is %#v; want the body's panic", r.event.Outcome())
 	}
 	if len(r.event.Store.Temps) != 1 {
 		t.Fatalf("the panicking run's temps are %#v; want the scan that broke", r.event.Store.Temps)
@@ -281,7 +281,7 @@ func TestAFailedRunCarriesItsNotDurableWrites(t *testing.T) {
 		!strings.Contains(r.err, filepath.Join(twinCheckout.WorkTree, verbs.WorkspacePath())+" landed") || !strings.Contains(r.err, errSync.Error()) {
 		t.Errorf("the run is status %d, reason %q, stderr %q; want the readback's failure, and the workspace file not durable, both said", r.status, reasonOf(r.event), r.err)
 	}
-	f, _ := r.event.Outcome.(cli.Failed)
+	f, _ := r.event.Outcome().(cli.Failed)
 	var nd notDurable
 	if !errors.As(f.Failure, &nd) || !errors.Is(f.Failure, errWorkspaceUnread) {
 		t.Errorf("the run's failure %v holds no notDurable or no workspace failure", f.Failure)

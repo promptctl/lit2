@@ -103,7 +103,7 @@ func replay(env fold.Env, founding fold.Founding, s *store.Store, stored *comman
 // mint signs drafts as one frame of events after the folded state,
 // written under the version ref names.
 func (o opened) mint(drafts []events.Draft, ref git.ObjectID) (events.Minted, error) {
-	ctx := events.Context{Writer: o.id.Checkout, Agent: o.p.Agent, ConfigRef: ref, Policy: o.folded.State.Cites(),
+	ctx := events.Context{Writer: o.id.Checkout, Agent: command.AgentOf(o.p.LitAgent), ConfigRef: ref, Policy: o.folded.State.Cites(),
 		Frontier: o.folded.State.Frontier(), Known: o.folded.State.Known(), Now: o.now()}
 	m, err := events.Mint(ctx, events.NewDrafts(drafts[0], drafts[1:]...), o.id.Key.Signer(), o.p.Entropy)
 	if err != nil {

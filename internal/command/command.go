@@ -39,13 +39,40 @@ type TraceID [16]byte
 func (t TraceID) String() string { return hex.EncodeToString(t[:]) }
 
 // Invocation is what is known of an invocation before anything else is
-// read: its trace, its release, its agent, and Started, the clock's first
-// reading, so the duration covers every stage of it.
+// read: its trace, its release, LIT_AGENT as it read it, and Started, the
+// clock's first reading, so the duration covers every stage of it.
 type Invocation struct {
-	Trace   TraceID
-	Version string
-	Agent   events.Agent
-	Started time.Time
+	Trace    TraceID
+	Version  string
+	LitAgent Variable
+	Started  time.Time
+}
+
+// Variable is an environment variable as the process read it: Unset, or
+// Set to its value, an empty one included, which is a different fact.
+//
+//sumtype:decl
+type Variable interface{ variable() }
+
+// Unset is a variable the environment does not hold.
+type Unset struct{}
+
+// Set is a variable the environment holds, and its value.
+type Set struct{ Value string }
+
+func (Unset) variable() {}
+func (Set) variable()   {}
+
+// AgentOf is the agent LIT_AGENT, v, labels a run with: none when it is
+// unset, and what D7 reads from its value when it is set.
+func AgentOf(v Variable) events.Agent {
+	switch v := v.(type) {
+	case Unset:
+		return events.Unlabeled{}
+	case Set:
+		return events.AgentFrom(v.Value)
+	}
+	panic(fmt.Sprintf("command: %T is not a Variable", v))
 }
 
 // Ended is how an invocation ended: Recorded, its event made, or
@@ -54,18 +81,18 @@ type Invocation struct {
 //sumtype:decl
 type Ended interface{ ended() }
 
-// Recorded is a run whose event was made: the event, and the error line
-// and exit status of its outcome, said under the recover that made it.
+// Recorded is a run whose event was made: the event, and the exit status
+// of its outcome, said under the recover that made it.
 type Recorded struct {
 	Event  Event
-	Line   string
 	Status int
 }
 
 // Unrecorded is a run that made no event: a read the event is made of, at
 // its start or its end, broke, Broke. Said is what the run says of the
-// outcome it had: its error line and, when a panic ended it, that panic's
-// stack, which no event keeps; nothing when it broke before it had one.
+// outcome it had, which no event keeps: its error line, when Say did not
+// deliver it, and the stack of a panic that ended it; nothing when it
+// broke before it had an outcome.
 type Unrecorded struct {
 	Said  string
 	Broke Internal
@@ -73,6 +100,44 @@ type Unrecorded struct {
 
 func (Recorded) ended()   {}
 func (Unrecorded) ended() {}
+
+// Ending is how a run ended, as its event says it: Succeeded, or Failed,
+// with its failure and what became of the error line that said it, which
+// only a failure has.
+//
+//sumtype:decl
+type Ending interface{ ending() }
+
+// Succeeded is a run that did what was asked.
+type Succeeded struct{}
+
+// Failed is a run that ended in Failure, and what Say did with its line.
+type Failed struct {
+	Failure reason.Failure
+	Line    Delivery
+}
+
+func (Succeeded) ending() {}
+func (Failed) ending()    {}
+
+// Delivery is what Say did with a failure's error line: took it; refused
+// it, and why; or panicked, with the panic and its stack.
+//
+//sumtype:decl
+type Delivery interface{ delivery() }
+
+// Delivered is an error line Say took.
+type Delivered struct{}
+
+// Refused is an error line Say refused, and why.
+type Refused struct{ Why error }
+
+// SayPanicked is an error line Say panicked on.
+type SayPanicked struct{ Broke Internal }
+
+func (Delivered) delivery()   {}
+func (Refused) delivery()     {}
+func (SayPanicked) delivery() {}
 
 // ConfigFacts is the version in force a run read from its store's fold:
 // its config-ref and what it held. How many versions the log holds, and
@@ -99,7 +164,18 @@ type Event struct {
 	Verbs    *VerbsFacts
 	Policy   PolicyFacts
 	Git      []git.Spawn
-	Outcome  cli.Outcome
+	Ending   Ending
+}
+
+// Outcome is the outcome the run's ending is.
+func (e Event) Outcome() cli.Outcome {
+	switch end := e.Ending.(type) {
+	case Succeeded:
+		return cli.Done{}
+	case Failed:
+		return cli.Failed{Failure: end.Failure}
+	}
+	panic(fmt.Sprintf("command: %T is not an Ending", e.Ending))
 }
 
 // Stages is one invocation as Record runs it, in this order, each stage
@@ -107,8 +183,10 @@ type Event struct {
 // Begin, the reads an event is made of; Ask, what the command line asks
 // and its answer, A; Locate, the checkout git finds; Identify, the place
 // that checkout is, its identity read; Answer, the answer run at that
-// place; and End, the steps every run ends with, over the answer's
-// outcome.
+// place; End, the steps every run ends with, over the answer's outcome;
+// and Say, the outcome's error line put where the person who ran it reads
+// it, before the event is written, so a slow or hung log cannot hold the
+// line back.
 type Stages[A any] struct {
 	Begin    func() Invocation
 	Ask      func() (cli.Summary, A)
@@ -116,6 +194,7 @@ type Stages[A any] struct {
 	Identify func(Located) Place
 	Answer   func(A, Run) cli.Outcome
 	End      func(Run, cli.Outcome) cli.Outcome
+	Say      func(line string) error
 }
 
 // Run is an invocation at its place, as Record hands it to Answer and End:
@@ -265,19 +344,23 @@ func (Internal) Reason() string { return "internal" }
 //   - a panic from Ask through Identify, or in End, or in saying the
 //     outcome's error line and status, is the run's outcome, an Internal,
 //     recorded with the facts given before it;
+//   - a panic in Say is a line it did not deliver, which the event says;
 //   - a panic in Begin, or in the end's reads, the clock again for the
 //     duration and the git processes the run spawned, leaves no event to
-//     make: the run is Unrecorded, saying the outcome it had.
+//     make: the run is Unrecorded, saying what Say did not, the line it
+//     did not deliver and the stack of a panic that ended the outcome.
 func Record[A any](c Clock, spawns func() []git.Spawn, s Stages[A]) Ended {
 	return Caught(func() Ended {
 		inv := s.Begin()
 		r := &run{started: inv.Started, asked: cli.Unparsed(), where: func() Where { return PlaceUnread{} }}
 		end := Caught(func() said { return saying(through(r, s)) }, func(broke Internal) said { return saying(failedFor(broke)) })
+		// said before the end's reads, so the duration covers it
+		ended := ending(end, s.Say)
 		return Caught(func() Ended {
-			e := Event{Invocation: inv, Command: r.asked, Place: r.where(), Duration: c.Now().Sub(inv.Started), Store: r.stored, Config: r.config, Verbs: r.did, Policy: r.policy, Git: spawns(), Outcome: end.outcome}
-			return Recorded{Event: e, Line: end.line, Status: end.status}
+			e := Event{Invocation: inv, Command: r.asked, Place: r.where(), Duration: c.Now().Sub(inv.Started), Store: r.stored, Config: r.config, Verbs: r.did, Policy: r.policy, Git: spawns(), Ending: ended}
+			return Recorded{Event: e, Status: end.status}
 		}, func(broke Internal) Ended {
-			return Unrecorded{Said: end.line + string(stackOf(end.outcome)), Broke: broke}
+			return Unrecorded{Said: unsaid(end, ended) + string(stackOf(end.outcome)), Broke: broke}
 		})
 	}, func(broke Internal) Ended { return Unrecorded{Broke: broke} })
 }
@@ -295,6 +378,40 @@ func through[A any](r *run, s Stages[A]) cli.Outcome {
 	r.where = func() Where { return r.at }
 	at := Run{r: r}
 	return s.End(at, Caught(func() cli.Outcome { return s.Answer(answer, at) }, failedFor))
+}
+
+// ending is the ending of a run that said end: a failure's line handed to
+// say, and what say did with it.
+func ending(end said, say func(string) error) Ending {
+	switch o := end.outcome.(type) {
+	case cli.Done:
+		return Succeeded{}
+	case cli.Failed:
+		return Failed{Failure: o.Failure, Line: Caught(func() Delivery {
+			if err := say(end.line); err != nil {
+				return Refused{Why: err}
+			}
+			return Delivered{}
+		}, func(broke Internal) Delivery { return SayPanicked{Broke: broke} })}
+	}
+	panic(fmt.Sprintf("command: %T is not an Outcome", end.outcome))
+}
+
+// unsaid is end's line when Say did not deliver it, as ended says.
+func unsaid(end said, ended Ending) string {
+	switch e := ended.(type) {
+	case Succeeded:
+		return ""
+	case Failed:
+		switch e.Line.(type) {
+		case Delivered:
+			return ""
+		case Refused, SayPanicked:
+			return end.line
+		}
+		panic(fmt.Sprintf("command: %T is not a Delivery", e.Line))
+	}
+	panic(fmt.Sprintf("command: %T is not an Ending", ended))
 }
 
 // failedFor is the outcome of a run that broke.

@@ -44,7 +44,7 @@ func TestInitRefusesAWorkTreeWhoseLitIsASymlink(t *testing.T) {
 	t.Run("control: a real .lit takes the workspace file", func(t *testing.T) {
 		c := treeOnDisk(t)
 		if status, e := initOnDisk(t, c); status != 0 {
-			t.Fatalf("admin init over a real .lit exited %d, %#v; want 0", status, e.Outcome)
+			t.Fatalf("admin init over a real .lit exited %d, %#v; want 0", status, e.Outcome())
 		}
 		if b, err := os.ReadFile(filepath.Join(c.WorkTree, verbs.LitDir().String(), verbs.WorkspaceFile().String())); err != nil || string(b) != string(assets.DefaultWorkspace.Bytes()) {
 			t.Errorf("the work tree's workspace file holds %q, %v; want the default profile", b, err)

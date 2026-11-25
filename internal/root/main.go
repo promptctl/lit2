@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"syscall"
@@ -16,7 +15,6 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
-	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
@@ -38,7 +36,9 @@ func Main(args []string) int {
 	// the unrecorded status.
 	reader, err := config.ReadReaderVersion(buildStamp())
 	if err != nil {
-		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
+		// [LAW:no-silent-failure] exception: the status says the run unrecorded
+		// whatever stderr takes.
+		_ = told(os.Stderr, "lit2: "+err.Error()+"\n")
 		return cli.Unrecorded
 	}
 	g := git.Find(os.Environ())
@@ -49,7 +49,7 @@ func Main(args []string) int {
 	return Run(Process{
 		Clock:         systemClock{},
 		Entropy:       rand.Reader,
-		Agent:         events.AgentFrom(os.Getenv("LIT_AGENT")),
+		LitAgent:      variable("LIT_AGENT"),
 		Locate:        here(g),
 		Stores:        diskStores(g, rand.Reader, u),
 		WorkTree:      workTree(u),
@@ -111,19 +111,16 @@ func diskStores(g *git.Git, entropy io.Reader, u *files.Durability) func(git.Che
 	return func(c git.Checkout) store.Ports { return store.DiskPorts(g, c, entropy, u) }
 }
 
-// commandLog is this machine's command log, $XDG_STATE_HOME/lit/commands,
-// ~/.local/state when XDG_STATE_HOME is unset (D12). The XDG spec makes a
-// relative value invalid, to be ignored, so one counts as unset.
-func commandLog() command.Sink {
-	state := os.Getenv("XDG_STATE_HOME")
-	if !filepath.IsAbs(state) {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return command.Unwritable{Err: fmt.Errorf("no directory for the command log: XDG_STATE_HOME is unset or relative and %w", err)}
-		}
-		state = filepath.Join(home, ".local", "state")
+// commandLog is this machine's command log, under the state directory
+// XDG_STATE_HOME names (D12).
+func commandLog() command.Sink { return command.NewLog(variable("XDG_STATE_HOME"), os.UserHomeDir) }
+
+// variable is the environment's name as the process reads it.
+func variable(name string) command.Variable {
+	if v, set := os.LookupEnv(name); set {
+		return command.Set{Value: v}
 	}
-	return command.NewLog(filepath.Join(state, "lit", "commands"))
+	return command.Unset{}
 }
 
 // buildStamp is the main module's version as Go stamped it. A build with no

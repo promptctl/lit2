@@ -76,8 +76,8 @@ func TestScenario15AccessControlFromTheFirstEvent(t *testing.T) {
 	// the capability it needed, and nothing is written
 	out, errOut, status, event = lit(joiner, "rm", epic)
 	var carried verbs.CarriedEvent
-	if failed, ok := event.Outcome.(cli.Failed); !ok || !errors.As(failed.Failure, &carried) || !isUnauthorized(carried.Why) || failed.Failure.Reason() != "unauthorized" {
-		t.Errorf("the contributor's rm %s ended %#v; want the fold to carry it as unauthorized", epic, event.Outcome)
+	if failed, ok := event.Outcome().(cli.Failed); !ok || !errors.As(failed.Failure, &carried) || !isUnauthorized(carried.Why) || failed.Failure.Reason() != "unauthorized" {
+		t.Errorf("the contributor's rm %s ended %#v; want the fold to carry it as unauthorized", epic, event.Outcome())
 	}
 	if status == 0 || !strings.Contains(errOut, "rm own/* (level=1)") || len(event.Store.Appends) != 0 {
 		t.Errorf("the contributor's rm %s: status %d, out %q, stderr %q", epic, status, out, errOut)

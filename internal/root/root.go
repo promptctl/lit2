@@ -20,7 +20,6 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/config"
-	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
@@ -38,7 +37,9 @@ import (
 type Process struct {
 	Clock   command.Clock
 	Entropy io.Reader
-	Agent   events.Agent
+	// LitAgent is LIT_AGENT as the process read it, which labels the
+	// events a run mints.
+	LitAgent command.Variable
 	// Locate is the checkout git finds where the invocation runs, none, or
 	// a search that failed.
 	Locate func() command.Located
@@ -68,27 +69,33 @@ type Process struct {
 }
 
 // Run runs one invocation of args: it invokes what args ask of lit2's
-// command line and says how it ended. A recorded run puts its outcome's
-// error line on Err before writing its event, so a slow or hung log cannot
-// hold the line back, and returns the outcome's exit status, unless the
-// event was lost and stderr would not take the loss either. A run with no
-// event says what it said of its outcome, when it had one, and that it
-// went unrecorded, with the panic and its stack, and ends with the
-// unrecorded status `[LAW:nothing-unseen]`.
+// command line and says how it ended. A recorded run, its outcome's error
+// line said on Err, returns the outcome's exit status once its event is
+// written, unless the event was lost and stderr would not take the loss
+// either. A run with no event says what it said of its outcome, when it
+// had one, and that it went unrecorded, with the panic and its stack, and
+// ends with the unrecorded status `[LAW:nothing-unseen]`.
 func Run(p Process, args []string) int {
-	// [LAW:no-silent-failure] exception: stderr is where failures are said;
-	// when writing to it fails, the exit status is the one channel left. A
-	// stderr that panics crashes the process, which Go ends with the
-	// unrecorded status too.
 	switch e := invoke(p, func() (cli.Summary, func(body) cli.Outcome) { return parsed(cli.Lit2, args) }).(type) {
 	case command.Recorded:
-		_, _ = io.WriteString(p.Err, e.Line)
 		return logged(p, recorded(p.Commands, e.Event), e.Status)
 	case command.Unrecorded:
-		_, _ = io.WriteString(p.Err, e.Said+fmt.Sprintf("lit2: unrecorded: %v\n%s", e.Broke, e.Broke.Stack()))
+		// [LAW:no-silent-failure] exception: the run is unrecorded, and its
+		// status says so whatever stderr takes.
+		_ = told(p.Err, e.Said+fmt.Sprintf("lit2: unrecorded: %v\n%s", e.Broke, e.Broke.Stack()))
 		return cli.Unrecorded
 	}
 	panic("root: an Ended that is neither Recorded nor Unrecorded")
+}
+
+// told is what stderr, w, did with s: nil when it took it, or why not, a
+// panic in w a refusal too, so every line lit2 says on stderr beside a
+// recorded run's error line, whose Say Record catches, fails alike.
+func told(w io.Writer, s string) error {
+	return command.Caught(func() error {
+		_, err := io.WriteString(w, s)
+		return err
+	}, func(broke command.Internal) error { return broke })
 }
 
 // recorded is what writing e to sink did: a sink or an encoding that
@@ -110,7 +117,7 @@ func logged(p Process, w command.Written, status int) int {
 			// [LAW:no-silent-failure] exception: the event is in the log and
 			// the next write finds what this one left, so a stderr that will
 			// not take it changes no status.
-			_, _ = io.WriteString(p.Err, "lit2: command log: "+left.String()+"\n")
+			_ = told(p.Err, "lit2: command log: "+left.String()+"\n")
 		}
 		return status
 	case command.Lost:
@@ -119,7 +126,9 @@ func logged(p Process, w command.Written, status int) int {
 		if errors.As(w.Why, &broke) {
 			said += string(broke.Stack())
 		}
-		if _, unsaid := io.WriteString(p.Err, said); unsaid != nil {
+		// [LAW:no-silent-failure] exception: when stderr will not take the
+		// loss, the exit status is the one channel left.
+		if unsaid := told(p.Err, said); unsaid != nil {
 			return cli.Unrecorded
 		}
 		return status
@@ -132,8 +141,9 @@ func logged(p Process, w command.Written, status int) int {
 // Record runs, in its order. It begins with the reads an event is made of,
 // the trace id and the clock; asks, which reads nothing, so what was asked
 // is known before anything else can panic; locates the checkout and reads
-// its identity; runs the answer at that place; and ends with the
-// judgement of its writes and the temps left beside the checkout's files.
+// its identity; runs the answer at that place; ends with the judgement of
+// its writes and the temps left beside the checkout's files; and says its
+// error line on Err.
 func invoke(p Process, ask func() (cli.Summary, func(body) cli.Outcome)) command.Ended {
 	return command.Record(p.Clock, p.Git, command.Stages[func(body) cli.Outcome]{
 		Begin: func() command.Invocation {
@@ -144,7 +154,7 @@ func invoke(p Process, ask func() (cli.Summary, func(body) cli.Outcome)) command
 				panic(fmt.Sprintf("minting the trace id: %v", err))
 			}
 			// read before the place, so the run's duration covers its reading
-			return command.Invocation{Trace: trace, Version: p.Reader.String(), Agent: p.Agent, Started: p.Clock.Now()}
+			return command.Invocation{Trace: trace, Version: p.Reader.String(), LitAgent: p.LitAgent, Started: p.Clock.Now()}
 		},
 		Ask:      ask,
 		Locate:   p.Locate,
@@ -158,6 +168,12 @@ func invoke(p Process, ask func() (cli.Summary, func(body) cli.Outcome)) command
 				return []command.Leftovers{command.TempsScanBroke{Broke: broke}}
 			})
 			return durable(*at.Stored(), o)
+		},
+		// a panic in stderr is Record's to catch, so the event says Say
+		// panicked, with its stack
+		Say: func(line string) error {
+			_, err := io.WriteString(p.Err, line)
+			return err
 		},
 	})
 }

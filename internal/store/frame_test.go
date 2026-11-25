@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -83,8 +84,9 @@ func TestEveryTruncationReadsAsWholeFramesAndAnIncompleteTail(t *testing.T) {
 		if whole > 0 {
 			wantEnd = ends[whole-1]
 		}
-		if len(s.Frames) != whole || len(s.Torn) != 0 || s.End != wantEnd || s.Until != Offset(cut) {
-			t.Errorf("cut at %d reads %d frames, %d torn, end %d, until %d; want %d frames, none torn, end %d", cut, len(s.Frames), len(s.Torn), s.End, s.Until, whole, wantEnd)
+		inFlight := Span{From: wantEnd, To: Offset(cut)}
+		if len(s.Frames) != whole || len(s.Torn) != 0 || s.End != wantEnd || s.InFlight() != inFlight {
+			t.Errorf("cut at %d reads %d frames, %d torn, end %d, in flight %v; want %d frames, none torn, end %d, in flight %v", cut, len(s.Frames), len(s.Torn), s.End, s.InFlight(), whole, wantEnd, inFlight)
 		}
 	}
 }
@@ -109,23 +111,98 @@ func TestGarbageBetweenFramesIsOneTornSpanAndLosesNothingElse(t *testing.T) {
 		}
 		torn := slices.Concat(log[:at], garbage, log[at:])
 		s := ScanFrames(100, torn)
-		if !slices.Equal(recordsOf(s), want) || len(s.Torn) != 1 || s.Torn[0] != (Span{From: 100 + at, To: 100 + at + Offset(len(garbage))}) || s.End != s.Until {
+		if !slices.Equal(recordsOf(s), want) || len(s.Torn) != 1 || s.Torn[0].Span != (Span{From: 100 + at, To: 100 + at + Offset(len(garbage))}) || s.InFlight().Len() != 0 {
 			t.Fatalf("trial %d: %d garbage bytes at %d read %v, torn %v; want every record and one torn span", trial, len(garbage), at, recordsOf(s), s.Torn)
 		}
 	}
 }
 
-func TestBytesThatAreNoFrameAreAnIncompleteTail(t *testing.T) {
+func TestBytesThatAreNoFrameAreTornAndNothingConsumes(t *testing.T) {
 	s := ScanFrames(7, []byte("no frame here"))
-	if len(s.Frames) != 0 || len(s.Torn) != 0 || s.End != 7 || s.Until != 20 {
-		t.Errorf("bytes with no frame read %+v; want nothing consumed", s)
-	}
-	f := Encode(mustBatch(t, "x"))
-	f[len(f)-1] ^= 1
-	if s := ScanFrames(0, f); len(s.Frames) != 0 || s.End != 0 {
-		t.Errorf("a frame whose CRC disagrees read %+v; want no frame", s)
+	if len(s.Frames) != 0 || !slices.Equal(s.Torn, []Torn{{Span: Span{From: 7, To: 20}, Why: NoMagic{}}}) || s.End != 7 || s.InFlight() != (Span{From: 20, To: 20}) {
+		t.Errorf("bytes with no frame read %+v; want them torn, nothing consumed, nothing in flight", s)
 	}
 	if !bytes.Equal(Encode(mustBatch(t, "x")), Encode(mustBatch(t, "x"))) {
 		t.Error("one batch encodes two ways")
+	}
+}
+
+// framed is a frame of length and body under a CRC that holds for them.
+func framed(length uint32, body []byte) []byte {
+	f := append([]byte{}, frameMagic[:]...)
+	f = binary.BigEndian.AppendUint32(f, length)
+	f = binary.BigEndian.AppendUint32(f, frameCRC(f[4:8], body))
+	return append(f, body...)
+}
+
+func TestEachRefusalSaysWhyItsBytesAreNoFrame(t *testing.T) {
+	good := Encode(mustBatch(t, "good"))
+	crc := Encode(mustBatch(t, "x"))
+	crc[len(crc)-1] ^= 1
+	// at the tail only bytes more bytes could finish are in flight; the
+	// rest are torn whatever follows them
+	refused := []struct {
+		name     string
+		bytes    []byte
+		why      Refusal
+		inFlight bool
+	}{
+		{"no magic", []byte("no frame here"), NoMagic{}, false},
+		{"a body cut short", framed(64, []byte("short")), Truncated{}, true},
+		{"a length over the bound", framed(maxBody+1, nil), OverBound{Length: maxBody + 1}, false},
+		{"a length over the bound, its CRC cut short", framed(maxBody+1, nil)[:9], OverBound{Length: maxBody + 1}, false},
+		{"a CRC that disagrees", crc, CRCMismatch{}, false},
+		{"a record longer than its body", framed(6, []byte{0, 0, 0, 9, 'a', 'b'}), BadRecordLength{}, false},
+		{"a body shorter than a record header", framed(2, []byte{0, 0}), BadRecordLength{}, false},
+		{"a CRC that holds over no records", framed(0, nil), NoRecords{}, false},
+	}
+	for _, r := range refused {
+		at := Offset(len(good))
+		span := Span{From: at, To: at + Offset(len(r.bytes))}
+		mid := ScanFrames(0, slices.Concat(good, r.bytes, good))
+		if len(mid.Frames) != 2 || !slices.Equal(mid.Torn, []Torn{{Span: span, Why: r.why}}) || mid.InFlight().Len() != 0 {
+			t.Errorf("%s between two frames read %d frames, torn %#v, in flight %v; want 2 frames, torn %#v", r.name, len(mid.Frames), mid.Torn, mid.InFlight(), Torn{Span: span, Why: r.why})
+		}
+		torn, inFlight := []Torn{{Span: span, Why: r.why}}, Span{From: span.To, To: span.To}
+		if r.inFlight {
+			torn, inFlight = []Torn{}, span
+		}
+		tail := ScanFrames(0, slices.Concat(good, r.bytes))
+		if len(tail.Frames) != 1 || !slices.Equal(tail.Torn, torn) || tail.End != at || tail.InFlight() != inFlight {
+			t.Errorf("%s at the tail read %d frames, torn %#v, end %d, in flight %v; want 1 frame, torn %#v, end %d, in flight %v", r.name, len(tail.Frames), tail.Torn, tail.End, tail.InFlight(), torn, at, inFlight)
+		}
+	}
+}
+
+// Torn bytes after the last whole frame and an append in flight after them
+// are each what they are: the append starts at the first frame the bytes
+// cut short, even one whose body holds the magic, or at a start of the
+// magic the bytes end on.
+func TestTornBytesBeforeAnAppendInFlightAreTornAndTheAppendIsInFlight(t *testing.T) {
+	good := Encode(mustBatch(t, "good"))
+	crc := Encode(mustBatch(t, "x"))
+	crc[len(crc)-1] ^= 1
+	inner := Encode(mustBatch(t, "holds "+string(frameMagic[:])+" in its body"))
+	inner = inner[:len(inner)-4] // cut after the magic in its body
+	at := Offset(len(good))
+	for _, tc := range []struct {
+		name     string
+		after    []byte
+		torn     []Torn
+		inFlight Span
+	}{
+		{"zeros, then a frame's first bytes", slices.Concat(make([]byte, 8), Encode(mustBatch(t, "landing"))[:6]),
+			[]Torn{{Span: Span{From: at, To: at + 8}, Why: NoMagic{}}}, Span{From: at + 8, To: at + 14}},
+		{"a CRC that disagrees, then a frame's first bytes", slices.Concat(crc, Encode(mustBatch(t, "landing"))[:10]),
+			[]Torn{{Span: Span{From: at, To: at + Offset(len(crc))}, Why: CRCMismatch{}}}, Span{From: at + Offset(len(crc)), To: at + Offset(len(crc)) + 10}},
+		{"a frame cut short whose body holds the magic", inner,
+			[]Torn{}, Span{From: at, To: at + Offset(len(inner))}},
+		{"zeros, then a start of the magic", slices.Concat([]byte("zz"), frameMagic[:2]),
+			[]Torn{{Span: Span{From: at, To: at + 2}, Why: NoMagic{}}}, Span{From: at + 2, To: at + 4}},
+	} {
+		s := ScanFrames(0, slices.Concat(good, tc.after))
+		if len(s.Frames) != 1 || s.End != at || !slices.Equal(s.Torn, tc.torn) || s.InFlight() != tc.inFlight {
+			t.Errorf("%s after a frame read %d frames, end %d, torn %#v, in flight %v; want 1 frame, end %d, torn %#v, in flight %v", tc.name, len(s.Frames), s.End, s.Torn, s.InFlight(), at, tc.torn, tc.inFlight)
+		}
 	}
 }

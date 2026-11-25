@@ -92,16 +92,41 @@ func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 		t.Errorf("an open over a torn span folds %+v; want the enrollment, version one, the 6 creates and one torn span", f)
 	}
 	// the body ran: only it records a verbs block
-	if failed, ok := e.Outcome.(cli.Failed); ok && failed.Failure.Reason() == "store" || e.Verbs == nil {
-		t.Errorf("a verb over a torn span ends %#v with verbs %v; want its body's outcome", e.Outcome, e.Verbs)
+	if failed, ok := e.Outcome().(cli.Failed); ok && failed.Failure.Reason() == "store" || e.Verbs == nil {
+		t.Errorf("a verb over a torn span ends %#v with verbs %v; want its body's outcome", e.Outcome(), e.Verbs)
+	}
+}
+
+// Bytes after the last frame that no more bytes can make one are torn in
+// the fold as in the read block; a frame's first bytes after them are in
+// flight, in neither count.
+func TestTornBytesAtTheTailAreCountedAndAnAppendInFlightIsNot(t *testing.T) {
+	logs := filestest.Memory()
+	twin := freshTwinOver(logs)
+	if status := Run(twin.Process, []string{"admin", "init"}); status != 0 {
+		t.Fatalf("admin init exited %d: %s", status, twin.Err)
+	}
+	twin.Commands.Events = nil
+	three(t, twin, 1)
+	filestest.Append(t, logs, store.LogName(twinID), []byte("no frame here"))
+	landing := store.Encode(must(store.NewBatch(store.Record("landing"))))
+	filestest.Append(t, logs, store.LogName(twinID), landing[:6])
+	_, e := run(t, twin, "get", "lit-abc/title")
+	torn, inFlight := 0, uint64(0)
+	for _, r := range e.Store.Reads {
+		torn += len(r.Scan.Torn)
+		inFlight += r.Scan.InFlight().Len()
+	}
+	if f := folded(t, e); f.Torn != 1 || f.Records != 5 || torn != 1 || inFlight != 6 {
+		t.Errorf("an open over torn bytes and an append in flight at the tail folds %d torn of %d records, reads %d torn and %d in flight; want 1 torn of 5, and 6 bytes in flight", f.Torn, f.Records, torn, inFlight)
 	}
 }
 
 func TestAVerbWithNoStoreFailsAsTheEnvironments(t *testing.T) {
 	_, e := run(t, outside(NewTwin()), "get", "lit-abc/title")
-	failed, ok := e.Outcome.(cli.Failed)
+	failed, ok := e.Outcome().(cli.Failed)
 	if !ok || failed.Failure.Reason() != "store" || failed.Failure.Class() != reason.ClassEnvironment || len(e.Store.Folds) != 0 {
-		t.Errorf("a verb with no store ends %#v with folds %v; want it failed as the store's, no fold", e.Outcome, e.Store.Folds)
+		t.Errorf("a verb with no store ends %#v with folds %v; want it failed as the store's, no fold", e.Outcome(), e.Store.Folds)
 	}
 }
 
