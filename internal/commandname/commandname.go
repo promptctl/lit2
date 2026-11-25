@@ -68,11 +68,6 @@ func Commit() Name { return InGroup("config", "commit") }
 // Status reports the version in force against the file.
 func Status() Name { return InGroup("config", "status") }
 
-// Rows is the name of every command lit2's command line has a row for,
-// the one list cli's test holds lit2's rows to, so no row is named but
-// here.
-func Rows() []Name { return []Name{Get(), Set(), Add(), Rm(), Init(), Sync(), Commit(), Status()} }
-
 // Unparsed names an argv that did not parse.
 func Unparsed() Name { return Verb("unparsed") }
 

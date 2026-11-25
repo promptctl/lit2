@@ -183,8 +183,9 @@ func (r body) ran(o cli.Outcome) command.Ran { return command.Ran{Place: r.place
 
 // dispatch binds each command to its body. Every verb runs the steps of §5
 // in order on every call: open and fold, the version in force loaded, then
-// its own body. A body that names its command names it by what was
-// asked, the row's name, never a spelling of its own.
+// its own body. Only the unbuilt row names the command it runs, and by
+// what was asked; a message telling a person which command to run next
+// reads commandname.
 func dispatch(r body, commands cli.Commands, p cli.Parsed) command.Ran {
 	switch c := p.Command.(type) {
 	case cli.Help:
@@ -197,13 +198,13 @@ func dispatch(r body, commands cli.Commands, p cli.Parsed) command.Ran {
 		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Add, pairs(c.Pairs()), c.Flags()) }))
 	case cli.Rm:
 		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Rm, paths(c.Paths()), c.Flags()) }))
-	case cli.AdminInit:
+	case cli.Init:
 		return r.init()
-	case cli.AdminSync:
+	case cli.Sync:
 		return r.ran(notBuilt(p.Asked.Name, "lit-converge-5eq"))
-	case cli.ConfigCommit:
+	case cli.Commit:
 		return r.ran(r.stored(opened.commit))
-	case cli.ConfigStatus:
+	case cli.Status:
 		return r.ran(r.stored(opened.status))
 	}
 	panic(fmt.Sprintf("root: %T is not a Command", p.Command))

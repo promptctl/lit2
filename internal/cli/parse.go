@@ -29,18 +29,33 @@ const (
 	endFlags   = "--"
 )
 
-// flag is one flag scan takes, and what --help says it does.
-type flag struct{ name, does string }
+// scanned is a line as scan reads it: its operand words, whether --help
+// is on it, and the flags it gives the command.
+type scanned struct {
+	words []string
+	help  bool
+	flags Flags
+}
 
-// theFlags is every flag scan takes, the one list --help and the unknown
-// flag's refusal render.
+// flag is one flag scan takes: its name, what --help says it does, and
+// what it sets on the line.
+type flag struct {
+	name, does string
+	set        func(*scanned)
+}
+
+// theFlags is every flag lit2 takes, the one list scan reads them by and
+// --help and the unknown flag's refusal render `[LAW:one-source-of-truth]`.
 func theFlags() []flag {
-	return []flag{{helpFlag, "anywhere prints this"}, {dryRunFlag, "shows what a write would do"}}
+	return []flag{
+		{helpFlag, "anywhere prints this", func(s *scanned) { s.help = true }},
+		{dryRunFlag, "shows what a write would do", func(s *scanned) { s.flags.DryRun = true }},
+	}
 }
 
 // flagNames is theFlags' names, said as a list.
 func flagNames() string {
-	names := make([]string, 0, 2)
+	var names []string
 	for _, f := range theFlags() {
 		names = append(names, f.name)
 	}
@@ -57,15 +72,18 @@ func isFlag(word string) bool { return strings.HasPrefix(word, flagPrefix) }
 type Commands struct {
 	rows []Row
 	bare Bare
+	// bareWords is the bare line as scan read it, the words a bare lit2
+	// routes as a typed line's
+	bareWords []string
 }
 
-// Row is one command: its name, the operands it takes, whether it takes
-// --dry-run, and its line in --help. The name's group is the group --help
-// prints it under, so regrouping a row is renaming it.
+// Row is one command: its name, the operands it takes, and its line in
+// --help. The name's group is the group --help prints it under, so
+// regrouping a row is renaming it; whether it takes --dry-run is its
+// operands' shape's.
 type Row struct {
 	Name     commandname.Name
 	Operands Operands
-	DryRun   bool
 	Summary  string
 }
 
@@ -83,9 +101,9 @@ type Bare struct {
 // as a flag, or that holds a space, which the log, joining a name's words
 // by spaces, would spell as two; a name a word line could reach two rows
 // by, one of them a prefix of the other or both the same; a reserved
-// name; and a bare invocation that is no row's or does not parse as its
-// row's. It keeps copies of rows and bare, so what it checked is what it
-// holds.
+// name; and a bare invocation scan does not read word for word as typed,
+// or that does not route, as a typed line does, to its row. It keeps
+// copies of rows and bare, so what it checked is what it holds.
 func NewCommands(rows []Row, bare Bare) (Commands, error) {
 	for i, r := range rows {
 		if r.Operands == nil || !r.Operands.makes() {
@@ -100,22 +118,24 @@ func NewCommands(rows []Row, bare Bare) (Commands, error) {
 			return Commands{}, fmt.Errorf("%w: %q", errReservedName, r.Name)
 		}
 		for _, o := range rows[:i] {
-			if reaches(o.Name, r.Name) || reaches(r.Name, o.Name) {
+			if begins(o.Name.Words(), r.Name.Words()) || begins(r.Name.Words(), o.Name.Words()) {
 				return Commands{}, fmt.Errorf("%w: %q and %q", errAmbiguous, o.Name, r.Name)
 			}
 		}
 	}
-	i := slices.IndexFunc(rows, func(r Row) bool { return r.Name == bare.Name })
-	if i < 0 {
-		return Commands{}, fmt.Errorf("%w: %q", errBareNoRow, bare.Name)
-	}
-	// %v, not %w: the row's refusal is this line's bug, never a usage
-	// failure a caller could take for the person's
-	if _, err := rows[i].parse(bare.Operands, Flags{}); err != nil {
-		return Commands{}, fmt.Errorf("%w: %v", errBareUnparsed, err)
+	typed := append(bare.Name.Words(), bare.Operands...)
+	s, err := scan(typed)
+	if err != nil || s.help || s.flags != (Flags{}) || !slices.Equal(s.words, typed) {
+		return Commands{}, fmt.Errorf("%w: %q", errBareNotAsTyped, typed)
 	}
 	bare.Operands = slices.Clone(bare.Operands)
-	return Commands{rows: slices.Clone(rows), bare: bare}, nil
+	c := Commands{rows: slices.Clone(rows), bare: bare, bareWords: s.words}
+	// %v, not %w: the row's refusal is this line's bug, never a usage
+	// failure a caller could take for the person's
+	if p, err := c.route(s.words, Flags{}); err != nil || p.Asked.Name != bare.Name {
+		return Commands{}, fmt.Errorf("%w: %q: %v", errBareUnrouted, typed, err)
+	}
+	return c, nil
 }
 
 // Rows is c's rows, in --help's order, for a caller to range over or to
@@ -129,57 +149,69 @@ func (c Commands) Bare() Bare {
 	return b
 }
 
-// reaches is whether a word line that reaches a also reaches b: b's words
-// begin with all of a's.
-func reaches(a, b commandname.Name) bool {
-	aw, bw := a.Words(), b.Words()
-	return len(aw) <= len(bw) && slices.Equal(aw, bw[:len(aw)])
+// begins is whether words begin with all of name's: the one test of
+// which row a word line reaches, Parse's and NewCommands's.
+func begins(name, words []string) bool {
+	return len(name) <= len(words) && slices.Equal(name, words[:len(name)])
 }
 
 // The table refusals, each the cause of NewCommands's error.
 var (
-	errNoMake       = errors.New("a row with no operand shape or no Make")
-	errNotAWord     = errors.New("a name word that is not one operand word")
-	errReservedName = errors.New("a reserved name")
-	errAmbiguous    = errors.New("names a word line reaches both of")
-	errBareNoRow    = errors.New("a bare invocation of no row")
-	errBareUnparsed = errors.New("a bare invocation its row does not parse")
+	errNoMake         = errors.New("a row with no operand shape or no Make")
+	errNotAWord       = errors.New("a name word that is not one operand word")
+	errReservedName   = errors.New("a reserved name")
+	errAmbiguous      = errors.New("names a word line reaches both of")
+	errBareNotAsTyped = errors.New("a bare invocation scan does not read as typed")
+	errBareUnrouted   = errors.New("a bare invocation that does not parse as its row's")
 )
 
 // Flags is the flags a command was given beside --help.
 type Flags struct{ DryRun bool }
 
 // Operands is the shape of a row's operands; Make's parameter is the shape,
-// so a row cannot make its command from the wrong one.
+// so a row cannot make its command from the wrong one. A shape that writes
+// hands its Make the flags, so the shape alone says whether a row takes
+// --dry-run, and no row can take it and not honour it.
 //
 //sumtype:decl
 type Operands interface {
 	operands()
 	// makes is whether the shape has its Make, which NewCommands requires.
 	makes() bool
+	// writes is whether the row takes --dry-run, which only a write does.
+	writes() bool
 }
 
-// TakesPaths is one or more paths: get, rm.
-type TakesPaths struct {
+// ReadsPaths is one or more paths read: get.
+type ReadsPaths struct{ Make func([]PathText) Command }
+
+// WritesPaths is one or more paths written: rm.
+type WritesPaths struct {
 	Make func([]PathText, Flags) Command
 }
 
-// TakesPairs is one or more path-value pairs: set, add.
-type TakesPairs struct{ Make func([]Pair, Flags) Command }
+// WritesPairs is one or more path-value pairs written: set, add.
+type WritesPairs struct{ Make func([]Pair, Flags) Command }
 
 // TakesNothing is no operands: a group's commands.
 type TakesNothing struct{ Make func() Command }
 
-func (TakesPaths) operands()       {}
-func (TakesPairs) operands()       {}
-func (o TakesPaths) makes() bool   { return o.Make != nil }
-func (o TakesPairs) makes() bool   { return o.Make != nil }
-func (o TakesNothing) makes() bool { return o.Make != nil }
+func (ReadsPaths) operands()       {}
+func (WritesPaths) operands()      {}
+func (WritesPairs) operands()      {}
 func (TakesNothing) operands()     {}
+func (o ReadsPaths) makes() bool   { return o.Make != nil }
+func (o WritesPaths) makes() bool  { return o.Make != nil }
+func (o WritesPairs) makes() bool  { return o.Make != nil }
+func (o TakesNothing) makes() bool { return o.Make != nil }
+func (ReadsPaths) writes() bool    { return false }
+func (WritesPaths) writes() bool   { return true }
+func (WritesPairs) writes() bool   { return true }
+func (TakesNothing) writes() bool  { return false }
 
 // Command is a parsed command line. Its fields are unexported and Parse is
 // the only constructor, so a pathless Get or an odd operand on Set cannot
-// exist.
+// exist; its accessors hand out copies, so no body changes what was parsed.
 //
 //sumtype:decl
 type Command interface{ command() }
@@ -209,16 +241,16 @@ type Add struct {
 }
 
 // Paths is the paths get reads.
-func (g Get) Paths() []PathText { return g.paths }
+func (g Get) Paths() []PathText { return slices.Clone(g.paths) }
 
 // Paths is the paths rm removes.
-func (r Rm) Paths() []PathText { return r.paths }
+func (r Rm) Paths() []PathText { return slices.Clone(r.paths) }
 
 // Pairs is each path set and its value.
-func (s Set) Pairs() []Pair { return s.pairs }
+func (s Set) Pairs() []Pair { return slices.Clone(s.pairs) }
 
 // Pairs is each path added to and its value.
-func (a Add) Pairs() []Pair { return a.pairs }
+func (a Add) Pairs() []Pair { return slices.Clone(a.pairs) }
 
 // Flags is the flags rm was given.
 func (r Rm) Flags() Flags { return r.flags }
@@ -229,27 +261,27 @@ func (s Set) Flags() Flags { return s.flags }
 // Flags is the flags add was given.
 func (a Add) Flags() Flags { return a.flags }
 
-// AdminInit makes this checkout a writer.
-type AdminInit struct{}
+// Init makes this checkout a writer.
+type Init struct{}
 
-// AdminSync publishes this checkout's events and fetches every writer's.
-type AdminSync struct{}
+// Sync publishes this checkout's events and fetches every writer's.
+type Sync struct{}
 
-// ConfigCommit applies the committed workspace file as the next version.
-type ConfigCommit struct{}
+// Commit applies the committed workspace file as the next version.
+type Commit struct{}
 
-// ConfigStatus reports the version in force against the file.
-type ConfigStatus struct{}
+// Status reports the version in force against the file.
+type Status struct{}
 
-func (Help) command()         {}
-func (Get) command()          {}
-func (Rm) command()           {}
-func (Set) command()          {}
-func (Add) command()          {}
-func (AdminInit) command()    {}
-func (AdminSync) command()    {}
-func (ConfigCommit) command() {}
-func (ConfigStatus) command() {}
+func (Help) command()   {}
+func (Get) command()    {}
+func (Rm) command()     {}
+func (Set) command()    {}
+func (Add) command()    {}
+func (Init) command()   {}
+func (Sync) command()   {}
+func (Commit) command() {}
+func (Status) command() {}
 
 // PathText is a path as typed. It is not yet an address: a short id
 // resolves against the fold, so address parses it at §5 step 4
@@ -275,24 +307,31 @@ type Parsed struct {
 
 // Parse reads argv against c. Its error is a ParseFailure.
 func Parse(c Commands, args []string) (Parsed, error) {
-	words, help, flags, err := scan(args)
+	s, err := scan(args)
 	if err != nil {
 		return Parsed{}, err
 	}
-	if help {
+	if s.help {
 		return Parsed{Asked: Summary{Name: commandname.Help()}, Command: Help{}}, nil
 	}
+	words := s.words
 	if len(words) == 0 {
-		// a bare lit2 is its bare row, parsed as typed, so its flags are
-		// judged as that row's are
-		words = append(c.bare.Name.Words(), c.bare.Operands...)
+		// a bare lit2 is its bare line, read by scan as a typed one is, so
+		// the flags typed with it are judged as its row's are
+		words = c.bareWords
 	}
+	return c.route(words, s.flags)
+}
+
+// route is the command words parse to on c, given flags: the row the
+// words begin with, its operands the rest.
+func (c Commands) route(words []string, flags Flags) (Parsed, error) {
 	for _, r := range c.rows {
 		name := r.Name.Words()
-		if len(words) < len(name) || !slices.Equal(words[:len(name)], name) {
+		if !begins(name, words) {
 			continue
 		}
-		if flags.DryRun && !r.DryRun {
+		if flags.DryRun && !r.Operands.writes() {
 			return Parsed{}, refuseUsage(fmt.Errorf("%s: %w; only a write takes it", r.Name, errNoDryRun))
 		}
 		return r.parse(words[len(name):], flags)
@@ -306,59 +345,54 @@ func Parse(c Commands, args []string) (Parsed, error) {
 	return Parsed{}, UnknownVerb{prefix: words[0] + " ", word: words[1], known: c.known()}
 }
 
-// scan splits argv into operands and flags. The flags are --help and
-// --dry-run; -- ends the flags; a word that does not start with -- is an
-// operand, - included. --help anywhere wins over an unknown flag, which is
-// a usage failure only when no --help is on the line, so the whole line is
-// read before judging.
-func scan(args []string) (words []string, help bool, flags Flags, err error) {
+// scan splits argv into operands and the flags theFlags names; -- ends
+// the flags; a word that is no flag is an operand, - included. --help
+// anywhere wins over an unknown flag, which is a usage failure only when
+// no --help is on the line, so the whole line is read before judging.
+func scan(args []string) (scanned, error) {
+	var s scanned
 	var unknown string
 	for i, a := range args {
 		if a == endFlags {
-			words = append(words, args[i+1:]...)
+			s.words = append(s.words, args[i+1:]...)
 			break
 		}
 		if !isFlag(a) {
-			words = append(words, a)
+			s.words = append(s.words, a)
 			continue
 		}
-		if a == helpFlag {
-			help = true
-			continue
-		}
-		if a == dryRunFlag {
-			flags.DryRun = true
+		if f := slices.IndexFunc(theFlags(), func(f flag) bool { return f.name == a }); f >= 0 {
+			theFlags()[f].set(&s)
 			continue
 		}
 		if unknown == "" {
 			unknown = a
 		}
 	}
-	if !help && unknown != "" {
-		return nil, false, Flags{}, refuseUsage(fmt.Errorf("%w %s; the flags are %s", errUnknownFlag, unknown, flagNames()))
+	if !s.help && unknown != "" {
+		return scanned{}, refuseUsage(fmt.Errorf("%w %s; the flags are %s", errUnknownFlag, unknown, flagNames()))
 	}
-	return words, help, flags, nil
+	return s, nil
 }
 
 // parse checks the operands against the row's shape and makes its
-// command, with the summary of it the event records. Each shape builds
-// its summary's paths apart from its command's, so the record keeps the
-// paths as typed whatever is later done with the command: the second
-// copy is the event's own `[LAW:one-source-of-truth]` exception: the
-// command's accessors hand out its slices to the bodies that read them,
-// so the record cannot share them.
+// command, with the summary of it the event records, which shares the
+// command's paths: the command hands out only copies of them.
 func (r Row) parse(operands []string, flags Flags) (Parsed, error) {
 	switch o := r.Operands.(type) {
-	case TakesPaths:
-		if len(operands) == 0 {
-			return Parsed{}, refuseUsage(fmt.Errorf("%s: %w; it takes one or more", r.Name, errNoPaths))
+	case ReadsPaths:
+		paths, err := r.paths(operands)
+		if err != nil {
+			return Parsed{}, err
 		}
-		paths, asked := make([]PathText, len(operands)), make([]PathText, len(operands))
-		for i, w := range operands {
-			paths[i], asked[i] = PathText(w), PathText(w)
+		return Parsed{Asked: Summary{Name: r.Name, Paths: paths}, Command: o.Make(paths)}, nil
+	case WritesPaths:
+		paths, err := r.paths(operands)
+		if err != nil {
+			return Parsed{}, err
 		}
-		return Parsed{Asked: Summary{Name: r.Name, Paths: asked}, Command: o.Make(paths, flags)}, nil
-	case TakesPairs:
+		return Parsed{Asked: Summary{Name: r.Name, Paths: paths}, Command: o.Make(paths, flags)}, nil
+	case WritesPairs:
 		if len(operands) == 0 || len(operands)%2 != 0 {
 			return Parsed{}, refuseUsage(fmt.Errorf("%s: %w; got %d operands", r.Name, errNotPairs, len(operands)))
 		}
@@ -375,6 +409,18 @@ func (r Row) parse(operands []string, flags Flags) (Parsed, error) {
 		return Parsed{Asked: Summary{Name: r.Name}, Command: o.Make()}, nil
 	}
 	panic(fmt.Sprintf("cli: %T is not Operands", r.Operands))
+}
+
+// paths is operands as the one or more paths r takes.
+func (r Row) paths(operands []string) ([]PathText, error) {
+	if len(operands) == 0 {
+		return nil, refuseUsage(fmt.Errorf("%s: %w; it takes one or more", r.Name, errNoPaths))
+	}
+	paths := make([]PathText, len(operands))
+	for i, w := range operands {
+		paths[i] = PathText(w)
+	}
+	return paths, nil
 }
 
 // isGroup is whether word is a group's: the first of some row's two

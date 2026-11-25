@@ -467,7 +467,7 @@ func (x *expanded) rm(w World) *refusal {
 		}
 		r, err := w.Schema().Table().Find(x.addr.Place, field.Deleted)
 		if err != nil {
-			return refuse("not_removable", "%s has no deleted flag: the root and a home are the tree's, and rm removes an item, a comment or a member", x.addr)
+			return refuse("not_removable", "%s has no deleted flag: the root and a home are the tree's, and %s removes an item, a comment or a member", x.addr, Rm)
 		}
 		x.writes = []write{{subject: existing(w, x.addr), path: field.Deleted, decl: r.(config.FieldRow).Decl, value: field.Scalar{Text: "true"}, source: FromOperand{}, shape: setOne}}
 		return nil
@@ -479,7 +479,7 @@ func (x *expanded) rm(w World) *refusal {
 		x.writes = []write{{subject: existing(w, x.addr), path: t.Path, decl: t.Decl, value: field.Scalar{Text: t.Name.String()}, source: FromOperand{}, shape: sh}}
 		return nil
 	case address.Field:
-		return refuse("not_removable", "rm removes an item, a comment or a member, and %s is a field", x.addr)
+		return refuse("not_removable", "%s removes an item, a comment or a member, and %s is a field", Rm, x.addr)
 	}
 	panic(fmt.Sprintf("verbs: %T is not a Target", x.addr.Target))
 }
@@ -562,9 +562,9 @@ func VerbsOf(r config.Row) []string {
 			out = append(out, Rm.String()+" "+string(f.At)+"/<member>")
 		}
 	case field.Elements:
-		out = append(out, "rm "+string(f.At)+"/<id>")
+		out = append(out, Rm.String()+" "+string(f.At)+"/<id>")
 	case field.Principals:
-		out = append(out, "rm "+string(f.At)+"/<principal>")
+		out = append(out, Rm.String()+" "+string(f.At)+"/<principal>")
 	case field.One, field.Children:
 	}
 	return out
@@ -572,7 +572,7 @@ func VerbsOf(r config.Row) []string {
 
 func wrongVerb(verb Verb, path field.Path, r config.Row) *refusal {
 	if r == nil {
-		return refuse("wrong_verb", "%s writes a field, not a whole node or a member; rm removes an item, a comment or a member", verb)
+		return refuse("wrong_verb", "%s writes a field, not a whole node or a member; %s removes an item, a comment or a member", verb, Rm)
 	}
 	if no := Unwritten(r); no != nil {
 		return refuse(no.Reason(), "%s: %v", path, no)

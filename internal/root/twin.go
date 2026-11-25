@@ -172,7 +172,7 @@ func storesOf(c git.Checkout, ports store.Ports) func(git.Checkout) store.Ports 
 // composition, and its event is kept by no log.
 func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 	var forged error
-	// [LAW:single-enforcer] exception: a summary no row parsed, since a
+	// [LAW:one-source-of-truth] exception: a summary no row parsed, since a
 	// forged write is no command line; its name is the reserved one no row
 	// may take, so it is never read as a person's command.
 	e := invoke(t.Process, cli.Summary{Name: commandname.Forged()}, func(r body) command.Ran {

@@ -38,9 +38,9 @@ func parse(args ...string) (Command, error) {
 // operandsFor is one operand line o takes: a path, a pair, or nothing.
 func operandsFor(o Operands) []string {
 	switch o.(type) {
-	case TakesPaths:
+	case ReadsPaths, WritesPaths:
 		return []string{"x"}
-	case TakesPairs:
+	case WritesPairs:
 		return []string{"x", "v"}
 	case TakesNothing:
 		return nil
@@ -51,9 +51,11 @@ func operandsFor(o Operands) []string {
 // made is the command r's own Make makes of operandsFor, with no flags.
 func made(r Row) Command {
 	switch o := r.Operands.(type) {
-	case TakesPaths:
+	case ReadsPaths:
+		return o.Make([]PathText{"x"})
+	case WritesPaths:
 		return o.Make([]PathText{"x"}, Flags{})
-	case TakesPairs:
+	case WritesPairs:
 		return o.Make([]Pair{{"x", "v"}}, Flags{})
 	case TakesNothing:
 		return o.Make()
@@ -88,18 +90,6 @@ func helpLine(help string, r Row) bool {
 		}
 	}
 	return false
-}
-
-// lit2's rows are commandname's, so the name every message reads is the
-// name a row parses by.
-func TestLit2sRowsAreTheNamesCommandnameHolds(t *testing.T) {
-	var got []commandname.Name
-	for _, r := range Lit2().rows {
-		got = append(got, r.Name)
-	}
-	if !slices.Equal(got, commandname.Rows()) {
-		t.Errorf("lit2's rows are named %v; want commandname's, %v", got, commandname.Rows())
-	}
 }
 
 func TestOperandsAndFlagsParseIntoTheCommand(t *testing.T) {
@@ -242,16 +232,25 @@ func TestHelpsFieldsAreTheTablesRows(t *testing.T) {
 // edit `[LAW:composability]`.
 func TestOneMoreRowIsParsedHelpedAndAskedUnderItsName(t *testing.T) {
 	c := Lit2()
-	show := Row{Name: commandname.Verb("show"), Operands: TakesPaths{Make: func(p []PathText, _ Flags) Command { return Get{paths: p} }}, Summary: "read, by another name"}
+	show := Row{Name: commandname.Verb("show"), Operands: ReadsPaths{Make: func(p []PathText) Command { return Get{paths: p} }}, Summary: "read, by another name"}
+	// a write, which takes --dry-run by its shape alone
+	erase := Row{Name: commandname.Verb("erase"), Operands: WritesPaths{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, Summary: "delete, by another name"}
 	// a command of a kind nothing else in the package has heard of
 	ping := Row{Name: commandname.InGroup("admin", "ping"), Operands: TakesNothing{Make: func() Command { return probe{} }}, Summary: "a command no switch knows"}
-	more, err := NewCommands(append(slices.Clone(c.rows), show, ping), c.bare)
+	more, err := NewCommands(append(slices.Clone(c.rows), show, erase, ping), c.bare)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := Parse(more, []string{"show", "x"})
 	if err != nil || got.Asked.Name != show.Name || !reflect.DeepEqual(got.Command, Get{paths: []PathText{"x"}}) {
 		t.Errorf("show x = %#v, %v; want a get asked as show", got, err)
+	}
+	got, err = Parse(more, []string{"erase", "x", "--dry-run"})
+	if err != nil || got.Asked.Name != erase.Name || !reflect.DeepEqual(got.Command, Rm{paths: []PathText{"x"}, flags: Flags{DryRun: true}}) {
+		t.Errorf("erase x --dry-run = %#v, %v; want a dry rm asked as erase", got, err)
+	}
+	if _, err := Parse(more, []string{"show", "x", "--dry-run"}); !errors.Is(err, errNoDryRun) {
+		t.Errorf("show x --dry-run = %v; want errNoDryRun: a read takes no --dry-run", err)
 	}
 	got, err = Parse(more, []string{"admin", "ping"})
 	if err != nil || got.Asked.Name != ping.Name || got.Command != (probe{}) {
@@ -272,7 +271,7 @@ func (probe) command() {}
 // built; each beside lit2's own, which is.
 func TestALineThatDoesNotParseOneWayIsNotBuilt(t *testing.T) {
 	c := Lit2()
-	nothing := TakesNothing{Make: func() Command { return AdminInit{} }}
+	nothing := TakesNothing{Make: func() Command { return Init{} }}
 	row := func(n commandname.Name) Row { return Row{Name: n, Operands: nothing} }
 	for _, tc := range []struct {
 		name string
@@ -291,9 +290,11 @@ func TestALineThatDoesNotParseOneWayIsNotBuilt(t *testing.T) {
 		{"the unparsed name", []Row{row(commandname.Unparsed())}, c.bare, errReservedName},
 		{"the help name", []Row{row(commandname.Help())}, c.bare, errReservedName},
 		{"the forged name", []Row{row(commandname.Forged())}, c.bare, errReservedName},
-		{"a bare of no row", nil, Bare{Name: commandname.Verb("show")}, errBareNoRow},
-		{"a bare its row refuses", nil, Bare{Name: commandname.Get()}, errBareUnparsed},
-		{"a bare with operands its row takes none of", nil, Bare{Name: commandname.Init(), Operands: []string{"x"}}, errBareUnparsed},
+		{"a bare of no row", nil, Bare{Name: commandname.Verb("show")}, errBareUnrouted},
+		{"a bare its row refuses", nil, Bare{Name: commandname.Get()}, errBareUnrouted},
+		{"a bare with operands its row takes none of", nil, Bare{Name: commandname.Init(), Operands: []string{"x"}}, errBareUnrouted},
+		{"a bare with an operand scan reads as a flag", nil, Bare{Name: commandname.Get(), Operands: []string{"--help"}}, errBareNotAsTyped},
+		{"a bare with the end of the flags", nil, Bare{Name: commandname.Get(), Operands: []string{"--", "x"}}, errBareNotAsTyped},
 	} {
 		if _, err := NewCommands(append(slices.Clone(c.rows), tc.rows...), tc.bare); !errors.Is(err, tc.want) {
 			t.Errorf("%s: NewCommands = %v; want %v", tc.name, err, tc.want)
@@ -305,8 +306,8 @@ func TestALineThatDoesNotParseOneWayIsNotBuilt(t *testing.T) {
 	}
 }
 
-// The paths the event records are the paths as typed, whatever is done
-// with the command after: no row's summary shares its command's storage.
+// The paths the event records, and the command's, are the paths as
+// typed, whatever a body does with what the command hands out.
 func TestTheSummaryKeepsThePathsAsTyped(t *testing.T) {
 	c := Lit2()
 	for _, r := range c.rows {
@@ -328,6 +329,9 @@ func TestTheSummaryKeepsThePathsAsTyped(t *testing.T) {
 		if !slices.Equal(p.Asked.Paths, []PathText{"x"}) {
 			t.Errorf("%s: the summary's paths are %v after the command's changed; want [x], as typed", r.Name, p.Asked.Paths)
 		}
+		if !reflect.DeepEqual(p.Command, made(r)) {
+			t.Errorf("%s: the command is %#v after what it handed out changed; want %#v", r.Name, p.Command, made(r))
+		}
 	}
 }
 
@@ -343,7 +347,7 @@ func TestTheProseAroundTheRowsFollowsThem(t *testing.T) {
 			rows[i].Name = read
 		}
 	}
-	rows = append(rows, Row{Name: commandname.InGroup("team", "list"), Operands: TakesNothing{Make: func() Command { return AdminSync{} }}})
+	rows = append(rows, Row{Name: commandname.InGroup("team", "list"), Operands: TakesNothing{Make: func() Command { return Sync{} }}})
 	renamed, err := NewCommands(rows, Bare{Name: read, Operands: []string{"/"}, Shows: "everything"})
 	if err != nil {
 		t.Fatal(err)

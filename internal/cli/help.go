@@ -5,35 +5,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/verbs"
 )
-
-// Lit2 is lit2's command line, in the order --help prints it: the four
-// verbs on paths, then admin, what keeps a checkout's store, and config,
-// what applies the workspace's versions, both outside the everyday
-// surface. A bare lit2 is get /. A row this file gets wrong panics here,
-// inside the run's recover, so the run is recorded as lit2's own failure,
-// and the test that builds it fails before such a binary ships
-// `[LAW:no-silent-failure]`.
-func Lit2() Commands {
-	c, err := NewCommands([]Row{
-		{Name: commandname.Get(), Operands: TakesPaths{Make: func(p []PathText, _ Flags) Command { return Get{paths: p} }}, Summary: "read the nodes at these paths"},
-		{Name: commandname.Set(), Operands: TakesPairs{Make: func(p []Pair, f Flags) Command { return Set{pairs: p, flags: f} }}, DryRun: true, Summary: "replace the value at each path"},
-		{Name: commandname.Add(), Operands: TakesPairs{Make: func(p []Pair, f Flags) Command { return Add{pairs: p, flags: f} }}, DryRun: true, Summary: "append each value to the list at its path"},
-		{Name: commandname.Rm(), Operands: TakesPaths{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, DryRun: true, Summary: "delete the nodes at these paths"},
-		{Name: commandname.Init(), Operands: TakesNothing{Make: func() Command { return AdminInit{} }}, Summary: "make this checkout a writer: its id, its principal, the workspace's first version"},
-		{Name: commandname.Sync(), Operands: TakesNothing{Make: func() Command { return AdminSync{} }}, Summary: "publish this checkout's events and fetch and verify every writer's"},
-		{Name: commandname.Commit(), Operands: TakesNothing{Make: func() Command { return ConfigCommit{} }}, Summary: "apply the committed " + verbs.WorkspacePath() + " as the next version"},
-		{Name: commandname.Status(), Operands: TakesNothing{Make: func() Command { return ConfigStatus{} }}, Summary: "the version in force, the file against it, and any contending"},
-	}, Bare{Name: commandname.Get(), Operands: []string{"/"}, Shows: "the tree, the lanes in rank order, what is next, and the version in force"})
-	if err != nil {
-		panic(fmt.Sprintf("cli: lit2's command line: %v", err))
-	}
-	return c
-}
 
 // Fields is the field table help prints: the one the version in force
 // declares, or none, and why.
@@ -62,7 +37,7 @@ func HelpText(c Commands, fields Fields) string {
 		fmt.Fprintf(&b, "   lit2 %s <command>", g.word)
 	}
 	fmt.Fprintf(&b, "   lit2 %s\n", helpFlag)
-	fmt.Fprintf(&b, "lit2 alone is %s: %s\n", strings.Join(append(c.bare.Name.Words(), c.bare.Operands...), " "), c.bare.Shows)
+	fmt.Fprintf(&b, "lit2 alone is %s: %s\n", strings.Join(c.bareWords, " "), c.bare.Shows)
 	for _, f := range theFlags() {
 		fmt.Fprintf(&b, "%s %s; ", f.name, f.does)
 	}
@@ -154,9 +129,9 @@ func rowLines(b *strings.Builder, title string, rows []Row) {
 // synopsis is how --help spells an operand shape.
 func synopsis(o Operands) string {
 	switch o.(type) {
-	case TakesPaths:
+	case ReadsPaths, WritesPaths:
 		return "path..."
-	case TakesPairs:
+	case WritesPairs:
 		return "path value..."
 	case TakesNothing:
 		return ""
