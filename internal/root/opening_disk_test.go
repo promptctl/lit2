@@ -16,6 +16,20 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
+// diskAt is Main's ports of place and store as lit2 run at dir through g
+// has them.
+func diskAt(g *git.Git, dir string) Process {
+	u := files.NewDurability()
+	return Process{
+		Locate:        func() command.Located { return locate(g, dir) },
+		IdentityFiles: identityFiles(u),
+		Stores:        diskStores(g, rand.Reader, u),
+	}
+}
+
+// placeAt is the place lit2 reads at dir through g.
+func placeAt(g *git.Git, dir string) command.Place { return placeOf(diskAt(g, dir)) }
+
 func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 	for config, want := range map[string]git.ObjectFormat{
 		"": git.SHA1, // no config at all: git's defaults
@@ -28,14 +42,14 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		p := place(gittest.Runner(t), dir, files.NewDurability())
+		disk := diskAt(gittest.Runner(t), dir)
+		p := placeOf(disk)
 		in, located := p.(command.InCheckout)
-		o := opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability()))
-		opened, ok := o.(command.Opened)
-		if !located || !ok || in.Checkout.Format != want {
-			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, o, want)
+		o, opens := command.OpeningAt(p).(command.Opens)
+		if !located || !opens || in.Checkout.Format != want {
+			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, command.OpeningAt(p), want)
 		}
-		if got := appendOne(t, opened.Store, twinID); !slices.Equal(got, []string{"an event"}) {
+		if got := appendOne(t, disk.writerOf(o).store, twinID); !slices.Equal(got, []string{"an event"}) {
 			t.Errorf("the opened store reads back %v", got)
 		}
 		// the store is the common dir's: one opened from the common dir
@@ -51,20 +65,22 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
 	unminted := checkout(t, nil)
 	outside, ceilingEnv := gittest.Outside(t)
-	for name, p := range map[string]command.Place{
-		"outside a checkout": place(gittest.Runner(t, ceilingEnv), outside, files.NewDurability()),
-		"an unminted one":    place(gittest.Runner(t), unminted, files.NewDurability()),
-		"a config that does not parse": place(gittest.Runner(t), func() string {
+	for name, dir := range map[string]struct {
+		g   *git.Git
+		dir string
+	}{
+		"outside a checkout": {gittest.Runner(t, ceilingEnv), outside},
+		"an unminted one":    {gittest.Runner(t), unminted},
+		"a config that does not parse": {gittest.Runner(t), func() string {
 			d := checkout(t, minted)
 			if err := os.WriteFile(filepath.Join(d, ".git", "config"), []byte("[core\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			return d
-		}(), files.NewDurability()),
+		}()},
 	} {
-		o := opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability()))
-		if got, ok := o.(command.Unopened); !ok || got.Why == nil {
-			t.Errorf("%s opens %#v; want no store, and why", name, o)
+		if o, none := command.OpeningAt(placeAt(dir.g, dir.dir)).(command.NoStore); !none || o.Why == nil {
+			t.Errorf("%s opens %#v; want no store, and why", name, command.OpeningAt(placeAt(dir.g, dir.dir)))
 		}
 	}
 }

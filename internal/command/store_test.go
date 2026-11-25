@@ -2,8 +2,8 @@ package command
 
 import (
 	"errors"
+	"reflect"
 	"testing"
-	"time"
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/files"
@@ -19,7 +19,7 @@ func memoryStore() *store.Store {
 
 func storeBlockOf(t *testing.T, f StoreFacts) map[string]any {
 	t.Helper()
-	m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "get"}, Started: t0, Store: f, Outcome: cli.Done{}})
+	m := decode(t, Event{Invocation: asked(inv, "get"), Place: here, Store: f, Outcome: cli.Done{}})
 	block, ok := m["store"].(map[string]any)
 	if !ok {
 		t.Fatalf("the line has no store block: %v", m)
@@ -48,9 +48,26 @@ func must[T any](t *testing.T) func(v T, err error) T {
 	}
 }
 
-func TestAnEventThatNeverUsedItsStoreHasNoStoreBlock(t *testing.T) {
-	if m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "help"}, Started: t0, Outcome: cli.Done{}}); m["store"] != nil {
-		t.Errorf("an event with no store step carries %v", m["store"])
+// Every line says its store's opening, a run that ran no store step's
+// too: opened at a minted checkout, for its writer, and unopened at every
+// other place, with no why, which the place block says.
+func TestEveryLineSaysItsStoresOpening(t *testing.T) {
+	unopened := map[string]any{"state": "unopened"}
+	for _, tc := range []struct {
+		name  string
+		place Place
+		want  map[string]any
+	}{
+		{"a minted checkout", here, map[string]any{"state": "opened", "writer": store.CheckoutID{9}.String()}},
+		{"an unminted one", InCheckout{Checkout: checkout, Identity: Unminted{Missing: Both{}}}, unopened},
+		{"an unreadable one", InCheckout{Checkout: checkout, Identity: Unreadable{File: IDFile{}, Err: errors.New("garbage")}}, unopened},
+		{"outside a checkout", NoCheckout{Dir: "/"}, unopened},
+		{"an unlocatable one", Unlocatable{Dir: "/", Err: errors.New("git broke")}, unopened},
+	} {
+		block, _ := decode(t, Event{Invocation: asked(inv, "help"), Place: tc.place, Outcome: cli.Done{}})["store"].(map[string]any)
+		if o, _ := block["open"].(map[string]any); !reflect.DeepEqual(o, tc.want) {
+			t.Errorf("%s: the store block is %v; want its open block %v", tc.name, block, tc.want)
+		}
 	}
 }
 
@@ -121,7 +138,7 @@ func TestTheStoreBlockSaysEachDirectoryScannedOrWhyNot(t *testing.T) {
 	if unread["dir"] != "/w/.lit" || unread["scan"] != "not_scanned" || unread["error"] != "a symlink" || unread["temps"] != nil {
 		t.Errorf("the unread temps are %v; want the directory not scanned and why", unread)
 	}
-	if none := storeBlockOf(t, StoreFacts{Opening: Opened{Store: memoryStore()}}); none["temps"] != nil {
+	if none := storeBlockOf(t, StoreFacts{}); none["temps"] != nil {
 		t.Errorf("a store block with no directory scanned says %v", none["temps"])
 	}
 }
@@ -213,29 +230,18 @@ func TestAnAppendSaysTheSyncOfItsLogsName(t *testing.T) {
 
 func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 	appended := store.Appended{Written: store.Written{Records: 2, Bytes: 40}, Log: store.LogLookedUp{}}
-	e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, noGit, asked(inv, "set"), here, stays(func(r Recorder) cli.Outcome {
 		r.Stored.Appends = append(r.Stored.Appends, appended)
 		panic("after the append")
-	})
+	}))
 	if len(e.Store.Appends) != 1 || e.Store.Appends[0].(store.Appended).Bytes != appended.Bytes || cli.ExitCode(e.Outcome) != 70 {
 		t.Errorf("a panic after an append recorded %+v, exit %d; want the append kept, exit 70", e.Store, cli.ExitCode(e.Outcome))
 	}
 }
 
-func TestTheOpeningSaysOpenedOrWhyNot(t *testing.T) {
-	opened := storeBlockOf(t, StoreFacts{Opening: Opened{Store: memoryStore()}})
-	if o, _ := opened["open"].(map[string]any); o["state"] != "opened" || o["why"] != nil {
-		t.Errorf("an opened store's line is %v; want opened", o)
-	}
-	unopened := storeBlockOf(t, StoreFacts{Opening: Unopened{Why: errors.New("this checkout has no id")}})
-	if o, _ := unopened["open"].(map[string]any); o["state"] != "unopened" || o["why"] != "this checkout has no id" {
-		t.Errorf("an unopened store's line is %v; want unopened, and why", o)
-	}
-}
-
 // The checkout's object format is on the place line, beside its paths.
 func TestThePlaceSaysTheCheckoutsObjectFormat(t *testing.T) {
-	place, _ := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "get"}, Started: t0, Outcome: cli.Done{}})["place"].(map[string]any)
+	place, _ := decode(t, Event{Invocation: asked(inv, "get"), Place: here, Outcome: cli.Done{}})["place"].(map[string]any)
 	c, _ := place["checkout"].(map[string]any)
 	if c["object_format"] != "sha256" || c["git_dir"] != "/w/.git" {
 		t.Errorf("the place line is %v; want the checkout's paths and its format, sha256", place)

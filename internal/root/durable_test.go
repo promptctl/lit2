@@ -108,8 +108,8 @@ func TestTheRecoveryPhraseIsShownWheneverTheKeyWasCreated(t *testing.T) {
 	// one as shared makes it over the files it is given, which it returns.
 	mint := func(t *testing.T, shared func(files.Files) files.Files) (session, *files.Memory) {
 		s := unsynced(t, filestest.Faults{})
-		under := files.NewMemory(twinShared)
-		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared(under), files.NewMemory(twinPrivate) }
+		under, private := files.NewMemory(twinShared), files.NewMemory(twinPrivate)
+		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared(under), private }
 		return s, under
 	}
 	// phrase is the phrase of the key under holds, which init must print.
@@ -233,9 +233,8 @@ func TestAPanickingBodysEventSaysItsEndStepsDidNotRun(t *testing.T) {
 func TestEveryWriteWhoseSyncFailedEndsTheRunNotDurable(t *testing.T) {
 	t.Run("the checkout id", func(t *testing.T) {
 		s := unsynced(t, filestest.Faults{})
-		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) {
-			return files.NewMemory(twinShared), filestest.NotDurable(files.NewMemory(twinPrivate), filestest.Faults{CreateOnce: errSync})
-		}
+		shared, private := files.NewMemory(twinShared), filestest.NotDurable(files.NewMemory(twinPrivate), filestest.Faults{CreateOnce: errSync})
+		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared, private }
 		notDurableRun(t, s.lit("admin", "init"), command.PathOf(command.IDFile{}, twinCheckout))
 	})
 	t.Run("the founding pin", func(t *testing.T) {
@@ -309,7 +308,8 @@ func (gone) Write([]byte) (int, error) { return 0, syscall.EPIPE }
 func TestAPhraseThatCouldNotBeShownFailsTheRun(t *testing.T) {
 	fresh := func(t *testing.T, shared files.Files) said {
 		s := unsynced(t, filestest.Faults{})
-		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared, files.NewMemory(twinPrivate) }
+		private := files.NewMemory(twinPrivate)
+		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared, private }
 		s.twin.Process.Out = gone{}
 		return s.lit("admin", "init")
 	}

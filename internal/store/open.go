@@ -301,15 +301,16 @@ type Heads struct {
 	RefsRead, LogsRead int
 }
 
-// Logs is the directory this store's logs are in, as its port names it.
-func (s *Store) Logs() files.Dir { return s.ports.files.Dir() }
+// Logs is the directory the clone's logs are in, as p's port names it.
+func (p Ports) Logs() files.Dir { return p.files.Dir() }
 
-// Temps is the temporary files of log creates in the logs' directory,
-// listed now: a create's that never ran again, or one in flight, for the
-// command to say once its work is done, so a temp its own create reaped
-// is not said as left `[LAW:no-silent-failure]`.
-func (s *Store) Temps() ([]string, error) {
-	logs, err := s.ports.files.List()
+// Temps is the temporary files of log creates in the clone's logs'
+// directory, listed now: a create's that never ran again, or one in
+// flight, for the command to say once its work is done, so a temp its own
+// create reaped is not said as left `[LAW:no-silent-failure]`. The logs
+// are every writer's, so no writer is needed to list them.
+func (p Ports) Temps() ([]string, error) {
+	logs, err := p.files.List()
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,6 @@
 package root
 
 import (
-	"errors"
 	"math/rand/v2"
 	"testing"
 
@@ -33,7 +32,7 @@ func three(t *testing.T, twin Twin, seed byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	held, err := replay(twin.Process.Fold, founding, twin.Process.Store.(command.Opened).Store, &command.StoreFacts{})
+	held, err := replay(twin.Process.Fold, founding, twin.Store(), &command.StoreFacts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +42,7 @@ func three(t *testing.T, twin Twin, seed byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	storetest.AppendAll(t, twin.Process.Store.(command.Opened).Store, m.Batch)
+	storetest.AppendAll(t, twin.Store(), m.Batch)
 }
 
 // folded is the one fold e records.
@@ -78,11 +77,8 @@ func TestEveryOpenFoldsEveryRecord(t *testing.T) {
 }
 
 func TestATornSpanIsSkippedAndCounted(t *testing.T) {
-	twin := NewFreshTwin()
 	logs := filestest.Memory()
-	ports := store.RepositoryInMemory(logs, rand.NewChaCha8([32]byte{5}))
-	opened := command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound)}
-	twin.Process.Store, twin.Process.Open = opened, func(git.Checkout, command.Minted) command.Opening { return opened }
+	twin := freshTwinOver(logs)
 	if status := Run(twin.Process, []string{"admin", "init"}); status != 0 {
 		t.Fatalf("admin init exited %d: %s", status, twin.Err)
 	}
@@ -102,9 +98,7 @@ func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 }
 
 func TestAVerbWithNoStoreFailsAsTheEnvironments(t *testing.T) {
-	twin := NewTwin()
-	twin.Process.Store = command.Unopened{Why: errors.New("this checkout has no id")}
-	_, e := run(t, twin, "get", "lit-abc/title")
+	_, e := run(t, outside(NewTwin()), "get", "lit-abc/title")
 	failed, ok := e.Outcome.(cli.Failed)
 	if !ok || failed.Failure.Reason() != "store" || failed.Failure.Class() != reason.ClassEnvironment || len(e.Store.Folds) != 0 {
 		t.Errorf("a verb with no store ends %#v with folds %v; want it failed as the store's, no fold", e.Outcome, e.Store.Folds)

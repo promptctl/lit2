@@ -2,6 +2,7 @@ package command
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
@@ -120,4 +121,58 @@ func (u Unminted) Files() []File {
 		return []File{IDFile{}, PrincipalFile{}}
 	}
 	panic(fmt.Sprintf("command: %T is not a Missing", u.Missing))
+}
+
+// Opening is what a place opens: a minted checkout's store, for its
+// writer, or none, and why, in the words of what the place holds. It is
+// the place's, derived by OpeningAt and never set beside it, so whether an
+// invocation's store opened is said once `[LAW:one-source-of-truth]`: the
+// root opens the store by it and the line says, by it, the opening of the
+// place the run ended in, which admin init's mint moves.
+//
+//sumtype:decl
+type Opening interface{ opening() }
+
+// Opens is a minted checkout, whose store opens for its writer.
+type Opens struct {
+	Checkout git.Checkout
+	Writer   Minted
+}
+
+// NoStore is a place that opens no store: outside a checkout, in one not
+// yet minted, or one whose writer cannot be read.
+type NoStore struct{ Why error }
+
+func (Opens) opening()   {}
+func (NoStore) opening() {}
+
+// OpeningAt is what p opens.
+func OpeningAt(p Place) Opening {
+	in, err := CheckoutAt(p)
+	if err != nil {
+		return NoStore{Why: err}
+	}
+	switch id := in.Identity.(type) {
+	case Minted:
+		return Opens{Checkout: in.Checkout, Writer: id}
+	case Unminted:
+		return NoStore{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(in.Checkout), " and "))}
+	case Unreadable:
+		return NoStore{Why: fmt.Errorf("reading %s: %w", PathOf(id.File, in.Checkout), id.Err)}
+	}
+	panic(fmt.Sprintf("command: %T is not an Identity", in.Identity))
+}
+
+// CheckoutAt is the checkout p is in, or why p is in none: git finding no
+// checkout, or the search's own failure.
+func CheckoutAt(p Place) (InCheckout, error) {
+	switch p := p.(type) {
+	case InCheckout:
+		return p, nil
+	case NoCheckout:
+		return InCheckout{}, git.NotFound{Dir: p.Dir}
+	case Unlocatable:
+		return InCheckout{}, p.Err
+	}
+	panic(fmt.Sprintf("command: %T is not a Place", p))
 }

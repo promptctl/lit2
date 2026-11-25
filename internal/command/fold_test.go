@@ -10,7 +10,7 @@ import (
 
 func foldBlockOf(t *testing.T, f fold.FoldFacts) map[string]any {
 	t.Helper()
-	m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "get"}, Started: t0, Store: StoreFacts{Folds: []fold.FoldFacts{f}}, Outcome: cli.Done{}})
+	m := decode(t, Event{Invocation: asked(inv, "get"), Place: here, Store: StoreFacts{Folds: []fold.FoldFacts{f}}, Outcome: cli.Done{}})
 	list, _ := m["fold"].([]any)
 	if len(list) != 1 {
 		t.Fatalf("the line's fold block is %v; want one fold", m["fold"])
@@ -60,7 +60,7 @@ func TestAFoldOfNothingIsEveryCountZeroAndPresent(t *testing.T) {
 }
 
 func TestAnEventThatNeverFoldedHasNoFoldBlock(t *testing.T) {
-	if m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "help"}, Started: t0, Outcome: cli.Done{}}); m["fold"] != nil {
+	if m := decode(t, Event{Invocation: asked(inv, "help"), Place: here, Outcome: cli.Done{}}); m["fold"] != nil {
 		t.Errorf("an event that never reached step 3 carries %v", m["fold"])
 	}
 }

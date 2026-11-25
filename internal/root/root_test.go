@@ -13,6 +13,21 @@ import (
 	"github.com/promptctl/lit2/internal/reason"
 )
 
+// A parse that panics is asked as unparsed and answered as lit2's failure,
+// the panic's value and stack kept, so the run is recorded as a body's
+// panic is.
+func TestAParseThatPanicsIsAskedAsUnparsed(t *testing.T) {
+	asked, answer := parsed(func() (cli.Command, error) { panic("a parse broke") }, func(body, cli.Command) command.Ran {
+		t.Fatal("a parse that panicked answered its command")
+		return command.Ran{}
+	})
+	failed, ok := answer(body{}).Outcome.(cli.Failed)
+	var in command.Internal
+	if asked.Name != cli.Unparsed || !ok || !errors.As(failed.Failure, &in) || !strings.Contains(in.Error(), "a parse broke") || len(in.Stack()) == 0 {
+		t.Errorf("a panicking parse asked %#v and answered %#v; want unparsed, answered Internal with its value and stack", asked, failed)
+	}
+}
+
 // run runs one invocation on a fresh twin and returns its status and the
 // one event it left, whose exit code must be that status.
 func run(t *testing.T, twin Twin, args ...string) (int, command.Event) {

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"strings"
 	"syscall"
 	"time"
 
@@ -46,14 +45,12 @@ func Main(args []string) int {
 	// handed to every disk port, so a failure one port saw is answered to
 	// every other over that directory
 	u := files.NewDurability()
-	place, open := here(g, u), diskStore(g, rand.Reader, u)
 	return Run(Process{
 		Clock:         systemClock{},
 		Entropy:       rand.Reader,
 		Agent:         events.AgentFrom(os.Getenv("LIT_AGENT")),
-		Place:         place,
-		Store:         opening(place, open),
-		Open:          open,
+		Locate:        here(g),
+		Stores:        diskStores(g, rand.Reader, u),
 		WorkTree:      workTree(u),
 		Code:          g.CodeAt,
 		Git:           g.Spawns,
@@ -83,57 +80,34 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
 
-// here is the place of the working directory, its identity read through
-// ports whose syncs u keeps.
-func here(g *git.Git, u *files.Durability) command.Place {
-	dir, err := os.Getwd()
-	if err != nil {
-		return command.Unlocatable{Err: fmt.Errorf("reading the working directory: %w", err)}
+// here locates the checkout of the working directory through g. A working
+// directory that has no path is ".", the one name it still has.
+func here(g *git.Git) func() command.Located {
+	return func() command.Located {
+		dir, err := os.Getwd()
+		if err != nil {
+			return command.Unlocatable{Dir: ".", Err: fmt.Errorf("reading the working directory: %w", err)}
+		}
+		return locate(g, dir)
 	}
-	return place(g, dir, u)
 }
 
-// place is the checkout git locates at dir, and its writer.
-func place(g *git.Git, dir string, u *files.Durability) command.Place {
+// locate is the checkout g finds from dir, none, or why the search failed.
+func locate(g *git.Git, dir string) command.Located {
 	c, err := g.Locate(dir)
-	var none git.NotFound
-	if errors.As(err, &none) {
+	if errors.As(err, new(git.NotFound)) {
 		return command.NoCheckout{Dir: dir}
 	}
 	if err != nil {
 		return command.Unlocatable{Dir: dir, Err: err}
 	}
-	return command.InCheckout{Checkout: c, Identity: readIdentity(identityFiles(u)(c))}
+	return command.AtCheckout{Checkout: c}
 }
 
-// opening opens the store of a minted checkout through open, the one place
-// a run's store is opened. Any other place has no store and says why.
-func opening(p command.Place, open func(git.Checkout, command.Minted) command.Opening) command.Opening {
-	switch p := p.(type) {
-	case command.InCheckout:
-		switch id := p.Identity.(type) {
-		case command.Minted:
-			return open(p.Checkout, id)
-		case command.Unminted:
-			return command.Unopened{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(p.Checkout), " and "))}
-		case command.Unreadable:
-			return command.Unopened{Why: fmt.Errorf("reading %s: %w", command.PathOf(id.File, p.Checkout), id.Err)}
-		}
-		panic(fmt.Sprintf("root: %T is not an Identity", p.Identity))
-	case command.NoCheckout:
-		return command.Unopened{Why: fmt.Errorf("no git checkout at or above %s", p.Dir)}
-	case command.Unlocatable:
-		return command.Unopened{Why: p.Err}
-	}
-	panic(fmt.Sprintf("root: %T is not a Place", p))
-}
-
-// diskStore opens a minted checkout's store over its clone's common dir on
-// disk, lit's repository written by g, its syncs kept by u.
-func diskStore(g *git.Git, entropy io.Reader, u *files.Durability) func(git.Checkout, command.Minted) command.Opening {
-	return func(c git.Checkout, id command.Minted) command.Opening {
-		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(g, c, entropy, u), store.DefaultSegmentBound)}
-	}
+// diskStores is the ports of a checkout's clone's store on disk, lit's
+// repository written by g, its syncs kept by u.
+func diskStores(g *git.Git, entropy io.Reader, u *files.Durability) func(git.Checkout) store.Ports {
+	return func(c git.Checkout) store.Ports { return store.DiskPorts(g, c, entropy, u) }
 }
 
 // commandLog is this machine's command log, $XDG_STATE_HOME/lit/commands,

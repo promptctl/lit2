@@ -238,30 +238,35 @@ func (o opened) status() cli.Outcome {
 // none adopts the one FoundingFile names, or with no file founds the
 // store; then, in a store no version is in force in, the workspace's
 // version one: the file in the work tree, or the default profile written
-// there when there is none.
-func (r body) init() cli.Outcome {
-	in, ok := r.p.Place.(command.InCheckout)
-	if !ok {
-		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer, and this is none")}}
+// there when there is none. The mint moves the place: the run ends in its
+// checkout with the identity the mint read back, so the store init opens,
+// the principal it prints and the place its event says are that one
+// read's, whatever the mint did.
+func (r body) init() command.Ran {
+	in, err := command.CheckoutAt(r.place)
+	if err != nil {
+		return r.ran(cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer: %w", err)}})
 	}
-	c := in.Checkout
-	once := r.p.onceFiles(c)
+	once := r.p.onceFiles(in.Checkout)
 	minting := MintIdentity(once.id, once.key, r.p.Entropy)
 	// every file init creates is on its event, by path, durable or not
 	for _, c := range minting.creations() {
 		r.w.created(c)
 	}
-	var minted command.Minted
+	r.place = command.InCheckout{Checkout: in.Checkout, Identity: minting.identity()}
+	return r.ran(r.enroll(in.Checkout, once, minting))
+}
+
+// enroll is admin init in c after its mint.
+func (r body) enroll(c git.Checkout, once onceFiles, minting Minting) cli.Outcome {
 	switch m := minting.(type) {
 	case NotMinted:
 		return cli.Failed{Failure: storeFailure{err: m.Why}}
 	case Found:
-		minted = m.Minted
-		if out, isFailed := written(fmt.Fprintf(r.p.Out, "principal %s\n", minted.Key.Principal())).(cli.Failed); isFailed {
+		if out, isFailed := written(fmt.Fprintf(r.p.Out, "principal %s\n", m.Minted.Key.Principal())).(cli.Failed); isFailed {
 			return out
 		}
 	case Made:
-		minted = m.Minted
 		if err := showPhrase(r.p.Out, m.Minted.Key, once.key); err != nil {
 			return cli.Failed{Failure: err}
 		}
@@ -273,27 +278,21 @@ func (r body) init() cli.Outcome {
 		}
 		return cli.Failed{Failure: unread}
 	}
-	opening := r.p.Open(in.Checkout, minted)
-	r.rec.Stored.Opening = opening
-	so, ok := opening.(command.Opened)
-	if !ok {
-		return cli.Failed{Failure: storeFailure{err: opening.(command.Unopened).Why}}
-	}
 	tree := r.p.WorkTree(c)
 	if err := adopt(r.w, once.pin, tree); err != nil {
 		return failed(err)
 	}
-	o, err := r.openAs(so, in.Checkout, minted)
+	o, err := r.openFounded()
 	if err != nil {
 		return failed(err)
 	}
 	// the file names the clone's founding, for the next clone to adopt
 	if f, founded := o.founding.(fold.FoundedBy); founded {
-		if err := writeFoundingFile(r.w, once.founding, f, pinPath(in.Checkout)); err != nil {
+		if err := writeFoundingFile(r.w, once.founding, f, pinPath(c)); err != nil {
 			return failed(err)
 		}
 	}
-	me := minted.Key.Principal()
+	me := o.id.Key.Principal()
 	var drafts []events.Draft
 	// an owner applies version one: set /workspace is the owner role's
 	said, owns, founds := "", false, false
@@ -310,7 +309,7 @@ func (r body) init() cli.Outcome {
 		said = fmt.Sprintf("membership requested: an owner admits you with lit2 add /members '{principal: %q, role: contributor}'\n", me.String())
 	case verbs.Unjudged:
 		r.rec.Policy.Bootstrap = "unjudged"
-		return failed(unjudged(s.Policy, in.Checkout))
+		return failed(unjudged(s.Policy, c))
 	case verbs.Asked:
 		r.rec.Policy.Bootstrap = "already_requested"
 		return written(fmt.Fprintf(r.p.Out, "membership requested: no owner has admitted %s yet\n", me))
@@ -335,8 +334,8 @@ func (r body) init() cli.Outcome {
 		if err != nil {
 			return cli.Failed{Failure: workspaceFailure{err: err}}
 		}
-		ref = git.HashBlob(in.Checkout.Format, b)
-		act, err := verbs.Admit(o.folded.State, b, in.Checkout.Format, r.p.Reader)
+		ref = git.HashBlob(c.Format, b)
+		act, err := verbs.Admit(o.folded.State, b, c.Format, r.p.Reader)
 		if err != nil {
 			return failed(err)
 		}
@@ -344,7 +343,7 @@ func (r body) init() cli.Outcome {
 	case len(drafts) == 0:
 		return written(io.WriteString(r.p.Out, "no workspace version is in force: an owner applies one with lit2 config commit\n"))
 	default:
-		ref = git.HashBlob(in.Checkout.Format, assets.DefaultWorkspace.Bytes())
+		ref = git.HashBlob(c.Format, assets.DefaultWorkspace.Bytes())
 	}
 	if founds {
 		return o.found(once, drafts, ref, said)

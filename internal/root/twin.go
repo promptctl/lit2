@@ -29,7 +29,6 @@ type Twin struct {
 	Commands *command.Memory
 	Tree     *files.Memory
 	Code     *git.CodeMemory
-	ports    store.Ports
 }
 
 // The twin's checkout and the id it is minted with.
@@ -104,7 +103,7 @@ func freshTwinOver(logs files.Files) Twin {
 // either writes read by both, its work tree holding the FoundingFile t's
 // holds, as a clone of the repository t committed it to does.
 func NewTwinBeside(t Twin) Twin {
-	beside := twinOver(t.ports, besideCheckout, besideID, besideKey(), [32]byte{'b', 'e', 's', 'i', 'd', 'e', ' ', 't', 'w', 'i', 'n'})
+	beside := twinOver(t.Process.Stores(twinCheckout), besideCheckout, besideID, besideKey(), [32]byte{'b', 'e', 's', 'i', 'd', 'e', ' ', 't', 'w', 'i', 'n'})
 	named, err := foundingFileIn(t.Tree)
 	if err != nil {
 		panic(err)
@@ -120,7 +119,6 @@ func NewTwinBeside(t Twin) Twin {
 func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events.Key, seed [32]byte) Twin {
 	out, errOut, commands := &bytes.Buffer{}, &bytes.Buffer{}, &command.Memory{}
 	entropy := rand.NewChaCha8(seed)
-	opened := command.Opened{Store: store.Open(id, ports, store.DefaultSegmentBound)}
 	tree, code := files.NewMemory(litDir(c)), &git.CodeMemory{}
 	// the twin is minted: its identity files hold its id and key, so init
 	// finds them there
@@ -132,9 +130,8 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 			Clock:         &command.FixedClock{At: time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)},
 			Entropy:       entropy,
 			Agent:         events.Unlabeled{},
-			Place:         command.InCheckout{Checkout: c, Identity: command.Minted{Checkout: id, Key: key}},
-			Store:         opened,
-			Open:          func(git.Checkout, command.Minted) command.Opening { return opened },
+			Locate:        func() command.Located { return command.AtCheckout{Checkout: c} },
+			Stores:        storesOf(c, ports),
 			WorkTree:      func(git.Checkout) files.Files { return tree },
 			Code:          func(git.Checkout) git.Code { return code },
 			Git:           func() []git.Spawn { return []git.Spawn{} },
@@ -152,35 +149,67 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 		Commands: commands,
 		Tree:     tree,
 		Code:     code,
-		ports:    ports,
+	}
+}
+
+// storesOf is the store ports of c's clone, as Main's are of each
+// checkout's, so a run that asks for another checkout's store fails as a
+// wrong path through Main's would read the wrong clone.
+func storesOf(c git.Checkout, ports store.Ports) func(git.Checkout) store.Ports {
+	return func(at git.Checkout) store.Ports {
+		if at != c {
+			panic(fmt.Sprintf("root: the twin holds the store of %s, not %s", c.CommonDir, at.CommonDir))
+		}
+		return ports
 	}
 }
 
 // Forge is a modified client's write: verb on ops compiled and minted as
 // lit2 mints them and appended with no verdict asked of the fold, the
 // event a test hands every replica for the fold to refuse
-// `[LAW:single-enforcer]`.
+// `[LAW:single-enforcer]`. It is invoked as every run is, through the one
+// composition, and its event is kept by no log.
 func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
-	rec := command.Recorder{Asked: func(cli.Summary) {}, Stored: &command.StoreFacts{}, Configured: func(command.ConfigFacts) {}, Told: func(command.VerbsFacts) {}, Policy: &command.PolicyFacts{}}
 	var forged error
-	w := &writes{stored: rec.Stored}
-	out := body{p: t.Process, now: t.Process.Clock.Now(), rec: rec, w: w}.verb(func(v inForce) cli.Outcome {
-		c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
-		if no, refused := c.Refusal(); refused {
-			forged = no.Err()
+	e := invoke(t.Process, cli.Summary{Name: "forge"}, func(r body) command.Ran {
+		return r.ran(r.verb(func(v inForce) cli.Outcome {
+			c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
+			if no, refused := c.Refusal(); refused {
+				forged = no.Err()
+				return cli.Done{}
+			}
+			m, err := v.mint(c.Drafts, v.ref)
+			if err == nil {
+				err = v.append(m)
+			}
+			forged = err
 			return cli.Done{}
-		}
-		m, err := v.mint(c.Drafts, v.ref)
-		if err == nil {
-			err = v.append(m)
-		}
-		forged = err
-		return cli.Done{}
+		}))
 	})
-	if f, isFailed := w.end(out).(cli.Failed); isFailed {
+	if f, isFailed := e.Outcome.(cli.Failed); isFailed {
 		return f.Failure
 	}
 	return forged
+}
+
+// Store is the twin's store as a run opens it, from the writer its
+// identity files hold, for a test to append to or read directly.
+func (t Twin) Store() *store.Store { return t.writer().store }
+
+// Principal is the principal the twin's identity files hold.
+func (t Twin) Principal() events.PrincipalID { return t.writer().id.Key.Principal() }
+
+// writer is the twin's writer and store as a run opens them, read from
+// its place now, so a test that changed the place gets the store a run
+// would open there.
+func (t Twin) writer() writer {
+	switch o := command.OpeningAt(placeOf(t.Process)).(type) {
+	case command.Opens:
+		return t.Process.writerOf(o)
+	case command.NoStore:
+		panic(fmt.Sprintf("root: the twin's place opens no store: %v", o.Why))
+	}
+	panic("root: an Opening that is neither Opens nor NoStore")
 }
 
 // durably panics unless p placed its file durably: the twin's setup is

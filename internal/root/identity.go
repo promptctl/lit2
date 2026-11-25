@@ -29,23 +29,28 @@ const identityMode fs.FileMode = 0o600
 // there does not parse: the mint never writes over it.
 var errIdentityUnreadable = errors.New("an unreadable identity file")
 
-// Minting is what MintIdentity did, each with the creates it ran: minted
-// nothing; found the clone's key there; created the key, and read the
-// identity back; or created the key and could not read it back. A key
-// this call created is carried whatever came after it landed, so its
-// phrase is shown once, and no failure after, a readback's or a sync's,
-// may lose it `[LAW:no-silent-failure]` `[LAW:types-are-the-program]`.
+// Minting is what MintIdentity did, each with the creates it ran and the
+// identity its files held once it ended, read once: minted nothing; found
+// the clone's key there; created the key, and read the identity back; or
+// created the key and could not read it back. A key this call created is
+// carried whatever came after it landed, so its phrase is shown once, and
+// no failure after, a readback's or a sync's, may lose it
+// `[LAW:no-silent-failure]` `[LAW:types-are-the-program]`. admin init's
+// place after its mint is built from that identity, never from a second
+// read `[LAW:one-source-of-truth]`.
 //
 //sumtype:decl
 type Minting interface {
 	minting()
 	creations() []command.Creation
+	identity() command.Identity
 }
 
 // NotMinted is a mint that placed no identity file of the two, or found
-// one that does not read.
+// one that does not read; Read is what the files held after it.
 type NotMinted struct {
 	Creates []command.Creation
+	Read    command.Identity
 	Why     error
 }
 
@@ -63,56 +68,66 @@ type Made struct {
 }
 
 // MadeUnread is a mint that created the key file, Key, and could not
-// read the identity back.
+// read the identity back; Read is what it read instead.
 type MadeUnread struct {
 	Creates []command.Creation
 	Key     events.Key
+	Read    command.Identity
 	Why     error
 }
 
 func (NotMinted) minting()                         {}
 func (n NotMinted) creations() []command.Creation  { return n.Creates }
+func (n NotMinted) identity() command.Identity     { return n.Read }
 func (Found) minting()                             {}
 func (f Found) creations() []command.Creation      { return f.Creates }
+func (f Found) identity() command.Identity         { return f.Minted }
 func (Made) minting()                              {}
 func (m Made) creations() []command.Creation       { return m.Creates }
+func (m Made) identity() command.Identity          { return m.Minted }
 func (MadeUnread) minting()                        {}
 func (m MadeUnread) creations() []command.Creation { return m.Creates }
+func (m MadeUnread) identity() command.Identity    { return m.Read }
 
 // MintIdentity creates the checkout id at id and the principal's key at
 // key, each once, then reads both back, so a worktree that loses a race to
 // create the clone's key signs with the winner's. It prints nothing. A
 // create whose sync failed is landed, and the mint goes on; its Creation
-// says so.
+// says so. However it ends, it reads the files once, last.
 func MintIdentity(id, key onceFile, entropy io.Reader) Minting {
+	var creates []command.Creation
+	// a mint that stops early says what the files hold all the same
+	stopped := func(why error) Minting {
+		return NotMinted{Creates: creates, Read: readIdentity(key.files, id.files), Why: why}
+	}
 	var checkout store.CheckoutID
 	if _, err := io.ReadFull(entropy, checkout[:]); err != nil {
-		return NotMinted{Why: fmt.Errorf("drawing the checkout id: %w", err)}
+		return stopped(fmt.Errorf("drawing the checkout id: %w", err))
 	}
 	k, err := events.NewKey(entropy)
 	if err != nil {
-		return NotMinted{Why: err}
+		return stopped(err)
 	}
-	var creates []command.Creation
 	create := func(f onceFile, b []byte) files.Placing {
 		p := f.files.CreateOnce(f.name, b)
 		creates = append(creates, command.Creation{Path: f.path(), Placing: p})
 		return p
 	}
 	if no, failed := create(id, checkout.FileText()).(files.NotPlaced); failed {
-		return NotMinted{Creates: creates, Why: fmt.Errorf("creating the checkout id file: %w", no.Why)}
+		return stopped(fmt.Errorf("creating the checkout id file: %w", no.Why))
 	}
 	var made files.Made
 	switch p := create(key, k.FileText()).(type) {
 	case files.NotPlaced:
-		return NotMinted{Creates: creates, Why: fmt.Errorf("creating the key file: %w", p.Why)}
+		return stopped(fmt.Errorf("creating the key file: %w", p.Why))
 	case files.Placed:
 		made = p.Made
 	case files.PlacedNotDurable:
 		made = p.Made
 	}
+	read := readIdentity(key.files, id.files)
 	var minted command.Minted
-	switch got := readIdentity(key.files, id.files).(type) {
+	switch got := read.(type) {
 	case command.Minted:
 		minted = got
 	case command.Unminted:
@@ -122,11 +137,11 @@ func MintIdentity(id, key onceFile, entropy io.Reader) Minting {
 	}
 	switch {
 	case made == files.Created && err != nil:
-		return MadeUnread{Creates: creates, Key: k, Why: err}
+		return MadeUnread{Creates: creates, Key: k, Read: read, Why: err}
 	case made == files.Created:
 		return Made{Creates: creates, Minted: minted}
 	case err != nil:
-		return NotMinted{Creates: creates, Why: err}
+		return NotMinted{Creates: creates, Read: read, Why: err}
 	}
 	return Found{Creates: creates, Minted: minted}
 }

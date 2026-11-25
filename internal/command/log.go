@@ -119,7 +119,7 @@ type line struct {
 	Command    commandFacts `json:"command"`
 	Counts     counts       `json:"counts"`
 	Config     *configLine  `json:"config,omitempty"`
-	Store      *storeLine   `json:"store,omitempty"`
+	Store      storeLine    `json:"store"`
 	Fold       []foldLine   `json:"fold,omitempty"`
 	Verbs      *verbsLine   `json:"verbs,omitempty"`
 	Policy     *policyLine  `json:"policy,omitempty"`
@@ -209,7 +209,7 @@ func encode(e Event) ([]byte, error) {
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
 		Config:     configBlock(e.Config),
-		Store:      storeBlock(e.Store),
+		Store:      storeBlock(OpeningAt(e.Place), e.Store),
 		Fold:       foldBlock(e.Store.Folds),
 		Verbs:      verbsBlock(e.Verbs, e.Store.Landed()),
 		Policy:     policyBlock(e.Policy),
