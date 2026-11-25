@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"syscall"
 	"testing"
@@ -23,37 +22,58 @@ func asking(commands func() cli.Commands, args ...string) func() (cli.Summary, f
 	return func() (cli.Summary, func(body) cli.Outcome) { return parsed(commands, args) }
 }
 
+// recordedOf is the end of a run that made its event.
+func recordedOf(t *testing.T, e command.Ended) command.Recorded {
+	t.Helper()
+	r, ok := e.(command.Recorded)
+	if !ok {
+		t.Fatalf("the run ended %#v; want it recorded", e)
+	}
+	return r
+}
+
 // A panic in any stage between the run's start and its event is recorded
 // as lit2's failure, its value and stack kept, with what was known before
-// it: what was asked, once asking ended, and the place, once it was read.
+// it: what was asked, once asking ended, and how far the run got in
+// reading its place.
 func TestAPanicInAnyStageIsRecorded(t *testing.T) {
+	found := command.AtCheckout{Checkout: twinCheckout}
 	for _, tc := range []struct {
-		stage  string
-		twin   func(Twin) Twin
-		ask    func() (cli.Summary, func(body) cli.Outcome)
-		asked  commandname.Name
-		placed bool
+		stage string
+		twin  func(Twin) Twin
+		ask   func() (cli.Summary, func(body) cli.Outcome)
+		asked commandname.Name
+		where func(command.Where) bool
 	}{
-		{"building the command table", func(t Twin) Twin { return t }, asking(func() cli.Commands { panic("the table broke") }, "get", "x"), commandname.Unparsed(), false},
-		{"reading the place", func(t Twin) Twin {
-			t.Process.Locate = func() command.Located { panic("the place broke") }
+		{"building the command table", func(t Twin) Twin { return t }, asking(func() cli.Commands { panic("the table broke") }, "get", "x"), commandname.Unparsed(), is(command.PlaceUnread{})},
+		{"locating the checkout", func(t Twin) Twin {
+			t.Process.Locate = func() command.Located { panic("the walk broke") }
 			return t
-		}, asking(cli.Lit2, "get", "x"), commandname.Get(), false},
+		}, asking(cli.Lit2, "get", "x"), commandname.Get(), is(command.PlaceUnread{})},
+		{"reading its identity", func(t Twin) Twin {
+			t.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { panic("the identity broke") }
+			return t
+		}, asking(cli.Lit2, "get", "x"), commandname.Get(), is(found)},
 		{"running the command", func(t Twin) Twin {
 			t.Process.Out = panicking{}
 			return t
-		}, asking(cli.Lit2, "--help"), commandname.Help(), true},
+		}, asking(cli.Lit2, "--help"), commandname.Help(), func(w command.Where) bool { _, read := w.(command.Place); return read }},
 	} {
-		ended := invoke(tc.twin(NewTwin()).Process, tc.ask)
+		ended := recordedOf(t, invoke(tc.twin(NewTwin()).Process, tc.ask))
 		e := ended.Event
 		var in command.Internal
 		if !errors.As(failure(t, e), &in) || !strings.Contains(in.Error(), "broke") || len(in.Stack()) == 0 || ended.Status != 70 {
 			t.Errorf("%s: ended %#v; want Internal with its value and stack, exit 70", tc.stage, e.Outcome)
 		}
-		if _, read := e.Place.(command.Place); e.Command.Name != tc.asked || read != tc.placed {
-			t.Errorf("%s: recorded %s at %#v; want %s, the place read: %v", tc.stage, e.Command.Name, e.Place, tc.asked, tc.placed)
+		if e.Command.Name != tc.asked || !tc.where(e.Place) {
+			t.Errorf("%s: recorded %s at %#v; want %s", tc.stage, e.Command.Name, e.Place, tc.asked)
 		}
 	}
+}
+
+// is is whether a Where is want.
+func is(want command.Where) func(command.Where) bool {
+	return func(w command.Where) bool { return w == want }
 }
 
 // panicking is a stdout whose writes panic.
@@ -81,23 +101,33 @@ func TestAPanicAfterTheMintIsRecordedMinted(t *testing.T) {
 	}
 }
 
-// A run whose start panics, its trace id or its clock, has no event: it
-// says so on stderr and ends unrecorded.
-func TestAStartThatFailsIsSaidUnrecorded(t *testing.T) {
-	for name, broke := range map[string]func(Twin) Twin{
-		"the trace id": func(t Twin) Twin {
+// A run whose event cannot be made, its start or its end panicking, says
+// the outcome's line when it has one, then that it went unrecorded, with
+// the panic's stack, and ends unrecorded.
+func TestARunWithNoEventIsSaidUnrecorded(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		broke func(Twin) Twin
+		line  string
+	}{
+		{"the trace id", func(t Twin) Twin {
 			t.Process.Entropy = refusingReader{}
 			return t
-		},
-		"the clock": func(t Twin) Twin {
-			t.Process.Clock = panickingClock{}
+		}, ""},
+		{"the clock at the start", func(t Twin) Twin {
+			t.Process.Clock = &brokenClock{after: 0}
 			return t
-		},
+		}, ""},
+		{"the clock at the end", func(t Twin) Twin {
+			t.Process.Clock = &brokenClock{after: 1}
+			return t
+		}, "error (reason=unknown_verb): "},
 	} {
-		twin := broke(NewTwin())
-		status := Run(twin.Process, []string{"--help"})
-		if status != cli.Unrecorded || len(twin.Commands.Events) != 0 || !strings.HasPrefix(twin.Err.String(), "lit2: unrecorded: ") {
-			t.Errorf("%s failing: status %d, %d events, stderr %q; want %d, none, the unrecorded line", name, status, len(twin.Commands.Events), twin.Err, cli.Unrecorded)
+		twin := tc.broke(NewTwin())
+		status := Run(twin.Process, []string{"frobnicate"})
+		said := twin.Err.String()
+		if status != cli.Unrecorded || len(twin.Commands.Events) != 0 || !strings.HasPrefix(said, tc.line) || !strings.Contains(said, "lit2: unrecorded: ") || !strings.Contains(said, "goroutine") {
+			t.Errorf("%s failing: status %d, %d events, stderr %q; want %d, none, %q then the unrecorded line and its stack", tc.name, status, len(twin.Commands.Events), said, cli.Unrecorded, tc.line)
 		}
 	}
 }
@@ -106,47 +136,50 @@ type refusingReader struct{}
 
 func (refusingReader) Read([]byte) (int, error) { return 0, errors.New("no entropy") }
 
-type panickingClock struct{}
+// brokenClock is a clock that reads its first after times and then breaks.
+type brokenClock struct{ after int }
 
-func (panickingClock) Now() time.Time { panic("the clock broke") }
+func (c *brokenClock) Now() time.Time {
+	if c.after == 0 {
+		panic("the clock broke")
+	}
+	c.after--
+	return time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
+}
 
-// A sink that fails or panics loses the event, said on stderr; when stderr
-// refuses that too, the status says the run unrecorded. A log whose
-// pruning did not finish kept the event, so the status is the outcome's.
+// A sink that fails or panics loses the event, said on stderr, with the
+// panic's stack; when stderr refuses that too, the status says the run
+// unrecorded.
 func TestALostEventNeverLooksClean(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		sink   command.Sink
-		stderr func(*bytes.Buffer) io.Writer
 		status int
-		said   string
+		said   []string
 	}{
-		{"a failed write", command.Unwritable{Err: errors.New("disk gone")}, plain, 0, "command event not recorded: disk gone"},
-		{"a panicking write", panickingSink{}, plain, 0, "command event not recorded: writing the command event: panic: the sink broke"},
-		{"a failed write, stderr refusing", command.Unwritable{Err: errors.New("disk gone")}, deaf, cli.Unrecorded, ""},
-		{"housekeeping, stderr refusing", housekeepingSink{}, deaf, 0, ""},
+		{"a failed write", command.Unwritable{Err: errors.New("disk gone")}, 0, []string{"lit2: command event not recorded: disk gone\n"}},
+		{"a panicking write", panickingSink{}, 0, []string{"lit2: command event not recorded: panic: the sink broke\n", "goroutine"}},
 	} {
 		twin := NewTwin()
 		twin.Process.Commands = tc.sink
-		twin.Process.Err = tc.stderr(twin.Err)
-		if status := Run(twin.Process, []string{"--help"}); status != tc.status || !strings.Contains(twin.Err.String(), tc.said) {
-			t.Errorf("%s: status %d, stderr %q; want %d saying %q", tc.name, status, twin.Err, tc.status, tc.said)
+		status := Run(twin.Process, []string{"--help"})
+		for _, s := range tc.said {
+			if status != tc.status || !strings.Contains(twin.Err.String(), s) {
+				t.Errorf("%s: status %d, stderr %q; want %d saying %q", tc.name, status, twin.Err, tc.status, s)
+			}
+		}
+		deaf := NewTwin()
+		deaf.Process.Commands = tc.sink
+		deaf.Process.Err = refusing{errors.New("stderr gone")}
+		if status := Run(deaf.Process, []string{"--help"}); status != cli.Unrecorded {
+			t.Errorf("%s, stderr refusing: status %d; want %d, the one channel left", tc.name, status, cli.Unrecorded)
 		}
 	}
 }
 
-func plain(b *bytes.Buffer) io.Writer { return b }
-
-func deaf(*bytes.Buffer) io.Writer { return refusing{errors.New("stderr gone")} }
-
 type panickingSink struct{}
 
 func (panickingSink) Write(command.Event) error { panic("the sink broke") }
-
-// housekeepingSink is a log that kept the event and could not prune.
-type housekeepingSink struct{}
-
-func (housekeepingSink) Write(command.Event) error { return command.Housekeeping{} }
 
 // The duration covers reading the place: an identity read that takes a
 // second shows in it.
@@ -249,7 +282,7 @@ func TestARegroupedRowIsNamedByItsNewPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	twin := NewTwin()
-	e := invoke(twin.Process, asking(func() cli.Commands { return regrouped }, "config", "sync")).Event
+	e := recordedOf(t, invoke(twin.Process, asking(func() cli.Commands { return regrouped }, "config", "sync"))).Event
 	if e.Command.Name != moved || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(failure(t, e).Error(), "lit2 config sync is not built") {
 		t.Errorf("config sync recorded %#v ending %#v; want it asked as config sync, its failure naming config sync", e.Command, e.Outcome)
 	}
@@ -309,7 +342,7 @@ func TestTheEventIsInTheTwinsCheckoutAsItsWriter(t *testing.T) {
 	twin := NewTwin()
 	_, e := run(t, twin, "--help")
 	want := command.InCheckout{Checkout: twinCheckout, Identity: command.Minted{Checkout: twinID, Key: twinKey()}}
-	if e.Place != command.Placed(want) {
+	if e.Place != command.Where(want) {
 		t.Errorf("the event's place is %#v; want %#v", e.Place, want)
 	}
 }

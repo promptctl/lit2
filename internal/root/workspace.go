@@ -245,7 +245,7 @@ func (o opened) status() cli.Outcome {
 // moves, are that one read's, whatever the mint did, and a panic after the
 // mint is recorded in the minted place.
 func (r body) init() cli.Outcome {
-	in, err := command.CheckoutAt(*r.place)
+	in, err := command.CheckoutAt(r.place.Place())
 	if err != nil {
 		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("%s makes a git checkout a writer: %w", commandname.Init(), err)}}
 	}
@@ -255,7 +255,7 @@ func (r body) init() cli.Outcome {
 	for _, c := range minting.creations() {
 		r.w.created(c)
 	}
-	*r.place = command.InCheckout{Checkout: in.Checkout, Identity: minting.identity()}
+	r.place.Move(command.InCheckout{Checkout: in.Checkout, Identity: minting.identity()})
 	return r.enroll(in.Checkout, once, minting)
 }
 

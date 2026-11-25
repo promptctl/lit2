@@ -187,16 +187,22 @@ func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 			return cli.Done{}
 		})
 	}
-	e := invoke(t.Process, func() (cli.Summary, func(body) cli.Outcome) {
+	ended := invoke(t.Process, func() (cli.Summary, func(body) cli.Outcome) {
 		// [LAW:one-source-of-truth] exception: a summary no row parsed, since
 		// a forged write is no command line; its name is the reserved one no
 		// row may take, so it is never read as a person's command.
 		return cli.Summary{Name: commandname.Forged()}, forge
-	}).Event
-	if f, isFailed := e.Outcome.(cli.Failed); isFailed {
-		return f.Failure
+	})
+	switch e := ended.(type) {
+	case command.Recorded:
+		if f, isFailed := e.Event.Outcome.(cli.Failed); isFailed {
+			return f.Failure
+		}
+		return forged
+	case command.Unrecorded:
+		return e.Broke
 	}
-	return forged
+	panic("root: an Ended that is neither Recorded nor Unrecorded")
 }
 
 // Store is the twin's store as a run opens it, from the writer its

@@ -80,3 +80,7 @@ type Summary struct {
 	Paths  []PathText
 	Values int
 }
+
+// Unparsed is the summary of an argv that did not parse, or has not yet:
+// the name of none of the rows, no paths and no values.
+func Unparsed() Summary { return Summary{Name: commandname.Unparsed()} }

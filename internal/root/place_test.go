@@ -130,7 +130,7 @@ func TestAnUnremovableOldDayFileStillLeavesTheRecord(t *testing.T) {
 	}
 	twin := NewTwin()
 	twin.Process.Commands = command.NewLog(dir)
-	if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.String() != "lit2: command log: pruning did not finish: skipped 2026-09-02.jsonl: not day files, so never pruned\n" {
+	if status := Run(twin.Process, []string{"--help"}); status != 0 || twin.Err.String() != "lit2: command log: kept 2026-09-02.jsonl: not day files, so never pruned\n" {
 		t.Fatalf("--help beside a directory named as an old day file: status %d, stderr %q", status, twin.Err)
 	}
 	twin.Err.Reset()
@@ -146,11 +146,17 @@ func TestAnUnremovableOldDayFileStillLeavesTheRecord(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if status := Run(twin.Process, []string{"--help"}); status != 0 || !strings.HasPrefix(twin.Err.String(), "lit2: command log: pruning did not finish: ") {
+	if status := Run(twin.Process, []string{"--help"}); status != 0 || !strings.HasPrefix(twin.Err.String(), "lit2: command log: removing old day files failed: ") {
 		t.Errorf("--help with an unremovable old day file: status %d, stderr %q", status, twin.Err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "2026-11-11.jsonl")); err != nil || strings.Count(string(b), "\n") != 2 {
 		t.Errorf("the log holds %q, %v; want both lines", b, err)
+	}
+	// the event is in the log, so a stderr that will not take what pruning
+	// left changes no status: the next write says it again
+	twin.Process.Err = refusing{errors.New("stderr gone")}
+	if status := Run(twin.Process, []string{"--help"}); status != 0 {
+		t.Errorf("--help with an unremovable old day file and a refusing stderr: status %d; want 0, its event kept", status)
 	}
 }
 

@@ -35,18 +35,33 @@ var (
 	here = InCheckout{Checkout: checkout, Identity: Minted{Checkout: store.CheckoutID{9}, Key: key}}
 )
 
-// record is the event of work run with its place read as at first.
-func record(c Clock, spawns func() []git.Spawn, inv Invocation, at Place, work func(Recorder) cli.Outcome) Event {
-	return Record(c, spawns, inv, func(r Recorder) cli.Outcome {
-		p := at
-		r.Placed(&p)
-		return work(r)
-	}).Event
+// beginning is a start that reads as inv.
+func beginning(inv Invocation) func() Invocation { return func() Invocation { return inv } }
+
+// recordedOf is the event of a run that made one.
+func recordedOf(t *testing.T, e Ended) Recorded {
+	t.Helper()
+	r, ok := e.(Recorded)
+	if !ok {
+		t.Fatalf("the run ended %#v; want it recorded", e)
+	}
+	return r
 }
 
-// The place recorded is the cell work holds it in: where work moved it, a
-// panic after the move included, and none before work read one.
-func TestTheEventKeepsThePlaceWorkHeldWhenItEnded(t *testing.T) {
+// record is the event of work, asked inv's command, run with its place
+// read as at first.
+func record(t *testing.T, c Clock, spawns func() []git.Spawn, inv Invocation, at Place, work func(Recorder) cli.Outcome) Event {
+	t.Helper()
+	return recordedOf(t, Record(c, spawns, beginning(inv), func(r Recorder) cli.Outcome {
+		r.Asked(inv.Command)
+		r.Placed(at)
+		return work(r)
+	})).Event
+}
+
+// The place recorded is how far the run got and, once read, where it is
+// held: where work moved it, a panic after the move included.
+func TestTheEventKeepsHowFarTheRunGotInReadingItsPlace(t *testing.T) {
 	unminted := InCheckout{Checkout: checkout, Identity: Unminted{Missing: Both{}}}
 	for _, tc := range []struct {
 		name string
@@ -55,53 +70,90 @@ func TestTheEventKeepsThePlaceWorkHeldWhenItEnded(t *testing.T) {
 		{"work that ends", func() {}},
 		{"work that panics after the move", func() { panic("the body broke") }},
 	} {
-		e := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Init()), func(r Recorder) cli.Outcome {
-			p := Place(unminted)
-			r.Placed(&p)
-			p = here
+		e := recordedOf(t, Record(&FixedClock{At: t0}, noGit, beginning(inv), func(r Recorder) cli.Outcome {
+			r.Placed(unminted).Move(here)
 			tc.then()
 			return cli.Done{}
-		}).Event
-		if !reflect.DeepEqual(e.Place, Placed(here)) {
+		})).Event
+		if e.Place != Where(here) {
 			t.Errorf("%s: recorded the place %#v; want the one it moved to, %#v", tc.name, e.Place, here)
 		}
 	}
-	unread := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Init()), func(Recorder) cli.Outcome { panic("before the place") }).Event
-	if unread.Place != (PlaceUnread{}) || decode(t, unread)["place"] == nil {
-		t.Errorf("work that panicked before reading its place recorded %#v; want PlaceUnread, said on the line", unread.Place)
+	found := AtCheckout{Checkout: checkout}
+	for _, tc := range []struct {
+		name  string
+		work  func(Recorder) cli.Outcome
+		where Where
+		line  string
+	}{
+		{"before git was asked", func(Recorder) cli.Outcome { panic("before locating") }, PlaceUnread{}, `"place":{"unread":{}}`},
+		{"between finding the checkout and its identity", func(r Recorder) cli.Outcome {
+			r.Located(found)
+			panic("reading the identity")
+		}, found, `"identity":{"unread":{}}`},
+	} {
+		e := recordedOf(t, Record(&FixedClock{At: t0}, noGit, beginning(inv), tc.work)).Event
+		line, err := encode(e)
+		if e.Place != tc.where || err != nil || !strings.Contains(string(line), tc.line) {
+			t.Errorf("a panic %s recorded %#v, said %s; want %#v, saying %s", tc.name, e.Place, line, tc.where, tc.line)
+		}
 	}
 }
 
-// What was asked is what work says, once it knows; before that, the
-// invocation's own.
+// What was asked is what work says, once it knows; before that, unparsed.
 func TestTheEventKeepsWhatWorkSaidWasAsked(t *testing.T) {
 	said := cli.Summary{Name: commandname.Get(), Paths: []cli.PathText{"x"}}
-	e := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Unparsed()), func(r Recorder) cli.Outcome {
+	e := recordedOf(t, Record(&FixedClock{At: t0}, noGit, beginning(inv), func(r Recorder) cli.Outcome {
 		r.Asked(said)
 		panic("after asking")
-	}).Event
+	})).Event
 	if !reflect.DeepEqual(e.Command, said) {
 		t.Errorf("a panic after asking recorded %#v; want %#v", e.Command, said)
 	}
-	before := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Unparsed()), func(Recorder) cli.Outcome { panic("before asking") }).Event
-	if before.Command.Name != commandname.Unparsed() {
-		t.Errorf("a panic before asking recorded %s; want the invocation's, unparsed", before.Command.Name)
+	before := recordedOf(t, Record(&FixedClock{At: t0}, noGit, beginning(inv), func(Recorder) cli.Outcome { panic("before asking") })).Event
+	if !reflect.DeepEqual(before.Command, cli.Unparsed()) {
+		t.Errorf("a panic before asking recorded %#v; want unparsed", before.Command)
 	}
 }
 
-// The line and the status are the outcome's, derived under the recover: a
+// The line and the status are the outcome's, said under the recover: a
 // failure whose rendering panics ends as the Internal of that panic.
 func TestALineThatPanicsToRenderEndsInternal(t *testing.T) {
-	ended := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), func(r Recorder) cli.Outcome {
-		p := Place(here)
-		r.Placed(&p)
+	ended := recordedOf(t, Record(&FixedClock{At: t0}, noGit, beginning(inv), func(r Recorder) cli.Outcome {
 		return cli.Failed{Failure: unsayable{}}
-	})
+	}))
 	in, ok := ended.Event.Outcome.(cli.Failed).Failure.(Internal)
 	if !ok || !strings.Contains(in.Error(), "no words for it") || ended.Status != 70 || !strings.Contains(ended.Line, "no words for it") {
 		t.Errorf("a failure that cannot be said ended %#v; want an Internal of its panic, said, exit 70", ended)
 	}
 }
+
+// A read the event is made of that panics leaves no event: at the start
+// there is no outcome to say; at the end the outcome's line is still said.
+func TestAReadTheEventIsMadeOfThatPanicsIsUnrecorded(t *testing.T) {
+	refused := cli.Failed{Failure: Broke(errors.New("refused"))}
+	for _, tc := range []struct {
+		name   string
+		clock  Clock
+		spawns func() []git.Spawn
+		begin  func() Invocation
+		line   string
+	}{
+		{"the start", &FixedClock{At: t0}, noGit, func() Invocation { panic("the start broke") }, ""},
+		{"the clock at the end", panicking{}, noGit, beginning(inv), cli.Report(refused)},
+		{"the git spawns", &FixedClock{At: t0}, func() []git.Spawn { panic("the spawns broke") }, beginning(inv), cli.Report(refused)},
+	} {
+		e, ok := Record(tc.clock, tc.spawns, tc.begin, func(Recorder) cli.Outcome { return refused }).(Unrecorded)
+		if !ok || e.Line != tc.line || !strings.Contains(e.Broke.Error(), "broke") || len(e.Broke.Stack()) == 0 {
+			t.Errorf("%s panicking ended %#v; want unrecorded with its panic and stack, saying %q", tc.name, e, tc.line)
+		}
+	}
+}
+
+// panicking is a clock that breaks when read.
+type panicking struct{}
+
+func (panicking) Now() time.Time { panic("the clock broke") }
 
 // unsayable is a failure whose message panics.
 type unsayable struct{}
@@ -120,7 +172,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 		{commandname.Get(), cli.Failed{Failure: Broke(errors.New("not built"))}, 70},
 	} {
 		given := asked(inv, tc.name)
-		e := record(&FixedClock{At: t0}, noGit, given, here, func(Recorder) cli.Outcome {
+		e := record(t, &FixedClock{At: t0}, noGit, given, here, func(Recorder) cli.Outcome {
 			return tc.outcome
 		})
 		if !reflect.DeepEqual(e.Invocation, given) || cli.ExitCode(e.Outcome) != tc.exit {
@@ -134,7 +186,7 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := record(&FixedClock{At: t0}, noGit, asking(inv, p.Asked), here, func(Recorder) cli.Outcome {
+	e := record(t, &FixedClock{At: t0}, noGit, asking(inv, p.Asked), here, func(Recorder) cli.Outcome {
 		panic("the body broke")
 	})
 	if e.Command.Name != commandname.Get() || len(e.Command.Paths) != 1 || e.Command.Paths[0] != "x" {
@@ -154,7 +206,7 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 // duration runs from the reading Record is given.
 func TestRecordTimesTheRunFromTheReadingItIsGiven(t *testing.T) {
 	clock := &FixedClock{At: t0.Add(250 * time.Millisecond)}
-	e := record(clock, noGit, asked(inv, commandname.Help()), here, func(Recorder) cli.Outcome {
+	e := record(t, clock, noGit, asked(inv, commandname.Help()), here, func(Recorder) cli.Outcome {
 		clock.At = clock.At.Add(1500 * time.Millisecond)
 		return cli.Done{}
 	})
@@ -167,7 +219,7 @@ func TestRecordTimesTheRunFromTheReadingItIsGiven(t *testing.T) {
 // body gives it, and a run that read none has no config block at all.
 func TestTheVersionInForceIsRecordedOnceTheBodyGivesIt(t *testing.T) {
 	given := ConfigFacts{Ref: "ab12", Facts: config.Facts{Gate: "none"}}
-	e := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(r Recorder) cli.Outcome {
+	e := record(t, &FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(r Recorder) cli.Outcome {
 		r.Configured(given)
 		panic("after the fold")
 	})
@@ -179,7 +231,7 @@ func TestTheVersionInForceIsRecordedOnceTheBodyGivesIt(t *testing.T) {
 	if block["ref"] != "ab12" || counts["levels"] != 0.0 {
 		t.Errorf("the config block is %v; want the ref and every zero count written", block)
 	}
-	none := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
+	none := record(t, &FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
 	if _, ok := decode(t, none)["config"]; ok || none.Config != nil {
 		t.Error("a run that read no version has a config block")
 	}
@@ -264,7 +316,7 @@ func TestEverySpawnReachesTheLoggedLine(t *testing.T) {
 		{Args: []string{"rev-parse"}, Ended: git.Exited{Code: 128}, Stderr: "fatal: not a git repository"},
 		{Args: []string{"hash-object"}, Ended: git.Unstarted{Why: errors.New("git is not on PATH")}},
 	}
-	e := record(&FixedClock{At: t0}, func() []git.Spawn { return ran }, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
+	e := record(t, &FixedClock{At: t0}, func() []git.Spawn { return ran }, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
 	block, _ := decode(t, e)["git"].([]any)
 	if len(block) != 2 {
 		t.Fatalf("the git block is %v; want both spawns", block)
@@ -274,7 +326,7 @@ func TestEverySpawnReachesTheLoggedLine(t *testing.T) {
 	if exited["exit"] != 128.0 || exited["stderr"] != "fatal: not a git repository" || unstarted["unstarted"] != "git is not on PATH" || unstarted["exit"] != nil {
 		t.Errorf("the git block is %v; want git's exit and stderr, and why the other never started", block)
 	}
-	none := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
+	none := record(t, &FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
 	if block, ok := decode(t, none)["git"].([]any); !ok || len(block) != 0 {
 		t.Errorf("a run with no git logged %v; want an empty block", decode(t, none)["git"])
 	}
@@ -287,7 +339,7 @@ type joined struct{ Internal }
 func (j joined) Unwrap() []error { return []error{j.Internal, errors.New("and a write not durable")} }
 
 func TestAnInternalJoinedWithAnotherFailureKeepsItsStack(t *testing.T) {
-	broke := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { panic("the body broke") }).Outcome.(cli.Failed).Failure.(Internal)
+	broke := record(t, &FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { panic("the body broke") }).Outcome.(cli.Failed).Failure.(Internal)
 	m := decode(t, Event{Invocation: asked(inv, commandname.Get()), Place: here, Outcome: cli.Failed{Failure: joined{broke}}})
 	if stack, _ := m["stack"].(string); stack == "" || stack != string(broke.Stack()) {
 		t.Errorf("the line's stack is %q; want the Internal's", m["stack"])

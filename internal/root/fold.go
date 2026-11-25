@@ -53,13 +53,13 @@ func (r body) open() (opened, error) {
 // a body opens a store, admin init's after its mint included, so the store
 // opened is always the place's `[LAW:one-source-of-truth]`.
 func (r body) openFounded() (opened, error) {
-	switch o := command.OpeningAt(*r.place).(type) {
+	switch o := command.OpeningAt(r.place.Place()).(type) {
 	case command.Opens:
 		return r.openAs(r.p.writerOf(o))
 	case command.NoStore:
 		return opened{}, storeFailure{err: o.Why}
 	}
-	panic(fmt.Sprintf("root: %T is not an Opening", command.OpeningAt(*r.place)))
+	panic(fmt.Sprintf("root: %T is not an Opening", command.OpeningAt(r.place.Place())))
 }
 
 // openAs folds w's store, seeded with the founding its clone pinned.

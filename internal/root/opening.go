@@ -12,8 +12,12 @@ import (
 // writer its identity files hold, or where no checkout was found. Main
 // and the twin both read it here, over their own ports, so the identity a
 // twin-backed test runs under is read as lit2 reads it on disk.
-func placeOf(p Process) command.Place {
-	switch l := p.Locate().(type) {
+func placeOf(p Process) command.Place { return identified(p, p.Locate()) }
+
+// identified is the place of what git found, l: a checkout with the writer
+// its identity files hold, or where no checkout was found.
+func identified(p Process, l command.Located) command.Place {
+	switch l := l.(type) {
 	case command.AtCheckout:
 		return command.InCheckout{Checkout: l.Checkout, Identity: readIdentity(p.IdentityFiles(l.Checkout))}
 	case command.NoCheckout:
@@ -21,7 +25,7 @@ func placeOf(p Process) command.Place {
 	case command.Unlocatable:
 		return l
 	}
-	panic(fmt.Sprintf("root: %T is not a Located", p.Locate()))
+	panic(fmt.Sprintf("root: %T is not a Located", l))
 }
 
 // writer is a minted checkout, its writer, and its store, opened for that
