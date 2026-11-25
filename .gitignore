@@ -1,1 +1,4 @@
 /lit2
+reference-docs/
+.DS_Store
+.lit/statusline.json
