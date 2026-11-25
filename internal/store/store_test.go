@@ -123,7 +123,8 @@ func TestAPublicationWhoseSegmentDoesNotFillItsSpanIsUnreadableAndResealed(t *te
 	if _, err := s.Publish(pub); err != nil {
 		t.Fatal(err)
 	}
-	reader := Open(CheckoutID{0xc}, MemoryPorts(filestest.Memory(), p.objects, p.refs, bytes.NewReader(nil)), DefaultSegmentBound)
+	// a clone that fetched lit's repository and holds no log
+	reader := Open(CheckoutID{0xc}, WithFiles(p, filestest.Memory()), DefaultSegmentBound)
 	h, err = reader.Heads()
 	if err != nil {
 		t.Fatal(err)
@@ -180,8 +181,7 @@ func TestAPublicationOfNoSegmentIsUnreadableAndResealed(t *testing.T) {
 // record, the frames, and the log's id.
 func appended(t *testing.T, me CheckoutID, records ...string) (*Store, Ports, [][]byte, LogID) {
 	t.Helper()
-	repo := git.NewMemory()
-	p := MemoryPorts(filestest.Memory(), repo, repo, bytes.NewReader(make([]byte, 64)))
+	p := RepositoryInMemory(filestest.Memory(), bytes.NewReader(make([]byte, 64)))
 	s := Open(me, p, DefaultSegmentBound)
 	var frames [][]byte
 	for _, r := range records {

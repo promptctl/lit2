@@ -19,8 +19,11 @@ func WithFiles(p Ports, f files.Files) Ports {
 	return p
 }
 
-// LogDir is the directory of the logs of at's clone, as DiskPorts opens it.
-func LogDir(at git.Checkout) files.Dir { return locate(at).logs }
+// WithRefs is p with lit's repository's refs read and replaced through r.
+func WithRefs(p Ports, r git.Refs) Ports {
+	p.refs = r
+	return p
+}
 
 // RepositoryDir is lit's repository of at's clone, as DiskPorts opens it.
 func RepositoryDir(at git.Checkout) string { return locate(at).repo.Path() }

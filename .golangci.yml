@@ -1,5 +1,11 @@
 version: "2"
 
+run:
+  # The tag builds every file the fast loop does and the integration
+  # tests besides, so one run lints the whole tree.
+  build-tags:
+    - integration
+
 linters:
   default: standard
   enable:

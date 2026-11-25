@@ -1,6 +1,9 @@
+//go:build integration
+
 package files_test
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"maps"
@@ -18,11 +21,6 @@ import (
 // The rows only the disk faces: a symlink, or anything else, where a
 // directory or a file of it should be. Each asserts with os, an oracle
 // beside the port, that nothing was read or written at the link's target.
-
-var (
-	dir = files.MustName("dir")
-	a   = files.MustName("a")
-)
 
 // holds fails t unless the file at path holds want.
 func holds(t *testing.T, path, want string) {
@@ -75,16 +73,6 @@ func notTheDirectory(t *testing.T, call string, err error) {
 	if !errors.As(err, new(files.NotTheDirectory)) {
 		t.Errorf("%s failed with %v; want NotTheDirectory", call, err)
 	}
-}
-
-// notPlaced is why p placed nothing, failing t unless it is NotPlaced.
-func notPlaced(t *testing.T, p files.Placing) error {
-	t.Helper()
-	no, ok := p.(files.NotPlaced)
-	if !ok {
-		t.Errorf("CreateOnce = %#v; want NotPlaced", p)
-	}
-	return no.Why
 }
 
 // notAppended is why a appended nothing, failing t unless it is
@@ -220,26 +208,6 @@ func TestADirectoryThatIsNotItselfIsRefused(t *testing.T) {
 		refusesEveryCall(t, f, notTheDirectory)
 		empty(t, filepath.Join(outside, dir.String()))
 	})
-}
-
-func TestTheZeroDirIsRefused(t *testing.T) {
-	f := files.At(files.Dir{}, files.NewDurability())
-	if err := notPlaced(t, f.CreateOnce(a, []byte("x"))); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("CreateOnce failed with %v; want ErrNoDir", err)
-	}
-	if l, err := f.List(); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("List = %v, %v; want ErrNoDir", l, err)
-	}
-	if err := files.NewDurability().Make(files.Dir{}); !errors.Is(err, files.ErrNoDir) {
-		t.Errorf("Make failed with %v; want ErrNoDir", err)
-	}
-}
-
-// A base that is not absolute is a bug: no Dir is made from it.
-func TestADirFromNoAbsoluteBaseIsABug(t *testing.T) {
-	for _, base := range []string{"", "relative"} {
-		panics.With(t, files.ErrNotABase, func() { files.DirAt(base, dir) })
-	}
 }
 
 // Every entry of a listed directory that is no file of the port is
@@ -411,5 +379,40 @@ func TestAFileIsMadeInItsPortsMode(t *testing.T) {
 		if info.Mode().Perm() != mode {
 			t.Errorf("a file of a %v port is %v; want %v", mode, info.Mode().Perm(), mode)
 		}
+	}
+}
+
+// An append lands at the file's end as it is when the write runs, not as
+// it was at the open: another writer's whole append lands in that gap, and
+// both are whole where their answers say, the guarantee O_APPEND gives a
+// write, here forced at the step it covers
+// [LAW:no-ambient-temporal-coupling].
+func TestAnAppendLandsAfterAWriteBetweenItsOpenAndItsWrite(t *testing.T) {
+	base := t.TempDir()
+	plain := files.At(files.DirAt(base, dir), files.NewDurability())
+	filestest.Create(t, plain, a, []byte("head"))
+	first, second := []byte(strings.Repeat("a", 64)), []byte(strings.Repeat("b", 64))
+	var between files.Appending
+	gated := files.At(files.Writing(files.DirAt(base, dir), func(p string) {
+		if between == nil && p == filepath.Join(base, dir.String(), a.String()) {
+			between = plain.Append(a, second)
+		}
+	}), files.NewDurability())
+	got := gated.Append(a, first)
+	for _, w := range []struct {
+		name  string
+		got   files.Appending
+		frame []byte
+	}{{"the gated append", got, first}, {"the append in its gap", between, second}} {
+		appended, ok := w.got.(files.Appended)
+		if !ok {
+			t.Fatalf("%s = %#v; want Appended", w.name, w.got)
+		}
+		if b, err := plain.ReadAt(a, appended.End-64, 64); err != nil || !bytes.Equal(b, w.frame) {
+			t.Errorf("%s's bytes before its end %d are %q, %v; want its frame whole", w.name, appended.End, b, err)
+		}
+	}
+	if size, err := plain.Size(a); err != nil || size != 4+2*64 {
+		t.Errorf("the file is %d bytes, %v; want %d, both appends whole", size, err, 4+2*64)
 	}
 }

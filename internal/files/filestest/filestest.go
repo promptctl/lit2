@@ -1,7 +1,9 @@
-// Package filestest is the contract suite every implementation of the
-// Files port passes, and what a test outside files needs of the port: a
-// Dir whose seams it sees or fails, a twin whose writes land but are not
-// durable, and the writes a test arranges state with.
+// Package filestest is the contract suite the Files port's disk adapter
+// and its twin both pass, run side by side, so one contract is what both
+// are `[LAW:one-source-of-truth]` (D2); and what a test outside files
+// needs of the port: a Dir whose seams it sees or fails, a twin whose
+// writes land but are not durable, and the writes a test arranges state
+// with.
 package filestest
 
 import (
@@ -17,10 +19,23 @@ import (
 	"github.com/promptctl/lit2/internal/files/internal/seam"
 )
 
-// Files holds fresh, an empty directory each call, to the Files contract.
-// Every row names the variant a write answers, never only whether it
-// failed.
-func Files(t *testing.T, fresh func(*testing.T) files.Files) {
+// Files holds the disk adapter, over a fresh temporary directory, and the
+// twin to the Files contract.
+func Files(t *testing.T) {
+	t.Run("disk", func(t *testing.T) {
+		contract(t, func(t *testing.T) files.Files {
+			return files.At(files.DirAt(t.TempDir(), files.MustName("dir")), files.NewDurability())
+		})
+	})
+	t.Run("memory", func(t *testing.T) {
+		contract(t, func(*testing.T) files.Files { return Memory() })
+	})
+}
+
+// contract holds fresh, an empty directory each call, to the Files
+// contract. Every row names the variant a write answers, never only
+// whether it failed.
+func contract(t *testing.T, fresh func(*testing.T) files.Files) {
 	n := files.MustName("a")
 	t.Run("an append to no file is NotAppended, NotFound", func(t *testing.T) {
 		got := fresh(t).Append(n, []byte("x"))

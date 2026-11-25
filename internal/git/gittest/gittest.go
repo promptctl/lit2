@@ -1,6 +1,12 @@
 // Package gittest is the contract suites of lit's repository's two ports,
-// Objects and Refs, which the repository on disk and its twin in memory
-// both pass, so a test over the twin is a test over the repository.
+// Objects and Refs, and of the code repository, Code, each run over the
+// repository on disk and its twin in memory side by side, so a test over
+// the twin is a test over the repository: one contract is what both arms
+// are `[LAW:one-source-of-truth]`, written down as D2. The helpers it
+// exports to make a repository, run git or plant a directory are built
+// with the integration tag alone, so a fast test cannot call one by name;
+// the suites' real arms are built from this package's own unexported
+// ones.
 package gittest
 
 import (
@@ -77,9 +83,20 @@ func RefusedEntries() []string {
 	return []string{"", ".", "..", ".git", ".GIT", "a/b", "a\x00b", ".hidden", "a b"}
 }
 
-// Objects holds fresh, an empty object database each call, to the Objects
+// Objects holds lit's repository on disk and its twin to the Objects
 // contract.
-func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
+func Objects(t *testing.T) {
+	t.Run("repository", func(t *testing.T) {
+		objects(t, func(t *testing.T) git.Objects { return freshRepository(t) })
+	})
+	t.Run("memory", func(t *testing.T) {
+		objects(t, func(*testing.T) git.Objects { return git.NewMemory() })
+	})
+}
+
+// objects holds fresh, an empty object database each call, to the Objects
+// contract.
+func objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 	t.Run("a blob's id is git's, and a second put finds it", func(t *testing.T) {
 		db := fresh(t)
 		for _, c := range []struct {
@@ -252,9 +269,9 @@ func Objects(t *testing.T, fresh func(*testing.T) git.Objects) {
 	})
 }
 
-// Repository is both of lit's repository's ports, as the disk repository
+// repository is both of lit's repository's ports, as the disk repository
 // and its twin each are.
-type Repository interface {
+type repository interface {
 	git.Objects
 	git.Refs
 }
@@ -270,9 +287,19 @@ func Refused() []git.RefName {
 		"refs/lit/a@{b", "refs/lit/a.", "refs/lit/a\x00b"}
 }
 
-// Refs holds fresh, an empty repository each call, to the Refs contract.
-func Refs(t *testing.T, fresh func(*testing.T) Repository) {
-	objects := func(t *testing.T, r Repository) (a, b git.ObjectID) {
+// Refs holds lit's repository on disk and its twin to the Refs contract.
+func Refs(t *testing.T) {
+	t.Run("repository", func(t *testing.T) {
+		refs(t, func(t *testing.T) repository { return freshRepository(t) })
+	})
+	t.Run("memory", func(t *testing.T) {
+		refs(t, func(*testing.T) repository { return git.NewMemory() })
+	})
+}
+
+// refs holds fresh, an empty repository each call, to the Refs contract.
+func refs(t *testing.T, fresh func(*testing.T) repository) {
+	objects := func(t *testing.T, r repository) (a, b git.ObjectID) {
 		t.Helper()
 		return PutBlob(t, r, []byte("hello\n")), PutBlob(t, r, nil)
 	}
@@ -304,6 +331,24 @@ func Refs(t *testing.T, fresh func(*testing.T) Repository) {
 				t.Errorf("after Replace(%s, %s) the refs are %v", name, to, heads)
 			}
 			was = git.Named{Target: to}
+		}
+	})
+	t.Run("a replace from no Was is a bug, to a target held or not, and moves nothing", func(t *testing.T) {
+		refs := fresh(t)
+		a, _ := objects(t, refs)
+		const name git.RefName = "refs/lit/log/w"
+		for _, to := range []git.ObjectID{a, ID(t, "0123456789abcdef0123456789abcdef01234567")} {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Errorf("Replace(%s, nil, %s) returned; want a panic", name, to)
+					}
+				}()
+				_ = refs.Replace(name, nil, to)
+			}()
+		}
+		if heads := list(t, refs, "refs/lit/"); len(heads) != 0 {
+			t.Errorf("after a replace from no Was the refs are %v; want none", heads)
 		}
 	})
 	t.Run("a replace from what the ref no longer is is refused, so a racing writer is never undone", func(t *testing.T) {

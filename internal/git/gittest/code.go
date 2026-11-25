@@ -2,23 +2,32 @@ package gittest
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/git"
 )
 
-// Commits is a code repository a test can commit to: Commit makes files,
+// commits is a code repository a test can commit to: Commit makes files,
 // path to bytes, the whole tree of a new commit on HEAD.
-type Commits interface {
+type commits interface {
 	git.Code
 	Commit(t *testing.T, files map[string][]byte)
 }
 
-// Code holds fresh, a code repository with no commit each call, to the Code
+// Code holds the code repository on disk and its twin to the Code
 // contract.
-func Code(t *testing.T, fresh func(*testing.T) Commits) {
+func Code(t *testing.T) {
+	t.Run("repository", func(t *testing.T) {
+		code(t, func(t *testing.T) commits { return newRepo(t) })
+	})
+	t.Run("memory", func(t *testing.T) {
+		code(t, func(*testing.T) commits { return memoryCode{&git.CodeMemory{}} })
+	})
+}
+
+// code holds fresh, a code repository with no commit each call, to the Code
+// contract.
+func code(t *testing.T, fresh func(*testing.T) commits) {
 	const path = ".lit/workspace.toml"
 	one, two := []byte("prefix = \"a\"\n"), []byte("prefix = \"b\"\n")
 	idOne, idTwo := git.HashBlob(git.SHA1, one), git.HashBlob(git.SHA1, two)
@@ -86,45 +95,8 @@ func Code(t *testing.T, fresh func(*testing.T) Commits) {
 	})
 }
 
-// Repo is a code repository on disk with no commit, committed to through
-// the git binary.
-type Repo struct {
-	git.Code
-	Dir string
-}
-
-// NewRepo is an empty code repository on disk, read as lit2 reads one.
-func NewRepo(t *testing.T) Repo {
-	t.Helper()
-	dir := Physical(t)
-	Git(t, dir, "init", "-q", "-b", "main")
-	g := Runner(t)
-	c, err := g.Locate(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return Repo{Code: g.CodeAt(c), Dir: dir}
-}
-
-// Commit writes files as the work tree's whole content and commits it.
-func (r Repo) Commit(t *testing.T, files map[string][]byte) {
-	t.Helper()
-	Git(t, r.Dir, "rm", "-rqf", "--ignore-unmatch", ".")
-	for p, b := range files {
-		full := filepath.Join(r.Dir, filepath.FromSlash(p))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, b, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		Git(t, r.Dir, "add", "--", p)
-	}
-	Git(t, r.Dir, "commit", "-q", "--allow-empty", "-m", "commit")
-}
-
-// Memory is the code repository's twin, committed to directly.
-type Memory struct{ *git.CodeMemory }
+// memoryCode is the code repository's twin, committed to directly.
+type memoryCode struct{ *git.CodeMemory }
 
 // Commit commits files.
-func (m Memory) Commit(_ *testing.T, files map[string][]byte) { m.CodeMemory.Commit(files) }
+func (m memoryCode) Commit(_ *testing.T, files map[string][]byte) { m.CodeMemory.Commit(files) }

@@ -151,8 +151,13 @@ func (g *Git) userEnv() []string {
 // how git stores what lit hands it.
 func (g *Git) litEnv() []string {
 	env := slices.DeleteFunc(slices.Clone(g.env), func(kv string) bool { return strings.HasPrefix(kv, "GIT_") })
-	return append(env, "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	return append(append(env, "LC_ALL=C"), NoConfig()...)
 }
+
+// NoConfig is the environment under which git reads no user or system
+// config: what lit's repository is written under, and what the tests'
+// oracle runs under, so the two read git alike.
+func NoConfig() []string { return []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"} }
 
 // run runs git with args in dir, "" for the process's own, under env with
 // stdin, and is its stdout, or Refused. Every attempt is recorded, one
