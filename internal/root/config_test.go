@@ -12,8 +12,10 @@ import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/store/storetest"
 	"github.com/promptctl/lit2/internal/verbs"
 )
 
@@ -29,7 +31,7 @@ func enrolledOnly(t *testing.T) session {
 	s := freshSession(t)
 	m := must(events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: blob(noPlan), Policy: 1, Now: s.twin.Process.Clock.Now()},
 		events.NewDrafts(events.Act{About: events.Root{}, Payload: events.Enroll{Owner: verbs.Owner, Roles: verbs.DefaultRoles()}}), twinKey().Signer(), rand.NewChaCha8([32]byte{9})))
-	must(s.twin.Process.Store.(command.Opened).Store.Append(m.Batch))
+	storetest.AppendAll(s.t, s.twin.Process.Store.(command.Opened).Store, m.Batch)
 	s.pins(m.Events[0].ID())
 	return s
 }
@@ -37,8 +39,9 @@ func enrolledOnly(t *testing.T) session {
 // pins names e the founding of the session's clone.
 func (s session) pins(e events.EventID) {
 	s.t.Helper()
-	if _, err := pin(s.twin.Process.Pin(git.Checkout{}), e); err != nil {
-		s.t.Fatal(err)
+	w := &writes{stored: &command.StoreFacts{}}
+	if _, err := pin(w, s.twin.Process.onceFiles(twinCheckout).pin, e); err != nil || len(w.unsynced) != 0 {
+		s.t.Fatalf("pinning %s: %v, unsynced %v", e, err, w.unsynced)
 	}
 }
 
@@ -46,11 +49,9 @@ func (s session) pins(e events.EventID) {
 // nil.
 func (s session) file(b []byte) {
 	s.t.Helper()
-	tree := files.NewMemory()
+	tree := filestest.Memory()
 	if b != nil {
-		if _, err := tree.CreateOnce(verbs.WorkspaceFile(), b); err != nil {
-			s.t.Fatal(err)
-		}
+		filestest.Create(s.t, tree, verbs.WorkspaceFile(), b)
 	}
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files { return tree }
 }

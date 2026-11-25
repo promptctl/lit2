@@ -35,6 +35,10 @@ func locate(at git.Checkout) location {
 	return location{logs: store.Sub(logDir), repo: store.Sub(repoDir)}
 }
 
+// LogsDir is the logs' directory of the store of at's clone, as a
+// message names it.
+func LogsDir(at git.Checkout) files.Dir { return locate(at).logs }
+
 // LogName is the log of the checkout id names, in the logs' directory.
 func LogName(id CheckoutID) files.Name { return files.MustName(id.String()) }
 

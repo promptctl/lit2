@@ -42,7 +42,11 @@ func Main(args []string) int {
 		return 2
 	}
 	g := git.Find(os.Environ())
-	place, open := here(g), diskStore(g, rand.Reader)
+	// [LAW:single-enforcer] one keeper of failed syncs for the process,
+	// handed to every disk port, so a failure one port saw is answered to
+	// every other over that directory
+	u := files.NewDurability()
+	place, open := here(g, u), diskStore(g, rand.Reader, u)
 	return Run(Process{
 		Clock:         systemClock{},
 		Entropy:       rand.Reader,
@@ -50,14 +54,14 @@ func Main(args []string) int {
 		Place:         place,
 		Store:         opening(place, open),
 		Open:          open,
-		WorkTree:      workTree,
+		WorkTree:      workTree(u),
 		Code:          g.CodeAt,
 		Git:           g.Spawns,
 		Fold:          foldEnv(runtime.GOMAXPROCS(0)),
 		Reader:        reader,
 		Commands:      commandLog(),
-		IdentityFiles: identityFiles,
-		Pin:           pinFiles,
+		IdentityFiles: identityFiles(u),
+		Pin:           pinFiles(u),
 		In:            os.Stdin,
 		Out:           os.Stdout,
 		Err:           os.Stderr,
@@ -67,24 +71,30 @@ func Main(args []string) int {
 // workTree is the files of c's .lit directory on disk, the real
 // directory at that name in the work tree: a .lit that is a symlink,
 // wherever it points, is refused, so nothing a work tree commits writes
-// into the store or anywhere else.
-func workTree(c git.Checkout) files.Files { return files.At(files.DirAt(c.WorkTree, verbs.LitDir())) }
+// into the store or anywhere else. Its syncs are kept by u.
+func workTree(u *files.Durability) func(git.Checkout) files.Files {
+	return func(c git.Checkout) files.Files { return files.At(litDir(c), u) }
+}
+
+// litDir is c's .lit directory, in its work tree.
+func litDir(c git.Checkout) files.Dir { return files.DirAt(c.WorkTree, verbs.LitDir()) }
 
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
 
-// here is the place of the working directory.
-func here(g *git.Git) command.Place {
+// here is the place of the working directory, its identity read through
+// ports whose syncs u keeps.
+func here(g *git.Git, u *files.Durability) command.Place {
 	dir, err := os.Getwd()
 	if err != nil {
 		return command.Unlocatable{Err: fmt.Errorf("reading the working directory: %w", err)}
 	}
-	return place(g, dir)
+	return place(g, dir, u)
 }
 
 // place is the checkout git locates at dir, and its writer.
-func place(g *git.Git, dir string) command.Place {
+func place(g *git.Git, dir string, u *files.Durability) command.Place {
 	c, err := g.Locate(dir)
 	var none git.NotFound
 	if errors.As(err, &none) {
@@ -93,7 +103,7 @@ func place(g *git.Git, dir string) command.Place {
 	if err != nil {
 		return command.Unlocatable{Dir: dir, Err: err}
 	}
-	return command.InCheckout{Checkout: c, Identity: readIdentity(identityFiles(c))}
+	return command.InCheckout{Checkout: c, Identity: readIdentity(identityFiles(u)(c))}
 }
 
 // opening opens the store of a minted checkout through open, the one place
@@ -119,10 +129,10 @@ func opening(p command.Place, open func(git.Checkout, command.Minted) command.Op
 }
 
 // diskStore opens a minted checkout's store over its clone's common dir on
-// disk, lit's repository written by g.
-func diskStore(g *git.Git, entropy io.Reader) func(git.Checkout, command.Minted) command.Opening {
+// disk, lit's repository written by g, its syncs kept by u.
+func diskStore(g *git.Git, entropy io.Reader, u *files.Durability) func(git.Checkout, command.Minted) command.Opening {
 	return func(c git.Checkout, id command.Minted) command.Opening {
-		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(g, c, entropy), store.DefaultSegmentBound)}
+		return command.Opened{Store: store.Open(id.Checkout, store.DiskPorts(g, c, entropy, u), store.DefaultSegmentBound)}
 	}
 }
 

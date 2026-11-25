@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -20,6 +21,9 @@ import (
 type Disk struct {
 	dir  Dir
 	mode fs.FileMode
+	// durability is the process's keeper of failed syncs, which every
+	// port and lit's repository share
+	durability *Durability
 }
 
 // readable is the mode At makes files in, 0644, readable by anyone who
@@ -27,48 +31,133 @@ type Disk struct {
 const readable fs.FileMode = 0o644
 
 // At is the files of d, which need not exist yet, every file made
-// readable.
-func At(d Dir) Disk { return AtMode(d, readable) }
+// readable, its syncs kept by u, the process's.
+func At(d Dir, u *Durability) Disk { return AtMode(d, readable, u) }
 
 // AtMode is the files of d, each made in mode: a secret's files are 0600
 // through this same port.
-func AtMode(d Dir, mode fs.FileMode) Disk { return Disk{dir: d, mode: mode} }
+func AtMode(d Dir, mode fs.FileMode, u *Durability) Disk {
+	return Disk{dir: d, mode: mode, durability: u}
+}
 
-// intent is what walking a Dir does about each directory on its way: an
-// opening finds it there, and a creating makes it where it is missing.
-type intent uint8
+// Durability is what one process knows of its fsyncs: for each directory
+// or file, by its path, that none has failed, or the first that did,
+// which every later sync of that path answers without syncing, since a
+// sync that failed may have dropped what it held and a second may pass
+// over it. A failure of one path marks no other. It is the one keeper of
+// that rule `[LAW:single-enforcer]`: the composition root builds one per
+// process and hands it to every disk port and to lit's repository, so two
+// ports over one directory answer one failure. Its state is shared by the
+// pointer, never by a Dir, which is a value, nor by a package variable
+// `[LAW:no-shared-mutable-globals]`; its map is a sync.Map, whose lock is
+// never held across an fsync. It knows nothing across processes: a later
+// run whose sync passes cannot know an earlier one failed, so the run
+// that saw the failure is the run that says it.
+type Durability struct {
+	// failed is each path's first failed fsync, an error by its path
+	failed sync.Map
+}
 
-const (
-	opening intent = iota + 1
-	creating
-)
+// NewDurability is a process's keeper, none of whose syncs has failed:
+// built once, by the composition root.
+func NewDurability() *Durability { return &Durability{} }
 
-// made is what i does about the directory mkdir would make: nothing, to
-// open it, and, to create it, mkdir, the directory being there already
-// no failure.
-func (i intent) made(mkdir func() error) error {
-	switch i {
-	case opening:
-		return nil
-	case creating:
-		if err := mkdir(); err != nil && !errors.Is(err, fs.ErrExist) {
-			return err
-		}
-		return nil
+// sync runs do, the fsync of the directory or file at path, unless a sync
+// of it failed before, and keeps the first failure for every later sync
+// of it to answer. A failure another sync of path kept while do ran is
+// answered too, so a sync that passed beside a failed one never says the
+// path durable.
+func (u *Durability) sync(path string, do func() error) error {
+	key := filepath.Clean(path)
+	if why, failed := u.failure(key); failed {
+		return why
 	}
-	panic(fmt.Sprintf("files: %d is no intent", i))
+	if err := do(); err != nil {
+		kept, _ := u.failed.LoadOrStore(key, err)
+		return kept.(error)
+	}
+	if why, failed := u.failure(key); failed {
+		return why
+	}
+	return nil
+}
+
+// failure is the failed sync kept for key, if one is.
+func (u *Durability) failure(key string) (error, bool) {
+	why, failed := u.failed.Load(key)
+	if !failed {
+		return nil, false
+	}
+	return why.(error), true
+}
+
+// syncDir fsyncs r's directory, d's at path, through the seam.
+func (u *Durability) syncDir(d Dir, r *os.Root, path string) (err error) {
+	f, err := r.Open(".")
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	return u.sync(path, func() error { return d.seams.Sync(path, f) })
 }
 
 // walk is d's directory, opened from its base, each element entered in
-// turn by the step, after do has made it in its parent if do creates. The
-// base is made by os.MkdirAll, as the git dirs and the work tree a base
-// names are lit2's or git's own. An element missing to an opening is
-// fs.ErrNotExist.
-func (d Dir) walk(do intent) (*os.Root, error) {
-	if err := d.valid(); err != nil {
-		return nil, err
+// turn by the step. A base or an element missing is fs.ErrNotExist.
+func (d Dir) walk() (*os.Root, error) {
+	return d.enter(func(*os.Root, string, string) error { return nil })
+}
+
+// walking is what walking a Dir to create in it did: failed, or reached
+// its directory, every entry on the way synced into its parent or not.
+//
+//sumtype:decl
+type walking interface{ walking() }
+
+type (
+	walkFailed     struct{ why error }
+	walked         struct{ r *os.Root }
+	walkedUnsynced struct {
+		r   *os.Root
+		why error
 	}
-	if err := do.made(func() error { return os.MkdirAll(d.base, 0o755) }); err != nil {
+)
+
+func (walkFailed) walking()     {}
+func (walked) walking()         {}
+func (walkedUnsynced) walking() {}
+
+// walkMaking is d's directory as walk reaches it, each element first made
+// in its parent where it is missing, the directory being there already no
+// failure, then its parent fsynced through u, so the entry survives a
+// power loss. The parent is fsynced whether this call made the entry or
+// found it, since one found may be a racing writer's, not yet synced
+// `[LAW:dataflow-not-control-flow]`. A failed mkdir stops the walk; a
+// failed sync does not, since the entry is there to every later step:
+// the walk goes on and says it. The base is never made: it is a git dir
+// or a work tree, git's, which exists before lit2 runs, and its parent is
+// outside any root, so an entry made for it could not be synced.
+func (d Dir) walkMaking(u *Durability) walking {
+	var unsynced error
+	r, err := d.enter(func(parent *os.Root, name, parentPath string) error {
+		if err := parent.Mkdir(name, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		unsynced = errors.Join(unsynced, u.syncDir(d, parent, parentPath))
+		return nil
+	})
+	switch {
+	case err != nil:
+		return walkFailed{why: errors.Join(err, unsynced)}
+	case unsynced != nil:
+		return walkedUnsynced{r: r, why: unsynced}
+	}
+	return walked{r: r}
+}
+
+// enter is d's directory, opened from its base, each element entered in
+// turn by the step once made has run on it in its parent, at parentPath.
+func (d Dir) enter(made func(parent *os.Root, name, parentPath string) error) (*os.Root, error) {
+	if err := d.valid(); err != nil {
 		return nil, err
 	}
 	r, err := os.OpenRoot(d.base)
@@ -77,9 +166,9 @@ func (d Dir) walk(do intent) (*os.Root, error) {
 	}
 	for i, e := range d.elems {
 		var next *os.Root
-		err := do.made(func() error { return r.Mkdir(e.s, 0o755) })
+		err := made(r, e.s, d.upTo(i))
 		if err == nil {
-			next, err = step(r, e.s, d.upTo(i+1), directory, d.gate)
+			next, err = step(r, e.s, d.upTo(i+1), directory, d.seams.Gate)
 		}
 		if err = errors.Join(err, r.Close()); err != nil {
 			if next != nil {
@@ -94,20 +183,40 @@ func (d Dir) walk(do intent) (*os.Root, error) {
 
 // Check checks each element of d by the step every Files call takes,
 // holding nothing open, and makes nothing: one missing is fs.ErrNotExist.
-// Make makes d where it is missing, its base by os.MkdirAll and each
-// element inside its parent, checked alike. Both are for a user handed a
-// path, as git is, which checks the directory, then names it by its path.
-func (d Dir) Check() error { return d.walked(opening) }
-
-func (d Dir) Make() error { return d.walked(creating) }
-
-// walked is d walked as do says, and closed.
-func (d Dir) walked(do intent) error {
-	r, err := d.walk(do)
+// Make makes d where it is missing, each element inside its parent and
+// fsynced into it through u, checked alike; its base must exist, and a
+// failed sync is its failure. Sync checks d alike and fsyncs its
+// directory through u, so an entry a user made in it by its path, as
+// git's repository is renamed into place, survives a power loss. All
+// three are for a user handed a path, as git is, which checks the
+// directory, then names it by its path.
+func (d Dir) Check() error {
+	r, err := d.walk()
 	if err != nil {
 		return err
 	}
 	return r.Close()
+}
+
+func (u *Durability) Make(d Dir) error {
+	walk := d.walkMaking(u)
+	switch w := walk.(type) {
+	case walkFailed:
+		return w.why
+	case walked:
+		return w.r.Close()
+	case walkedUnsynced:
+		return errors.Join(w.why, w.r.Close())
+	}
+	panic(fmt.Sprintf("files: %T is no walking", walk))
+}
+
+func (u *Durability) Sync(d Dir) error {
+	r, err := d.walk()
+	if err != nil {
+		return err
+	}
+	return errors.Join(u.syncDir(d, r, d.Path()), r.Close())
 }
 
 // kind is a kind of entry the step reaches: the type its mode must be, and
@@ -207,41 +316,63 @@ func missing(n Name, err error) error {
 	return err
 }
 
-// with runs do on n's file, opened by the step with flag in the
-// directory, and closes both.
-func (o Disk) with(n Name, flag int, do func(*os.File) error) (err error) {
+// open is n's file, opened by the step with flag in the directory, and
+// the directory it is in.
+func (o Disk) open(n Name, flag int) (*os.Root, *os.File, error) {
 	if err := n.valid(); err != nil {
-		return err
+		return nil, nil, err
 	}
-	r, err := o.dir.walk(opening)
+	r, err := o.dir.walk()
 	if err != nil {
-		return missing(n, err)
+		return nil, nil, missing(n, err)
 	}
-	defer func() { err = errors.Join(err, r.Close()) }()
-	f, err := step(r, n.s, o.dir.PathOf(n), file(flag), o.dir.gate)
+	f, err := step(r, n.s, o.dir.PathOf(n), file(flag), o.dir.seams.Gate)
 	if err != nil {
-		return missing(n, err)
+		return nil, nil, errors.Join(missing(n, err), r.Close())
 	}
-	defer func() { err = errors.Join(err, f.Close()) }()
-	return do(f)
+	return r, f, nil
 }
 
-func (o Disk) Append(n Name, b []byte) (end uint64, err error) {
-	err = o.with(n, os.O_APPEND|os.O_WRONLY, func(f *os.File) error {
-		if _, err := f.Write(b); err != nil {
-			return err
-		}
-		// a printed echo must survive a power loss, so the append is not
-		// done until it is on disk (the store's decision 11)
-		if err := f.Sync(); err != nil {
-			return err
-		}
-		at, err := f.Seek(0, io.SeekCurrent)
-		end = uint64(at)
+// with runs do on n's file, opened by the step with flag in the
+// directory, and closes both.
+func (o Disk) with(n Name, flag int, do func(*os.File) error) error {
+	r, f, err := o.open(n, flag)
+	if err != nil {
 		return err
-	})
-	return end, err
+	}
+	return errors.Join(do(f), f.Close(), r.Close())
 }
+
+func (o Disk) Append(n Name, b []byte) Appending {
+	r, f, err := o.open(n, os.O_APPEND|os.O_WRONLY)
+	if err != nil {
+		return NotAppended{Why: err}
+	}
+	if _, err := f.Write(b); err != nil {
+		return NotAppended{Why: errors.Join(err, f.Close(), r.Close())}
+	}
+	at, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		// lseek of the current offset of a descriptor this call holds open
+		// fails only on a descriptor that is not one, which is a bug here
+		panic(fmt.Errorf("files: the offset after an append to %s: %w", o.dir.PathOf(n), err))
+	}
+	// [LAW:no-silent-failure] b has landed: from here every failure, of a
+	// sync or a close, leaves it there, so it is said beside the end, never
+	// as an append that wrote nothing, which a caller would write again.
+	// The name it is under was made durable by the step that established
+	// it, the create or a Sync, so the append fsyncs the file alone.
+	landed := Appended{End: uint64(at)}
+	synced := o.durability.sync(o.dir.PathOf(n), func() error { return o.dir.seams.Sync(o.dir.PathOf(n), f) })
+	if why := errors.Join(synced, f.Close(), r.Close()); why != nil {
+		return AppendedNotDurable{Appended: landed, Why: why}
+	}
+	return landed
+}
+
+func (o Disk) Sync() error { return o.durability.Sync(o.dir) }
+
+func (o Disk) Dir() Dir { return o.dir }
 
 func (o Disk) ReadAt(n Name, off, size uint64) (b []byte, err error) {
 	err = o.with(n, os.O_RDONLY, func(f *os.File) error {
@@ -272,111 +403,307 @@ func (o Disk) Size(n Name) (size uint64, err error) {
 	return size, err
 }
 
-func (o Disk) CreateOnce(n Name, b []byte) (made Made, err error) {
+// CreateOnce takes the same steps whichever create wins: the walk, each
+// directory made fsynced into its parent; the temp, written and fsynced;
+// the link; the name's other temps reaped once it is placed; this call's
+// own temp removed; and the directory fsynced, so a loser leaves the name
+// as durable as the winner does `[LAW:dataflow-not-control-flow]`.
+func (o Disk) CreateOnce(n Name, b []byte) Placing {
 	if err := n.valid(); err != nil {
-		return 0, err
+		return NotPlaced{Why: err}
 	}
-	r, err := o.dir.walk(creating)
-	if err != nil {
-		return 0, err
+	var r *os.Root
+	// a sync on the way that failed, which stops no create
+	var unsynced error
+	switch w := o.dir.walkMaking(o.durability).(type) {
+	case walkFailed:
+		return NotPlaced{Why: w.why}
+	case walked:
+		r = w.r
+	case walkedUnsynced:
+		r, unsynced = w.r, w.why
 	}
-	defer func() { err = errors.Join(err, r.Close()) }()
-	temp, err := o.temp(r, n, b)
-	if err != nil {
-		return 0, err
+	var temp string
+	switch t := o.temp(r, n, b).(type) {
+	case tempUnwritten:
+		return NotPlaced{Why: errors.Join(t.why, unsynced, r.Close()), Left: t.left}
+	case tempWritten:
+		temp = t.name
 	}
-	defer func() { err = errors.Join(err, r.Remove(temp)) }()
-	err = r.Link(temp, n.s)
-	if errors.Is(err, fs.ErrExist) {
-		at, err := r.Lstat(n.s)
-		if err != nil {
-			return 0, err
+	o.dir.seams.Gate(o.dir.pathIn(temp))
+	// nothing is placed until the name is looked at, so a NotPlaced
+	// reaps nothing: every other temp of n may still be a live create's,
+	// which may yet win
+	unplaced := func(why error) Placing {
+		// the temp is removed before the root it is removed through closes
+		left := o.dir.remove(r, temp).left(temp)
+		return NotPlaced{Why: errors.Join(why, unsynced, r.Close()), Left: left}
+	}
+	var placed Placed
+	var own removal
+	switch l := link(r, temp, n).(type) {
+	case unlinked:
+		return unplaced(l.why)
+	case linked:
+		placed.Made, own = Created, o.dir.remove(r, temp)
+	case taken:
+		// a temp a winner's reap removed first is already gone to the
+		// removal, which says so
+		if err := o.found(r, n); err != nil {
+			return unplaced(errors.Join(l.why, err))
 		}
-		if r, refused := aFile.refusal(o.dir.PathOf(n), at.Mode()); refused {
-			return 0, r
-		}
-		return Existing, nil
+		placed.Made, own = Existing, o.dir.remove(r, temp)
 	}
-	if err != nil {
-		return 0, err
+	placed.Reap = o.reap(r, n, temp)
+	placed.Reap.Left = append(placed.Reap.Left, own.left(temp)...)
+	// the name must survive a power loss as the appends to it will, and the
+	// reaps and removals with it; a parent's failed sync and the
+	// directory's own are of two paths, so each is said
+	synced := o.durability.syncDir(o.dir, r, o.dir.Path())
+	if why := errors.Join(unsynced, synced, r.Close()); why != nil {
+		return PlacedNotDurable{Placed: placed, Why: why}
 	}
-	// the new name must survive a power loss as the appends to it will
-	return Created, syncDir(r)
+	return placed
 }
 
-func syncDir(r *os.Root) (err error) {
-	d, err := r.Open(".")
+// linking is what linking a create's temp to its name did: linked it, so
+// this call made the name; found the name taken; or failed otherwise.
+//
+//sumtype:decl
+type linking interface{ linking() }
+
+type (
+	linked   struct{}
+	taken    struct{ why error }
+	unlinked struct{ why error }
+)
+
+func (linked) linking()   {}
+func (taken) linking()    {}
+func (unlinked) linking() {}
+
+// link links temp to n in r. The name is taken when it is there, and
+// when this call's temp is gone and the name holds a regular file: a
+// create that placed the name first reaped the temp, so it is the same
+// fact, the name taken `[LAW:one-type-per-behavior]`.
+func link(r *os.Root, temp string, n Name) linking {
+	err := r.Link(temp, n.s)
+	switch {
+	case err == nil:
+		return linked{}
+	case errors.Is(err, fs.ErrExist):
+		return taken{why: err}
+	case errors.Is(err, fs.ErrNotExist):
+		if at, lerr := r.Lstat(n.s); lerr == nil && at.Mode().IsRegular() {
+			return taken{why: err}
+		}
+	}
+	return unlinked{why: err}
+}
+
+// found is nil when n in r holds a regular file, looked at, not followed;
+// a name that holds anything else is NotAFile, and one that holds nothing
+// is the Lstat's failure.
+func (o Disk) found(r *os.Root, n Name) error {
+	at, err := r.Lstat(n.s)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, d.Close()) }()
-	return d.Sync()
+	if refusal, refused := aFile.refusal(o.dir.PathOf(n), at.Mode()); refused {
+		return refusal
+	}
+	return nil
 }
 
-// temp writes b to a new temporary file in r, in the instance's mode, and
-// returns its name, tempPrefix, n and a count, which no Name can be and
-// List never reports. The bytes are on disk before the file is closed, so
-// a power loss after the link leaves a whole file, never an empty one
-// every append then refuses. os.Root has no CreateTemp, so the count runs
-// up from 0 past every name another writer holds; two writers of one
-// name each end with their own temp, and the link decides whose bytes
-// are kept.
-func (o Disk) temp(r *os.Root, n Name, b []byte) (string, error) {
+// reap removes every temp of n in r but own, once n is placed. Then each
+// is a crash's leftover, the temp of a create that lost, which finds n
+// there when its link fails, or a winner's whose own removal finds it
+// gone; so a reap takes nothing a create still needs, and no lock orders
+// them `[LAW:no-ambient-temporal-coupling]`.
+func (o Disk) reap(r *os.Root, n Name, own string) Reap {
+	es, err := o.dir.entries(r)
+	if err != nil {
+		return Reap{Unlisted: fmt.Errorf("reading %s for the temps of %s: %w", o.dir.Path(), n, err)}
+	}
+	var rp Reap
+	for _, t := range es.temps {
+		if t.of != n || t.name == own {
+			continue
+		}
+		switch rm := o.dir.remove(r, t.name).(type) {
+		case removed:
+			rp.Reaped = append(rp.Reaped, t.name)
+		case alreadyGone:
+			// another reap removed it first: no one's to report
+		case notRemoved:
+			rp.Left = append(rp.Left, Leftover{Name: t.name, Why: rm.why})
+		}
+	}
+	return rp
+}
+
+// removal is what removing an entry did: removed it, found it already
+// gone, which a temp another create's reap removed is, or failed.
+//
+//sumtype:decl
+type removal interface {
+	removal()
+	// left is the entry name as a leftover when it could not be removed.
+	left(name string) []Leftover
+}
+
+type (
+	removed     struct{}
+	alreadyGone struct{}
+	notRemoved  struct{ why error }
+)
+
+func (removed) removal()                         {}
+func (removed) left(string) []Leftover           { return nil }
+func (alreadyGone) removal()                     {}
+func (alreadyGone) left(string) []Leftover       { return nil }
+func (notRemoved) removal()                      {}
+func (n notRemoved) left(name string) []Leftover { return []Leftover{{Name: name, Why: n.why}} }
+
+// remove removes name in r through the seam: the one place a removal's
+// outcome is decided `[LAW:single-enforcer]`.
+func (d Dir) remove(r *os.Root, name string) removal {
+	err := d.seams.Remove(r, name)
+	switch {
+	case err == nil:
+		return removed{}
+	case errors.Is(err, fs.ErrNotExist):
+		return alreadyGone{}
+	}
+	return notRemoved{why: err}
+}
+
+// classified is a directory's entries as the port reads them: the one
+// reading of an entry List, Temps and a reap share `[LAW:single-enforcer]`.
+type classified struct {
+	names   []Name
+	temps   []temp
+	refused []Refused
+}
+
+// temp is a create-once's temporary file: its name in the directory, and
+// the name it is a temp of.
+type temp struct {
+	name string
+	of   Name
+}
+
+// entries is r's directory's entries, read through the seam and
+// classified: a temp of a name, a file of the port, or refused. Only a
+// regular file is either, by the entry's type as the directory holds it,
+// not following a link: a directory, a symlink or a FIFO named as a temp
+// is refused, so no reap ever removes it `[LAW:single-enforcer]`.
+func (d Dir) entries(r *os.Root) (c classified, err error) {
+	f, err := r.Open(".")
+	if err != nil {
+		return classified{}, err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	es, err := d.seams.List(d.Path(), f)
+	if err != nil {
+		return classified{}, err
+	}
+	for _, e := range es {
+		path := d.pathIn(e.Name())
+		if r, refused := aFile.refusal(path, e.Type()); refused {
+			c.refused = append(c.refused, Refused{Name: e.Name(), Why: r})
+			continue
+		}
+		if of, ok := tempOf(e.Name()); ok {
+			c.temps = append(c.temps, temp{name: e.Name(), of: of})
+			continue
+		}
+		n, err := NameOf(e.Name())
+		if err != nil {
+			c.refused = append(c.refused, Refused{Name: e.Name(), Why: fmt.Errorf("%s: %w", path, err)})
+			continue
+		}
+		c.names = append(c.names, n)
+	}
+	slices.SortFunc(c.names, func(a, b Name) int { return strings.Compare(a.s, b.s) })
+	slices.SortFunc(c.temps, func(a, b temp) int { return strings.Compare(a.name, b.name) })
+	return c, nil
+}
+
+// pathIn is the path of the entry name in d, as a message names it.
+func (d Dir) pathIn(name string) string { return filepath.Join(d.Path(), name) }
+
+// temping is what writing a create's temporary file did: wrote it, or
+// failed, and what of it the failure left.
+//
+//sumtype:decl
+type temping interface{ temping() }
+
+type (
+	tempWritten   struct{ name string }
+	tempUnwritten struct {
+		why  error
+		left []Leftover
+	}
+)
+
+func (tempWritten) temping()   {}
+func (tempUnwritten) temping() {}
+
+// temp writes b to a new temporary file in r, in the instance's mode,
+// named by tempName, which no Name can be. The bytes are on disk before
+// the file is closed, so a power loss after the link leaves a whole file,
+// never an empty one every append then refuses. os.Root has no
+// CreateTemp, so the count runs up from 0 past every name another writer
+// holds; two writers of one name each end with their own temp, and the
+// link decides whose bytes are kept.
+func (o Disk) temp(r *os.Root, n Name, b []byte) temping {
 	for i := 0; ; i++ {
-		name := fmt.Sprintf("%s%s-%d", tempPrefix, n.s, i)
+		name := tempName(n, i)
 		f, err := r.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, o.mode)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return tempUnwritten{why: err}
 		}
 		_, werr := f.Write(b)
 		// the mode is the instance's whatever the umask, so a secret's file
 		// is 0600 and a readable one 0644
-		if err := errors.Join(werr, f.Chmod(o.mode), f.Sync(), f.Close()); err != nil {
-			return "", errors.Join(err, r.Remove(name))
+		path, chmod := o.dir.pathIn(name), f.Chmod(o.mode)
+		// a temp is a new file each time, so no earlier sync's failure can
+		// have dropped what it holds, and its own fsync answers for it
+		// alone `[LAW:one-source-of-truth]`; a temp whose fsync failed is
+		// removed, never linked
+		if err := errors.Join(werr, chmod, o.dir.seams.Sync(path, f), f.Close()); err != nil {
+			return tempUnwritten{why: err, left: o.dir.remove(r, name).left(name)}
 		}
-		return name, nil
+		return tempWritten{name: name}
 	}
 }
 
-func (o Disk) List() (l Listing, err error) {
-	l = Listing{Names: []Name{}, Refused: []Refused{}}
-	r, err := o.dir.walk(opening)
-	if errors.Is(err, fs.ErrNotExist) {
-		return l, nil // nothing is created by a read: no directory yet holds no file
-	}
+func (o Disk) List() (Listing, error) {
+	c, err := o.read()
 	if err != nil {
 		return Listing{}, err
+	}
+	l := Listing{Names: c.names, Refused: c.refused}
+	for _, t := range c.temps {
+		l.Temps = append(l.Temps, t.name)
+	}
+	return l, nil
+}
+
+// read is the directory's entries, classified; a missing directory holds
+// none, since nothing is created by a read.
+func (o Disk) read() (c classified, err error) {
+	r, err := o.dir.walk()
+	if errors.Is(err, fs.ErrNotExist) {
+		return classified{}, nil
+	}
+	if err != nil {
+		return classified{}, err
 	}
 	defer func() { err = errors.Join(err, r.Close()) }()
-	d, err := r.Open(".")
-	if err != nil {
-		return Listing{}, err
-	}
-	defer func() { err = errors.Join(err, d.Close()) }()
-	entries, err := d.ReadDir(-1)
-	if err != nil {
-		return Listing{}, err
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), tempPrefix) {
-			continue // a create-once's temporary file, which no Name can be
-		}
-		path := filepath.Join(o.dir.Path(), e.Name())
-		n, err := NameOf(e.Name())
-		if err != nil {
-			l.Refused = append(l.Refused, Refused{Name: e.Name(), Why: fmt.Errorf("%s: %w", path, err)})
-			continue
-		}
-		// the entry's type as the directory holds it, not following a link
-		if r, refused := aFile.refusal(path, e.Type()); refused {
-			l.Refused = append(l.Refused, Refused{Name: e.Name(), Why: r})
-			continue
-		}
-		l.Names = append(l.Names, n)
-	}
-	slices.SortFunc(l.Names, func(a, b Name) int { return strings.Compare(a.s, b.s) })
-	return l, nil
+	return o.dir.entries(r)
 }

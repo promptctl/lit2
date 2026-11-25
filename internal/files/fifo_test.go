@@ -22,7 +22,7 @@ func TestAFIFOAtANameIsRefusedAtOnce(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(base, dir.String(), a.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f := files.At(files.DirAt(base, dir))
+	f := files.At(files.DirAt(base, dir), files.NewDurability())
 	done := make(chan [2]error, 1)
 	go func() {
 		_, readErr := f.ReadAt(a, 0, 100)
@@ -56,7 +56,7 @@ func TestAFileSwappedForAFIFOIsRefusedAtOnce(t *testing.T) {
 		if err := syscall.Mkfifo(at, 0o644); err != nil {
 			t.Error(err)
 		}
-	}))
+	}), files.NewDurability())
 	done := make(chan error, 1)
 	go func() {
 		_, err := f.ReadAt(a, 0, 100)

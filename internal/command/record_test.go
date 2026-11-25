@@ -10,7 +10,6 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
-	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 )
@@ -156,9 +155,14 @@ func TestTheLineCarriesTheDefaultFieldsAndZeroCounts(t *testing.T) {
 
 func TestAVerbsLineSaysWhetherTheStoreTookAnAppend(t *testing.T) {
 	for _, tc := range []struct {
-		appends []store.Appended
+		appends []store.Appending
 		want    bool
-	}{{nil, false}, {[]store.Appended{{Records: 1, Log: files.Created}}, true}} {
+	}{
+		{nil, false},
+		{[]store.Appending{store.Appended{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}}}, true},
+		{[]store.Appending{store.AppendedNotDurable{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}, Why: errors.New("fsync failed")}}, true},
+		{[]store.Appending{store.NotAppended{Log: store.NoLog{}, Why: errors.New("no space")}}, false},
+	} {
 		m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "set"}, Started: t0, Store: StoreFacts{Appends: tc.appends}, Verbs: &VerbsFacts{}, Outcome: cli.Done{}})
 		v, _ := m["verbs"].(map[string]any)
 		if v["written"] != tc.want {
@@ -208,5 +212,19 @@ func TestEverySpawnReachesTheLoggedLine(t *testing.T) {
 	none := Record(&FixedClock{At: t0}, noGit, inv, func(time.Time, Recorder) cli.Outcome { return cli.Done{} })
 	if block, ok := decode(t, none)["git"].([]any); !ok || len(block) != 0 {
 		t.Errorf("a run with no git logged %v; want an empty block", decode(t, none)["git"])
+	}
+}
+
+// joined is a failure that holds an Internal beside another, as a run
+// that broke after a write that was not durable does.
+type joined struct{ Internal }
+
+func (j joined) Unwrap() []error { return []error{j.Internal, errors.New("and a write not durable")} }
+
+func TestAnInternalJoinedWithAnotherFailureKeepsItsStack(t *testing.T) {
+	broke := Record(&FixedClock{At: t0}, noGit, inv, func(time.Time, Recorder) cli.Outcome { panic("the body broke") }).Outcome.(cli.Failed).Failure.(Internal)
+	m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "get"}, Started: t0, Outcome: cli.Failed{Failure: joined{broke}}})
+	if stack, _ := m["stack"].(string); stack == "" || stack != string(broke.Stack()) {
+		t.Errorf("the line's stack is %q; want the Internal's", m["stack"])
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/panics"
 )
 
@@ -76,15 +77,34 @@ func notTheDirectory(t *testing.T, call string, err error) {
 	}
 }
 
+// notPlaced is why p placed nothing, failing t unless it is NotPlaced.
+func notPlaced(t *testing.T, p files.Placing) error {
+	t.Helper()
+	no, ok := p.(files.NotPlaced)
+	if !ok {
+		t.Errorf("CreateOnce = %#v; want NotPlaced", p)
+	}
+	return no.Why
+}
+
+// notAppended is why a appended nothing, failing t unless it is
+// NotAppended.
+func notAppended(t *testing.T, a files.Appending) error {
+	t.Helper()
+	no, ok := a.(files.NotAppended)
+	if !ok {
+		t.Errorf("Append = %#v; want NotAppended", a)
+	}
+	return no.Why
+}
+
 // refusesEveryCall fails t unless every call on f refuses the name a, by
 // want, and returns no bytes; a listing refuses the directory or lists a
 // among the entries it refuses.
 func refusesEveryCall(t *testing.T, f files.Files, want func(*testing.T, string, error)) {
 	t.Helper()
-	_, err := f.CreateOnce(a, []byte("inside"))
-	want(t, "CreateOnce", err)
-	_, err = f.Append(a, []byte("inside"))
-	want(t, "Append", err)
+	want(t, "CreateOnce", notPlaced(t, f.CreateOnce(a, []byte("inside"))))
+	want(t, "Append", notAppended(t, f.Append(a, []byte("inside"))))
 	b, err := f.ReadAt(a, 0, 100)
 	want(t, "ReadAt", err)
 	if len(b) != 0 {
@@ -116,7 +136,7 @@ func overLinkedName(t *testing.T, target func(dirPath string) (link, path string
 	link, path := target(filepath.Join(base, dir.String()))
 	write(t, path, "target")
 	symlink(t, link, filepath.Join(base, dir.String(), a.String()))
-	return files.At(files.DirAt(base, dir)), path
+	return files.At(files.DirAt(base, dir), files.NewDurability()), path
 }
 
 func TestANameThatIsNotARegularFileIsRefused(t *testing.T) {
@@ -135,15 +155,14 @@ func TestANameThatIsNotARegularFileIsRefused(t *testing.T) {
 		base, outside := t.TempDir(), filepath.Join(t.TempDir(), "nothing")
 		mkdir(t, filepath.Join(base, dir.String()))
 		symlink(t, outside, filepath.Join(base, dir.String(), a.String()))
-		_, err := files.At(files.DirAt(base, dir)).CreateOnce(a, []byte("inside"))
-		notAFile(t, "CreateOnce over a dangling symlink", err)
+		notAFile(t, "CreateOnce over a dangling symlink", notPlaced(t, files.At(files.DirAt(base, dir), files.NewDurability()).CreateOnce(a, []byte("inside"))))
 		empty(t, filepath.Dir(outside))
 	})
 	t.Run("a directory at a name is NotAFile to every call", func(t *testing.T) {
 		base := t.TempDir()
 		mkdir(t, filepath.Join(base, dir.String()))
 		mkdir(t, filepath.Join(base, dir.String(), a.String()))
-		refusesEveryCall(t, files.At(files.DirAt(base, dir)), notAFile)
+		refusesEveryCall(t, files.At(files.DirAt(base, dir), files.NewDurability()), notAFile)
 	})
 }
 
@@ -152,7 +171,7 @@ func TestANameThatIsNotARegularFileIsRefused(t *testing.T) {
 func linkedDir(t *testing.T, leave func(t *testing.T, base, at string)) (string, files.Disk) {
 	base := t.TempDir()
 	leave(t, base, filepath.Join(base, dir.String()))
-	return base, files.At(files.DirAt(base, dir))
+	return base, files.At(files.DirAt(base, dir), files.NewDurability())
 }
 
 func TestADirectoryThatIsNotItselfIsRefused(t *testing.T) {
@@ -188,7 +207,7 @@ func TestADirectoryThatIsNotItselfIsRefused(t *testing.T) {
 		mkdir(t, filepath.Join(base, "real"))
 		mkdir(t, filepath.Join(base, "real", dir.String()))
 		symlink(t, "real", filepath.Join(base, middle.String()))
-		f := files.At(files.DirAt(base, middle).Sub(dir))
+		f := files.At(files.DirAt(base, middle).Sub(dir), files.NewDurability())
 		refusesEveryCall(t, f, notTheDirectory)
 		empty(t, filepath.Join(base, "real", dir.String()))
 	})
@@ -197,21 +216,21 @@ func TestADirectoryThatIsNotItselfIsRefused(t *testing.T) {
 		middle := files.MustName("middle")
 		mkdir(t, filepath.Join(outside, dir.String()))
 		symlink(t, outside, filepath.Join(base, middle.String()))
-		f := files.At(files.DirAt(base, middle).Sub(dir))
+		f := files.At(files.DirAt(base, middle).Sub(dir), files.NewDurability())
 		refusesEveryCall(t, f, notTheDirectory)
 		empty(t, filepath.Join(outside, dir.String()))
 	})
 }
 
 func TestTheZeroDirIsRefused(t *testing.T) {
-	f := files.At(files.Dir{})
-	if _, err := f.CreateOnce(a, []byte("x")); !errors.Is(err, files.ErrNoDir) {
+	f := files.At(files.Dir{}, files.NewDurability())
+	if err := notPlaced(t, f.CreateOnce(a, []byte("x"))); !errors.Is(err, files.ErrNoDir) {
 		t.Errorf("CreateOnce failed with %v; want ErrNoDir", err)
 	}
 	if l, err := f.List(); !errors.Is(err, files.ErrNoDir) {
 		t.Errorf("List = %v, %v; want ErrNoDir", l, err)
 	}
-	if err := (files.Dir{}).Make(); !errors.Is(err, files.ErrNoDir) {
+	if err := files.NewDurability().Make(files.Dir{}); !errors.Is(err, files.ErrNoDir) {
 		t.Errorf("Make failed with %v; want ErrNoDir", err)
 	}
 }
@@ -225,7 +244,8 @@ func TestADirFromNoAbsoluteBaseIsABug(t *testing.T) {
 
 // Every entry of a listed directory that is no file of the port is
 // refused, by its path and why, beside the files; a create-once's
-// temporary file is neither.
+// temporary file is listed as one, so a leftover is said, never dropped,
+// and an entry with the temps' prefix that is no name's temp is refused.
 func TestAListRefusesEveryEntryThatIsNoFile(t *testing.T) {
 	base := t.TempDir()
 	at := filepath.Join(base, dir.String())
@@ -235,14 +255,21 @@ func TestAListRefusesEveryEntryThatIsNoFile(t *testing.T) {
 	symlink(t, a.String(), filepath.Join(at, "link"))
 	mkdir(t, filepath.Join(at, "sub"))
 	write(t, filepath.Join(at, `back\slash`), "x")
-	l, err := files.At(files.DirAt(base, dir)).List()
+	write(t, filepath.Join(at, ".tmp-x"), "x")
+	l, err := files.At(files.DirAt(base, dir), files.NewDurability()).List()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(l.Names, []files.Name{a}) {
 		t.Errorf("List names %v; want a alone", l.Names)
 	}
+	if !slices.Equal(l.Temps, []string{".tmp-a-0"}) {
+		t.Errorf("List temps %v; want .tmp-a-0, a create's leftover", l.Temps)
+	}
 	want := map[string]func(error) bool{
+		".tmp-x": func(err error) bool {
+			return errors.Is(err, files.ErrNotAName) && strings.Contains(err.Error(), filepath.Join(at, ".tmp-x"))
+		},
 		`back\slash`: func(err error) bool {
 			return errors.Is(err, files.ErrNotAName) && strings.Contains(err.Error(), filepath.Join(at, `back\slash`))
 		},
@@ -256,7 +283,7 @@ func TestAListRefusesEveryEntryThatIsNoFile(t *testing.T) {
 		},
 	}
 	if len(l.Refused) != len(want) {
-		t.Errorf("List refused %v; want %d entries, the link, the directory and the backslash", l.Refused, len(want))
+		t.Errorf("List refused %v; want %d entries, the link, the directory, the backslash and .tmp-x", l.Refused, len(want))
 	}
 	for _, r := range l.Refused {
 		if is, ok := want[r.Name]; !ok || !is(r) {
@@ -299,8 +326,7 @@ func TestAnEntrySwappedAfterItsLookIsRefused(t *testing.T) {
 			mkdir(t, filepath.Join(base, "real"))
 			symlink(t, "real", at)
 		})
-		_, err := files.At(d).CreateOnce(a, []byte("x"))
-		changed(t, "CreateOnce through a directory swapped for a link to another", at, err)
+		changed(t, "CreateOnce through a directory swapped for a link to another", at, notPlaced(t, files.At(d, files.NewDurability()).CreateOnce(a, []byte("x"))))
 		empty(t, filepath.Join(base, "real"))
 	})
 	t.Run("a file swapped for a link to another", func(t *testing.T) {
@@ -315,8 +341,7 @@ func TestAnEntrySwappedAfterItsLookIsRefused(t *testing.T) {
 			}
 			symlink(t, "b", filepath.Join(at, a.String()))
 		})
-		_, err := files.At(d).Append(a, []byte("x"))
-		changed(t, "Append to a file swapped for a link to another", filepath.Join(at, a.String()), err)
+		changed(t, "Append to a file swapped for a link to another", filepath.Join(at, a.String()), notAppended(t, files.At(d, files.NewDurability()).Append(a, []byte("x"))))
 		holds(t, filepath.Join(at, "b"), "b")
 	})
 	t.Run("a file swapped for a directory", func(t *testing.T) {
@@ -330,7 +355,7 @@ func TestAnEntrySwappedAfterItsLookIsRefused(t *testing.T) {
 			}
 			mkdir(t, filepath.Join(at, a.String()))
 		})
-		b, err := files.At(d).ReadAll(a)
+		b, err := files.At(d, files.NewDurability()).ReadAll(a)
 		var refused files.NotAFile
 		if !errors.As(err, &refused) || !refused.Mode.IsDir() {
 			t.Errorf("ReadAll of a file swapped for a directory = %q, %v; want NotAFile, a directory", b, err)
@@ -346,7 +371,7 @@ func TestADirIsCheckedAndMadeByTheStep(t *testing.T) {
 	symlink(t, outside, filepath.Join(base, dir.String()))
 	linked := files.DirAt(base, dir).Sub(a)
 	notTheDirectory(t, "Check", linked.Check())
-	notTheDirectory(t, "Make", linked.Make())
+	notTheDirectory(t, "Make", files.NewDurability().Make(linked))
 	empty(t, outside)
 	missing := files.DirAt(t.TempDir(), a).Sub(dir)
 	if err := missing.Check(); !errors.Is(err, fs.ErrNotExist) {
@@ -355,7 +380,7 @@ func TestADirIsCheckedAndMadeByTheStep(t *testing.T) {
 	if _, err := os.Lstat(missing.Path()); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Check made %s: %v; want nothing made", missing.Path(), err)
 	}
-	if err := missing.Make(); err != nil {
+	if err := files.NewDurability().Make(missing); err != nil {
 		t.Fatal(err)
 	}
 	if err := missing.Check(); err != nil {
@@ -377,11 +402,8 @@ func TestADirsParentIsItWithoutItsLastElement(t *testing.T) {
 // directories are made inside their parents.
 func TestAFileIsMadeInItsPortsMode(t *testing.T) {
 	for _, mode := range []fs.FileMode{0o644, 0o600} {
-		base := filepath.Join(t.TempDir(), "base")
-		d := files.DirAt(base, files.MustName("lit")).Sub(dir)
-		if _, err := files.AtMode(d, mode).CreateOnce(a, []byte("x")); err != nil {
-			t.Fatal(err)
-		}
+		d := files.DirAt(t.TempDir(), files.MustName("lit")).Sub(dir)
+		filestest.Create(t, files.AtMode(d, mode, files.NewDurability()), a, []byte("x"))
 		info, err := os.Stat(d.PathOf(a))
 		if err != nil {
 			t.Fatal(err)

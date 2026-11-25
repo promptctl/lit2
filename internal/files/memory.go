@@ -10,12 +10,16 @@ import (
 // Memory is Files in process, the twin of Disk, held to the same contract
 // suite and safe for concurrent use.
 type Memory struct {
+	dir   Dir
 	mu    sync.Mutex
 	files map[Name][]byte
 }
 
-// NewMemory is an empty directory in process.
-func NewMemory() *Memory { return &Memory{files: map[Name][]byte{}} }
+// NewMemory is an empty directory in process, standing for d, which names
+// its files.
+func NewMemory(d Dir) *Memory { return &Memory{dir: d, files: map[Name][]byte{}} }
+
+func (m *Memory) Dir() Dir { return m.dir }
 
 // with runs do under the lock once n is a name: the one place Memory
 // refuses the zero Name `[LAW:single-enforcer]`.
@@ -28,6 +32,9 @@ func (m *Memory) with(n Name, do func() error) error {
 	return do()
 }
 
+// Sync is nothing to do: a directory in process has no power to lose.
+func (m *Memory) Sync() error { return nil }
+
 // file runs do on n's bytes under the lock; a missing file is NotFound.
 func (m *Memory) file(n Name, do func(f []byte) error) error {
 	return m.with(n, func() error {
@@ -39,25 +46,33 @@ func (m *Memory) file(n Name, do func(f []byte) error) error {
 	})
 }
 
-func (m *Memory) Append(n Name, b []byte) (end uint64, err error) {
-	err = m.file(n, func(f []byte) error {
+// Append lands b at once, durable, since a directory in process has no
+// power to lose.
+func (m *Memory) Append(n Name, b []byte) Appending {
+	var end uint64
+	if err := m.file(n, func(f []byte) error {
 		m.files[n] = append(f, b...)
 		end = uint64(len(m.files[n]))
 		return nil
-	})
-	return end, err
+	}); err != nil {
+		return NotAppended{Why: err}
+	}
+	return Appended{End: end}
 }
 
-func (m *Memory) CreateOnce(n Name, b []byte) (made Made, err error) {
-	err = m.with(n, func() error {
-		if _, ok := m.files[n]; ok {
-			made = Existing
-			return nil
+// CreateOnce places n at once, durable; a directory in process writes no
+// temporary file, so it reaps none.
+func (m *Memory) CreateOnce(n Name, b []byte) Placing {
+	made := Existing
+	if err := m.with(n, func() error {
+		if _, ok := m.files[n]; !ok {
+			m.files[n], made = slices.Clone(b), Created
 		}
-		m.files[n], made = slices.Clone(b), Created
 		return nil
-	})
-	return made, err
+	}); err != nil {
+		return NotPlaced{Why: err}
+	}
+	return Placed{Made: made}
 }
 
 func (m *Memory) ReadAt(n Name, off, size uint64) (b []byte, err error) {
@@ -87,11 +102,11 @@ func (m *Memory) Size(n Name) (size uint64, err error) {
 }
 
 // List is every file; a directory in process holds nothing else, so none
-// is refused.
+// is a temp and none is refused.
 func (m *Memory) List() (Listing, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ns := slices.AppendSeq([]Name{}, maps.Keys(m.files))
 	slices.SortFunc(ns, func(a, b Name) int { return strings.Compare(a.s, b.s) })
-	return Listing{Names: ns, Refused: []Refused{}}, nil
+	return Listing{Names: ns}, nil
 }

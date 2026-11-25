@@ -34,9 +34,10 @@ import (
 type Repository struct{ repo }
 
 // RepositoryAt is lit's repository, the directory at, which need not
-// exist yet, written by g.
-func (g *Git) RepositoryAt(at files.Dir) Repository {
-	return Repository{repo{b: &onDisk{g: g, at: at}}}
+// exist yet, written by g, the syncs of its entry kept by u, the
+// process's, which its directories' other ports share.
+func (g *Git) RepositoryAt(at files.Dir, u *files.Durability) Repository {
+	return Repository{repo{b: &onDisk{g: g, at: at, entry: u}}}
 }
 
 type onDisk struct {
@@ -50,6 +51,10 @@ type onDisk struct {
 	mu    sync.Mutex
 	db    *filesystem.Storage
 	packs time.Time
+	// entry is the process's keeper of the syncs of the repository's entry
+	// and the directories on its way: once one of a directory fails, every
+	// later one of it answers that failure, whichever port asks
+	entry *files.Durability
 }
 
 // git runs git on the repository at dir: the one place a spawn names
@@ -84,7 +89,7 @@ func (d *onDisk) create() error {
 		return err
 	}
 	in := d.at.Parent()
-	if err := in.Make(); err != nil {
+	if err := d.entry.Make(in); err != nil {
 		return err
 	}
 	tmp, err := os.MkdirTemp(in.Path(), ".repo-")
@@ -271,8 +276,8 @@ var kinds = map[plumbing.ObjectType]kind{
 // tree and commit as it would one of its own. The bytes reach git as files
 // in a directory of lit's own beside the repository, never in it, one git
 // process for each kind objs holds, however many objects that is.
-func (d *onDisk) write(objs []object) ([]ObjectID, error) {
-	ids := make([]ObjectID, len(objs))
+func (d *onDisk) write(objs []object) (ids []ObjectID, err error) {
+	ids = make([]ObjectID, len(objs))
 	if len(objs) == 0 {
 		return ids, nil
 	}
@@ -284,7 +289,9 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
+	// the files' removal failing is the write's failure, never dropped
+	// `[LAW:no-silent-failure]`
+	defer func() { err = errors.Join(err, os.RemoveAll(tmp)) }()
 	paths := map[kind][]string{}
 	at := map[kind][]int{}
 	for i, o := range objs {
@@ -317,13 +324,25 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 }
 
 // writable is the repository's path, created if it is not yet, under a
-// git that keeps it durable.
+// git that keeps it durable. Its entry in the directory it is in is
+// fsynced on every path, whether this call renamed it into place, lost the
+// rename to another, or found it there, since one found may be a racing
+// create's, not yet synced: every object written into it is only as
+// durable as the name it is under `[LAW:dataflow-not-control-flow]`. Once
+// a sync of that directory fails, through this repository or any port of
+// the process, every later write of this repository in this process is
+// refused with its failure, never handed a repository whose name a
+// passing sync might hide was lost `[LAW:no-silent-failure]`; a later run
+// knows nothing of it, so the run that saw it is the run that says it.
 func (d *onDisk) writable() (string, error) {
 	if err := d.g.durable(); err != nil {
 		return "", err
 	}
 	if err := d.create(); err != nil {
 		return "", err
+	}
+	if err := d.entry.Sync(d.at.Parent()); err != nil {
+		return "", fmt.Errorf("syncing the entry of lit's repository: %w", err)
 	}
 	return d.path()
 }

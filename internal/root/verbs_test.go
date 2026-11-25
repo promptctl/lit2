@@ -2,6 +2,7 @@ package root
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -357,8 +358,14 @@ func TestInitPrintsThePrincipal(t *testing.T) {
 	if r.out != "principal "+twinKey().Principal().String()+"\n" {
 		t.Errorf("admin init printed %q", r.out)
 	}
-	if got := r.event.Store.Inits; len(got) != 1 || got[0] != (command.Fresh{Checkout: files.Existing, Key: files.Existing}) {
-		t.Errorf("admin init's event records %+v; want both files found", got)
+	found := files.Placed{Made: files.Existing}
+	want := []command.Creation{
+		{Path: command.PathOf(command.IDFile{}, twinCheckout), Placing: found},
+		{Path: command.PathOf(command.PrincipalFile{}, twinCheckout), Placing: found},
+		{Path: litDir(twinCheckout).PathOf(foundingFile), Placing: found},
+	}
+	if got := r.event.Store.Creates; !reflect.DeepEqual(got, want) {
+		t.Errorf("admin init's event records %+v; want exactly %+v: both identity files and the founding file found, each by its path, durable", got, want)
 	}
 	if again := s.ok("admin", "init"); again != r.out {
 		t.Errorf("a second init printed %q; want %q", again, r.out)

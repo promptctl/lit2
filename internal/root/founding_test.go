@@ -7,6 +7,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
 )
@@ -55,10 +56,8 @@ func TestInitFoundsOverAnEnrollmentNoFileNames(t *testing.T) {
 
 func TestInitRefusesAFoundingFileNamingAnotherFounding(t *testing.T) {
 	s := newSession(t)
-	tree := files.NewMemory()
-	if _, err := tree.CreateOnce(FoundingFile(), events.EventID{1}.FileText()); err != nil {
-		t.Fatal(err)
-	}
+	tree := filestest.Memory()
+	filestest.Create(t, tree, FoundingFile(), events.EventID{1}.FileText())
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files { return tree }
 	r := s.lit("admin", "init")
 	var contradicted foundingContradicted

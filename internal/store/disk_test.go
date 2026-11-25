@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
@@ -38,8 +39,8 @@ func TestTwoWorktreesOfOneCloneShareOneStoreEachWithItsOwnLogAndRef(t *testing.T
 	if second.CommonDir != main.CommonDir || second.GitDir == main.GitDir {
 		t.Fatalf("the linked worktree is %+v; want the main's common dir and its own git dir", second)
 	}
-	sa := store.Open(ida, store.DiskPorts(gittest.Runner(t), main, storetest.Entropy(1)), store.DefaultSegmentBound)
-	sb := store.Open(idb, store.DiskPorts(gittest.Runner(t), second, storetest.Entropy(2)), store.DefaultSegmentBound)
+	sa := store.Open(ida, store.DiskPorts(gittest.Runner(t), main, storetest.Entropy(1), files.NewDurability()), store.DefaultSegmentBound)
+	sb := store.Open(idb, store.DiskPorts(gittest.Runner(t), second, storetest.Entropy(2), files.NewDurability()), store.DefaultSegmentBound)
 	ba, bb := storetest.Numbered(t, 3, "a"), storetest.Numbered(t, 2, "b")
 	storetest.AppendAll(t, sa, ba...)
 	storetest.AppendAll(t, sb, bb...)
@@ -89,7 +90,7 @@ func codeRepository(t *testing.T, c git.Checkout) string {
 func TestAThousandAppendsAndAPublishLeaveTheCodeRepositoryAsItWasAndPassFsck(t *testing.T) {
 	c := gittest.Clone(t)
 	before := codeRepository(t, c)
-	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(1)), 4096)
+	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(1), files.NewDurability()), 4096)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1000, "event")...)
 	first := storetest.PublishOwn(t, s)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 10, "more")...)
@@ -128,7 +129,7 @@ func TestAppendingProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	disk := store.DiskPorts(g, c, storetest.Entropy(byte(os.Getpid())))
+	disk := store.DiskPorts(g, c, storetest.Entropy(byte(os.Getpid())), files.NewDurability())
 	ports := store.WithFiles(disk, &turnTaking{Files: store.FilesOf(disk), t: t, dir: os.Getenv("LIT2_BARRIER"), turn: turn})
 	storetest.AppendAll(t, store.Open(ida, ports, store.DefaultSegmentBound), storetest.Numbered(t, n, os.Getenv("LIT2_PREFIX"))...)
 }
@@ -146,23 +147,26 @@ type turnTaking struct {
 	turn int
 }
 
-func (f *turnTaking) Append(n files.Name, b []byte) (uint64, error) {
+func (f *turnTaking) Append(n files.Name, b []byte) files.Appending {
 	prev := "go"
 	if f.turn > 0 {
 		prev = fmt.Sprintf("turn-%d", f.turn-1)
 	}
 	await(f.t, func() bool { return exists(f.t, filepath.Join(f.dir, prev)) })
-	end, err := f.Files.Append(n, b)
-	if err != nil {
-		return end, err
+	got := f.Files.Append(n, b)
+	if _, landed := got.(files.Appended); !landed {
+		return got
 	}
 	// O_EXCL, so a turn two processes both took fails the second
 	h, err := os.OpenFile(filepath.Join(f.dir, fmt.Sprintf("turn-%d", f.turn)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return end, err
+	if err == nil {
+		err = h.Close()
 	}
 	f.turn += 2
-	return end, h.Close()
+	if err != nil {
+		f.t.Fatalf("handing on turn %d: %v", f.turn-2, err)
+	}
+	return got
 }
 
 // await polls done, briefly, until it holds or the test's deadline, a
@@ -239,7 +243,7 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 	if len(turns) != 2*appends {
 		t.Errorf("the appenders took %d turns; want one per append, %d", len(turns), 2*appends)
 	}
-	s := store.Open(idb, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(3)), store.DefaultSegmentBound)
+	s := store.Open(idb, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(3), files.NewDurability()), store.DefaultSegmentBound)
 	got := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: ida}))
 	if len(got) != 2*appends || len(slices.Compact(slices.Sorted(slices.Values(got)))) != 2*appends {
 		t.Errorf("two processes of %d appends each left %d records; want %d, each once", appends, len(got), 2*appends)
@@ -262,7 +266,7 @@ func TestTwoProcessesAppendingToOneLogLoseNoRecord(t *testing.T) {
 func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 	c := gittest.Clone(t)
 	publish := func(id store.CheckoutID, seed byte) store.Published {
-		s := store.Open(id, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(seed)), store.DefaultSegmentBound)
+		s := store.Open(id, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(seed), files.NewDurability()), store.DefaultSegmentBound)
 		// each writer's own records, so no two share a segment's blob
 		storetest.AppendAll(t, s, storetest.Numbered(t, 2, id.String())...)
 		return storetest.PublishOwn(t, s)
@@ -291,7 +295,7 @@ func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a reader holding no log
-	ports := store.WithFiles(store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7)), files.NewMemory())
+	ports := store.WithFiles(store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7), files.NewDurability()), filestest.Memory())
 	objects, _ := store.RepositoryOf(ports)
 	// d's one segment, its loose file cut to half, so its header reads and
 	// its body does not, as a filesystem that lost a write would leave it
@@ -325,7 +329,7 @@ func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 // repository. A log, made through DiskPorts, is written by its owner alone.
 func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 	c := gittest.Clone(t)
-	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(5)), store.DefaultSegmentBound)
+	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(5), files.NewDurability()), store.DefaultSegmentBound)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "event")...)
 	out := storetest.PublishOwn(t, s)
 	repo := store.RepositoryDir(c)
@@ -361,7 +365,7 @@ func TestTheStoresFilesAreAsReadableAsItsObjects(t *testing.T) {
 // name and why, hiding no other.
 func TestAnEntryOfTheLogsThatIsNoFileIsAnUnreadableLog(t *testing.T) {
 	c := gittest.Clone(t)
-	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(9)), store.DefaultSegmentBound)
+	s := store.Open(ida, store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(9), files.NewDurability()), store.DefaultSegmentBound)
 	storetest.AppendAll(t, s, storetest.Numbered(t, 1, "a")...)
 	logs := store.LogDir(c).Path()
 	if err := os.Symlink(store.LogName(ida).String(), filepath.Join(logs, "link")); err != nil {
@@ -413,7 +417,7 @@ func TestAStoreDirThatIsALinkIsRefusedForTheRepository(t *testing.T) {
 	if err := os.Symlink(elsewhere, at); err != nil {
 		t.Fatal(err)
 	}
-	objects, _ := store.RepositoryOf(store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(10)))
+	objects, _ := store.RepositoryOf(store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(10), files.NewDurability()))
 	if _, err := objects.PutBlobs([][]byte{[]byte("x")}); !errors.As(err, new(files.NotTheDirectory)) {
 		t.Errorf("the repository's first write through a linked store directory failed with %v; want NotTheDirectory", err)
 	}

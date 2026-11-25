@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/store/storetest"
 )
 
 // appendOne appends one record through s and reads every record of its
@@ -22,9 +24,7 @@ func appendOne(t *testing.T, s *store.Store, me store.CheckoutID) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Append(b); err != nil {
-		t.Fatal(err)
-	}
+	storetest.AppendAll(t, s, b)
 	h, err := s.Heads()
 	if err != nil || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: me}) {
 		t.Fatalf("after one append the heads are %+v, %v; want the writer's one stream", h, err)
@@ -54,11 +54,11 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		p := place(gittest.Runner(t), dir)
+		p := place(gittest.Runner(t), dir, files.NewDurability())
 		in, located := p.(command.InCheckout)
-		opened, ok := opening(p, diskStore(gittest.Runner(t), rand.Reader)).(command.Opened)
+		opened, ok := opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability())).(command.Opened)
 		if !located || !ok || in.Checkout.Format != want {
-			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, opening(p, diskStore(gittest.Runner(t), rand.Reader)), want)
+			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability())), want)
 		}
 		if got := appendOne(t, opened.Store, twinID); !slices.Equal(got, []string{"an event"}) {
 			t.Errorf("the opened store reads back %v", got)
@@ -66,7 +66,7 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 		// the store is the common dir's: one opened from the common dir
 		// alone reads the append, from its log, since nothing is published
 		alone := git.Checkout{CommonDir: in.Checkout.CommonDir, Format: in.Checkout.Format}
-		h, err := store.Open(store.CheckoutID{0xff}, store.DiskPorts(gittest.Runner(t), alone, rand.Reader), store.DefaultSegmentBound).Heads()
+		h, err := store.Open(store.CheckoutID{0xff}, store.DiskPorts(gittest.Runner(t), alone, rand.Reader, files.NewDurability()), store.DefaultSegmentBound).Heads()
 		if err != nil || h.LogsRead != 1 || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: twinID}) {
 			t.Errorf("the store of the common dir alone holds %+v, %v; want the append in twinID's log", h, err)
 		}
@@ -76,18 +76,18 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
 	unminted := checkout(t, nil)
 	for name, p := range map[string]command.Place{
-		"outside a checkout": place(gittest.Runner(t), t.TempDir()),
-		"an unminted one":    place(gittest.Runner(t), unminted),
+		"outside a checkout": place(gittest.Runner(t), t.TempDir(), files.NewDurability()),
+		"an unminted one":    place(gittest.Runner(t), unminted, files.NewDurability()),
 		"a config that does not parse": place(gittest.Runner(t), func() string {
 			d := checkout(t, minted)
 			if err := os.WriteFile(filepath.Join(d, ".git", "config"), []byte("[core\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			return d
-		}()),
+		}(), files.NewDurability()),
 	} {
-		if got, ok := opening(p, diskStore(gittest.Runner(t), rand.Reader)).(command.Unopened); !ok || got.Why == nil {
-			t.Errorf("%s opens %#v; want no store, and why", name, opening(p, diskStore(gittest.Runner(t), rand.Reader)))
+		if got, ok := opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability())).(command.Unopened); !ok || got.Why == nil {
+			t.Errorf("%s opens %#v; want no store, and why", name, opening(p, diskStore(gittest.Runner(t), rand.Reader, files.NewDurability())))
 		}
 	}
 }

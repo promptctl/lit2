@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 )
@@ -20,7 +21,7 @@ import (
 // checked from the directory above.
 func repositoryAt(g *git.Git, path string) git.Repository {
 	in := filepath.Dir(path)
-	return g.RepositoryAt(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))).Sub(files.MustName(filepath.Base(path))))
+	return g.RepositoryAt(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))).Sub(files.MustName(filepath.Base(path))), files.NewDurability())
 }
 
 func TestObjectsContract(t *testing.T) {
@@ -714,4 +715,108 @@ func TestARepositoryDirThatIsALinkIsRefused(t *testing.T) {
 			t.Errorf("the link is %v, %v after the write; want it still the link, never renamed over", info, err)
 		}
 	})
+}
+
+// lit's repository's entry in the directory it is in is fsynced before a
+// write is handed the repository, on every path: a repository the write
+// renamed into place, one whose rename it lost to another create, and one
+// it found there. The lost rename is forced by the gate: a second create
+// makes the repository between this one's look and its rename.
+func TestTheRepositorysEntryIsSyncedOnEveryWrite(t *testing.T) {
+	g := gittest.Runner(t)
+	in := filepath.Join(gittest.Physical(t), "store")
+	at := func(seams filestest.Seams) files.Dir {
+		return filestest.Seamed(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))), seams).Sub(files.MustName("repo"))
+	}
+	// synced fails t unless a write through seams synced in, last.
+	synced := func(t *testing.T, path string, seams func(*filestest.Syncs) filestest.Seams) {
+		t.Helper()
+		var syncs filestest.Syncs
+		gittest.PutBlob(t, g.RepositoryAt(at(seams(&syncs)), files.NewDurability()), []byte(path))
+		if seen := syncs.Seen(); len(seen) == 0 || seen[len(seen)-1] != in {
+			t.Errorf("a write %s synced %v; want %s, the directory the repository is in, last", path, seen, in)
+		}
+	}
+	recording := func(s *filestest.Syncs) filestest.Seams { return filestest.Recording(s, filestest.Passing) }
+	synced(t, "renaming it into place", recording)
+	synced(t, "finding it there", recording)
+
+	// the creating walk of the directory it is in is the first look at
+	// it, since the check before finds no directory and looks at nothing;
+	// the other create runs there, after this one found no repository and
+	// before its rename, which it then loses
+	in = filepath.Join(gittest.Physical(t), "store")
+	other := false
+	synced(t, "losing its rename", func(s *filestest.Syncs) filestest.Seams {
+		seams := recording(s)
+		seams.Gate = func(path string) {
+			if path == in && !other {
+				other = true
+				gittest.PutBlob(t, g.RepositoryAt(at(filestest.OS()), files.NewDurability()), []byte("the other create"))
+			}
+		}
+		return seams
+	})
+	if !other {
+		t.Error("the other create never ran; want it inside this one's creating walk")
+	}
+}
+
+// A sync of the repository's entry that failed is never tried again: every
+// later write in the process is refused with it, since a second sync may
+// pass over what the first dropped.
+func TestAFailedSyncOfTheRepositorysEntryRefusesEveryLaterWrite(t *testing.T) {
+	g := gittest.Runner(t)
+	in := filepath.Join(gittest.Physical(t), "store")
+	errSync := errors.New("the disk refused the fsync")
+	var syncs filestest.Syncs
+	seams := filestest.Recording(&syncs, func(path string) error {
+		if path == in {
+			return errSync
+		}
+		return nil
+	})
+	repo := g.RepositoryAt(filestest.Seamed(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))), seams).Sub(files.MustName("repo")), files.NewDurability())
+	for _, write := range []string{"first", "second"} {
+		if _, err := gittest.Put(repo, []byte(write)); !errors.Is(err, errSync) {
+			t.Errorf("the %s write failed with %v; want the failed sync", write, err)
+		}
+	}
+	synced := 0
+	for _, p := range syncs.Seen() {
+		if p == in {
+			synced++
+		}
+	}
+	if synced != 1 {
+		t.Errorf("the entry was synced %d times over %v; want once, never again after it failed", synced, syncs.Seen())
+	}
+}
+
+// A failed sync of the directory lit's repository is entered in, through
+// another port of the process, refuses the repository's next write: the
+// process's one keeper answers it, though the repository's own fsync of
+// that directory would pass.
+func TestAFailedSyncOfTheEntrysDirectoryThroughAnotherPortRefusesAWrite(t *testing.T) {
+	g := gittest.Runner(t)
+	in := filepath.Join(gittest.Physical(t), "store")
+	store := files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in)))
+	errSync := errors.New("the disk refused the fsync, once")
+	u := files.NewDurability()
+	logs := files.At(filestest.Seamed(store, filestest.Recording(&filestest.Syncs{}, func(path string) error {
+		if path == in {
+			return errSync
+		}
+		return nil
+	})), u)
+	if err := u.Make(store); err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.Sync(); !errors.Is(err, errSync) {
+		t.Fatalf("the other port's Sync = %v; want the seam's failure", err)
+	}
+	repo := g.RepositoryAt(store.Sub(files.MustName("repo")), u)
+	if _, err := gittest.Put(repo, []byte("after")); !errors.Is(err, errSync) {
+		t.Errorf("the write after the other port's failed sync failed with %v; want that failure", err)
+	}
 }

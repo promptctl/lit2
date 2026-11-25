@@ -211,7 +211,7 @@ func encode(e Event) ([]byte, error) {
 		Config:     configBlock(e.Config),
 		Store:      storeBlock(e.Store),
 		Fold:       foldBlock(e.Store.Folds),
-		Verbs:      verbsBlock(e.Verbs, len(e.Store.Appends) > 0),
+		Verbs:      verbsBlock(e.Verbs, e.Store.Landed()),
 		Policy:     policyBlock(e.Policy),
 		Git:        gitBlock(e.Git),
 		Place:      placeLine(e.Place),
@@ -221,7 +221,9 @@ func encode(e Event) ([]byte, error) {
 		l.Outcome = "ok"
 	case cli.Failed:
 		l.Outcome, l.Reason, l.Error = o.Failure.Class().String(), o.Failure.Reason(), o.Failure.Error()
-		if in, ok := o.Failure.(Internal); ok {
+		// an Internal joined with another failure keeps its stack
+		var in Internal
+		if errors.As(o.Failure, &in) {
 			l.Stack = string(in.Stack())
 		}
 	}

@@ -62,7 +62,9 @@ type Process struct {
 }
 
 // Run runs one invocation: it mints the trace id, records the store's
-// opening, the parse and the command's body as one event, puts the outcome's error line on Err before
+// opening, the parse, the command's body, every write it made and the
+// temps left beside the checkout's files as one event, puts the outcome's
+// error line on Err before
 // writing the event, so a slow or hung log cannot hold the line back, and
 // returns the outcome's exit status.
 func Run(p Process, args []string) int {
@@ -81,7 +83,11 @@ func Run(p Process, args []string) int {
 			return failed(err)
 		}
 		rec.Asked(cli.Summarize(cmd))
-		return dispatch(body{p: p, now: now, rec: rec}, table, groups, cmd)
+		w := &writes{stored: rec.Stored}
+		out := w.end(unfinished(func() cli.Outcome { return dispatch(body{p: p, now: now, rec: rec, w: w}, table, groups, cmd) }))
+		// after the body, so the temps its creates reaped are not said
+		rec.Stored.Temps = leftovers(p, p.Place, rec.Stored)
+		return out
 	})
 	// [LAW:no-silent-failure] exception: stderr is where failures are said,
 	// a lost event among them; when writing to it fails there is no channel
@@ -93,12 +99,35 @@ func Run(p Process, args []string) int {
 	return cli.ExitCode(event.Outcome)
 }
 
+// unfinished is body's outcome. A body that panics panics on, saying that
+// the run's end steps, the judging of its writes' durability and the scan
+// of its temps, did not run, so the event Record writes after the panic
+// says so in its outcome, never an empty scan that reads as none left
+// `[LAW:no-silent-failure]`.
+func unfinished(body func() cli.Outcome) cli.Outcome {
+	defer func() {
+		if r := recover(); r != nil {
+			panic(stoppedBeforeItsEnd{panicked: r})
+		}
+	}()
+	return body()
+}
+
+// stoppedBeforeItsEnd is a body's panic, said with the end steps it kept
+// from running.
+type stoppedBeforeItsEnd struct{ panicked any }
+
+func (s stoppedBeforeItsEnd) String() string {
+	return fmt.Sprintf("%v; the run stopped before its end: the durability of its writes was not judged, and no directory's temps were scanned", s.panicked)
+}
+
 // body is one invocation as its body sees it: the process, the clock's one
-// reading, and where its facts go.
+// reading, where its facts go, and where its writes are said.
 type body struct {
 	p   Process
 	now time.Time
 	rec command.Recorder
+	w   *writes
 }
 
 // dispatch binds each command to its body. Every verb runs the steps of §5

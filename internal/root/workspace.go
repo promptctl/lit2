@@ -166,7 +166,7 @@ func (o opened) judged(drafts []events.Draft, ref git.ObjectID, said string) cli
 // appends the frame and names the enrollment in FoundingFile, then says
 // said. The pin comes first: a frame that loses the race to pin is never
 // written, since every replica would carry it `[LAW:single-enforcer]`.
-func (o opened) found(pins, tree files.Files, drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
+func (o opened) found(once onceFiles, drafts []events.Draft, ref git.ObjectID, said string) cli.Outcome {
 	m, err := o.mint(drafts, ref)
 	if err != nil {
 		return failed(err)
@@ -176,7 +176,7 @@ func (o opened) found(pins, tree files.Files, drafts []events.Draft, ref git.Obj
 	if refused {
 		return out
 	}
-	won, err := pin(pins, founding.Enrollment)
+	won, err := pin(o.w, once.pin, founding.Enrollment)
 	if err != nil {
 		return failed(err)
 	}
@@ -187,7 +187,7 @@ func (o opened) found(pins, tree files.Files, drafts []events.Draft, ref git.Obj
 		return failed(unwritten{err: err, pin: pinPath(o.checkout)})
 	}
 	o.rec.Policy.Founding, o.rec.Policy.Under = won, judged.State.Policy()
-	if err := writeFoundingFile(tree, founding, pinPath(o.checkout)); err != nil {
+	if err := writeFoundingFile(o.w, once.founding, founding, pinPath(o.checkout)); err != nil {
 		return failed(err)
 	}
 	return written(fmt.Fprintf(o.p.Out, "%sfounding %s named in %s: commit it, and every clone adopts this store\n", said, founding.Enrollment, foundingPath()))
@@ -244,19 +244,34 @@ func (r body) init() cli.Outcome {
 	if !ok {
 		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer, and this is none")}}
 	}
-	shared, private := r.p.IdentityFiles(in.Checkout)
-	minted, fresh, err := MintIdentity(shared, private, r.p.Entropy)
-	if err != nil {
-		return cli.Failed{Failure: storeFailure{err: err}}
+	c := in.Checkout
+	once := r.p.onceFiles(c)
+	minting := MintIdentity(once.id, once.key, r.p.Entropy)
+	// every file init creates is on its event, by path, durable or not
+	for _, c := range minting.creations() {
+		r.w.created(c)
 	}
-	r.rec.Stored.Inits = append(r.rec.Stored.Inits, fresh)
-	said := fmt.Sprintf("principal %s\n", minted.Key.Principal())
-	if fresh.Key == files.Created {
-		said += fmt.Sprintf("recovery phrase: %s\nwrite it down: it is the one way to restore this key\n", minted.Key.Phrase())
-	}
-	// the phrase is said before anything else can fail: it is shown once
-	if out, isFailed := written(io.WriteString(r.p.Out, said)).(cli.Failed); isFailed {
-		return out
+	var minted command.Minted
+	switch m := minting.(type) {
+	case NotMinted:
+		return cli.Failed{Failure: storeFailure{err: m.Why}}
+	case Found:
+		minted = m.Minted
+		if out, isFailed := written(fmt.Fprintf(r.p.Out, "principal %s\n", minted.Key.Principal())).(cli.Failed); isFailed {
+			return out
+		}
+	case Made:
+		minted = m.Minted
+		if err := showPhrase(r.p.Out, m.Minted.Key, once.key); err != nil {
+			return cli.Failed{Failure: err}
+		}
+	case MadeUnread:
+		// the phrase is said whatever the readback did: it is shown once
+		unread := storeFailure{err: m.Why}
+		if err := showPhrase(r.p.Out, m.Key, once.key); err != nil {
+			return cli.Failed{Failure: both{Failure: err, also: unread}}
+		}
+		return cli.Failed{Failure: unread}
 	}
 	opening := r.p.Open(in.Checkout, minted)
 	r.rec.Stored.Opening = opening
@@ -264,9 +279,8 @@ func (r body) init() cli.Outcome {
 	if !ok {
 		return cli.Failed{Failure: storeFailure{err: opening.(command.Unopened).Why}}
 	}
-	tree := r.p.WorkTree(in.Checkout)
-	pins := r.p.Pin(in.Checkout)
-	if err := adopt(pins, tree); err != nil {
+	tree := r.p.WorkTree(c)
+	if err := adopt(r.w, once.pin, tree); err != nil {
 		return failed(err)
 	}
 	o, err := r.openAs(so, in.Checkout, minted)
@@ -275,7 +289,7 @@ func (r body) init() cli.Outcome {
 	}
 	// the file names the clone's founding, for the next clone to adopt
 	if f, founded := o.founding.(fold.FoundedBy); founded {
-		if err := writeFoundingFile(tree, f, pinPath(in.Checkout)); err != nil {
+		if err := writeFoundingFile(r.w, once.founding, f, pinPath(in.Checkout)); err != nil {
 			return failed(err)
 		}
 	}
@@ -317,7 +331,7 @@ func (r body) init() cli.Outcome {
 		}
 		ref = v.ref
 	case owns:
-		b, err := versionOne(tree)
+		b, err := versionOne(r.w, once.workspace)
 		if err != nil {
 			return cli.Failed{Failure: workspaceFailure{err: err}}
 		}
@@ -333,19 +347,19 @@ func (r body) init() cli.Outcome {
 		ref = git.HashBlob(in.Checkout.Format, assets.DefaultWorkspace.Bytes())
 	}
 	if founds {
-		return o.found(pins, tree, drafts, ref, said)
+		return o.found(once, drafts, ref, said)
 	}
 	return o.judged(drafts, ref, said)
 }
 
-// versionOne is the file in the work tree, the default profile created
-// there first when there is none; read back, so a race to create it
-// applies the winner's.
-func versionOne(tree files.Files) ([]byte, error) {
-	if _, err := tree.CreateOnce(verbs.WorkspaceFile(), assets.DefaultWorkspace.Bytes()); err != nil {
+// versionOne is the file in the work tree, at file, the default profile
+// created there first when there is none; read back, so a race to create
+// it applies the winner's.
+func versionOne(w *writes, file onceFile) ([]byte, error) {
+	if err := w.create(file, assets.DefaultWorkspace.Bytes()); err != nil {
 		return nil, fmt.Errorf("writing %s: %w", verbs.WorkspacePath(), err)
 	}
-	b, err := read(tree, verbs.WorkspaceFile(), func(b []byte) ([]byte, error) { return b, nil })
+	b, err := read(file.files, file.name, func(b []byte) ([]byte, error) { return b, nil })
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", verbs.WorkspacePath(), err)
 	}
@@ -386,3 +400,28 @@ func (c commitRefused) Error() string     { return c.cause.Error() }
 func (c commitRefused) Unwrap() error     { return c.cause }
 func (commitRefused) Class() reason.Class { return reason.ClassRefused }
 func (commitRefused) Reason() string      { return "workspace" }
+
+// showPhrase prints the principal of key, created at file, and its
+// recovery phrase, shown this once. A phrase that could not be written
+// fails the run, EPIPE among the causes: a reader gone before the phrase
+// reached it is a phrase no one saw `[LAW:no-silent-failure]`.
+func showPhrase(out io.Writer, key events.Key, file onceFile) reason.Failure {
+	if _, err := fmt.Fprintf(out, "principal %s\nrecovery phrase: %s\nwrite it down: it is the one way to restore this key\n", key.Principal(), key.Phrase()); err != nil {
+		return phraseUnshown{err: err, key: file.path()}
+	}
+	return nil
+}
+
+// phraseUnshown is the recovery phrase of a key this run created that
+// could not be written to stdout.
+type phraseUnshown struct {
+	err error
+	key string
+}
+
+func (p phraseUnshown) Error() string {
+	return fmt.Sprintf("the recovery phrase of the key created at %s was not shown: writing it to stdout: %v; the key works, and lit2 shows its phrase only when it creates it", p.key, p.err)
+}
+func (p phraseUnshown) Unwrap() error     { return p.err }
+func (phraseUnshown) Class() reason.Class { return reason.ClassEnvironment }
+func (phraseUnshown) Reason() string      { return "output" }
