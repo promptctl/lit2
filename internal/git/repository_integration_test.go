@@ -97,8 +97,8 @@ func TestLocateReadsTheEnvironmentAsGitDoes(t *testing.T) {
 }
 
 func TestLocateWithNoGitIsNotFoundAndARefusalIsGits(t *testing.T) {
-	dir := gittest.Physical(t)
-	if _, err := gittest.Runner(t).Locate(dir); err != (git.NotFound{Dir: dir}) {
+	dir, g := gittest.NoCheckout(t)
+	if _, err := g.Locate(dir); err != (git.NotFound{Dir: dir}) {
 		t.Errorf("Locate(%s) failed with %v; want NotFound", dir, err)
 	}
 	// refusedBy is whether err is git's refusal of Locate's rev-parse in
@@ -111,7 +111,6 @@ func TestLocateWithNoGitIsNotFoundAndARefusalIsGits(t *testing.T) {
 		}
 		return refused.Spawn.Ended == git.Ended(git.Exited{Code: gittest.Exit(t, dir, "rev-parse", "--show-toplevel")})
 	}
-	// [LAW:verifiable-goals] exception: git's refusal, with no identity lit can read; proven by its minimal pair
 	root := gittest.Physical(t)
 	worktree, bare := filepath.Join(root, "worktree"), filepath.Join(root, "bare")
 	gittest.Git(t, root, "init", "-q", worktree)
@@ -122,7 +121,6 @@ func TestLocateWithNoGitIsNotFoundAndARefusalIsGits(t *testing.T) {
 	if _, err := gittest.Runner(t).Locate(bare); !refusedBy(t, bare, err) {
 		t.Errorf("Locate in a bare repository failed with %v; want git's refusal of its rev-parse", err)
 	}
-	// [LAW:verifiable-goals] exception: git's refusal, with no identity lit can read; proven by its minimal pair
 	main, linked := filepath.Join(root, "main"), filepath.Join(root, "linked")
 	gittest.Git(t, root, "init", "-q", "-b", "main", main)
 	gittest.Git(t, main, "commit", "-q", "--allow-empty", "-m", "first")
@@ -301,7 +299,7 @@ func TestABrokenRefIsListedAndLeftByARead(t *testing.T) {
 	if err := repo.Replace("refs/lit/log/good", git.Absent{}, blob); err != nil {
 		t.Fatal(err)
 	}
-	torn := filepath.Join(dir, "refs", "lit", "log", "torn")
+	torn := gittest.LooseRef(dir, "refs/lit/log/torn")
 	for _, text := range []string{"", "torn", "ref: refs/lit/log/good", strings.Repeat("0", 40) + "\n"} {
 		if err := os.WriteFile(torn, []byte(text), 0o644); err != nil {
 			t.Fatal(err)
@@ -316,13 +314,14 @@ func TestABrokenRefIsListedAndLeftByARead(t *testing.T) {
 			t.Errorf("listing changed the broken ref holding %q: %q, %v", text, got, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "HEAD"), nil, 0o644); err != nil {
+	head := gittest.LooseRef(dir, "HEAD")
+	if err := os.WriteFile(head, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if l, err := repo.List("refs/lit/"); err != nil || len(l.Heads) != 1 || len(l.Broken) != 1 {
 		t.Errorf("with an empty HEAD, List = %+v, %v; want both refs as before", l, err)
 	}
-	if info, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil || info.Size() != 0 {
+	if info, err := os.Stat(head); err != nil || info.Size() != 0 {
 		t.Errorf("listing touched the empty HEAD: %v, %v", info, err)
 	}
 }
@@ -350,8 +349,10 @@ func TestAPackArrivingAfterTheFirstReadIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	gittest.Git(t, dir, "repack", "-a", "-d", "-q")
-	if loose, _ := filepath.Glob(filepath.Join(filepath.Dir(gittest.LooseObject(dir, blob)), "*")); len(loose) != 0 {
-		t.Fatalf("the repack left the blob loose: %v", loose)
+	// the repack's prune removes the loose file, and the fan-out directory
+	// it emptied, so only the file's absence says the blob moved
+	if _, err := os.Stat(gittest.LooseObject(dir, blob)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the blob's loose file after the repack: %v; want it gone", err)
 	}
 	if _, err := repo.Blob(blob); err != nil {
 		t.Errorf("a blob moved into a new pack read as %v; want it read", err)
@@ -396,7 +397,7 @@ func TestTheCallersGitVariablesNeverRedirectAWrite(t *testing.T) {
 	elsewhere := filepath.Join(root, "elsewhere")
 	gittest.Git(t, root, "init", "-q", "--bare", elsewhere)
 	dir := filepath.Join(root, "repo")
-	g := gittest.Runner(t, "GIT_DIR="+elsewhere, "GIT_OBJECT_DIRECTORY="+filepath.Join(elsewhere, "objects"), "GIT_INDEX_FILE="+filepath.Join(elsewhere, "index"))
+	g := gittest.Runner(t, "GIT_DIR="+elsewhere, "GIT_OBJECT_DIRECTORY="+gittest.ObjectsDir(elsewhere), "GIT_INDEX_FILE="+filepath.Join(elsewhere, "index"))
 	id, err := gittest.Put(repositoryAt(g, dir), []byte("mine"))
 	if err != nil {
 		t.Fatal(err)
@@ -426,7 +427,7 @@ func TestALockFileIsNoRef(t *testing.T) {
 	}
 	for _, lock := range []string{"", blob.String() + "\n"} {
 		for _, n := range []string{"a.lock", "b.lock", ".b", ".tmp-c"} {
-			if err := os.WriteFile(filepath.Join(dir, "refs", "lit", "log", n), []byte(lock), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(gittest.LooseRef(dir, "refs/lit/log/"), n), []byte(lock), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -451,7 +452,7 @@ func TestAReplaceGitRefusesIsSaidByTheRefsStateAfter(t *testing.T) {
 	if err := repo.Replace("refs/lit/log/control", git.Absent{}, blob); err != nil {
 		t.Fatalf("control: a replace from absent failed with %v", err)
 	}
-	logs := filepath.Join(dir, "refs", "lit", "log")
+	logs := gittest.LooseRef(dir, "refs/lit/log/")
 	if err := os.Chmod(logs, 0o555); err != nil {
 		t.Fatal(err)
 	}

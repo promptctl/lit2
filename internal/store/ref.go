@@ -35,7 +35,8 @@ func (WriterRef) ref() {}
 func (InboxRef) ref()  {}
 
 // Namespace is refs/lit/, the prefix every ref of lit's repository is
-// under, and the one spelling of it.
+// under. git takes a ref of any name, so the store owns lit's namespace,
+// and every name it reads or writes is spelled from this.
 const Namespace git.RefName = "refs/lit/"
 
 // The namespaces under Namespace.

@@ -82,11 +82,20 @@ func ask(t testing.TB, dir, stdin string, args ...string) (string, error) {
 // git does and not what this machine's config makes it do.
 func Env(t testing.TB) []string {
 	t.Helper()
+	env, err := Environ()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+// Environ is Env for a caller with no test to fail, as TestMain is.
+func Environ() ([]string, error) {
 	bin, err := exec.LookPath("git")
 	if err != nil {
-		t.Fatalf("these tests need the git binary: %v", err)
+		return nil, fmt.Errorf("these tests need the git binary: %w", err)
 	}
-	return []string{"PATH=" + filepath.Dir(bin), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}
+	return []string{"PATH=" + filepath.Dir(bin), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}, nil
 }
 
 // Runner is lit2's git as a test runs it.
@@ -132,19 +141,29 @@ func NoCheckout(t testing.TB) (dir string, g *git.Git) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return dir, Runner(t, "GIT_CEILING_DIRECTORIES="+planted)
+	return dir, Runner(t, Ceiling(dir))
 }
 
+// Ceiling is the variable that stops git's walk up from dir at the
+// directory dir is in, as NoCheckout's git has it.
+func Ceiling(dir string) string { return "GIT_CEILING_DIRECTORIES=" + filepath.Dir(dir) }
+
+// ObjectsDir is the directory git keeps the objects of the repository at
+// repo in. It, LooseObject and LooseRef are the oracle's one spelling of
+// git's layout.
+func ObjectsDir(repo string) string { return filepath.Join(repo, "objects") }
+
 // LooseObject is where git's files backend keeps id loose in the
-// repository at repo: objects/, then the id's first two hex digits, then
-// the rest. It is the oracle's one spelling of that layout.
+// repository at repo: its objects directory, then the id's first two hex
+// digits, then the rest.
 func LooseObject(repo string, id git.ObjectID) string {
 	hex := id.String()
-	return filepath.Join(repo, "objects", hex[:2], hex[2:])
+	return filepath.Join(ObjectsDir(repo), hex[:2], hex[2:])
 }
 
 // LooseRef is where git's files backend keeps the ref n loose in the
-// repository at repo.
+// repository at repo; of a prefix of refs, n ending in /, it is the
+// directory they are kept in.
 func LooseRef(repo string, n git.RefName) string {
 	return filepath.Join(repo, filepath.FromSlash(string(n)))
 }

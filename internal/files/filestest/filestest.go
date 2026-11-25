@@ -55,7 +55,10 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 			t.Errorf("ReadAt(MaxUint64, 1) = %q, %v; want nothing, past the end", b, err)
 		}
 	})
-	t.Run("concurrent appends to one file each land whole where they say, and none is lost", func(t *testing.T) {
+	// a load, not a race forced: no seam reaches between the bytes of one
+	// append, so which appends overlap is the scheduler's; what holds under
+	// every overlap is that each lands whole where it says
+	t.Run("200 appends from 8 writers at once each land whole where they say, and none is lost", func(t *testing.T) {
 		f := fresh(t)
 		Create(t, f, n, []byte("head"))
 		const writers, each = 8, 25
@@ -65,12 +68,13 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 		for w := range writers {
 			wg.Go(func() {
 				for i := range each {
-					got, ok := f.Append(n, fmt.Appendf(nil, "w%d-%04d", w, i)).(files.Appended)
+					got := f.Append(n, fmt.Appendf(nil, "w%d-%04d", w, i))
+					a, ok := got.(files.Appended)
 					if !ok {
 						t.Errorf("Append = %#v; want Appended", got)
 						return
 					}
-					ends[w] = append(ends[w], got.End)
+					ends[w] = append(ends[w], a.End)
 				}
 			})
 		}
@@ -116,12 +120,13 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 		for i := range 16 {
 			wg.Go(func() {
 				b := []byte{byte('a' + i)}
-				got, ok := f.CreateOnce(n, b).(files.Placed)
+				got := f.CreateOnce(n, b)
+				p, ok := got.(files.Placed)
 				if !ok {
 					t.Errorf("CreateOnce = %#v; want Placed", got)
 					return
 				}
-				if got.Made == files.Created {
+				if p.Made == files.Created {
 					mu.Lock()
 					winners = append(winners, b)
 					mu.Unlock()
@@ -178,21 +183,23 @@ func placed(p files.Placing, made files.Made) bool {
 // Create creates n holding b in f, failing t unless it is Placed.
 func Create(t testing.TB, f files.Files, n files.Name, b []byte) files.Placed {
 	t.Helper()
-	got, ok := f.CreateOnce(n, b).(files.Placed)
+	got := f.CreateOnce(n, b)
+	p, ok := got.(files.Placed)
 	if !ok {
 		t.Fatalf("CreateOnce(%s) = %#v; want Placed", n, got)
 	}
-	return got
+	return p
 }
 
 // Append appends b to n in f, failing t unless it is Appended.
 func Append(t testing.TB, f files.Files, n files.Name, b []byte) files.Appended {
 	t.Helper()
-	got, ok := f.Append(n, b).(files.Appended)
+	got := f.Append(n, b)
+	a, ok := got.(files.Appended)
 	if !ok {
 		t.Fatalf("Append(%s) = %#v; want Appended", n, got)
 	}
-	return got
+	return a
 }
 
 // Memory is an empty directory in process, standing for /memory: for a

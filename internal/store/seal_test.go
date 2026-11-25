@@ -107,7 +107,7 @@ func TestSealingFromAPriorPublicationEqualsSealingFromScratch(t *testing.T) {
 // A raised bound keeps every full segment cut by the lower one; only new
 // bytes are cut by it.
 func TestARaisedBoundKeepsTheSmallerSegments(t *testing.T) {
-	log := bytes.Repeat(Encode(mustBatch(t, "a record of some length")), 20)
+	log := bytes.Repeat(Encode(BatchOf(t, "a record of some length")), 20)
 	prior := kept(Seal(nil, Tail{From: 0, Bytes: log}, 100))
 	full, from := keepWithin(prior, 1000)
 	if len(full) != len(prior)-1 || from != prior[len(prior)-1].Span.From {
@@ -120,7 +120,7 @@ func TestASegmentStaysWithinItsBoundUnlessOneFrameIsLarger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	small := Encode(mustBatch(t, "s"))
+	small := Encode(BatchOf(t, "s"))
 	log := append(append(append([]byte{}, small...), Encode(big)...), small...)
 	got := spans(Seal(nil, Tail{From: 0, Bytes: log}, 100))
 	s, b := Offset(len(small)), Offset(len(Encode(big)))

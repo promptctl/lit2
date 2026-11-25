@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
@@ -74,7 +75,7 @@ func TestStore(t *testing.T) {
 	t.Run("a fresh common dir reads zero refs, zero logs and no stream", func(t *testing.T) {
 		t.Parallel()
 		s := store.Open(a, fresh().ports, store.DefaultSegmentBound)
-		h := storetest.Heads(t, s)
+		h := headsOf(t, s)
 		if h.RefsRead != 0 || h.LogsRead != 0 || len(h.Streams) != 0 {
 			t.Errorf("a fresh store's heads are %+v; want zero refs, zero logs, no stream", h)
 		}
@@ -86,19 +87,19 @@ func TestStore(t *testing.T) {
 	t.Run("appended batches read back in order, each whole, at increasing offsets", func(t *testing.T) {
 		t.Parallel()
 		s := store.Open(a, fresh().ports, store.DefaultSegmentBound)
-		bs := []store.Batch{storetest.Batch(t, "one"), storetest.Batch(t, "two", "three"), storetest.Batch(t, "four", "five", "six")}
+		bs := []store.Batch{store.BatchOf(t, "one"), store.BatchOf(t, "two", "three"), store.BatchOf(t, "four", "five", "six")}
 		appended := storetest.AppendAll(t, s, bs...)
 		first, created := appended[0].Log.(store.LogCreated)
 		if !created || first.Made != files.Created || appended[1].Log != (store.LogLookedUp{}) || appended[2].Records != 3 {
 			t.Errorf("the appends were %+v; want the first to create the log and the next to look it up", appended)
 		}
-		scan := storetest.Whole(t, s, store.WriterRef{Checkout: a})
+		scan := whole(t, s, store.WriterRef{Checkout: a})
 		if len(scan.Frames) != len(bs) || len(scan.Torn) != 0 || scan.End != scan.Until || scan.End != appended[2].Until.At {
 			t.Fatalf("the log reads %+v; want %d whole frames ending where the last append ended", scan, len(bs))
 		}
 		for i, f := range scan.Frames {
-			if !slices.Equal(storetest.Texts(f.Batch), storetest.Texts(bs[i])) || i > 0 && f.At <= scan.Frames[i-1].At {
-				t.Errorf("frame %d is %v at %d; want %v after the frame before it", i, storetest.Texts(f.Batch), f.At, storetest.Texts(bs[i]))
+			if !slices.Equal(texts(f.Batch), texts(bs[i])) || i > 0 && f.At <= scan.Frames[i-1].At {
+				t.Errorf("frame %d is %v at %d; want %v after the frame before it", i, texts(f.Batch), f.At, texts(bs[i]))
 			}
 		}
 	})
@@ -107,33 +108,37 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, store.DefaultSegmentBound)
-		storetest.AppendAll(t, s, storetest.Batch(t, "before"))
-		partial := store.Encode(storetest.Batch(t, "lost in a crash"))
+		storetest.AppendAll(t, s, store.BatchOf(t, "before"))
+		partial := store.Encode(store.BatchOf(t, "lost in a crash"))
 		partial = partial[:len(partial)/2]
 		filestest.Append(t, p.logs, store.LogName(a), partial)
-		scan := storetest.Whole(t, s, store.WriterRef{Checkout: a})
-		if !slices.Equal(storetest.Read(scan), []string{"before"}) || len(scan.Torn) != 0 || uint64(scan.Until-scan.End) != uint64(len(partial)) {
+		scan := whole(t, s, store.WriterRef{Checkout: a})
+		if !slices.Equal(store.RecordsOf(scan), []string{"before"}) || len(scan.Torn) != 0 || uint64(scan.Until-scan.End) != uint64(len(partial)) {
 			t.Errorf("with a partial frame the log reads %+v; want the whole frame and the rest an incomplete tail", scan)
 		}
-		storetest.AppendAll(t, s, storetest.Batch(t, "after"))
-		scan = storetest.Whole(t, s, store.WriterRef{Checkout: a})
-		if !slices.Equal(storetest.Read(scan), []string{"before", "after"}) || len(scan.Torn) != 1 || scan.Torn[0].Len() != uint64(len(partial)) || scan.End != scan.Until {
+		storetest.AppendAll(t, s, store.BatchOf(t, "after"))
+		scan = whole(t, s, store.WriterRef{Checkout: a})
+		if !slices.Equal(store.RecordsOf(scan), []string{"before", "after"}) || len(scan.Torn) != 1 || scan.Torn[0].Len() != uint64(len(partial)) || scan.End != scan.Until {
 			t.Errorf("after one more append the log reads %+v; want both records and one torn span of %d bytes", scan, len(partial))
 		}
 	})
 
-	t.Run("many appenders to one log lose no record", func(t *testing.T) {
+	// a load, not a race forced: past the first append, whose race
+	// TestFirstAppendsRacingKeepOneLog forces, an append writes the log by
+	// one files Append, so which appends overlap is the scheduler's; what
+	// holds under every overlap is that none is lost or torn
+	t.Run("200 appends from 8 stores at once to one log each read back once, none torn", func(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		var want []string
 		var wg sync.WaitGroup
 		for g := range 8 {
-			bs := storetest.Numbered(t, 25, fmt.Sprintf("g%d", g))
-			want = append(want, storetest.All(bs)...)
+			bs := numbered(t, 25, fmt.Sprintf("g%d", g))
+			want = append(want, texts(bs...)...)
 			wg.Go(func() {
 				s := store.Open(a, p.ports, store.DefaultSegmentBound)
 				for _, bt := range bs {
-					if got, ok := s.Append(bt).(store.Appended); !ok {
+					if got := s.Append(bt); !isAppended(got) {
 						t.Errorf("Append = %#v; want Appended", got)
 						return
 					}
@@ -141,8 +146,8 @@ func TestStore(t *testing.T) {
 			})
 		}
 		wg.Wait()
-		scan := storetest.Whole(t, store.Open(a, p.ports, store.DefaultSegmentBound), store.WriterRef{Checkout: a})
-		got := storetest.Read(scan)
+		scan := whole(t, store.Open(a, p.ports, store.DefaultSegmentBound), store.WriterRef{Checkout: a})
+		got := store.RecordsOf(scan)
 		slices.Sort(got)
 		slices.Sort(want)
 		if !slices.Equal(got, want) || len(scan.Torn) != 0 {
@@ -154,18 +159,18 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, store.DefaultSegmentBound)
-		bs := storetest.Numbered(t, 1000, "event")
+		bs := numbered(t, 1000, "event")
 		storetest.AppendAll(t, s, bs...)
-		out := storetest.PublishOwn(t, s)
+		out := publishOwn(t, s)
 		if out.Move != (store.RefCreated{}) || out.Prior != (store.NoPrior{}) || out.Kept != 0 || out.Sealed == 0 || len(out.New) != out.Sealed+2 {
 			t.Errorf("the publish was %+v; want a created ref, no prior, and only its segments, one tree and one commit new", out)
 		}
 		// a clone that fetched lit's repository and holds no log of a
 		other := fetched(p)
 		reader := store.Open(b, other.ports, store.DefaultSegmentBound)
-		scan := storetest.Whole(t, reader, store.WriterRef{Checkout: a})
-		if !slices.Equal(storetest.Read(scan), storetest.All(bs)) || len(scan.Torn) != 0 || scan.End != scan.Until {
-			t.Errorf("the publication reads back %d records; want the log's %d", len(storetest.Read(scan)), len(bs))
+		scan := whole(t, reader, store.WriterRef{Checkout: a})
+		if !slices.Equal(store.RecordsOf(scan), texts(bs...)) || len(scan.Torn) != 0 || scan.End != scan.Until {
+			t.Errorf("the publication reads back %d records; want the log's %d", len(store.RecordsOf(scan)), len(bs))
 		}
 	})
 
@@ -173,11 +178,11 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, 256)
-		storetest.AppendAll(t, s, storetest.Numbered(t, 30, "first")...)
-		first := storetest.PublishOwn(t, s)
+		storetest.AppendAll(t, s, numbered(t, 30, "first")...)
+		first := publishOwn(t, s)
 		before := segments(t, p.objects, first.Commit)
-		storetest.AppendAll(t, s, storetest.Numbered(t, 3, "more")...)
-		second := storetest.PublishOwn(t, s)
+		storetest.AppendAll(t, s, numbered(t, 3, "more")...)
+		second := publishOwn(t, s)
 		after := segments(t, p.objects, second.Commit)
 		if len(before) < 2 || second.Kept != len(before)-1 || len(second.New) != second.Sealed+2 ||
 			second.Move != (store.RefReplaced{Previous: first.Commit}) || second.Prior != (store.KeptFrom{Commit: first.Commit}) {
@@ -186,7 +191,7 @@ func TestStore(t *testing.T) {
 		if !slices.Equal(after[:len(before)-1], before[:len(before)-1]) {
 			t.Errorf("the full segments changed: %v, then %v", before, after)
 		}
-		idle := storetest.PublishOwn(t, s)
+		idle := publishOwn(t, s)
 		if idle.Move != (store.RefUnchanged{}) || len(idle.New) != 0 || idle.NewBytes != 0 || idle.Commit != second.Commit {
 			t.Errorf("an idle publish was %+v; want the ref unchanged and nothing new", idle)
 		}
@@ -196,10 +201,10 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, store.DefaultSegmentBound)
-		storetest.AppendAll(t, s, storetest.Numbered(t, 3, "first")...)
-		early := storetest.SealOwn(t, s)
-		storetest.AppendAll(t, s, storetest.Numbered(t, 3, "more")...)
-		later := storetest.PublishOwn(t, s)
+		storetest.AppendAll(t, s, numbered(t, 3, "first")...)
+		early := sealOwn(t, s)
+		storetest.AppendAll(t, s, numbered(t, 3, "more")...)
+		later := publishOwn(t, s)
 		ref := store.WriterRef{Checkout: a}
 		_, err := s.Publish(early)
 		stale(t, err, ref, later.Commit)
@@ -216,8 +221,8 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, store.DefaultSegmentBound)
-		storetest.AppendAll(t, s, storetest.Numbered(t, 3, "event")...)
-		first, second := storetest.SealOwn(t, s), storetest.SealOwn(t, s)
+		storetest.AppendAll(t, s, numbered(t, 3, "event")...)
+		first, second := sealOwn(t, s), sealOwn(t, s)
 		one, err := s.Publish(first)
 		if err != nil {
 			t.Fatal(err)
@@ -232,11 +237,11 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, store.DefaultSegmentBound)
-		storetest.AppendAll(t, s, storetest.Numbered(t, 3, "event")...)
-		storetest.PublishOwn(t, s)
-		idle := storetest.SealOwn(t, s)
-		storetest.AppendAll(t, s, storetest.Numbered(t, 1, "more")...)
-		later := storetest.PublishOwn(t, s)
+		storetest.AppendAll(t, s, numbered(t, 3, "event")...)
+		publishOwn(t, s)
+		idle := sealOwn(t, s)
+		storetest.AppendAll(t, s, numbered(t, 1, "more")...)
+		later := publishOwn(t, s)
 		_, err := s.Publish(idle)
 		stale(t, err, store.WriterRef{Checkout: a}, later.Commit)
 	})
@@ -245,22 +250,22 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, store.DefaultSegmentBound)
-		storetest.AppendAll(t, s, storetest.Batch(t, "one"))
+		storetest.AppendAll(t, s, store.BatchOf(t, "one"))
 		size, err := p.logs.Size(store.LogName(a))
 		if err != nil {
 			t.Fatal(err)
 		}
-		header, err := p.logs.ReadAt(store.LogName(a), 0, size-uint64(len(store.Encode(storetest.Batch(t, "one")))))
+		header, err := p.logs.ReadAt(store.LogName(a), 0, size-uint64(len(store.Encode(store.BatchOf(t, "one")))))
 		if err != nil {
 			t.Fatal(err)
 		}
 		// the header and half a frame: what a crash in the first append leaves
-		half := store.Encode(storetest.Batch(t, "half"))
+		half := store.Encode(store.BatchOf(t, "half"))
 		crashed := fresh()
 		filestest.Create(t, crashed.logs, store.LogName(a), append(header, half[:len(half)/2]...))
 		s = store.Open(a, crashed.ports, store.DefaultSegmentBound)
 		sealed, err := s.SealOwn()
-		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: storetest.Heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
+		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: headsOf(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
 			t.Errorf("sealing a log with no whole frame made %#v, %v; want %#v", sealed, err, want)
 		}
 		if refs, err := crashed.refs.List(store.Namespace); err != nil || len(refs.Heads)+len(refs.Broken) != 0 {
@@ -272,7 +277,7 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, 64)
-		bs := storetest.Numbered(t, 10, "event")
+		bs := numbered(t, 10, "event")
 		storetest.AppendAll(t, s, bs...)
 		ref := store.WriterRef{Checkout: a}
 		held, err := gittest.Put(p.objects, []byte("not a commit"))
@@ -282,7 +287,7 @@ func TestStore(t *testing.T) {
 		if err := p.refs.Replace(ref.Name(), git.Absent{}, held); err != nil {
 			t.Fatal(err)
 		}
-		out := storetest.PublishOwn(t, s)
+		out := publishOwn(t, s)
 		resealed, ok := out.Prior.(store.Resealed)
 		var none store.NoPublication
 		var notLit git.NotLit
@@ -292,8 +297,8 @@ func TestStore(t *testing.T) {
 		}
 		// a clone that fetched lit's repository and holds no log of a
 		other := fetched(p)
-		if got := storetest.Read(storetest.Whole(t, store.Open(b, other.ports, 64), ref)); !slices.Equal(got, storetest.All(bs)) {
-			t.Errorf("the resealed publication reads %v; want the log's %v", got, storetest.All(bs))
+		if got := store.RecordsOf(whole(t, store.Open(b, other.ports, 64), ref)); !slices.Equal(got, texts(bs...)) {
+			t.Errorf("the resealed publication reads %v; want the log's %v", got, texts(bs...))
 		}
 	})
 
@@ -301,7 +306,7 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		s := store.Open(a, p.ports, store.DefaultSegmentBound)
-		storetest.AppendAll(t, s, storetest.Batch(t, "one"))
+		storetest.AppendAll(t, s, store.BatchOf(t, "one"))
 		size, err := p.logs.Size(store.LogName(a))
 		if err != nil {
 			t.Fatal(err)
@@ -310,8 +315,8 @@ func TestStore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		storetest.AppendAll(t, s, storetest.Batch(t, "two"))
-		storetest.PublishOwn(t, s)
+		storetest.AppendAll(t, s, store.BatchOf(t, "two"))
+		publishOwn(t, s)
 		// the same repository beside a log holding only the first batch
 		rewound := fetched(p)
 		filestest.Create(t, rewound.logs, store.LogName(a), short)
@@ -327,7 +332,7 @@ func TestStore(t *testing.T) {
 		inbox := store.InboxRef{Inbox: store.InboxID{1}}
 		publish := func(from git.Was, log store.LogID, records ...string) store.Published {
 			t.Helper()
-			pub, err := store.NewPublication(inbox, from, log, []store.Segment{store.Fresh{Start: 0, Bytes: store.Encode(storetest.Batch(t, records...))}})
+			pub, err := store.NewPublication(inbox, from, log, []store.Segment{store.Fresh{Start: 0, Bytes: store.Encode(store.BatchOf(t, records...))}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -338,14 +343,14 @@ func TestStore(t *testing.T) {
 			return out
 		}
 		filed := publish(git.Absent{}, store.LogID{1}, "filed", "remotely")
-		if got := storetest.Read(storetest.Whole(t, s, inbox)); filed.Move != (store.RefCreated{}) || !slices.Equal(got, []string{"filed", "remotely"}) {
+		if got := store.RecordsOf(whole(t, s, inbox)); filed.Move != (store.RefCreated{}) || !slices.Equal(got, []string{"filed", "remotely"}) {
 			t.Errorf("the inbox reads %v after %+v; want its two records", got, filed)
 		}
 		rewrite := publish(git.Named{Target: filed.Commit}, store.LogID{2}, "filed")
 		if rewrite.Move != (store.RefReplaced{Previous: filed.Commit}) {
 			t.Errorf("the rewrite's publish was %+v; want it to replace the ref", rewrite)
 		}
-		if got := storetest.Read(storetest.Whole(t, s, inbox)); !slices.Equal(got, []string{"filed"}) {
+		if got := store.RecordsOf(whole(t, s, inbox)); !slices.Equal(got, []string{"filed"}) {
 			t.Errorf("after a rewrite the inbox reads %v; want only what the rewrite holds", got)
 		}
 	})
@@ -354,63 +359,90 @@ func TestStore(t *testing.T) {
 		t.Parallel()
 		p := fresh()
 		sa, sb := store.Open(a, p.ports, store.DefaultSegmentBound), store.Open(b, p.ports, store.DefaultSegmentBound)
-		storetest.AppendAll(t, sa, storetest.Batch(t, "from a"))
-		storetest.AppendAll(t, sb, storetest.Batch(t, "from b"))
+		storetest.AppendAll(t, sa, store.BatchOf(t, "from a"))
+		storetest.AppendAll(t, sb, store.BatchOf(t, "from b"))
 		for _, s := range []*store.Store{sa, sb} {
-			h := storetest.Heads(t, s)
+			h := headsOf(t, s)
 			if h.LogsRead != 2 || len(h.Streams) != 2 ||
-				!slices.Equal(storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: a})), []string{"from a"}) ||
-				!slices.Equal(storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: b})), []string{"from b"}) {
+				!slices.Equal(store.RecordsOf(whole(t, s, store.WriterRef{Checkout: a})), []string{"from a"}) ||
+				!slices.Equal(store.RecordsOf(whole(t, s, store.WriterRef{Checkout: b})), []string{"from b"}) {
 				t.Errorf("a checkout sees %+v; want both logs, each with its own record", h)
 			}
 		}
-		storetest.PublishOwn(t, sa)
-		storetest.PublishOwn(t, sb)
+		publishOwn(t, sa)
+		publishOwn(t, sb)
 		l, err := p.refs.List(store.Namespace)
 		refs := l.Heads
 		if err != nil || len(refs) != 2 || refs[0].Name != (store.WriterRef{Checkout: a}).Name() || refs[1].Name != (store.WriterRef{Checkout: b}).Name() {
 			t.Errorf("after both publish the refs are %v, %v; want one per checkout", refs, err)
 		}
-		if h := storetest.Heads(t, sa); h.RefsRead != 2 || len(h.Streams) != 2 {
+		if h := headsOf(t, sa); h.RefsRead != 2 || len(h.Streams) != 2 {
 			t.Errorf("after both publish a checkout sees %+v; want two refs read and two streams, each from its log", h)
 		}
 	})
 }
 
-// meeting is logs whose first two reads of a log that is not there wait
-// for each other, so two first appends both find no log and both create
-// one: the race forced, never left to the scheduler
-// `[LAW:no-ambient-temporal-coupling]`.
+// isAppended is whether a is a frame that landed durable.
+func isAppended(a store.Appending) bool {
+	_, ok := a.(store.Appended)
+	return ok
+}
+
+// meeting is logs whose first reads of a log that is not there, one per
+// racing append, wait until all have read, so every racer finds no log
+// and creates one: the race forced, never left to the scheduler
+// `[LAW:no-ambient-temporal-coupling]`. A racer that waits past meetBy,
+// a bound on a failure and no part of the order, fails the test, saying
+// how many of the racers read, and goes on.
 type meeting struct {
 	files.Files
-	met     sync.WaitGroup
+	t       *testing.T
+	racers  int32
 	arrived atomic.Int32
+	met     chan struct{}
+}
+
+const meetBy = 10 * time.Second
+
+func newMeeting(t *testing.T, racers int) *meeting {
+	return &meeting{Files: filestest.Memory(), t: t, racers: int32(racers), met: make(chan struct{})}
 }
 
 func (m *meeting) ReadAt(n files.Name, off, size uint64) ([]byte, error) {
 	b, err := m.Files.ReadAt(n, off, size)
-	if errors.As(err, new(files.NotFound)) && m.arrived.Add(1) <= 2 {
-		m.met.Done()
-		m.met.Wait()
+	if !errors.As(err, new(files.NotFound)) {
+		return b, err
+	}
+	switch arrived := m.arrived.Add(1); {
+	case arrived == m.racers:
+		close(m.met)
+	case arrived < m.racers:
+		select {
+		case <-m.met:
+		case <-time.After(meetBy):
+			m.t.Errorf("%d racing first reads of %s were to meet; %d had read when %v passed", m.racers, n, m.arrived.Load(), meetBy)
+		}
 	}
 	return b, err
 }
 
-func TestTwoFirstAppendsRacingKeepOneLog(t *testing.T) {
-	logs := &meeting{Files: filestest.Memory()}
-	logs.met.Add(2)
-	p := store.MemoryPorts(logs, storetest.Entropy(1))
-	records := []string{"first", "second"}
+func TestFirstAppendsRacingKeepOneLog(t *testing.T) {
+	records := []string{"first", "second", "third"}
+	batches := make([]store.Batch, len(records))
+	for i, r := range records {
+		batches[i] = store.BatchOf(t, r)
+	}
+	p := store.MemoryPorts(newMeeting(t, len(records)), storetest.Entropy(1))
 	got := make([]store.Appending, len(records))
 	var wg sync.WaitGroup
-	for i, r := range records {
-		wg.Go(func() { got[i] = store.Open(a, p, store.DefaultSegmentBound).Append(storetest.Batch(t, r)) })
+	for i, bt := range batches {
+		wg.Go(func() { got[i] = store.Open(a, p, store.DefaultSegmentBound).Append(bt) })
 	}
 	wg.Wait()
 	s := store.Open(a, p, store.DefaultSegmentBound)
-	h := storetest.Heads(t, s)
+	h := headsOf(t, s)
 	if len(h.Streams) != 1 {
-		t.Fatalf("after two first appends the heads are %+v; want one stream", h)
+		t.Fatalf("after %d first appends the heads are %+v; want one stream", len(records), h)
 	}
 	made := map[files.Made]int{}
 	for i, g := range got {
@@ -421,12 +453,12 @@ func TestTwoFirstAppendsRacingKeepOneLog(t *testing.T) {
 		}
 		made[created.Made]++
 	}
-	if made[files.Created] != 1 || made[files.Existing] != 1 {
-		t.Errorf("the two creates made %v; want one Created and one Existing", made)
+	if made[files.Created] != 1 || made[files.Existing] != len(records)-1 {
+		t.Errorf("the %d creates made %v; want one Created and the rest Existing", len(records), made)
 	}
-	read := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: a}))
+	read := store.RecordsOf(whole(t, s, store.WriterRef{Checkout: a}))
 	slices.Sort(read)
-	if !slices.Equal(read, []string{"first", "second"}) {
-		t.Errorf("the log reads %v; want both records", read)
+	if want := slices.Sorted(slices.Values(records)); !slices.Equal(read, want) {
+		t.Errorf("the log reads %v; want every record, %v", read, want)
 	}
 }

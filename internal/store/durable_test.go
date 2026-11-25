@@ -66,24 +66,25 @@ func TestAFrameThatLandedIsNeverNotAppended(t *testing.T) {
 		s := over(filestest.Faults{Append: errAppend})
 		got := notDurable(t, s.Append(bt), errAppend, errCreate)
 		created(t, got.Log)
-		scan := storetest.Whole(t, s, store.WriterRef{Checkout: me})
-		if !slices.Equal(storetest.Read(scan), []string{"landed"}) || scan.End != got.Until.At {
-			t.Errorf("the log reads %v, ending at %d; want the one frame, ending where the append said, %d", storetest.Read(scan), scan.End, got.Until.At)
+		scan := whole(t, s, store.WriterRef{Checkout: me})
+		if !slices.Equal(store.RecordsOf(scan), []string{"landed"}) || scan.End != got.Until.At {
+			t.Errorf("the log reads %v, ending at %d; want the one frame, ending where the append said, %d", store.RecordsOf(scan), scan.End, got.Until.At)
 		}
 	})
 	t.Run("a failed sync of the log's create is the frame's, which still lands", func(t *testing.T) {
 		s := over(filestest.Faults{CreateOnce: errCreate})
 		created(t, unsynced(t, notDurable(t, s.Append(bt), errCreate, errAppend).Log, errCreate))
-		if got := storetest.Read(storetest.Whole(t, s, store.WriterRef{Checkout: me})); !slices.Equal(got, []string{"landed"}) {
+		if got := store.RecordsOf(whole(t, s, store.WriterRef{Checkout: me})); !slices.Equal(got, []string{"landed"}) {
 			t.Errorf("the log reads %v; want the one frame", got)
 		}
 	})
 	t.Run("a log looked up is synced again, and a failed sync is the frame's", func(t *testing.T) {
 		errName := errors.New("the log's directory's fsync failed")
 		s := over(filestest.Faults{Sync: errName})
-		first, ok := s.Append(bt).(store.Appended)
+		appending := s.Append(bt)
+		first, ok := appending.(store.Appended)
 		if !ok {
-			t.Fatalf("the first append = %#v; want Appended, its create's sync its own", first)
+			t.Fatalf("the first append = %#v; want Appended, its create's sync its own", appending)
 		}
 		created(t, first.Log)
 		if got := unsynced(t, notDurable(t, s.Append(bt), errName, errAppend, errCreate).Log, errName); got != (store.LogLookedUp{}) {

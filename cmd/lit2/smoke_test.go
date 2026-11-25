@@ -12,11 +12,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/lit2/internal/git/gittest"
 )
 
 // lit2 is the binary TestMain built with the documented command, before
-// any test ran, so no test's environment reaches the build
-// `[LAW:no-ambient-temporal-coupling]`.
+// any test ran; Go gives TestMain no channel to a test but a global, so
+// newSandbox reads it once and every run takes it from the sandbox.
 var lit2 string
 
 func TestMain(m *testing.M) {
@@ -26,8 +28,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	lit2 = filepath.Join(dir, "lit2")
-	cmd := exec.Command("go", "build", "-o", lit2, ".")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	goBin, env, err := toolchain()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	cmd := exec.Command(goBin, "build", "-o", lit2, ".")
+	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "CGO_ENABLED=0 go build ./cmd/lit2: %v\n%s", err, out)
 		os.Exit(1)
@@ -40,42 +47,55 @@ func TestMain(m *testing.M) {
 	os.Exit(status)
 }
 
-// sandbox is where a smoke test runs lit2 and git: tmp, under a
-// repository planted above it and a ceiling between them, so tmp is
-// outside a checkout whatever holds the test's temporary directory, and an
-// environment built from nothing, so no config, GIT_DIR or HOME of the
-// caller's reaches either.
-type sandbox struct {
-	tmp string
-	env []string
+// toolchain is the go command of the toolchain go env reports, and an
+// environment for its build made from nothing: where that toolchain, its
+// module cache and its build cache are, the git it stamps the module's
+// version from, which the binary reads, no go env file, and no cgo, so no
+// GOFLAGS, GOWORK or other variable of the caller's shapes the build.
+func toolchain() (string, []string, error) {
+	out, err := exec.Command("go", "env", "-json", "GOROOT", "GOPATH", "GOMODCACHE", "GOCACHE").Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("go env: %w", err)
+	}
+	var at struct{ GOROOT, GOPATH, GOMODCACHE, GOCACHE string }
+	if err := json.Unmarshal(out, &at); err != nil {
+		return "", nil, fmt.Errorf("go env: %w", err)
+	}
+	env, err := gittest.Environ()
+	if err != nil {
+		return "", nil, err
+	}
+	return filepath.Join(at.GOROOT, "bin", "go"), append(env, "GOROOT="+at.GOROOT, "GOPATH="+at.GOPATH,
+		"GOMODCACHE="+at.GOMODCACHE, "GOCACHE="+at.GOCACHE, "GOENV=off", "CGO_ENABLED=0"), nil
 }
+
+// sandbox is where a smoke test runs the built lit2: tmp, outside every
+// checkout as gittest.NoCheckout makes one, with a HOME and a state
+// directory beside it. Every run's environment is derived from tmp and
+// built from nothing, so no config, GIT_DIR or HOME of the caller's
+// reaches a run.
+type sandbox struct{ lit2, tmp string }
 
 func newSandbox(t *testing.T) sandbox {
 	t.Helper()
-	planted, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatalf("the smoke tests need the git binary: %v", err)
-	}
-	sb := sandbox{tmp: filepath.Join(planted, "sub"), env: []string{
-		"PATH=" + filepath.Dir(bin),
-		"HOME=" + filepath.Join(planted, "home"),
-		"XDG_STATE_HOME=" + filepath.Join(planted, "state"),
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CEILING_DIRECTORIES=" + planted,
-	}}
-	git(t, sb, planted, "init", "-q")
-	if err := os.Mkdir(sb.tmp, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return sb
+	tmp, _ := gittest.NoCheckout(t)
+	return sandbox{lit2: lit2, tmp: tmp}
 }
 
-// state is where lit2 in sb keeps its command log.
+// home is lit2's HOME in sb.
+func (sb sandbox) home() string { return filepath.Join(filepath.Dir(sb.tmp), "home") }
+
+// state is lit2's XDG_STATE_HOME in sb, where it keeps its command log.
 func (sb sandbox) state() string { return filepath.Join(filepath.Dir(sb.tmp), "state") }
+
+// command is lit2 with args in dir, in sb: under the git a test's lit2
+// runs, stopped at the ceiling above tmp, with sb's HOME and state.
+func (sb sandbox) command(t *testing.T, dir string, args ...string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(sb.lit2, args...)
+	cmd.Dir, cmd.Env = dir, append(gittest.Env(t), gittest.Ceiling(sb.tmp), "HOME="+sb.home(), "XDG_STATE_HOME="+sb.state())
+	return cmd
+}
 
 // TestSmoke runs the built lit2 as a person would, outside any checkout and
 // inside two not yet minted, whose workspace drafts are not in force, one
@@ -85,14 +105,14 @@ func TestSmoke(t *testing.T) {
 	sb := newSandbox(t)
 	tmp, state := sb.tmp, sb.state()
 	hostile := filepath.Join(filepath.Dir(tmp), "hostile")
-	git(t, sb, filepath.Dir(tmp), "init", "-q", hostile)
+	gittest.Git(t, filepath.Dir(tmp), "init", "-q", hostile)
 	if err := os.WriteFile(filepath.Join(hostile, ".gitconfig"), []byte("[init]\n\tdefaultBranch = hostile\n[alias]\n\tinit = status\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_DIR", filepath.Join(hostile, ".git"))
 	t.Setenv("HOME", hostile)
-	broken := checkout(t, sb, filepath.Join(tmp, "broken"), "prefix = [unclosed\n")
-	parses := checkout(t, sb, filepath.Join(tmp, "parses"), oneLevel)
+	broken := checkout(t, filepath.Join(tmp, "broken"), "prefix = [unclosed\n")
+	parses := checkout(t, filepath.Join(tmp, "parses"), oneLevel)
 
 	var statuses []int
 	for _, tc := range []struct {
@@ -109,8 +129,7 @@ func TestSmoke(t *testing.T) {
 		{[]string{"--help"}, 0, "admin sync", "", false, broken},
 		{[]string{"--help"}, 0, "admin sync", "", false, parses},
 	} {
-		cmd := exec.Command(lit2, tc.args...)
-		cmd.Dir, cmd.Env = tc.dir, sb.env
+		cmd := sb.command(t, tc.dir, tc.args...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		if tc.brokenPipe {
@@ -190,7 +209,7 @@ func holds(stdout, want string) bool {
 // binary and the store on disk.
 func TestSmokeWorksATicket(t *testing.T) {
 	sb := newSandbox(t)
-	dir := checkout(t, sb, filepath.Join(sb.tmp, "work"), "")
+	dir := checkout(t, filepath.Join(sb.tmp, "work"), "")
 	lit := func(args ...string) string { t.Helper(); return run(t, sb, dir, 0, args...) }
 	if out := lit("admin", "init"); !strings.HasPrefix(out, "principal did:key:") || !strings.Contains(out, "recovery phrase: ") || !strings.Contains(out, "enrolled: policy v1, owner did:key:") || !strings.Contains(out, "applied as version one") {
 		t.Fatalf("admin init printed %q", out)
@@ -223,7 +242,7 @@ func TestSmokeWorksATicket(t *testing.T) {
 // new model; a file that does not parse stops no command.
 func TestSmokeAppliesTheWorkspace(t *testing.T) {
 	sb := newSandbox(t)
-	dir := checkout(t, sb, filepath.Join(sb.tmp, "work"), "")
+	dir := checkout(t, filepath.Join(sb.tmp, "work"), "")
 	lit := func(status int, args ...string) string { t.Helper(); return run(t, sb, dir, status, args...) }
 	write := func(text string) {
 		t.Helper()
@@ -232,15 +251,15 @@ func TestSmokeAppliesTheWorkspace(t *testing.T) {
 		}
 	}
 	lit(0, "admin", "init")
-	first := git(t, sb, dir, "hash-object", ".lit/workspace.toml")
+	first := gittest.Git(t, dir, "hash-object", ".lit/workspace.toml")
 	if got := lit(0, "get", "/workspace"); !strings.Contains(got, first[:7]+" in force · .lit/workspace.toml matches") {
 		t.Errorf("the board after init: %q; want %s in force", got, first[:7])
 	}
 	if got := lit(0, "config", "status"); !strings.Contains(got, "in HEAD's history: no") {
 		t.Errorf("status before the file is committed:\n%s", got)
 	}
-	git(t, sb, dir, "add", ".lit/workspace.toml")
-	git(t, sb, dir, "commit", "-q", "-m", "workspace")
+	gittest.Git(t, dir, "add", ".lit/workspace.toml")
+	gittest.Git(t, dir, "commit", "-q", "-m", "workspace")
 	if got := lit(0, "config", "status"); !strings.Contains(got, "in HEAD's history: yes") {
 		t.Errorf("status once the file is committed:\n%s", got)
 	}
@@ -252,8 +271,8 @@ func TestSmokeAppliesTheWorkspace(t *testing.T) {
 		t.Errorf("the board beside an edit, the default still in force:\n%s", got)
 	}
 	lit(1, "config", "commit")
-	git(t, sb, dir, "commit", "-q", "-am", "icebox")
-	blob := git(t, sb, dir, "rev-parse", "HEAD:.lit/workspace.toml")
+	gittest.Git(t, dir, "commit", "-q", "-am", "icebox")
+	blob := gittest.Git(t, dir, "rev-parse", "HEAD:.lit/workspace.toml")
 	if got := lit(0, "config", "commit"); got != "applied "+blob+"\n" {
 		t.Errorf("config commit printed %q; want applied %s", got, blob)
 	}
@@ -297,8 +316,7 @@ terminal = true
 // exits status.
 func run(t *testing.T, sb sandbox, dir string, status int, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(lit2, args...)
-	cmd.Dir, cmd.Env = dir, sb.env
+	cmd := sb.command(t, dir, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	got := 0
@@ -312,20 +330,6 @@ func run(t *testing.T, sb sandbox, dir string, status int, args ...string) strin
 		t.Fatalf("lit2 %q exited %d, stderr %q; want %d", args, got, stderr.String(), status)
 	}
 	return stdout.String()
-}
-
-// git runs git in dir, in sb, as an author, and is its output.
-func git(t *testing.T, sb sandbox, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(sb.env[:len(sb.env):len(sb.env)],
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %q: %v\n%s", args, err, out)
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // configLine is the command log's config block, as a reader of the log sees it.
@@ -349,11 +353,11 @@ next = ["done"]
 terminal = true
 `
 
-// checkout makes a git checkout at dir, in sb, whose .lit/workspace.toml
-// is draft, or with none when draft is empty, and returns dir.
-func checkout(t *testing.T, sb sandbox, dir, draft string) string {
+// checkout makes a git checkout at dir whose .lit/workspace.toml is
+// draft, or with none when draft is empty, and returns dir.
+func checkout(t *testing.T, dir, draft string) string {
 	t.Helper()
-	git(t, sb, filepath.Dir(dir), "init", "--quiet", dir)
+	gittest.Git(t, filepath.Dir(dir), "init", "--quiet", dir)
 	if draft == "" {
 		return dir
 	}

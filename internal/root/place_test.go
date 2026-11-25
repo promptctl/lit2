@@ -48,9 +48,10 @@ func identityAt(t *testing.T, dir string) command.Identity {
 }
 
 func TestTheIdentityFilesGiveTheWriterAndItsKey(t *testing.T) {
-	got, ok := identityAt(t, checkout(t, minted)).(command.Minted)
+	id := identityAt(t, checkout(t, minted))
+	got, ok := id.(command.Minted)
 	if !ok || got.Checkout != twinID || got.Key.Principal() != twinKey().Principal() {
-		t.Errorf("the identity is %#v; want Minted %s, signing as %s", got, twinID, twinKey())
+		t.Errorf("the identity is %#v; want Minted %s, signing as %s", id, twinID, twinKey())
 	}
 }
 

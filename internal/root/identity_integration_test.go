@@ -4,12 +4,45 @@ package root
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/git"
 )
+
+// TestIdentityOnDisk holds the disk adapter to the identity's behavior
+// over the twin.
+func TestIdentityOnDisk(t *testing.T) { identityContract(t, onDisk) }
+
+// worktrees is a main worktree and a linked one of one clone, at root,
+// their directories made as git makes them: a create never makes the
+// directory its Dir is based in.
+func worktrees(t *testing.T, root string) [2]git.Checkout {
+	common := filepath.Join(root, "main", ".git")
+	cs := [2]git.Checkout{
+		{WorkTree: filepath.Join(root, "main"), GitDir: common, CommonDir: common},
+		{WorkTree: filepath.Join(root, "linked"), GitDir: filepath.Join(common, "worktrees", "linked"), CommonDir: common},
+	}
+	for _, c := range cs {
+		for _, d := range []string{c.WorkTree, c.GitDir} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return cs
+}
+
+func onDisk(t *testing.T) clone {
+	cs := worktrees(t, t.TempDir())
+	u := files.NewDurability()
+	shared, a := identityFiles(u)(cs[0])
+	_, b := identityFiles(u)(cs[1])
+	return clone{shared: shared, worktree: [2]files.Files{a, b}}
+}
 
 func TestTheIdentityFilesOnDiskAreASecrets(t *testing.T) {
 	c := worktrees(t, t.TempDir())[1]

@@ -15,8 +15,8 @@ func TestARefNameParsesBackOrIsRefused(t *testing.T) {
 		}
 	}
 	for _, n := range []git.RefName{
-		"refs/lit/log/", "refs/lit/log/0A000000000000000000000000000000", "refs/lit/log/0a00000000000000000000000000000",
-		"refs/lit/inbox/0a000000000000000000000000000000/x", "refs/lit/other/0a000000000000000000000000000000", "refs/heads/main",
+		Namespace + "log/", Namespace + "log/0A000000000000000000000000000000", Namespace + "log/0a00000000000000000000000000000",
+		Namespace + "inbox/0a000000000000000000000000000000/x", Namespace + "other/0a000000000000000000000000000000", "refs/heads/main",
 	} {
 		if r, err := ParseRef(n); !errors.Is(err, errNotARef) {
 			t.Errorf("ParseRef(%s) = %v, %v; want errNotARef", n, r, err)

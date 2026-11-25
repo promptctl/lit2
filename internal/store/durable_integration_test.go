@@ -31,9 +31,10 @@ func TestAnAppendThatPlacesNoLogSaysItsCreatesTemp(t *testing.T) {
 	})
 	seams.Remove = func(*os.Root, string) error { return errRemove }
 	s := store.Open(me, store.MemoryPorts(files.At(filestest.Seamed(logs, seams), files.NewDurability()), storetest.Entropy(4)), store.DefaultSegmentBound)
-	got, ok := s.Append(must[store.Batch](t)(store.NewBatch(store.Record("lost")))).(store.NotAppended)
+	appending := s.Append(must[store.Batch](t)(store.NewBatch(store.Record("lost"))))
+	got, ok := appending.(store.NotAppended)
 	if !ok || !errors.Is(got.Why, errCreate) {
-		t.Fatalf("Append whose create's temp would not sync = %#v; want NotAppended, by that sync", got)
+		t.Fatalf("Append whose create's temp would not sync = %#v; want NotAppended, by that sync", appending)
 	}
 	if no, ok := got.Log.(store.NoLog); !ok || len(no.Left) != 1 || no.Left[0].Name != temp || !errors.Is(no.Left[0].Why, errRemove) {
 		t.Errorf("the append's log is %#v; want NoLog, %s Left by the removal", got.Log, temp)

@@ -7,14 +7,15 @@ depend on which, and the decisions the design documents left to the layout.
 
 ```
 CGO_ENABLED=0 go build ./cmd/lit2     # writes ./lit2
-go test ./...                         # the fast loop: unit and port-contract tests
-go test -tags integration ./...       # and every test whose code reaches the disk, git or a process
+go test ./...                         # the fast loop: unit tests, and each port's contract over its fake and its adapter
+go test -tags integration ./...       # and every test reaching the disk, git or a process outside a contract's factory
 go tool golangci-lint run             # lints the integration tests too
 ```
 
 ## Units, downhill
 
-`cmd/lit2` is the program and imports only `root`. Every other unit is a
+`cmd/lit2` is the program and imports only `root`; its test, which drives
+the built binary, is not the program. Every other unit is a
 directory under `internal/`, and a unit's subdirectories belong to it. A unit
 imports only units below it in this block `[LAW:one-way-deps]`; `root` and
 `command` sit beside the stack of architecture.md §6, importing from it with
@@ -122,11 +123,13 @@ The decisions the layout needed and the design documents did not make.
   so none of its transport packages is linked; edwards25519 in
   `events` for the signature check; the TOML parser and `x/mod` in
   `config`. Tests are
-  the standard `testing` package. A test whose code under test reaches
-  the real disk, git or another process is an integration or end-to-end
-  test and carries `//go:build integration`; a port's contract suite, which
-  holds its fake and its real adapter to one behavior side by side, is not
-  tagged, so the fast loop keeps every fake honest. Lint is golangci-lint
+  the standard `testing` package. A test file that reaches the real disk,
+  git or another process carries `//go:build integration`, but for a
+  function literal it gives a port's contract suite, a function of a
+  `*test` package, as the factory of the real adapter: the suite holds the
+  fake and the adapter to one behavior side by side, so the fast loop keeps
+  every fake honest. `internal/architecture` is the rule's one enforcer.
+  Lint is golangci-lint
   v2 as a `tool` directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums
   make a missing case a lint failure.

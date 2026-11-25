@@ -123,7 +123,11 @@ func TestAPublicationWhoseSegmentDoesNotFillItsSpanIsUnreadableAndResealed(t *te
 	if _, err := s.Publish(pub); err != nil {
 		t.Fatal(err)
 	}
-	reader := Open(CheckoutID{0xc}, WithFiles(p, filestest.Memory()), DefaultSegmentBound)
+	// a clone with no log, and no entropy, so a reader that drew an id
+	// would fail loudly
+	q := p
+	q.files, q.entropy = filestest.Memory(), bytes.NewReader(nil)
+	reader := Open(CheckoutID{0xc}, q, DefaultSegmentBound)
 	h, err = reader.Heads()
 	if err != nil {
 		t.Fatal(err)

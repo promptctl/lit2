@@ -202,9 +202,10 @@ func TestAnAppendThatLandedNothingCarriesItsLogsFailedSync(t *testing.T) {
 	if err == nil {
 		t.Fatal("an append that landed nothing answered no error")
 	}
-	f, ok := w.end(failed(err)).(cli.Failed)
+	run := w.end(failed(err))
+	f, ok := run.(cli.Failed)
 	if !ok || !errors.Is(f.Failure, syscall.EIO) || !strings.Contains(f.Failure.Error(), errRead.Error()) {
-		t.Errorf("the run is %#v; want failed by the append's failure, its chain holding the log's EIO", f)
+		t.Errorf("the run is %#v; want failed by the append's failure, its chain holding the log's EIO", run)
 	}
 	if reason := f.Failure.Reason(); reason == "durability" {
 		t.Errorf("the run's reason is %q; want the append's own failure first", reason)

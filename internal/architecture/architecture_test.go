@@ -6,8 +6,10 @@ package architecture
 import (
 	"fmt"
 	"go/ast"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -35,6 +37,7 @@ const (
 	drawing    rule = "is not the layers block's order from cli to git"
 	noBlock    rule = "is missing from ARCHITECTURE.md"
 	opened     rule = "opens an envelope below the verbs, which no layer there may read (INV:opaque-envelope)"
+	reaches    rule = "reaches the disk, git or a process from a test without the integration build constraint, outside a factory it gives a port's contract suite (D2)"
 )
 
 // readers is the units that may open an envelope or name the keyring that
@@ -181,6 +184,9 @@ func ignored(name string) bool {
 func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int, declared map[string]string) []violation {
 	var vs []violation
 	test := strings.HasSuffix(path, "_test.go")
+	// [LAW:single-enforcer] the fast loop's one gate: a test the go tool
+	// builds without -tags integration reaches nothing outside the process
+	fast := test && !gated(f)
 	imported := map[string]string{} // the name a file uses for an import → its path
 	for _, imp := range f.Imports {
 		ip := strings.Trim(imp.Path.Value, "`\"")
@@ -195,13 +201,17 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 		if ip == "net" || strings.HasPrefix(ip, "net/") || ip == "crypto/tls" {
 			vs = append(vs, violation{path + ": import " + ip, network})
 		}
+		if ip == "os/exec" && fast {
+			vs = append(vs, violation{path + ": import " + ip, reaches})
+		}
 		at := violation{path + ": import " + ip, ""}
 		if rest, ok := strings.CutPrefix(ip, mod+"/internal/"); ok {
 			unit := strings.Split(rest, "/")[0]
 			to, listed := rank[unit]
 			from, owned := rank[owner]
 			switch {
-			case owner == "cmd" && unit != "root":
+			// a test of the program drives the built binary, and is not the program
+			case owner == "cmd" && unit != "root" && !test:
 				at.rule = program
 			case owner != "cmd" && listed && owned && unit != owner && to <= from:
 				at.rule = upward
@@ -221,6 +231,9 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 				vs = append(vs, violation{path + ": " + c.Text, embeds})
 			}
 		}
+	}
+	if fast {
+		vs = append(vs, reachesOutsideFactories(path, f, mod, imported)...)
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		sel, ok := n.(*ast.SelectorExpr)
@@ -247,6 +260,109 @@ func checkFile(path, owner string, f *ast.File, mod string, rank map[string]int,
 		return true
 	})
 	return vs
+}
+
+// gated is whether f's //go:build line holds it out of every build without
+// the integration tag: integration is the line, or one of its conjuncts.
+func gated(f *ast.File) bool {
+	for _, group := range f.Comments {
+		for _, c := range group.List {
+			if c.Pos() < f.Package && constraint.IsGoBuild(c.Text) {
+				x, err := constraint.Parse(c.Text)
+				return err == nil && requires(x, "integration")
+			}
+		}
+	}
+	return false
+}
+
+// requires is whether x is false whenever tag is unset: x is tag, or a
+// conjunction with tag among its terms.
+func requires(x constraint.Expr, tag string) bool {
+	switch x := x.(type) {
+	case *constraint.TagExpr:
+		return x.Tag == tag
+	case *constraint.AndExpr:
+		return requires(x.X, tag) || requires(x.Y, tag)
+	}
+	return false
+}
+
+// reach is each package's calls that reach outside the process: the os
+// calls that make, change or remove a file or start a process, every
+// syscall, the store on disk, the git lit2 runs, and the gittest
+// constructors that run git or make a repository. A test's own TempDir
+// is reach too, and os/exec is reach by its import. A read is not: what
+// is on disk for a test to read is the source it was built from, or what
+// one of these made.
+var reach = map[string]func(name string) bool{
+	"os": oneOf("WriteFile", "Create", "CreateTemp", "OpenFile", "Mkdir", "MkdirAll", "MkdirTemp", "Remove", "RemoveAll",
+		"Rename", "Symlink", "Link", "Chmod", "Chown", "Lchown", "Chtimes", "Truncate", "CopyFS", "StartProcess", "FindProcess"),
+	"io/ioutil":            oneOf("WriteFile", "TempDir", "TempFile"),
+	"syscall":              everyName,
+	"internal/store":       oneOf("DiskPorts"),
+	"internal/git":         oneOf("Find"),
+	"internal/git/gittest": oneOf("Git", "Ask", "Exit", "GitIn", "Env", "Environ", "Runner", "Physical", "Clone", "NoCheckout", "NewRepo"),
+}
+
+// reachesOutsideFactories is every call in f that reaches outside the
+// process, but those inside a function literal given to a port's contract
+// suite, a call into a package of the module named for a test kit: the
+// suite holds its fake and its real adapter to one behavior, so the fast
+// loop keeps the fake honest (D2).
+func reachesOutsideFactories(path string, f *ast.File, mod string, imported map[string]string) []violation {
+	var factories []*ast.FuncLit
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !kit(call.Fun, mod, imported) {
+			return true
+		}
+		for _, arg := range call.Args {
+			if lit, ok := arg.(*ast.FuncLit); ok {
+				factories = append(factories, lit)
+			}
+		}
+		return true
+	})
+	var vs []violation
+	ast.Inspect(f, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok && slices.Contains(factories, lit) {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		ip, isImport := "", false
+		if x, ok := sel.X.(*ast.Ident); ok {
+			ip, isImport = imported[x.Name]
+		}
+		called, ok := reach[strings.TrimPrefix(ip, mod+"/")]
+		if isImport && ok && called(sel.Sel.Name) || !isImport && sel.Sel.Name == "TempDir" {
+			vs = append(vs, violation{path + ": " + types.ExprString(sel), reaches})
+		}
+		return true
+	})
+	return vs
+}
+
+// kit is whether fun names a function of a package of the module named
+// for a test kit, as gittest and filestest are.
+func kit(fun ast.Expr, mod string, imported map[string]string) bool {
+	sel, ok := fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	ip := imported[x.Name]
+	return strings.HasPrefix(ip, mod+"/") && strings.HasSuffix(ip, "test")
 }
 
 // localName is the name a file refers to an import by: its own name, else
@@ -459,6 +575,14 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"a keyring built in fold's test", "internal/fold/fold_test.go", "package fold\n\nimport \"example.com/m/internal/events\"\n\nvar K = events.NewKeyring()\n", opened},
 		{"a keyring literal in fold", "internal/fold/fold.go", "package fold\n\nimport \"example.com/m/internal/events\"\n\nvar K = events.Keyring{}\n", opened},
 		{"events dot-imported in fold", "internal/fold/fold.go", "package fold\n\nimport . \"example.com/m/internal/events\"\n\nvar Read = Open\n", opened},
+		{"a temporary directory in a fast test", "internal/git/git_test.go", "package git\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) { _ = t.TempDir() }\n", reaches},
+		{"a file written by a fast test", "internal/git/git_test.go", "package git\n\nimport \"os\"\n\nvar Err = os.WriteFile(\"x\", nil, 0o644)\n", reaches},
+		{"a process in a fast test", "internal/git/git_test.go", "package git\n\nimport _ \"os/exec\"\n", reaches},
+		{"a syscall in a fast test", "internal/git/git_test.go", "package git\n\nimport \"syscall\"\n\nvar Err = syscall.Mkfifo(\"x\", 0o644)\n", reaches},
+		{"git in a fast test", "internal/cli/cli_test.go", "package cli\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/internal/git/gittest\"\n)\n\nfunc TestX(t *testing.T) { gittest.Clone(t) }\n", reaches},
+		{"the store on disk in a fast test", "internal/cli/cli_test.go", "package cli\n\nimport \"example.com/m/internal/store\"\n\nvar P = store.DiskPorts(nil, nil, nil, nil)\n", reaches},
+		{"a disk factory given to no contract suite", "internal/git/git_test.go", factory("run"), reaches},
+		{"a gate that is no conjunct of integration", "internal/git/git_test.go", "//go:build !integration || unix\n\n" + factory("run"), reaches},
 	} {
 		tree := synthetic()
 		tree[tc.path] = file(tc.text)
@@ -517,6 +641,28 @@ func TestTheReadersOpenEnvelopes(t *testing.T) {
 	tree["internal/root/keys.go"] = file("package root\n\nimport \"example.com/m/internal/events\"\n\nvar K = events.NewKeyring()\n")
 	if vs, err := check(tree); err != nil || len(vs) != 0 {
 		t.Errorf("cli opening an envelope and root building the keyring break %v, %v; want nothing", vs, err)
+	}
+}
+
+// factory is a test file that gives a factory reaching the disk to
+// suite, a function of gittest's or of its own.
+func factory(suite string) string {
+	return "package git_test\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/internal/git\"\n\t\"example.com/m/internal/git/gittest\"\n)\n\n" +
+		"func run(t *testing.T, fresh func(*testing.T) git.Objects) {}\n\n" +
+		"func TestObjects(t *testing.T) {\n\t" + suite + "(t, func(t *testing.T) git.Objects { return git.At(t.TempDir(), gittest.Runner(t)) })\n}\n"
+}
+
+// A test reaches the disk, git or a process unseen by the rule only in the
+// integration build, or in a factory a contract suite is given; the
+// program's own test, which drives the built binary, imports past root.
+func TestTheIntegrationGateAndAContractsFactoryReachTheDisk(t *testing.T) {
+	tree := synthetic()
+	tree["internal/git/objects_test.go"] = file(factory("gittest.Objects"))
+	tree["internal/git/run_test.go"] = file("//go:build integration\n\n" + factory("run"))
+	tree["internal/git/fifo_test.go"] = file("//go:build unix && integration\n\npackage git\n\nimport \"syscall\"\n\nvar Err = syscall.Mkfifo(\"x\", 0o644)\n")
+	tree["cmd/lit2/smoke_test.go"] = file("//go:build integration\n\npackage main\n\nimport (\n\t\"os/exec\"\n\n\t\"example.com/m/internal/git/gittest\"\n)\n\nvar Env, Cmd = gittest.Env, exec.Command\n")
+	if vs, err := check(tree); err != nil || len(vs) != 0 {
+		t.Errorf("a contract suite's disk factory, a gated test's reach and the program's test importing gittest break %v, %v; want nothing", vs, err)
 	}
 }
 

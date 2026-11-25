@@ -4,14 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
-	"github.com/promptctl/lit2/internal/git"
 )
 
 // clone is one clone's shared identity dir and two worktrees' private
@@ -21,33 +19,6 @@ type clone struct {
 	worktree [2]files.Files
 }
 
-// worktrees is a main worktree and a linked one of one clone, at root,
-// their directories made as git makes them: a create never makes the
-// directory its Dir is based in.
-func worktrees(t *testing.T, root string) [2]git.Checkout {
-	common := filepath.Join(root, "main", ".git")
-	cs := [2]git.Checkout{
-		{WorkTree: filepath.Join(root, "main"), GitDir: common, CommonDir: common},
-		{WorkTree: filepath.Join(root, "linked"), GitDir: filepath.Join(common, "worktrees", "linked"), CommonDir: common},
-	}
-	for _, c := range cs {
-		for _, d := range []string{c.WorkTree, c.GitDir} {
-			if err := os.MkdirAll(d, 0o755); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	return cs
-}
-
-func onDisk(t *testing.T) clone {
-	cs := worktrees(t, t.TempDir())
-	u := files.NewDurability()
-	shared, a := identityFiles(u)(cs[0])
-	_, b := identityFiles(u)(cs[1])
-	return clone{shared: shared, worktree: [2]files.Files{a, b}}
-}
-
 func inMemory(*testing.T) clone {
 	fresh := func() files.Files { return filestest.Memory() }
 	return clone{shared: fresh(), worktree: [2]files.Files{fresh(), fresh()}}
@@ -55,11 +26,7 @@ func inMemory(*testing.T) clone {
 
 func entropy(seed byte) *rand.ChaCha8 { return rand.NewChaCha8([32]byte{'i', 'd', seed}) }
 
-func TestIdentity(t *testing.T) {
-	for name, fresh := range map[string]func(*testing.T) clone{"disk": onDisk, "twin": inMemory} {
-		t.Run(name, func(t *testing.T) { identityContract(t, fresh) })
-	}
-}
+func TestIdentity(t *testing.T) { identityContract(t, inMemory) }
 
 func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 	t.Run("two worktrees minting at once sign with one key", func(t *testing.T) {
@@ -104,9 +71,10 @@ func identityContract(t *testing.T, fresh func(*testing.T) clone) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		again, ok := mint(c.shared, c.worktree[0], 2).(Found)
+		m := mint(c.shared, c.worktree[0], 2)
+		again, ok := m.(Found)
 		if !ok || again.Minted.Checkout != first.Checkout || again.Minted.Key.Principal() != first.Key.Principal() {
-			t.Errorf("a second mint is %#v; want the first, %v, Found", again, first)
+			t.Errorf("a second mint is %#v; want the first, %v, Found", m, first)
 		}
 		if !placed(again.Creates, files.Existing, files.Existing) {
 			t.Errorf("a second mint made %+v; want both files existing", again.Creates)
