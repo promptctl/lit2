@@ -201,12 +201,11 @@ func TestTheEventSaysWhetherItsErrorLineWasDelivered(t *testing.T) {
 	if lineOf(took) != (Delivered{}) {
 		t.Errorf("a taken line is %#v; want delivered", lineOf(took))
 	}
-	if u, ok := lineOf(refusedLine).(Undelivered); !ok || !errors.Is(u.Why, stderrGone) {
-		t.Errorf("a refused line is %#v; want undelivered, and why", lineOf(refusedLine))
+	if u, ok := lineOf(refusedLine).(Refused); !ok || !errors.Is(u.Why, stderrGone) {
+		t.Errorf("a refused line is %#v; want refused, and why", lineOf(refusedLine))
 	}
-	var in Internal
-	if u, ok := lineOf(panicked).(Undelivered); !ok || !errors.As(u.Why, &in) || !strings.Contains(in.Error(), "stderr broke") {
-		t.Errorf("a say that panicked is %#v; want undelivered, with its panic", lineOf(panicked))
+	if u, ok := lineOf(panicked).(SayPanicked); !ok || !strings.Contains(u.Broke.Error(), "stderr broke") || len(u.Broke.Stack()) == 0 {
+		t.Errorf("a say that panicked is %#v; want its panic and stack", lineOf(panicked))
 	}
 	same := refusedLine
 	same.Ending = took.Ending
@@ -217,9 +216,9 @@ func TestTheEventSaysWhetherItsErrorLineWasDelivered(t *testing.T) {
 		e    Event
 		want map[string]any
 	}{
-		{took, map[string]any{"error_line": "delivered", "error_line_undelivered": nil, "error_line_stack": nil}},
-		{refusedLine, map[string]any{"error_line": "undelivered", "error_line_undelivered": "stderr is closed", "error_line_stack": nil}},
-		{done, map[string]any{"error_line": nil, "error_line_undelivered": nil}},
+		{took, map[string]any{"error_line_delivery": "delivered", "error_line_why": nil, "error_line_stack": nil}},
+		{refusedLine, map[string]any{"error_line_delivery": "refused", "error_line_why": "stderr is closed", "error_line_stack": nil}},
+		{done, map[string]any{"error_line_delivery": nil, "error_line_why": nil}},
 	} {
 		m := decode(t, tc.e)
 		for k, v := range tc.want {
@@ -228,14 +227,15 @@ func TestTheEventSaysWhetherItsErrorLineWasDelivered(t *testing.T) {
 			}
 		}
 	}
-	if m := decode(t, panicked); m["error_line"] != "undelivered" || !strings.Contains(fmt.Sprint(m["error_line_stack"]), "goroutine") {
-		t.Errorf("a say that panicked writes %v, stack %v; want undelivered, with the panic's stack", m["error_line"], m["error_line_stack"])
+	if m := decode(t, panicked); m["error_line_delivery"] != "say_panicked" || m["error_line_why"] != "panic: stderr broke" || !strings.Contains(fmt.Sprint(m["error_line_stack"]), "goroutine") {
+		t.Errorf("a say that panicked writes %v, %v, stack %v; want say_panicked, with the panic and its stack", m["error_line_delivery"], m["error_line_why"], m["error_line_stack"])
 	}
 }
 
 // A read the event is made of that panics leaves no event: at the start
-// there is no outcome to say; at the end the outcome is still said, with
-// the stack of a panic that ended it, which no event keeps.
+// there is no outcome to say; at the end Say has had the outcome's line,
+// so the Unrecorded says only the stack of a panic that ended it, which no
+// event keeps.
 func TestAReadTheEventIsMadeOfThatPanicsIsUnrecorded(t *testing.T) {
 	refused := cli.Failed{Failure: Broke(errors.New("refused"))}
 	refusing := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { return refused })
@@ -243,27 +243,41 @@ func TestAReadTheEventIsMadeOfThatPanicsIsUnrecorded(t *testing.T) {
 	starting.Begin = func() Invocation { panic("the start broke") }
 	panicked := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { panic("the answer broke") })
 	spawnsBroke := func() []git.Spawn { panic("the spawns broke") }
+	line := []string{cli.Report(refused)}
 	for _, tc := range []struct {
 		name   string
 		clock  Clock
 		spawns func() []git.Spawn
 		stages Stages[struct{}]
+		told   func([]string) bool
 		said   func(string) bool
 	}{
-		{"the start", &FixedClock{At: t0}, noGit, starting, func(s string) bool { return s == "" }},
-		{"the clock at the end", panicking{}, noGit, refusing, func(s string) bool { return s == cli.Report(refused) }},
-		{"the git spawns", &FixedClock{At: t0}, spawnsBroke, refusing, func(s string) bool { return s == cli.Report(refused) }},
-		{"the git spawns after the answer panicked", &FixedClock{At: t0}, spawnsBroke, panicked, func(s string) bool {
-			return strings.Contains(s, "the answer broke") && strings.Contains(s, "goroutine")
-		}},
+		{"the start", &FixedClock{At: t0}, noGit, starting, func(l []string) bool { return len(l) == 0 }, func(s string) bool { return s == "" }},
+		{"the clock at the end", panicking{}, noGit, refusing, func(l []string) bool { return slices.Equal(l, line) }, func(s string) bool { return s == "" }},
+		{"the git spawns", &FixedClock{At: t0}, spawnsBroke, refusing, func(l []string) bool { return slices.Equal(l, line) }, func(s string) bool { return s == "" }},
+		{"the git spawns after the answer panicked", &FixedClock{At: t0}, spawnsBroke, panicked,
+			func(l []string) bool { return len(l) == 1 && strings.Contains(l[0], "the answer broke") },
+			func(s string) bool {
+				return strings.Contains(s, "goroutine") && !strings.Contains(s, "the answer broke")
+			}},
 	} {
-		// the Unrecorded says the line, so Say is never handed it
 		var told []string
 		tc.stages.Say = func(l string) error { told = append(told, l); return nil }
 		e, ok := Record(tc.clock, tc.spawns, tc.stages).(Unrecorded)
-		if !ok || !tc.said(e.Said) || !strings.Contains(e.Broke.Error(), "broke") || len(e.Broke.Stack()) == 0 || len(told) != 0 {
-			t.Errorf("%s panicking ended %#v, Say handed %q; want unrecorded with its panic and stack, and what it said, said once", tc.name, e, told)
+		if !ok || !tc.told(told) || !tc.said(e.Said) || !strings.Contains(e.Broke.Error(), "broke") || len(e.Broke.Stack()) == 0 {
+			t.Errorf("%s panicking ended %#v, Say handed %q; want unrecorded with its panic and stack, the line said once, by Say", tc.name, e, told)
 		}
+	}
+}
+
+// A run's duration covers Say: the clock read for it is read after Say
+// had the line.
+func TestTheDurationCoversSayingTheErrorLine(t *testing.T) {
+	clock := &FixedClock{At: t0}
+	s := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { return cli.Failed{Failure: Broke(errors.New("refused"))} })
+	s.Say = func(string) error { clock.At = clock.At.Add(3 * time.Second); return nil }
+	if e := recordedOf(t, Record(clock, noGit, s)).Event; e.Duration != 3*time.Second {
+		t.Errorf("a run whose Say took 3s lasted %v; want 3s", e.Duration)
 	}
 }
 

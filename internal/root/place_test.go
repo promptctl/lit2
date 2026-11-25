@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
@@ -227,3 +228,23 @@ func TestAnUnsetAndAnEmptyLitAgentAreRecordedApart(t *testing.T) {
 		t.Errorf("LIT_AGENT empty is %#v and unset is %#v; want them apart, labelling alike", empty.LitAgent, unset.LitAgent)
 	}
 }
+
+// An event that panics to encode is lost to the log, said with its
+// panic: the line never reached the file.
+func TestAnEventThatPanicsToEncodeIsLost(t *testing.T) {
+	dir := t.TempDir()
+	e := recordedOf(t, invoke(NewTwin().Process, asking(cli.Lit2, "--help"))).Event
+	e.Ending = command.Failed{Failure: unsayable{}, Line: command.Delivered{}}
+	lost, ok := recorded(command.NewLog(command.Set{Value: dir}, noHome), e).(command.Lost)
+	var in command.Internal
+	if !ok || !errors.As(lost.Why, &in) || !strings.Contains(in.Error(), "no words for it") || len(in.Stack()) == 0 {
+		t.Errorf("an event that panics to encode = %#v; want it lost for its panic", lost)
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Errorf("the log holds %v, %v; want nothing written", entries, err)
+	}
+}
+
+// noHome is a home that does not read, for a log whose XDG_STATE_HOME is
+// used.
+func noHome() (string, error) { return "", errors.New("this test has no home") }

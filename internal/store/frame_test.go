@@ -150,6 +150,7 @@ func TestEachRefusalSaysWhyItsBytesAreNoFrame(t *testing.T) {
 		{"no magic", []byte("no frame here"), NoMagic{}, false},
 		{"a body cut short", framed(64, []byte("short")), Truncated{}, true},
 		{"a length over the bound", framed(maxBody+1, nil), OverBound{Length: maxBody + 1}, false},
+		{"a length over the bound, its CRC cut short", framed(maxBody+1, nil)[:9], OverBound{Length: maxBody + 1}, false},
 		{"a CRC that disagrees", crc, CRCMismatch{}, false},
 		{"a record longer than its body", framed(6, []byte{0, 0, 0, 9, 'a', 'b'}), BadRecordLength{}, false},
 		{"a body shorter than a record header", framed(2, []byte{0, 0}), BadRecordLength{}, false},

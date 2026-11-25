@@ -89,7 +89,8 @@ func Run(p Process, args []string) int {
 }
 
 // told is what stderr, w, did with s: nil when it took it, or why not, a
-// panic in w a refusal too, so every line lit2 says on stderr fails alike.
+// panic in w a refusal too, so every line lit2 says on stderr beside a
+// recorded run's error line, whose Say Record catches, fails alike.
 func told(w io.Writer, s string) error {
 	return command.Caught(func() error {
 		_, err := io.WriteString(w, s)
@@ -168,8 +169,11 @@ func invoke(p Process, ask func() (cli.Summary, func(body) cli.Outcome)) command
 			})
 			return durable(*at.Stored(), o)
 		},
+		// a panic in stderr is Record's to catch, so the event says Say
+		// panicked, with its stack
 		Say: func(line string) error {
-			return told(p.Err, line)
+			_, err := io.WriteString(p.Err, line)
+			return err
 		},
 	})
 }

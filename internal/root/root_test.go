@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -186,29 +185,6 @@ func (c *brokenClock) Now() time.Time {
 	return time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
 }
 
-// A sink that fails or panics loses the event, said on stderr, with the
-// panic's stack; when stderr refuses that too, the status says the run
-// unrecorded.
-// An event that panics to encode is lost to the log, said with its
-// panic: the line never reached the file.
-func TestAnEventThatPanicsToEncodeIsLost(t *testing.T) {
-	dir := t.TempDir()
-	e := recordedOf(t, invoke(NewTwin().Process, asking(cli.Lit2, "--help"))).Event
-	e.Ending = command.Failed{Failure: unsayable{}, Line: command.Delivered{}}
-	lost, ok := recorded(command.NewLog(command.Set{Value: dir}, noHome), e).(command.Lost)
-	var in command.Internal
-	if !ok || !errors.As(lost.Why, &in) || !strings.Contains(in.Error(), "no words for it") || len(in.Stack()) == 0 {
-		t.Errorf("an event that panics to encode = %#v; want it lost for its panic", lost)
-	}
-	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
-		t.Errorf("the log holds %v, %v; want nothing written", entries, err)
-	}
-}
-
-// noHome is a home that does not read, for a log whose XDG_STATE_HOME is
-// used.
-func noHome() (string, error) { return "", errors.New("this test has no home") }
-
 // unsayable is a failure whose message panics.
 type unsayable struct{}
 
@@ -216,6 +192,9 @@ func (unsayable) Error() string       { panic("no words for it") }
 func (unsayable) Class() reason.Class { return reason.ClassRefused }
 func (unsayable) Reason() string      { return "unsayable" }
 
+// A sink that fails or panics loses the event, said on stderr, with the
+// panic's stack; when stderr refuses that too, the status says the run
+// unrecorded.
 func TestALostEventNeverLooksClean(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -407,7 +386,7 @@ func TestAnErrorLineStderrRefusedIsRecorded(t *testing.T) {
 	refusedStatus, undelivered := run(t, refused, "frobnicate")
 	tookLine, _ := delivered.Ending.(command.Failed)
 	refusedLine, _ := undelivered.Ending.(command.Failed)
-	u, ok := refusedLine.Line.(command.Undelivered)
+	u, ok := refusedLine.Line.(command.Refused)
 	if tookLine.Line != (command.Delivered{}) || !ok || !errors.Is(u.Why, syscall.EPIPE) || tookStatus != refusedStatus || tookStatus == 0 {
 		t.Errorf("stderr taking the line records %#v, status %d; refusing it records %#v, status %d; want delivered and undelivered with EPIPE, one failing status", delivered.Ending, tookStatus, undelivered.Ending, refusedStatus)
 	}

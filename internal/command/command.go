@@ -119,8 +119,8 @@ type Failed struct {
 func (Succeeded) ending() {}
 func (Failed) ending()    {}
 
-// Delivery is what Say did with a failure's error line: Delivered, taken;
-// or Undelivered, refused or panicked on, and why.
+// Delivery is what Say did with a failure's error line: took it; refused
+// it, and why; or panicked, with the panic and its stack.
 //
 //sumtype:decl
 type Delivery interface{ delivery() }
@@ -128,11 +128,15 @@ type Delivery interface{ delivery() }
 // Delivered is an error line Say took.
 type Delivered struct{}
 
-// Undelivered is an error line Say did not take, and why.
-type Undelivered struct{ Why error }
+// Refused is an error line Say refused, and why.
+type Refused struct{ Why error }
+
+// SayPanicked is an error line Say panicked on.
+type SayPanicked struct{ Broke Internal }
 
 func (Delivered) delivery()   {}
-func (Undelivered) delivery() {}
+func (Refused) delivery()     {}
+func (SayPanicked) delivery() {}
 
 // ConfigFacts is the version in force a run read from its store's fold:
 // its config-ref and what it held. How many versions the log holds, and
@@ -342,20 +346,21 @@ func (Internal) Reason() string { return "internal" }
 //   - a panic in Say is a line it did not deliver, which the event says;
 //   - a panic in Begin, or in the end's reads, the clock again for the
 //     duration and the git processes the run spawned, leaves no event to
-//     make: the run is Unrecorded, saying the outcome it had.
+//     make: the run is Unrecorded, saying the stack of a panic that ended
+//     its outcome, which Say had no way to say, once Say has the outcome's
+//     line.
 func Record[A any](c Clock, spawns func() []git.Spawn, s Stages[A]) Ended {
 	return Caught(func() Ended {
 		inv := s.Begin()
 		r := &run{started: inv.Started, asked: cli.Unparsed(), where: func() Where { return PlaceUnread{} }}
 		end := Caught(func() said { return saying(through(r, s)) }, func(broke Internal) said { return saying(failedFor(broke)) })
+		// said before the end's reads, so the duration covers it
+		ended := ending(end, s.Say)
 		return Caught(func() Ended {
-			took, ran := c.Now().Sub(inv.Started), spawns()
-			// said after the end's reads, so a run they leave unrecorded
-			// says its line once, in its Unrecorded
-			e := Event{Invocation: inv, Command: r.asked, Place: r.where(), Duration: took, Store: r.stored, Config: r.config, Verbs: r.did, Policy: r.policy, Git: ran, Ending: ending(end, s.Say)}
+			e := Event{Invocation: inv, Command: r.asked, Place: r.where(), Duration: c.Now().Sub(inv.Started), Store: r.stored, Config: r.config, Verbs: r.did, Policy: r.policy, Git: spawns(), Ending: ended}
 			return Recorded{Event: e, Status: end.status}
 		}, func(broke Internal) Ended {
-			return Unrecorded{Said: end.line + string(stackOf(end.outcome)), Broke: broke}
+			return Unrecorded{Said: string(stackOf(end.outcome)), Broke: broke}
 		})
 	}, func(broke Internal) Ended { return Unrecorded{Broke: broke} })
 }
@@ -376,7 +381,7 @@ func through[A any](r *run, s Stages[A]) cli.Outcome {
 }
 
 // ending is the ending of a run that said end: a failure's line handed to
-// say, and what say did with it, a panic in say a refusal too.
+// say, and what say did with it.
 func ending(end said, say func(string) error) Ending {
 	switch o := end.outcome.(type) {
 	case cli.Done:
@@ -384,10 +389,10 @@ func ending(end said, say func(string) error) Ending {
 	case cli.Failed:
 		return Failed{Failure: o.Failure, Line: Caught(func() Delivery {
 			if err := say(end.line); err != nil {
-				return Undelivered{Why: err}
+				return Refused{Why: err}
 			}
 			return Delivered{}
-		}, func(broke Internal) Delivery { return Undelivered{Why: broke} })}
+		}, func(broke Internal) Delivery { return SayPanicked{Broke: broke} })}
 	}
 	panic(fmt.Sprintf("command: %T is not an Outcome", end.outcome))
 }

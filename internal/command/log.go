@@ -249,32 +249,32 @@ func (u Unwritable) Write(Event) Written { return Lost{Why: u.Err} }
 // nothing is a line with zeros and a run that never happened is no line
 // `[LAW:nothing-unseen]`.
 type line struct {
-	Event                string        `json:"event"`
-	TraceID              string        `json:"trace_id"`
-	Service              string        `json:"service"`
-	StartedAt            string        `json:"started_at"`
-	DurationMS           float64       `json:"duration_ms"`
-	Outcome              string        `json:"outcome"`
-	Error                string        `json:"error,omitempty"`
-	Reason               string        `json:"reason,omitempty"`
-	Stack                string        `json:"stack,omitempty"`
-	ExitCode             int           `json:"exit_code"`
-	ErrorLine            string        `json:"error_line,omitempty"`
-	ErrorLineUndelivered string        `json:"error_line_undelivered,omitempty"`
-	ErrorLineStack       string        `json:"error_line_stack,omitempty"`
-	Version              string        `json:"version"`
-	Command              commandFacts  `json:"command"`
-	Counts               counts        `json:"counts"`
-	Config               *configLine   `json:"config,omitempty"`
-	Store                storeLine     `json:"store"`
-	Fold                 []foldLine    `json:"fold,omitempty"`
-	Verbs                *verbsLine    `json:"verbs,omitempty"`
-	Policy               *policyLine   `json:"policy,omitempty"`
-	Git                  []spawnLine   `json:"git"`
-	Place                any           `json:"place"`
-	Agent                string        `json:"agent,omitempty"`
-	AgentUnlabeled       string        `json:"agent_unlabeled,omitempty"`
-	CommandLog           stateHomeLine `json:"command_log"`
+	Event             string        `json:"event"`
+	TraceID           string        `json:"trace_id"`
+	Service           string        `json:"service"`
+	StartedAt         string        `json:"started_at"`
+	DurationMS        float64       `json:"duration_ms"`
+	Outcome           string        `json:"outcome"`
+	Error             string        `json:"error,omitempty"`
+	Reason            string        `json:"reason,omitempty"`
+	Stack             string        `json:"stack,omitempty"`
+	ExitCode          int           `json:"exit_code"`
+	ErrorLineDelivery string        `json:"error_line_delivery,omitempty"`
+	ErrorLineWhy      string        `json:"error_line_why,omitempty"`
+	ErrorLineStack    string        `json:"error_line_stack,omitempty"`
+	Version           string        `json:"version"`
+	Command           commandFacts  `json:"command"`
+	Counts            counts        `json:"counts"`
+	Config            *configLine   `json:"config,omitempty"`
+	Store             storeLine     `json:"store"`
+	Fold              []foldLine    `json:"fold,omitempty"`
+	Verbs             *verbsLine    `json:"verbs,omitempty"`
+	Policy            *policyLine   `json:"policy,omitempty"`
+	Git               []spawnLine   `json:"git"`
+	Place             any           `json:"place"`
+	Agent             string        `json:"agent,omitempty"`
+	AgentUnlabeled    string        `json:"agent_unlabeled,omitempty"`
+	CommandLog        stateHomeLine `json:"command_log"`
 }
 
 // spawnLine is one git process the invocation ran; the block is empty,
@@ -373,7 +373,7 @@ func encode(e Event, chose stateHome) ([]byte, error) {
 	case Failed:
 		l.Outcome, l.Reason, l.Error = end.Failure.Class().String(), end.Failure.Reason(), end.Failure.Error()
 		l.Stack = string(stackOf(e.Outcome()))
-		l.ErrorLine, l.ErrorLineUndelivered, l.ErrorLineStack = delivery(end.Line)
+		l.ErrorLineDelivery, l.ErrorLineWhy, l.ErrorLineStack = delivery(end.Line)
 	default:
 		panic(fmt.Sprintf("command: %T is not an Ending", e.Ending))
 	}
@@ -493,18 +493,16 @@ type (
 )
 
 // delivery is what became of a failure's error line, as the line spells
-// it: delivered, or undelivered, why, and the stack of a panic that was
-// why.
+// it: delivered; refused, and why; or a say that panicked, with the panic
+// and its stack.
 func delivery(d Delivery) (said, why, stack string) {
 	switch d := d.(type) {
 	case Delivered:
 		return "delivered", "", ""
-	case Undelivered:
-		var in Internal
-		if errors.As(d.Why, &in) {
-			stack = string(in.Stack())
-		}
-		return "undelivered", d.Why.Error(), stack
+	case Refused:
+		return "refused", d.Why.Error(), ""
+	case SayPanicked:
+		return "say_panicked", d.Broke.Error(), string(d.Broke.Stack())
 	}
 	panic(fmt.Sprintf("command: %T is not a Delivery", d))
 }

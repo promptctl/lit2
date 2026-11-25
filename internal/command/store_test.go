@@ -1,8 +1,11 @@
 package command
 
 import (
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/promptctl/lit2/internal/cli"
@@ -148,21 +151,42 @@ func TestTheStoreBlockSaysEachDirectoryScannedOrWhyNot(t *testing.T) {
 	}
 }
 
+// framed is a frame of length and body under a CRC that holds for them,
+// in the store's frame format: magic, length, CRC-32C over the length and
+// the body, then the body.
+func framed(length uint32, body []byte) []byte {
+	f := binary.BigEndian.AppendUint32([]byte{0xf1, 'l', 'i', 't'}, length)
+	c := crc32.MakeTable(crc32.Castagnoli)
+	f = binary.BigEndian.AppendUint32(f, crc32.Update(crc32.Checksum(f[4:8], c), c, body))
+	return append(f, body...)
+}
+
 func TestAReadSaysWhyEachSpanWasTornAndOnlyAnAppendInFlightIsAnIncompleteTail(t *testing.T) {
 	s := memoryStore()
 	s.Append(must[store.Batch](t)(store.NewBatch(store.Record("event"))))
 	st := must[store.Heads](t)(s.Heads()).Streams[0]
-	torn := func(from, to store.Offset, why store.Refusal) store.Torn {
-		return store.Torn{Span: store.Span{From: from, To: to}, Why: why}
+	good := store.Encode(must[store.Batch](t)(store.NewBatch(store.Record("good"))))
+	crc := slices.Clone(good)
+	crc[len(crc)-1] ^= 1
+	torn := [][]byte{
+		[]byte("zz"),                            // no magic
+		framed(1<<20, []byte("cut")),            // a length past every byte: truncated
+		framed(1<<24+1, nil),                    // over the bound
+		crc,                                     // a CRC that disagrees
+		framed(6, []byte{0, 0, 0, 9, 'a', 'b'}), // a record longer than its body
+		framed(0, nil),                          // no records
 	}
-	// torn to its end, nothing in flight
-	tornThrough := store.Scan{End: 20, Until: 25, Torn: []store.Torn{
-		torn(0, 5, store.NoRecords{}), torn(10, 12, store.CRCMismatch{}), torn(12, 13, store.OverBound{Length: 1 << 30}), torn(20, 25, store.NoMagic{})}}
-	// torn after its last frame, then 6 bytes in flight
-	inFlight := store.Scan{End: 20, Until: 30, Torn: []store.Torn{torn(3, 4, store.Truncated{}), torn(20, 24, store.BadRecordLength{})}}
-	block := storeBlockOf(t, StoreFacts{Reads: []store.Scanned{{Range: store.Range{Stream: st, From: 0}, Scan: tornThrough}, {Range: store.Range{Stream: st, From: 0}, Scan: inFlight}}})
-	want := map[string]any{"frames_read": 0.0, "bytes_read": 55.0, "incomplete_tail_bytes": 6.0, "torn": []any{map[string]any{
-		"ref": string(st.Ref.Name()), "torn_spans": 6.0, "torn_bytes": 18.0,
+	var log []byte
+	tornBytes := 0
+	for _, b := range torn {
+		log = slices.Concat(log, good, b)
+		tornBytes += len(b)
+	}
+	log = slices.Concat(log, good, good[:6]) // an append in flight
+	scan := store.ScanFrames(0, log)
+	block := storeBlockOf(t, StoreFacts{Reads: []store.Scanned{{Range: store.Range{Stream: st, From: 0}, Scan: scan}}})
+	want := map[string]any{"frames_read": 7.0, "bytes_read": float64(len(log)), "incomplete_tail_bytes": 6.0, "torn": []any{map[string]any{
+		"ref": string(st.Ref.Name()), "torn_spans": 6.0, "torn_bytes": float64(tornBytes),
 		"why": map[string]any{"truncated": 1.0, "no_magic": 1.0, "over_bound": 1.0, "crc_mismatch": 1.0, "bad_record_length": 1.0, "no_records": 1.0}}}}
 	if !reflect.DeepEqual(block["read"], want) {
 		t.Errorf("the read is %v; want %v", block["read"], want)

@@ -36,7 +36,9 @@ func Main(args []string) int {
 	// the unrecorded status.
 	reader, err := config.ReadReaderVersion(buildStamp())
 	if err != nil {
-		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
+		// [LAW:no-silent-failure] exception: the status says the run unrecorded
+		// whatever stderr takes.
+		_ = told(os.Stderr, "lit2: "+err.Error()+"\n")
 		return cli.Unrecorded
 	}
 	g := git.Find(os.Environ())

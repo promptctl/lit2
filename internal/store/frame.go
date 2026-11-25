@@ -116,16 +116,21 @@ type Torn struct {
 	Why Refusal
 }
 
-// Refusal is why the bytes at a place are not a whole frame. Each is what
-// the frame's own bytes say, so an append a crash cut short that a later
-// append then followed reads as a CRCMismatch: its length covers bytes it
-// never wrote.
+// Refusal is why the bytes at a place are not a whole frame, as the
+// frame's own bytes say it, and Finishable, whether more bytes after them
+// could make it one: only Truncated, whose bytes stop before its length
+// does. So an append a crash cut short reads as Truncated while nothing
+// follows it, as an append in flight does, and once a later append follows
+// it, as a CRCMismatch, its length then covering bytes it never wrote, or
+// as Truncated still when its length runs past every byte there.
 //
 //sumtype:decl
-type Refusal interface{ refusal() }
+type Refusal interface {
+	refusal()
+	Finishable() bool
+}
 
-// Truncated is a frame whose header or body runs past the bytes there,
-// which more bytes could finish.
+// Truncated is a frame whose header or body runs past the bytes there.
 type Truncated struct{}
 
 // NoMagic is bytes that do not start with the frame's magic.
@@ -149,6 +154,30 @@ func (OverBound) refusal()       {}
 func (CRCMismatch) refusal()     {}
 func (BadRecordLength) refusal() {}
 func (NoRecords) refusal()       {}
+
+func (Truncated) Finishable() bool       { return true }
+func (NoMagic) Finishable() bool         { return false }
+func (OverBound) Finishable() bool       { return false }
+func (CRCMismatch) Finishable() bool     { return false }
+func (BadRecordLength) Finishable() bool { return false }
+func (NoRecords) Finishable() bool       { return false }
+
+// read is what the bytes at a place are: a whole frame, its batch and its
+// length; or no frame, and why.
+//
+//sumtype:decl
+type read interface{ read() }
+
+type (
+	wholeFrame struct {
+		batch Batch
+		n     int
+	}
+	noFrame struct{ why Refusal }
+)
+
+func (wholeFrame) read() {}
+func (noFrame) read()    {}
 
 // The frame: 4-byte magic, 4-byte body length, CRC-32C over the length and
 // the body, then the body, its records each length-prefixed.
@@ -186,94 +215,109 @@ func frameCRC(length, body []byte) uint32 {
 func ScanFrames(from Offset, b []byte) Scan {
 	at := func(i int) Offset { return from + Offset(i) }
 	s := Scan{Frames: []Frame{}, Torn: []Torn{}, End: from, Until: at(len(b))}
-	for pos := 0; pos < len(b); {
-		batch, n, refused := frameAt(b[pos:])
-		if refused == nil {
-			s.Frames = append(s.Frames, Frame{At: at(pos), Batch: batch})
-			pos += n
+	for pos, r := 0, frameAt(b); pos < len(b); {
+		switch f := r.(type) {
+		case wholeFrame:
+			s.Frames = append(s.Frames, Frame{At: at(pos), Batch: f.batch})
+			pos += f.n
 			s.End = at(pos)
-			continue
+			r = frameAt(b[pos:])
+		case noFrame:
+			next, cut, following := unframed(b, pos, f.why)
+			if cut > pos {
+				s.Torn = append(s.Torn, Torn{Span: Span{From: at(pos), To: at(cut)}, Why: f.why})
+			}
+			pos, r = next, following
 		}
-		next, cut := unframed(b, pos, refused)
-		if cut > pos {
-			s.Torn = append(s.Torn, Torn{Span: Span{From: at(pos), To: at(cut)}, Why: refused})
-		}
-		pos = next
 	}
 	return s
 }
 
 // unframed is where the bytes from pos, whose frame was refused for why,
-// stop being no frame: next, the next whole frame's start or the bytes'
-// end; and cut, where its torn bytes stop. That is next, unless no whole
-// frame follows and a frame the bytes cut short does: then it is the
-// first such frame, since every frame after it lies in the bytes its
-// length claims.
-func unframed(b []byte, pos int, why Refusal) (next, cut int) {
-	cut, short := len(b), false
-	for q := pos; ; {
-		if _, isShort := why.(Truncated); isShort && !short {
-			cut, short = q, true
-		}
-		q = nextMagic(b, q)
-		if q == len(b) {
-			return q, cut
-		}
-		if _, _, why = frameAt(b[q:]); why == nil {
-			return q, q
+// stop being no frame: next, the next whole frame's start, read as
+// following, or the bytes' end, where following is no frame; and cut,
+// where its torn bytes stop. That is next, unless no whole frame follows
+// and a finishable frame does: then it is the first such frame, since
+// every frame after it lies in the bytes its length claims.
+func unframed(b []byte, pos int, why Refusal) (next, cut int, following read) {
+	cut, finishable := len(b), why.Finishable()
+	if finishable {
+		cut = pos
+	}
+	for q := nextMagic(b, pos); q < len(b); q = nextMagic(b, q) {
+		switch f := frameAt(b[q:]).(type) {
+		case wholeFrame:
+			return q, q, f
+		case noFrame:
+			if !finishable && f.why.Finishable() {
+				cut, finishable = q, true
+			}
 		}
 	}
+	return len(b), cut, noFrame{why: Truncated{}}
 }
 
-// nextMagic is where the next frame after q may start: the next magic, or
-// a start of the magic the bytes end on, or the bytes' end.
+// nextMagic is where after q the next frame may start: the next place the
+// bytes start with the magic, or with a start of it they end on, or the
+// bytes' end.
 func nextMagic(b []byte, q int) int {
 	if i := bytes.Index(b[q+1:], frameMagic[:]); i >= 0 {
 		return q + 1 + i
 	}
-	for k := len(frameMagic) - 1; k > 0; k-- {
-		if len(b)-k > q && bytes.HasSuffix(b, frameMagic[:k]) {
-			return len(b) - k
+	for r := max(q+1, len(b)-len(frameMagic)+1); r < len(b); r++ {
+		if magicAt(b[r:]) {
+			return r
 		}
 	}
 	return len(b)
 }
 
-// frameAt reads the whole frame b starts with, and its length, or why b
-// starts with none.
-func frameAt(b []byte) (Batch, int, Refusal) {
-	if !bytes.HasPrefix(b, frameMagic[:min(len(b), len(frameMagic))]) {
-		return Batch{}, 0, NoMagic{}
+// magicAt is whether b starts with the magic, or, shorter than it, with a
+// start of it.
+func magicAt(b []byte) bool {
+	return bytes.HasPrefix(b, frameMagic[:min(len(b), len(frameMagic))])
+}
+
+// frameAt reads the whole frame b starts with, or why b starts with none.
+func frameAt(b []byte) read {
+	if !magicAt(b) {
+		return noFrame{why: NoMagic{}}
 	}
-	if len(b) < frameHeader {
-		return Batch{}, 0, Truncated{}
+	if len(b) < 8 {
+		return noFrame{why: Truncated{}}
 	}
 	length := binary.BigEndian.Uint32(b[4:])
 	if length > maxBody {
-		return Batch{}, 0, OverBound{Length: length}
+		return noFrame{why: OverBound{Length: length}}
 	}
 	if frameHeader+int(length) > len(b) {
-		return Batch{}, 0, Truncated{}
+		return noFrame{why: Truncated{}}
 	}
 	body := b[frameHeader : frameHeader+int(length)]
 	if frameCRC(b[4:8], body) != binary.BigEndian.Uint32(b[8:]) {
-		return Batch{}, 0, CRCMismatch{}
+		return noFrame{why: CRCMismatch{}}
 	}
 	var rs []Record
 	for len(body) > 0 {
 		if len(body) < recordHeader {
-			return Batch{}, 0, BadRecordLength{}
+			return noFrame{why: BadRecordLength{}}
 		}
 		n := binary.BigEndian.Uint32(body)
 		if uint64(n) > uint64(len(body)-recordHeader) {
-			return Batch{}, 0, BadRecordLength{}
+			return noFrame{why: BadRecordLength{}}
 		}
 		rs = append(rs, Record(body[recordHeader:recordHeader+int(n)]))
 		body = body[recordHeader+int(n):]
 	}
-	if len(rs) == 0 {
-		return Batch{}, 0, NoRecords{}
+	batch, err := NewBatch(rs...)
+	switch {
+	case errors.Is(err, errEmptyBatch):
+		return noFrame{why: NoRecords{}}
+	case err != nil:
+		// [LAW:single-enforcer] NewBatch says what a batch is; records within
+		// the frame's bound that it refuses for more than their absence are
+		// lit2 broken.
+		panic(fmt.Sprintf("store: the records of a frame within its bound are no batch: %v", err))
 	}
-	// the body is within maxBody, so the records are a batch
-	return Batch{first: rs[0], rest: rs[1:]}, frameHeader + int(length), nil
+	return wholeFrame{batch: batch, n: frameHeader + int(length)}
 }
