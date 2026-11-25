@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/commandname"
 )
 
@@ -58,7 +57,7 @@ func noHome() (string, error) { return "", errNoHome }
 // home's .local/state, a relative value said; and a home that does not
 // read is a loss naming which.
 func TestEachLineSaysHowItsLogWasChosen(t *testing.T) {
-	e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
+	e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Ending: Succeeded{}}
 	state := t.TempDir()
 	for _, tc := range []struct {
 		name  string
@@ -106,7 +105,7 @@ func TestParallelWritersLeaveEveryLineWhole(t *testing.T) {
 	wrote := make(chan Written, n)
 	for i := range n {
 		wg.Go(func() {
-			e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
+			e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Ending: Succeeded{}}
 			e.Trace = TraceID{byte(i)}
 			wrote <- log.Write(e)
 		})
@@ -135,7 +134,7 @@ func TestAWriteRemovesDayFilesOlderThan30Days(t *testing.T) {
 		}
 	}
 	// notes.txt is no day file: pruning keeps it and says so
-	w := log.Write(Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}})
+	w := log.Write(Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Ending: Succeeded{}})
 	if !reflect.DeepEqual(w, Kept{Left: []Unpruned{NotADayFile{Name: "notes.txt"}}}) {
 		t.Fatalf("a write beside notes.txt = %#v; want it kept, saying notes.txt is no day file", w)
 	}
@@ -164,7 +163,7 @@ func TestALogUnderARegularFileFailsToWrite(t *testing.T) {
 	}
 	later := inv
 	later.Started = t0.Add(time.Hour)
-	e := Event{Invocation: later, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
+	e := Event{Invocation: later, Command: summary(commandname.Help()), Place: here, Ending: Succeeded{}}
 	if w := NewLog(Set{Value: filepath.Dir(file)}, noHome).Write(e); !reflect.DeepEqual(w, Kept{}) {
 		t.Fatalf("control: a log beside the regular file: %#v", w)
 	}
@@ -179,7 +178,7 @@ func TestPruningSaysEachThingItLeft(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root lists and removes whatever a directory's mode")
 	}
-	e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}}
+	e := Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Ending: Succeeded{}}
 	unlistedLog, unlisted := stateLog(t)
 	unremovedLog, unremoved := stateLog(t)
 	for _, name := range []string{"2026-09-01.jsonl", "2026-09-02.jsonl", "2026-11-11.jsonl"} {

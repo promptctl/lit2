@@ -182,8 +182,8 @@ func keepWithin(prior []Kept, bound SegmentBound) ([]Kept, Offset) {
 	return full, prior[len(prior)-1].Span.From
 }
 
-// units is the scan's whole frames and torn spans in stream order, which
-// tile its bytes up to End.
+// units is the scan's whole frames and the torn spans before them, in
+// stream order, which tile its bytes up to End.
 func units(s Scan) []Span {
 	us := make([]Span, 0, len(s.Frames)+len(s.Torn))
 	torn := s.Torn

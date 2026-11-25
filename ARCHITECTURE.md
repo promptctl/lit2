@@ -157,8 +157,8 @@ The decisions the layout needed and the design documents did not make.
   duration. Entropy is an `io.Reader` in the process: `crypto/rand.Reader`,
   seeded ChaCha8 in the twin.
 - **D7 Agent label** `LIT_AGENT`: unset or empty is no label, anything
-  else is the label, opaque; the command event says which of unset and
-  empty it was.
+  else is the label, opaque; a run with no label says on its command event
+  whether LIT_AGENT was unset or the value it was set to.
 - **D8 `config` above `fold`, `field` below `config`.** The fold reads no
   configuration (decision H); config and address both stand on field's
   kinds and atoms, so neither imports the other for them.

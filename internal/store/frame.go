@@ -83,31 +83,30 @@ type Frame struct {
 	Batch Batch
 }
 
-// Scan is what a reader finds in a stream's bytes: whole frames; torn spans,
-// bytes between whole frames that no command finished, skipped and counted,
-// each with why the frame at its start was refused; End, the offset after
-// the last whole frame; and Tail, the bytes after End, if any. The tail is
-// never consumed and never truncated, since a frame cut short there and an
-// append in flight look the same (the store's decision 4).
+// Scan is what a reader finds in a stream's bytes, up to Until: whole
+// frames; torn spans, bytes no whole frame holds and no more bytes can make
+// one of, skipped and counted, each with why the frame at its start was
+// refused; and End, the offset after the last whole frame. Bytes after End
+// are never consumed and never truncated (the store's decision 4): torn
+// bytes there become a torn span between frames once a frame follows them,
+// and InFlight is the rest.
 type Scan struct {
 	Frames []Frame
 	Torn   []Torn
 	End    Offset
-	Tail   ScanTail
+	Until  Offset
 }
 
-// Until is the offset after the scan's last byte: the tail's end, or End
-// when there is no tail.
-func (s Scan) Until() Offset {
-	switch t := s.Tail.(type) {
-	case NoTail:
-		return s.End
-	case InFlight:
-		return t.Span.To
-	case TornTail:
-		return t.Span.To
+// InFlight is the bytes after the last whole frame, and after the torn
+// spans that follow it, that more bytes could make a frame of: an append in
+// flight, or one a crash cut short, which look the same. It is empty when
+// there are none.
+func (s Scan) InFlight() Span {
+	from := s.End
+	if n := len(s.Torn); n > 0 && s.Torn[n-1].To > from {
+		from = s.Torn[n-1].To
 	}
-	panic(fmt.Sprintf("store: %T is not a ScanTail", s.Tail))
+	return Span{From: from, To: s.Until}
 }
 
 // Torn is a torn span, and why the frame at its start was refused; magic
@@ -117,46 +116,17 @@ type Torn struct {
 	Why Refusal
 }
 
-// ScanTail is the bytes after a scan's last whole frame: none; a frame cut
-// short, which more bytes could finish, as an append in flight would; or
-// bytes that no more bytes can make a frame, and why.
-//
-//sumtype:decl
-type ScanTail interface{ tail() }
-
-// NoTail is a scan whose bytes end where its last whole frame ends.
-type NoTail struct{}
-
-// InFlight is a tail that starts a frame its bytes cut short.
-type InFlight struct{ Span Span }
-
-// TornTail is a tail whose frame is refused whatever follows it, and why.
-type TornTail struct {
-	Span Span
-	Why  Malformed
-}
-
-func (NoTail) tail()   {}
-func (InFlight) tail() {}
-func (TornTail) tail() {}
-
-// Refusal is why the bytes at a place are not a whole frame: Truncated, a
-// frame its bytes cut short, or Malformed, one no more bytes can make
-// whole.
+// Refusal is why the bytes at a place are not a whole frame. Each is what
+// the frame's own bytes say, so an append a crash cut short that a later
+// append then followed reads as a CRCMismatch: its length covers bytes it
+// never wrote.
 //
 //sumtype:decl
 type Refusal interface{ refusal() }
 
-// Truncated is a frame whose header or body runs past the bytes there.
+// Truncated is a frame whose header or body runs past the bytes there,
+// which more bytes could finish.
 type Truncated struct{}
-
-// Malformed is why bytes are a frame that no more bytes can make whole.
-//
-//sumtype:decl
-type Malformed interface {
-	Refusal
-	malformed()
-}
 
 // NoMagic is bytes that do not start with the frame's magic.
 type NoMagic struct{}
@@ -179,12 +149,6 @@ func (OverBound) refusal()       {}
 func (CRCMismatch) refusal()     {}
 func (BadRecordLength) refusal() {}
 func (NoRecords) refusal()       {}
-
-func (NoMagic) malformed()         {}
-func (OverBound) malformed()       {}
-func (CRCMismatch) malformed()     {}
-func (BadRecordLength) malformed() {}
-func (NoRecords) malformed()       {}
 
 // The frame: 4-byte magic, 4-byte body length, CRC-32C over the length and
 // the body, then the body, its records each length-prefixed.
@@ -220,50 +184,63 @@ func frameCRC(length, body []byte) uint32 {
 // frame starts it resynchronises on the next magic, so the bytes between
 // two whole frames are one torn span and nothing on either side is lost.
 func ScanFrames(from Offset, b []byte) Scan {
-	s := Scan{Frames: []Frame{}, Torn: []Torn{}}
-	pos, end := 0, 0
-	var why Refusal // why the frame at end was refused, once one was
-	for pos < len(b) {
+	at := func(i int) Offset { return from + Offset(i) }
+	s := Scan{Frames: []Frame{}, Torn: []Torn{}, End: from, Until: at(len(b))}
+	for pos := 0; pos < len(b); {
 		batch, n, refused := frameAt(b[pos:])
-		if refused != nil {
-			if pos == end {
-				why = refused
-			}
-			next := bytes.Index(b[pos+1:], frameMagic[:])
-			if next < 0 {
-				break
-			}
-			pos += 1 + next
+		if refused == nil {
+			s.Frames = append(s.Frames, Frame{At: at(pos), Batch: batch})
+			pos += n
+			s.End = at(pos)
 			continue
 		}
-		if pos > end {
-			s.Torn = append(s.Torn, Torn{Span: Span{From: from + Offset(end), To: from + Offset(pos)}, Why: why})
+		next, cut := unframed(b, pos, refused)
+		if cut > pos {
+			s.Torn = append(s.Torn, Torn{Span: Span{From: at(pos), To: at(cut)}, Why: refused})
 		}
-		s.Frames = append(s.Frames, Frame{At: from + Offset(pos), Batch: batch})
-		pos += n
-		end = pos
+		pos = next
 	}
-	s.End = from + Offset(end)
-	s.Tail = tailOf(Span{From: s.End, To: from + Offset(len(b))}, why)
 	return s
 }
 
-// tailOf is the tail over span, its frame refused for why when it has
-// bytes.
-func tailOf(span Span, why Refusal) ScanTail {
-	if span.Len() == 0 {
-		return NoTail{}
+// unframed is where the bytes from pos, whose frame was refused for why,
+// stop being no frame: next, the next whole frame's start or the bytes'
+// end; and cut, where its torn bytes stop. That is next, unless no whole
+// frame follows and a frame the bytes cut short does: then it is the
+// first such frame, since every frame after it lies in the bytes its
+// length claims.
+func unframed(b []byte, pos int, why Refusal) (next, cut int) {
+	cut, short := len(b), false
+	for q := pos; ; {
+		if _, isShort := why.(Truncated); isShort && !short {
+			cut, short = q, true
+		}
+		q = nextMagic(b, q)
+		if q == len(b) {
+			return q, cut
+		}
+		if _, _, why = frameAt(b[q:]); why == nil {
+			return q, q
+		}
 	}
-	if m, malformed := why.(Malformed); malformed {
-		return TornTail{Span: span, Why: m}
+}
+
+// nextMagic is where the next frame after q may start: the next magic, or
+// a start of the magic the bytes end on, or the bytes' end.
+func nextMagic(b []byte, q int) int {
+	if i := bytes.Index(b[q+1:], frameMagic[:]); i >= 0 {
+		return q + 1 + i
 	}
-	return InFlight{Span: span}
+	for k := len(frameMagic) - 1; k > 0; k-- {
+		if len(b)-k > q && bytes.HasSuffix(b, frameMagic[:k]) {
+			return len(b) - k
+		}
+	}
+	return len(b)
 }
 
 // frameAt reads the whole frame b starts with, and its length, or why b
-// starts with none: a frame its bytes cut short, no magic, a length over
-// the bound, a CRC that disagrees, a body that is not records, or one that
-// holds none.
+// starts with none.
 func frameAt(b []byte) (Batch, int, Refusal) {
 	if !bytes.HasPrefix(b, frameMagic[:min(len(b), len(frameMagic))]) {
 		return Batch{}, 0, NoMagic{}
@@ -294,11 +271,9 @@ func frameAt(b []byte) (Batch, int, Refusal) {
 		rs = append(rs, Record(body[recordHeader:recordHeader+int(n)]))
 		body = body[recordHeader+int(n):]
 	}
-	// the body is bounded by maxBody, so the one refusal NewBatch has left
-	// here is a batch of no records
-	batch, err := NewBatch(rs...)
-	if err != nil {
+	if len(rs) == 0 {
 		return Batch{}, 0, NoRecords{}
 	}
-	return batch, frameHeader + int(length), nil
+	// the body is within maxBody, so the records are a batch
+	return Batch{first: rs[0], rest: rs[1:]}, frameHeader + int(length), nil
 }

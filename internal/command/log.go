@@ -83,36 +83,79 @@ const retention = 30 * 24 * time.Hour
 // writes says which it was. A home that does not read is a log every write
 // loses, saying why.
 func NewLog(stateHome Variable, home func() (string, error)) Sink {
-	state, chose := "", stateHomeLine{XDGStateHome: "used"}
-	switch v := stateHome.(type) {
-	case Unset:
-		chose.XDGStateHome = "unset"
-	case Set:
-		switch {
-		case v.Value == "":
-			chose.XDGStateHome = "empty"
-		case !filepath.IsAbs(v.Value):
-			chose = stateHomeLine{XDGStateHome: "relative", Ignored: v.Value}
-		default:
-			state = v.Value
-		}
-	}
-	if chose.XDGStateHome != "used" {
-		h, err := home()
-		if err != nil {
-			return Unwritable{Err: fmt.Errorf("no directory for the command log: XDG_STATE_HOME is %s, and %w", chose, err)}
-		}
-		state = filepath.Join(h, ".local", "state")
+	chose := stateHomeOf(stateHome)
+	state, err := stateDir(chose, home)
+	if err != nil {
+		return Unwritable{Err: fmt.Errorf("no directory for the command log: XDG_STATE_HOME is %s, and %w", stateHomeLineOf(chose), err)}
 	}
 	return commandLog{dir: filepath.Join(state, "lit", "commands"), chose: chose}
 }
 
+// stateHome is how XDG_STATE_HOME chose the log's directory: used, its
+// value an absolute path; or ignored for home's, unset, empty or relative.
+//
+//sumtype:decl
+type stateHome interface{ stateHome() }
+
+type (
+	stateHomeUsed     struct{ Dir string }
+	stateHomeUnset    struct{}
+	stateHomeEmpty    struct{}
+	stateHomeRelative struct{ Ignored string }
+)
+
+func (stateHomeUsed) stateHome()     {}
+func (stateHomeUnset) stateHome()    {}
+func (stateHomeEmpty) stateHome()    {}
+func (stateHomeRelative) stateHome() {}
+
+func stateHomeOf(v Variable) stateHome {
+	switch v := v.(type) {
+	case Unset:
+		return stateHomeUnset{}
+	case Set:
+		switch {
+		case v.Value == "":
+			return stateHomeEmpty{}
+		case !filepath.IsAbs(v.Value):
+			return stateHomeRelative{Ignored: v.Value}
+		}
+		return stateHomeUsed{Dir: v.Value}
+	}
+	panic(fmt.Sprintf("command: %T is not a Variable", v))
+}
+
+// stateDir is the state directory s chose: its own, or home's.
+func stateDir(s stateHome, home func() (string, error)) (string, error) {
+	switch s := s.(type) {
+	case stateHomeUsed:
+		return s.Dir, nil
+	case stateHomeUnset, stateHomeEmpty, stateHomeRelative:
+		h, err := home()
+		return filepath.Join(h, ".local", "state"), err
+	}
+	panic(fmt.Sprintf("command: %T is not a stateHome", s))
+}
+
 // stateHomeLine is how the log's directory was chosen, as each line it
-// writes says it: XDG_STATE_HOME used, or unset, empty or relative, and so
-// ignored, a relative value said with it.
+// writes says it, a relative value ignored said with it.
 type stateHomeLine struct {
 	XDGStateHome string `json:"xdg_state_home"`
 	Ignored      string `json:"ignored,omitempty"`
+}
+
+func stateHomeLineOf(s stateHome) stateHomeLine {
+	switch s := s.(type) {
+	case stateHomeUsed:
+		return stateHomeLine{XDGStateHome: "used"}
+	case stateHomeUnset:
+		return stateHomeLine{XDGStateHome: "unset"}
+	case stateHomeEmpty:
+		return stateHomeLine{XDGStateHome: "empty"}
+	case stateHomeRelative:
+		return stateHomeLine{XDGStateHome: "relative", Ignored: s.Ignored}
+	}
+	panic(fmt.Sprintf("command: %T is not a stateHome", s))
 }
 
 func (s stateHomeLine) String() string {
@@ -124,7 +167,7 @@ func (s stateHomeLine) String() string {
 
 type commandLog struct {
 	dir   string
-	chose stateHomeLine
+	chose stateHome
 }
 
 // Write appends the event's line in one O_APPEND write, so concurrent
@@ -142,7 +185,7 @@ func (l commandLog) Write(e Event) Written {
 // append is e's line, which says how the log was chosen, appended to the
 // file of its day.
 func (l commandLog) append(e Event, day time.Time) error {
-	line, err := encodeIn(e, &l.chose)
+	line, err := encode(e, l.chose)
 	if err != nil {
 		return err
 	}
@@ -202,38 +245,36 @@ type Unwritable struct{ Err error }
 func (u Unwritable) Write(Event) Written { return Lost{Why: u.Err} }
 
 // line is the command event as one JSON object: the default field set,
-// then lit2's own fields; the error line's delivery, with why when it was
-// not delivered; the agent, or why there is none, LIT_AGENT unset or set
-// empty; and how the log that wrote it was chosen, which a sink that
-// writes no line has none of. Counts are written when zero, so a run that did
+// then lit2's own fields. Counts are written when zero, so a run that did
 // nothing is a line with zeros and a run that never happened is no line
 // `[LAW:nothing-unseen]`.
 type line struct {
-	Event                string         `json:"event"`
-	TraceID              string         `json:"trace_id"`
-	Service              string         `json:"service"`
-	StartedAt            string         `json:"started_at"`
-	DurationMS           float64        `json:"duration_ms"`
-	Outcome              string         `json:"outcome"`
-	Error                string         `json:"error,omitempty"`
-	Reason               string         `json:"reason,omitempty"`
-	Stack                string         `json:"stack,omitempty"`
-	ExitCode             int            `json:"exit_code"`
-	ErrorLine            string         `json:"error_line"`
-	ErrorLineUndelivered string         `json:"error_line_undelivered,omitempty"`
-	Version              string         `json:"version"`
-	Command              commandFacts   `json:"command"`
-	Counts               counts         `json:"counts"`
-	Config               *configLine    `json:"config,omitempty"`
-	Store                storeLine      `json:"store"`
-	Fold                 []foldLine     `json:"fold,omitempty"`
-	Verbs                *verbsLine     `json:"verbs,omitempty"`
-	Policy               *policyLine    `json:"policy,omitempty"`
-	Git                  []spawnLine    `json:"git"`
-	Place                any            `json:"place"`
-	Agent                string         `json:"agent,omitempty"`
-	AgentUnlabeled       string         `json:"agent_unlabeled,omitempty"`
-	CommandLog           *stateHomeLine `json:"command_log,omitempty"`
+	Event                string        `json:"event"`
+	TraceID              string        `json:"trace_id"`
+	Service              string        `json:"service"`
+	StartedAt            string        `json:"started_at"`
+	DurationMS           float64       `json:"duration_ms"`
+	Outcome              string        `json:"outcome"`
+	Error                string        `json:"error,omitempty"`
+	Reason               string        `json:"reason,omitempty"`
+	Stack                string        `json:"stack,omitempty"`
+	ExitCode             int           `json:"exit_code"`
+	ErrorLine            string        `json:"error_line,omitempty"`
+	ErrorLineUndelivered string        `json:"error_line_undelivered,omitempty"`
+	ErrorLineStack       string        `json:"error_line_stack,omitempty"`
+	Version              string        `json:"version"`
+	Command              commandFacts  `json:"command"`
+	Counts               counts        `json:"counts"`
+	Config               *configLine   `json:"config,omitempty"`
+	Store                storeLine     `json:"store"`
+	Fold                 []foldLine    `json:"fold,omitempty"`
+	Verbs                *verbsLine    `json:"verbs,omitempty"`
+	Policy               *policyLine   `json:"policy,omitempty"`
+	Git                  []spawnLine   `json:"git"`
+	Place                any           `json:"place"`
+	Agent                string        `json:"agent,omitempty"`
+	AgentUnlabeled       string        `json:"agent_unlabeled,omitempty"`
+	CommandLog           stateHomeLine `json:"command_log"`
 }
 
 // spawnLine is one git process the invocation ran; the block is empty,
@@ -305,18 +346,16 @@ func configBlock(c *ConfigFacts) *configLine {
 	}
 }
 
-func encode(e Event) ([]byte, error) { return encodeIn(e, nil) }
-
-// encodeIn is e's line as the log chosen as chose writes it.
-func encodeIn(e Event, chose *stateHomeLine) ([]byte, error) {
+// encode is e's line as the log chose chose writes it.
+func encode(e Event, chose stateHome) ([]byte, error) {
 	l := line{
-		CommandLog: chose,
+		CommandLog: stateHomeLineOf(chose),
 		Event:      "lit2 " + e.Command.Name.String(),
 		TraceID:    e.Trace.String(),
 		Service:    "lit2",
 		StartedAt:  e.Started.UTC().Format(time.RFC3339Nano),
 		DurationMS: float64(e.Duration) / float64(time.Millisecond),
-		ExitCode:   cli.ExitCode(e.Outcome),
+		ExitCode:   cli.ExitCode(e.Outcome()),
 		Version:    e.Version,
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
@@ -328,31 +367,21 @@ func encodeIn(e Event, chose *stateHomeLine) ([]byte, error) {
 		Git:        gitBlock(e.Git),
 		Place:      placeLine(e.Place),
 	}
-	switch o := e.Outcome.(type) {
-	case cli.Done:
+	switch end := e.Ending.(type) {
+	case Succeeded:
 		l.Outcome = "ok"
-	case cli.Failed:
-		l.Outcome, l.Reason, l.Error = o.Failure.Class().String(), o.Failure.Reason(), o.Failure.Error()
-		l.Stack = string(stackOf(o))
+	case Failed:
+		l.Outcome, l.Reason, l.Error = end.Failure.Class().String(), end.Failure.Reason(), end.Failure.Error()
+		l.Stack = string(stackOf(e.Outcome()))
+		l.ErrorLine, l.ErrorLineUndelivered, l.ErrorLineStack = delivery(end.Line)
+	default:
+		panic(fmt.Sprintf("command: %T is not an Ending", e.Ending))
 	}
-	switch d := e.ErrorLine.(type) {
-	case NoErrorLine:
-		l.ErrorLine = "none"
-	case LineDelivered:
-		l.ErrorLine = "delivered"
-	case LineUndelivered:
-		l.ErrorLine, l.ErrorLineUndelivered = "undelivered", d.Why.Error()
-	}
-	switch v := e.LitAgent.(type) {
-	case Unset:
-		l.AgentUnlabeled = "unset"
-	case Set:
-		switch a := events.AgentFrom(v.Value).(type) {
-		case events.Labeled:
-			l.Agent = a.String()
-		case events.Unlabeled:
-			l.AgentUnlabeled = "empty"
-		}
+	switch a := AgentOf(e.LitAgent).(type) {
+	case events.Labeled:
+		l.Agent = a.String()
+	case events.Unlabeled:
+		l.AgentUnlabeled = unlabeled(e.LitAgent)
 	}
 	b, err := json.Marshal(l)
 	if err != nil {
@@ -462,3 +491,32 @@ type (
 		Error string `json:"error"`
 	}
 )
+
+// delivery is what became of a failure's error line, as the line spells
+// it: delivered, or undelivered, why, and the stack of a panic that was
+// why.
+func delivery(d Delivery) (said, why, stack string) {
+	switch d := d.(type) {
+	case Delivered:
+		return "delivered", "", ""
+	case Undelivered:
+		var in Internal
+		if errors.As(d.Why, &in) {
+			stack = string(in.Stack())
+		}
+		return "undelivered", d.Why.Error(), stack
+	}
+	panic(fmt.Sprintf("command: %T is not a Delivery", d))
+}
+
+// unlabeled is why a run LIT_AGENT, v, left unlabeled has no agent: v
+// unset, or set to a value that labels nothing.
+func unlabeled(v Variable) string {
+	switch v := v.(type) {
+	case Unset:
+		return "unset"
+	case Set:
+		return fmt.Sprintf("set to %q", v.Value)
+	}
+	panic(fmt.Sprintf("command: %T is not a Variable", v))
+}

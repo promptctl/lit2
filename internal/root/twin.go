@@ -198,7 +198,7 @@ func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 	// or a refusal, is said beside a run that then failed or went unrecorded
 	switch e := ended.(type) {
 	case command.Recorded:
-		if f, isFailed := e.Event.Outcome.(cli.Failed); isFailed {
+		if f, isFailed := e.Event.Outcome().(cli.Failed); isFailed {
 			return errors.Join(f.Failure, forged)
 		}
 		return forged

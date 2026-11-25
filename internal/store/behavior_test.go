@@ -113,7 +113,7 @@ func TestTheStoresBehavior(t *testing.T) {
 			t.Errorf("the appends were %+v; want the first to create the log and the next to look it up", appended)
 		}
 		scan := storetest.Whole(t, s, store.WriterRef{Checkout: ida})
-		if len(scan.Frames) != len(bs) || len(scan.Torn) != 0 || scan.Tail != (store.NoTail{}) || scan.End != appended[2].Until.At {
+		if len(scan.Frames) != len(bs) || len(scan.Torn) != 0 || scan.InFlight().Len() != 0 || scan.End != appended[2].Until.At {
 			t.Fatalf("the log reads %+v; want %d whole frames ending where the last append ended", scan, len(bs))
 		}
 		for i, f := range scan.Frames {
@@ -133,12 +133,12 @@ func TestTheStoresBehavior(t *testing.T) {
 		partial = partial[:len(partial)/2]
 		filestest.Append(t, p.logs, store.LogName(ida), partial)
 		scan := storetest.Whole(t, s, store.WriterRef{Checkout: ida})
-		if !slices.Equal(storetest.Read(scan), []string{"before"}) || len(scan.Torn) != 0 || scan.Tail != (store.InFlight{Span: store.Span{From: scan.End, To: scan.End + store.Offset(len(partial))}}) {
+		if !slices.Equal(storetest.Read(scan), []string{"before"}) || len(scan.Torn) != 0 || scan.InFlight() != (store.Span{From: scan.End, To: scan.End + store.Offset(len(partial))}) {
 			t.Errorf("with a partial frame the log reads %+v; want the whole frame and the rest an incomplete tail", scan)
 		}
 		storetest.AppendAll(t, s, storetest.Batch(t, "after"))
 		scan = storetest.Whole(t, s, store.WriterRef{Checkout: ida})
-		if !slices.Equal(storetest.Read(scan), []string{"before", "after"}) || len(scan.Torn) != 1 || scan.Torn[0].Len() != uint64(len(partial)) || scan.Tail != (store.NoTail{}) {
+		if !slices.Equal(storetest.Read(scan), []string{"before", "after"}) || len(scan.Torn) != 1 || scan.Torn[0].Len() != uint64(len(partial)) || scan.InFlight().Len() != 0 {
 			t.Errorf("after one more append the log reads %+v; want both records and one torn span of %d bytes", scan, len(partial))
 		}
 	})
@@ -157,7 +157,7 @@ func TestTheStoresBehavior(t *testing.T) {
 		other := fetched(p)
 		reader := store.Open(idb, other.ports, store.DefaultSegmentBound)
 		scan := storetest.Whole(t, reader, store.WriterRef{Checkout: ida})
-		if !slices.Equal(storetest.Read(scan), storetest.All(bs)) || len(scan.Torn) != 0 || scan.Tail != (store.NoTail{}) {
+		if !slices.Equal(storetest.Read(scan), storetest.All(bs)) || len(scan.Torn) != 0 || scan.InFlight().Len() != 0 {
 			t.Errorf("the publication reads back %d records; want the log's %d", len(storetest.Read(scan)), len(bs))
 		}
 	})

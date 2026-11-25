@@ -3,6 +3,7 @@ package command
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -108,7 +109,7 @@ func TestTheEventKeepsHowFarTheRunGotInReadingItsPlace(t *testing.T) {
 		{"between finding the checkout and its identity", identifying, found, `"identity":{"unread":{}}`},
 	} {
 		e := recordedOf(t, Record(&FixedClock{At: t0}, noGit, tc.stages)).Event
-		line, err := encode(e)
+		line, err := encode(e, stateHomeUsed{Dir: "/state"})
 		if e.Place != tc.where || err != nil || !strings.Contains(string(line), tc.line) {
 			t.Errorf("a panic %s recorded %#v, said %s; want %#v, saying %s", tc.name, e.Place, line, tc.where, tc.line)
 		}
@@ -144,12 +145,12 @@ func TestEndRunsOverAnAnswerThatPanicked(t *testing.T) {
 	}
 	e := recordedOf(t, Record(&FixedClock{At: t0}, noGit, answering)).Event
 	in, _ := given.(cli.Failed).Failure.(Internal)
-	if !strings.Contains(in.Error(), "the answer broke") || len(in.Stack()) == 0 || !reflect.DeepEqual(e.Outcome, given) || !reflect.DeepEqual(e.Store.Temps, scanned) {
-		t.Errorf("End was given %v and the event holds %v, temps %v; want End over the answer's panic, its temps kept", given, e.Outcome, e.Store.Temps)
+	if !strings.Contains(in.Error(), "the answer broke") || len(in.Stack()) == 0 || !reflect.DeepEqual(e.Outcome(), given) || !reflect.DeepEqual(e.Store.Temps, scanned) {
+		t.Errorf("End was given %v and the event holds %v, temps %v; want End over the answer's panic, its temps kept", given, e.Outcome(), e.Store.Temps)
 	}
 	ending := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { return cli.Done{} })
 	ending.End = func(Run, cli.Outcome) cli.Outcome { panic("the end broke") }
-	if in, _ := recordedOf(t, Record(&FixedClock{At: t0}, noGit, ending)).Event.Outcome.(cli.Failed).Failure.(Internal); !strings.Contains(in.Error(), "the end broke") || len(in.Stack()) == 0 {
+	if in, _ := recordedOf(t, Record(&FixedClock{At: t0}, noGit, ending)).Event.Outcome().(cli.Failed).Failure.(Internal); !strings.Contains(in.Error(), "the end broke") || len(in.Stack()) == 0 {
 		t.Errorf("a panic in End ended %v; want its Internal", in)
 	}
 }
@@ -157,7 +158,7 @@ func TestEndRunsOverAnAnswerThatPanicked(t *testing.T) {
 // A panic whose value is an error keeps it in the chain.
 func TestAPanickedErrorStaysInTheChain(t *testing.T) {
 	cause := errors.New("the cause")
-	in, _ := record(t, &FixedClock{At: t0}, noGit, summary(commandname.Get()), here, func(Run) cli.Outcome { panic(cause) }).Outcome.(cli.Failed).Failure.(Internal)
+	in, _ := record(t, &FixedClock{At: t0}, noGit, summary(commandname.Get()), here, func(Run) cli.Outcome { panic(cause) }).Outcome().(cli.Failed).Failure.(Internal)
 	if !errors.Is(in, cause) {
 		t.Errorf("a panic with an error ended %v; want the error in its chain", in)
 	}
@@ -170,15 +171,15 @@ func TestALineThatPanicsToRenderEndsInternal(t *testing.T) {
 	var line string
 	s.Say = func(l string) error { line += l; return nil }
 	ended := recordedOf(t, Record(&FixedClock{At: t0}, noGit, s))
-	in, ok := ended.Event.Outcome.(cli.Failed).Failure.(Internal)
+	in, ok := ended.Event.Outcome().(cli.Failed).Failure.(Internal)
 	if !ok || !strings.Contains(in.Error(), "no words for it") || ended.Status != 70 || !strings.Contains(line, "no words for it") {
 		t.Errorf("a failure that cannot be said ended %#v, saying %q; want an Internal of its panic, said, exit 70", ended, line)
 	}
 }
 
-// What became of the error line is the event's: a line Say took, one it
-// refused or panicked on, and an outcome with no line make events that
-// differ in that alone.
+// What became of a failure's error line is the event's: a line Say took
+// and one it refused or panicked on make events that differ in that alone,
+// and a run that succeeded hands Say nothing.
 func TestTheEventSaysWhetherItsErrorLineWasDelivered(t *testing.T) {
 	refused := cli.Failed{Failure: Broke(errors.New("refused"))}
 	run := func(o cli.Outcome, say func(string) error) Event {
@@ -193,29 +194,32 @@ func TestTheEventSaysWhetherItsErrorLineWasDelivered(t *testing.T) {
 	refusedLine := run(refused, func(string) error { return stderrGone })
 	panicked := run(refused, func(string) error { panic("stderr broke") })
 	done := run(cli.Done{}, taking)
-	if !slices.Equal(said, []string{cli.Report(refused)}) {
-		t.Errorf("say was handed %q; want the refused run's line once and nothing for the done one", said)
+	if !slices.Equal(said, []string{cli.Report(refused)}) || done.Ending != (Succeeded{}) {
+		t.Errorf("say was handed %q and the done run ended %#v; want the refused run's line once, and the done run succeeded", said, done.Ending)
 	}
-	if took.ErrorLine != (LineDelivered{}) || done.ErrorLine != (NoErrorLine{}) {
-		t.Errorf("a taken line is %#v and no line is %#v; want delivered and none", took.ErrorLine, done.ErrorLine)
+	lineOf := func(e Event) Delivery { return e.Ending.(Failed).Line }
+	if lineOf(took) != (Delivered{}) {
+		t.Errorf("a taken line is %#v; want delivered", lineOf(took))
 	}
-	if u, ok := refusedLine.ErrorLine.(LineUndelivered); !ok || !errors.Is(u.Why, stderrGone) {
-		t.Errorf("a refused line is %#v; want undelivered, and why", refusedLine.ErrorLine)
+	if u, ok := lineOf(refusedLine).(Undelivered); !ok || !errors.Is(u.Why, stderrGone) {
+		t.Errorf("a refused line is %#v; want undelivered, and why", lineOf(refusedLine))
 	}
-	if u, ok := panicked.ErrorLine.(LineUndelivered); !ok || !strings.Contains(u.Why.Error(), "stderr broke") {
-		t.Errorf("a say that panicked is %#v; want undelivered, with its panic", panicked.ErrorLine)
+	var in Internal
+	if u, ok := lineOf(panicked).(Undelivered); !ok || !errors.As(u.Why, &in) || !strings.Contains(in.Error(), "stderr broke") {
+		t.Errorf("a say that panicked is %#v; want undelivered, with its panic", lineOf(panicked))
 	}
-	refusedLine.ErrorLine = took.ErrorLine
-	if !reflect.DeepEqual(took, refusedLine) {
+	same := refusedLine
+	same.Ending = took.Ending
+	if !reflect.DeepEqual(took, same) {
 		t.Errorf("a taken and a refused line differ beyond their delivery:\n%#v\n%#v", took, refusedLine)
 	}
 	for _, tc := range []struct {
 		e    Event
 		want map[string]any
 	}{
-		{took, map[string]any{"error_line": "delivered"}},
-		{run(refused, func(string) error { return stderrGone }), map[string]any{"error_line": "undelivered", "error_line_undelivered": "stderr is closed"}},
-		{done, map[string]any{"error_line": "none"}},
+		{took, map[string]any{"error_line": "delivered", "error_line_undelivered": nil, "error_line_stack": nil}},
+		{refusedLine, map[string]any{"error_line": "undelivered", "error_line_undelivered": "stderr is closed", "error_line_stack": nil}},
+		{done, map[string]any{"error_line": nil, "error_line_undelivered": nil}},
 	} {
 		m := decode(t, tc.e)
 		for k, v := range tc.want {
@@ -223,9 +227,9 @@ func TestTheEventSaysWhetherItsErrorLineWasDelivered(t *testing.T) {
 				t.Errorf("the line's %s is %v; want %v", k, m[k], v)
 			}
 		}
-		if _, has := tc.want["error_line_undelivered"]; !has && m["error_line_undelivered"] != nil {
-			t.Errorf("a line that was not refused says %v", m["error_line_undelivered"])
-		}
+	}
+	if m := decode(t, panicked); m["error_line"] != "undelivered" || !strings.Contains(fmt.Sprint(m["error_line_stack"]), "goroutine") {
+		t.Errorf("a say that panicked writes %v, stack %v; want undelivered, with the panic's stack", m["error_line"], m["error_line_stack"])
 	}
 }
 
@@ -287,7 +291,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 		e := record(t, &FixedClock{At: t0}, noGit, summary(tc.name), here, func(Run) cli.Outcome {
 			return tc.outcome
 		})
-		if !reflect.DeepEqual(e.Invocation, inv) || !reflect.DeepEqual(e.Command, summary(tc.name)) || cli.ExitCode(e.Outcome) != tc.exit {
+		if !reflect.DeepEqual(e.Invocation, inv) || !reflect.DeepEqual(e.Command, summary(tc.name)) || cli.ExitCode(e.Outcome()) != tc.exit {
 			t.Errorf("%s: the event is %#v; want the invocation, the summary and exit %d", tc.name, e, tc.exit)
 		}
 	}
@@ -304,12 +308,12 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 	if e.Command.Name != commandname.Get() || len(e.Command.Paths) != 1 || e.Command.Paths[0] != "x" {
 		t.Errorf("a panic in get x recorded %#v; want get with its one path", e.Command)
 	}
-	failed, ok := e.Outcome.(cli.Failed)
+	failed, ok := e.Outcome().(cli.Failed)
 	if !ok {
-		t.Fatalf("a panic ended %#v; want Failed", e.Outcome)
+		t.Fatalf("a panic ended %#v; want Failed", e.Outcome())
 	}
 	in, ok := failed.Failure.(Internal)
-	if !ok || !strings.Contains(in.Error(), "the body broke") || len(in.Stack()) == 0 || cli.ExitCode(e.Outcome) != 70 {
+	if !ok || !strings.Contains(in.Error(), "the body broke") || len(in.Stack()) == 0 || cli.ExitCode(e.Outcome()) != 70 {
 		t.Errorf("a panic is %#v; want Internal with its value and stack, exit 70", failed.Failure)
 	}
 }
@@ -351,7 +355,7 @@ func TestTheVersionInForceIsRecordedOnceTheBodyGivesIt(t *testing.T) {
 }
 func decode(t *testing.T, e Event) map[string]any {
 	t.Helper()
-	b, err := encode(e)
+	b, err := encode(e, stateHomeUsed{Dir: "/state"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +367,7 @@ func decode(t *testing.T, e Event) map[string]any {
 }
 
 func TestTheLineCarriesTheDefaultFieldsAndZeroCounts(t *testing.T) {
-	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}})
+	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Help()), Place: here, Ending: Succeeded{}})
 	for _, field := range []string{"event", "trace_id", "service", "started_at", "duration_ms", "outcome", "exit_code", "version", "command", "counts", "place"} {
 		if _, ok := m[field]; !ok {
 			t.Errorf("the line has no %s: %v", field, m)
@@ -391,7 +395,7 @@ func TestAVerbsLineSaysWhetherTheStoreTookAnAppend(t *testing.T) {
 		{[]store.Appending{store.AppendedNotDurable{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}, Why: errors.New("fsync failed")}}, true},
 		{[]store.Appending{store.NotAppended{Log: store.NoLog{}, Why: errors.New("no space")}}, false},
 	} {
-		m := decode(t, Event{Invocation: inv, Command: summary(commandname.Set()), Place: here, Store: StoreFacts{Appends: tc.appends}, Verbs: &VerbsFacts{}, Outcome: cli.Done{}})
+		m := decode(t, Event{Invocation: inv, Command: summary(commandname.Set()), Place: here, Store: StoreFacts{Appends: tc.appends}, Verbs: &VerbsFacts{}, Ending: Succeeded{}})
 		v, _ := m["verbs"].(map[string]any)
 		if v["written"] != tc.want {
 			t.Errorf("with %d appends the verbs block is %v; want written %v", len(tc.appends), v, tc.want)
@@ -400,7 +404,7 @@ func TestAVerbsLineSaysWhetherTheStoreTookAnAppend(t *testing.T) {
 }
 
 func TestAFailedLineSaysWhy(t *testing.T) {
-	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Unparsed()), Place: here, Outcome: cli.Failed{Failure: Broke(errors.New("broke"))}})
+	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Unparsed()), Place: here, Ending: Failed{Failure: Broke(errors.New("broke")), Line: Delivered{}}})
 	if m["outcome"] != "internal" || m["reason"] != "internal" || m["error"] != "broke" || m["exit_code"] != 70.0 {
 		t.Errorf("the line is %v; want internal, internal, broke, 70", m)
 	}
@@ -410,7 +414,7 @@ func TestTheLineSaysWhereAndWho(t *testing.T) {
 	m := decode(t, Event{Invocation: Invocation{
 		LitAgent: Set{Value: "claude"},
 		Started:  t0,
-	}, Command: summary(commandname.Help()), Place: Unlocatable{Dir: "/gone", Err: errors.New("permission denied")}, Outcome: cli.Done{}})
+	}, Command: summary(commandname.Help()), Place: Unlocatable{Dir: "/gone", Err: errors.New("permission denied")}, Ending: Succeeded{}})
 	place, _ := m["place"].(map[string]any)
 	unlocatable, _ := place["unlocatable"].(map[string]any)
 	if unlocatable["dir"] != "/gone" || unlocatable["error"] != "permission denied" || m["agent"] != "claude" {
@@ -428,12 +432,12 @@ func TestTheLineSaysWhyARunIsUnlabeled(t *testing.T) {
 		said, why any
 	}{
 		{"unset", Unset{}, events.Unlabeled{}, nil, "unset"},
-		{"set empty", Set{Value: ""}, events.Unlabeled{}, nil, "empty"},
+		{"set empty", Set{Value: ""}, events.Unlabeled{}, nil, `set to ""`},
 		{"set", Set{Value: "claude"}, events.AgentFrom("claude"), "claude", nil},
 	} {
 		in := inv
 		in.LitAgent = tc.v
-		m := decode(t, Event{Invocation: in, Command: summary(commandname.Help()), Place: here, Outcome: cli.Done{}})
+		m := decode(t, Event{Invocation: in, Command: summary(commandname.Help()), Place: here, Ending: Succeeded{}})
 		if AgentOf(tc.v) != tc.agent || m["agent"] != tc.said || m["agent_unlabeled"] != tc.why {
 			t.Errorf("LIT_AGENT %s labels %#v, and the line says agent %v, unlabeled %v; want %#v, %v, %v", tc.name, AgentOf(tc.v), m["agent"], m["agent_unlabeled"], tc.agent, tc.said, tc.why)
 		}
@@ -472,8 +476,8 @@ type joined struct{ Internal }
 func (j joined) Unwrap() []error { return []error{j.Internal, errors.New("and a write not durable")} }
 
 func TestAnInternalJoinedWithAnotherFailureKeepsItsStack(t *testing.T) {
-	broke := record(t, &FixedClock{At: t0}, noGit, summary(commandname.Get()), here, func(Run) cli.Outcome { panic("the body broke") }).Outcome.(cli.Failed).Failure.(Internal)
-	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Outcome: cli.Failed{Failure: joined{broke}}})
+	broke := record(t, &FixedClock{At: t0}, noGit, summary(commandname.Get()), here, func(Run) cli.Outcome { panic("the body broke") }).Outcome().(cli.Failed).Failure.(Internal)
+	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Ending: Failed{Failure: joined{broke}, Line: Delivered{}}})
 	if stack, _ := m["stack"].(string); stack == "" || stack != string(broke.Stack()) {
 		t.Errorf("the line's stack is %q; want the Internal's", m["stack"])
 	}

@@ -65,7 +65,7 @@ func TestAPanicInAnyStageIsRecorded(t *testing.T) {
 		e := ended.Event
 		var in command.Internal
 		if !errors.As(failure(t, e), &in) || !strings.Contains(in.Error(), "broke") || len(in.Stack()) == 0 || ended.Status != 70 {
-			t.Errorf("%s: ended %#v; want Internal with its value and stack, exit 70", tc.stage, e.Outcome)
+			t.Errorf("%s: ended %#v; want Internal with its value and stack, exit 70", tc.stage, e.Outcome())
 		}
 		if e.Command.Name != tc.asked || !tc.where(e.Place) {
 			t.Errorf("%s: recorded %s at %#v; want %s", tc.stage, e.Command.Name, e.Place, tc.asked)
@@ -84,8 +84,8 @@ func TestACommandThatPanicsStillScansItsTemps(t *testing.T) {
 		"its parse":  {func(t Twin) Twin { return t }, asking(func() cli.Commands { panic("the table broke") }, "--help")},
 	} {
 		e := recordedOf(t, invoke(tc.twin(NewTwin()).Process, tc.ask)).Event
-		if _, failed := e.Outcome.(cli.Failed); !failed || len(e.Store.Temps) == 0 {
-			t.Errorf("a run whose %s panicked ended %#v with temps %#v; want it failed, every directory scanned", name, e.Outcome, e.Store.Temps)
+		if _, failed := e.Outcome().(cli.Failed); !failed || len(e.Store.Temps) == 0 {
+			t.Errorf("a run whose %s panicked ended %#v with temps %#v; want it failed, every directory scanned", name, e.Outcome(), e.Store.Temps)
 		}
 		for _, l := range e.Store.Temps {
 			if _, scanned := l.(command.TempsScanned); !scanned {
@@ -194,7 +194,7 @@ func (c *brokenClock) Now() time.Time {
 func TestAnEventThatPanicsToEncodeIsLost(t *testing.T) {
 	dir := t.TempDir()
 	e := recordedOf(t, invoke(NewTwin().Process, asking(cli.Lit2, "--help"))).Event
-	e.Outcome = cli.Failed{Failure: unsayable{}}
+	e.Ending = command.Failed{Failure: unsayable{}, Line: command.Delivered{}}
 	lost, ok := recorded(command.NewLog(command.Set{Value: dir}, noHome), e).(command.Lost)
 	var in command.Internal
 	if !ok || !errors.As(lost.Why, &in) || !strings.Contains(in.Error(), "no words for it") || len(in.Stack()) == 0 {
@@ -271,7 +271,7 @@ func run(t *testing.T, twin Twin, args ...string) (int, command.Event) {
 		t.Fatalf("lit2 %q left %d events; want 1", args, len(twin.Commands.Events))
 	}
 	e := twin.Commands.Events[0]
-	if got := cli.ExitCode(e.Outcome); got != status {
+	if got := cli.ExitCode(e.Outcome()); got != status {
 		t.Errorf("lit2 %q exited %d but its event records %d", args, status, got)
 	}
 	return status, e
@@ -280,15 +280,15 @@ func run(t *testing.T, twin Twin, args ...string) (int, command.Event) {
 // failure is the failure e records, failing t when e records none.
 func failure(t *testing.T, e command.Event) reason.Failure {
 	t.Helper()
-	failed, ok := e.Outcome.(cli.Failed)
+	failed, ok := e.Outcome().(cli.Failed)
 	if !ok {
-		t.Fatalf("the run ended %#v; want it failed", e.Outcome)
+		t.Fatalf("the run ended %#v; want it failed", e.Outcome())
 	}
 	return failed.Failure
 }
 
 func reasonOf(e command.Event) string {
-	failed, ok := e.Outcome.(cli.Failed)
+	failed, ok := e.Outcome().(cli.Failed)
 	if !ok {
 		return ""
 	}
@@ -350,7 +350,7 @@ func TestARegroupedRowIsNamedByItsNewPlace(t *testing.T) {
 	twin := NewTwin()
 	e := recordedOf(t, invoke(twin.Process, asking(func() cli.Commands { return regrouped }, "config", "sync"))).Event
 	if e.Command.Name != moved || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(failure(t, e).Error(), "lit2 config sync is not built") {
-		t.Errorf("config sync recorded %#v ending %#v; want it asked as config sync, its failure naming config sync", e.Command, e.Outcome)
+		t.Errorf("config sync recorded %#v ending %#v; want it asked as config sync, its failure naming config sync", e.Command, e.Outcome())
 	}
 }
 
@@ -371,8 +371,8 @@ func TestAnAnswerStdoutRefusesIsTheEnvironments(t *testing.T) {
 func TestAReaderLeavingIsDone(t *testing.T) {
 	twin := NewTwin()
 	twin.Process.Out = refusing{fmt.Errorf("write /dev/stdout: %w", syscall.EPIPE)}
-	if status, e := run(t, twin, "--help"); status != 0 || e.Outcome != (cli.Done{}) || twin.Err.Len() != 0 {
-		t.Errorf("--help into a pipe whose reader left: status %d, outcome %#v, stderr %q", status, e.Outcome, twin.Err)
+	if status, e := run(t, twin, "--help"); status != 0 || e.Outcome() != (cli.Done{}) || twin.Err.Len() != 0 {
+		t.Errorf("--help into a pipe whose reader left: status %d, outcome %#v, stderr %q", status, e.Outcome(), twin.Err)
 	}
 }
 
@@ -405,9 +405,11 @@ func TestAnErrorLineStderrRefusedIsRecorded(t *testing.T) {
 	refused := NewTwin()
 	refused.Process.Err = refusing{fmt.Errorf("write /dev/stderr: %w", syscall.EPIPE)}
 	refusedStatus, undelivered := run(t, refused, "frobnicate")
-	u, ok := undelivered.ErrorLine.(command.LineUndelivered)
-	if delivered.ErrorLine != (command.LineDelivered{}) || !ok || !errors.Is(u.Why, syscall.EPIPE) || tookStatus != refusedStatus || tookStatus == 0 {
-		t.Errorf("stderr taking the line records %#v, status %d; refusing it records %#v, status %d; want delivered and undelivered with EPIPE, one failing status", delivered.ErrorLine, tookStatus, undelivered.ErrorLine, refusedStatus)
+	tookLine, _ := delivered.Ending.(command.Failed)
+	refusedLine, _ := undelivered.Ending.(command.Failed)
+	u, ok := refusedLine.Line.(command.Undelivered)
+	if tookLine.Line != (command.Delivered{}) || !ok || !errors.Is(u.Why, syscall.EPIPE) || tookStatus != refusedStatus || tookStatus == 0 {
+		t.Errorf("stderr taking the line records %#v, status %d; refusing it records %#v, status %d; want delivered and undelivered with EPIPE, one failing status", delivered.Ending, tookStatus, undelivered.Ending, refusedStatus)
 	}
 }
 

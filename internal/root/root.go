@@ -76,18 +76,25 @@ type Process struct {
 // had one, and that it went unrecorded, with the panic and its stack, and
 // ends with the unrecorded status `[LAW:nothing-unseen]`.
 func Run(p Process, args []string) int {
-	// [LAW:no-silent-failure] exception: stderr is where failures are said;
-	// when writing to it fails, the exit status is the one channel left. A
-	// stderr that panics crashes the process, which Go ends with the
-	// unrecorded status too.
 	switch e := invoke(p, func() (cli.Summary, func(body) cli.Outcome) { return parsed(cli.Lit2, args) }).(type) {
 	case command.Recorded:
 		return logged(p, recorded(p.Commands, e.Event), e.Status)
 	case command.Unrecorded:
-		_, _ = io.WriteString(p.Err, e.Said+fmt.Sprintf("lit2: unrecorded: %v\n%s", e.Broke, e.Broke.Stack()))
+		// [LAW:no-silent-failure] exception: the run is unrecorded, and its
+		// status says so whatever stderr takes.
+		_ = told(p.Err, e.Said+fmt.Sprintf("lit2: unrecorded: %v\n%s", e.Broke, e.Broke.Stack()))
 		return cli.Unrecorded
 	}
 	panic("root: an Ended that is neither Recorded nor Unrecorded")
+}
+
+// told is what stderr, w, did with s: nil when it took it, or why not, a
+// panic in w a refusal too, so every line lit2 says on stderr fails alike.
+func told(w io.Writer, s string) error {
+	return command.Caught(func() error {
+		_, err := io.WriteString(w, s)
+		return err
+	}, func(broke command.Internal) error { return broke })
 }
 
 // recorded is what writing e to sink did: a sink or an encoding that
@@ -109,7 +116,7 @@ func logged(p Process, w command.Written, status int) int {
 			// [LAW:no-silent-failure] exception: the event is in the log and
 			// the next write finds what this one left, so a stderr that will
 			// not take it changes no status.
-			_, _ = io.WriteString(p.Err, "lit2: command log: "+left.String()+"\n")
+			_ = told(p.Err, "lit2: command log: "+left.String()+"\n")
 		}
 		return status
 	case command.Lost:
@@ -118,7 +125,9 @@ func logged(p Process, w command.Written, status int) int {
 		if errors.As(w.Why, &broke) {
 			said += string(broke.Stack())
 		}
-		if _, unsaid := io.WriteString(p.Err, said); unsaid != nil {
+		// [LAW:no-silent-failure] exception: when stderr will not take the
+		// loss, the exit status is the one channel left.
+		if unsaid := told(p.Err, said); unsaid != nil {
 			return cli.Unrecorded
 		}
 		return status
@@ -160,8 +169,7 @@ func invoke(p Process, ask func() (cli.Summary, func(body) cli.Outcome)) command
 			return durable(*at.Stored(), o)
 		},
 		Say: func(line string) error {
-			_, err := io.WriteString(p.Err, line)
-			return err
+			return told(p.Err, line)
 		},
 	})
 }

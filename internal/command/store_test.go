@@ -20,7 +20,7 @@ func memoryStore() *store.Store {
 
 func storeBlockOf(t *testing.T, f StoreFacts) map[string]any {
 	t.Helper()
-	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Store: f, Outcome: cli.Done{}})
+	m := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Store: f, Ending: Succeeded{}})
 	block, ok := m["store"].(map[string]any)
 	if !ok {
 		t.Fatalf("the line has no store block: %v", m)
@@ -65,7 +65,7 @@ func TestEveryLineSaysItsStoresOpening(t *testing.T) {
 		{"outside a checkout", NoCheckout{Dir: "/"}, unopened},
 		{"an unlocatable one", Unlocatable{Dir: "/", Err: errors.New("git broke")}, unopened},
 	} {
-		block, _ := decode(t, Event{Invocation: inv, Command: summary(commandname.Help()), Place: tc.place, Outcome: cli.Done{}})["store"].(map[string]any)
+		block, _ := decode(t, Event{Invocation: inv, Command: summary(commandname.Help()), Place: tc.place, Ending: Succeeded{}})["store"].(map[string]any)
 		if o, _ := block["open"].(map[string]any); !reflect.DeepEqual(o, tc.want) {
 			t.Errorf("%s: the store block is %v; want its open block %v", tc.name, block, tc.want)
 		}
@@ -152,15 +152,18 @@ func TestAReadSaysWhyEachSpanWasTornAndOnlyAnAppendInFlightIsAnIncompleteTail(t 
 	s := memoryStore()
 	s.Append(must[store.Batch](t)(store.NewBatch(store.Record("event"))))
 	st := must[store.Heads](t)(s.Heads()).Streams[0]
-	span := func(from, to store.Offset) store.Span { return store.Span{From: from, To: to} }
-	tornTail := store.Scan{End: 20, Tail: store.TornTail{Span: span(20, 25), Why: store.NoMagic{}},
-		Torn: []store.Torn{{Span: span(0, 5), Why: store.NoRecords{}}, {Span: span(10, 12), Why: store.CRCMismatch{}}}}
-	inFlight := store.Scan{End: 20, Tail: store.InFlight{Span: span(20, 30)},
-		Torn: []store.Torn{{Span: span(3, 4), Why: store.Truncated{}}}}
-	block := storeBlockOf(t, StoreFacts{Reads: []store.Scanned{{Range: store.Range{Stream: st, From: 0}, Scan: tornTail}, {Range: store.Range{Stream: st, From: 0}, Scan: inFlight}}})
-	want := map[string]any{"frames_read": 0.0, "bytes_read": 55.0, "incomplete_tail_bytes": 10.0, "torn": []any{map[string]any{
-		"ref": string(st.Ref.Name()), "torn_spans": 4.0, "torn_bytes": 13.0,
-		"why": map[string]any{"no_records": 1.0, "crc_mismatch": 1.0, "no_magic": 1.0, "truncated": 1.0}}}}
+	torn := func(from, to store.Offset, why store.Refusal) store.Torn {
+		return store.Torn{Span: store.Span{From: from, To: to}, Why: why}
+	}
+	// torn to its end, nothing in flight
+	tornThrough := store.Scan{End: 20, Until: 25, Torn: []store.Torn{
+		torn(0, 5, store.NoRecords{}), torn(10, 12, store.CRCMismatch{}), torn(12, 13, store.OverBound{Length: 1 << 30}), torn(20, 25, store.NoMagic{})}}
+	// torn after its last frame, then 6 bytes in flight
+	inFlight := store.Scan{End: 20, Until: 30, Torn: []store.Torn{torn(3, 4, store.Truncated{}), torn(20, 24, store.BadRecordLength{})}}
+	block := storeBlockOf(t, StoreFacts{Reads: []store.Scanned{{Range: store.Range{Stream: st, From: 0}, Scan: tornThrough}, {Range: store.Range{Stream: st, From: 0}, Scan: inFlight}}})
+	want := map[string]any{"frames_read": 0.0, "bytes_read": 55.0, "incomplete_tail_bytes": 6.0, "torn": []any{map[string]any{
+		"ref": string(st.Ref.Name()), "torn_spans": 6.0, "torn_bytes": 18.0,
+		"why": map[string]any{"truncated": 1.0, "no_magic": 1.0, "over_bound": 1.0, "crc_mismatch": 1.0, "bad_record_length": 1.0, "no_records": 1.0}}}}
 	if !reflect.DeepEqual(block["read"], want) {
 		t.Errorf("the read is %v; want %v", block["read"], want)
 	}
@@ -257,14 +260,14 @@ func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 		r.Stored().Appends = append(r.Stored().Appends, appended)
 		panic("after the append")
 	})
-	if len(e.Store.Appends) != 1 || e.Store.Appends[0].(store.Appended).Bytes != appended.Bytes || cli.ExitCode(e.Outcome) != 70 {
-		t.Errorf("a panic after an append recorded %+v, exit %d; want the append kept, exit 70", e.Store, cli.ExitCode(e.Outcome))
+	if len(e.Store.Appends) != 1 || e.Store.Appends[0].(store.Appended).Bytes != appended.Bytes || cli.ExitCode(e.Outcome()) != 70 {
+		t.Errorf("a panic after an append recorded %+v, exit %d; want the append kept, exit 70", e.Store, cli.ExitCode(e.Outcome()))
 	}
 }
 
 // The checkout's object format is on the place line, beside its paths.
 func TestThePlaceSaysTheCheckoutsObjectFormat(t *testing.T) {
-	place, _ := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Outcome: cli.Done{}})["place"].(map[string]any)
+	place, _ := decode(t, Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Ending: Succeeded{}})["place"].(map[string]any)
 	c, _ := place["checkout"].(map[string]any)
 	if c["object_format"] != "sha256" || c["git_dir"] != "/w/.git" {
 		t.Errorf("the place line is %v; want the checkout's paths and its format, sha256", place)

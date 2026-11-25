@@ -95,8 +95,8 @@ func TestTheTwinsStoreIsInMemory(t *testing.T) {
 func TestARunWritesAsTheIDItsIdentityFilesHold(t *testing.T) {
 	twin := withIDFile(t, NewTwin(), besideID.FileText())
 	_, e := run(t, twin, "add", "unfiled/children", "{title: f}")
-	if _, failed := e.Outcome.(cli.Failed); failed {
-		t.Fatalf("add ended %#v; want it done", e.Outcome)
+	if _, failed := e.Outcome().(cli.Failed); failed {
+		t.Fatalf("add ended %#v; want it done", e.Outcome())
 	}
 	if got := writerOn(t, e); got != besideID {
 		t.Errorf("the event names writer %s; want the id file's, %s", got, besideID)
@@ -115,9 +115,9 @@ func TestATwinWhoseIDFileDoesNotParseOpensNoStore(t *testing.T) {
 	if _, unreadable := in.Identity.(command.Unreadable); !unreadable {
 		t.Errorf("the event's place is %#v; want the checkout, its id file unreadable", e.Place)
 	}
-	failed, ok := e.Outcome.(cli.Failed)
+	failed, ok := e.Outcome().(cli.Failed)
 	if !ok || failed.Failure.Reason() != "store" || len(e.Store.Folds) != 0 {
-		t.Errorf("get ended %#v with folds %v; want it failed as the store's, no fold", e.Outcome, e.Store.Folds)
+		t.Errorf("get ended %#v with folds %v; want it failed as the store's, no fold", e.Outcome(), e.Store.Folds)
 	}
 	if want := command.PathOf(command.IDFile{}, twinCheckout); !strings.Contains(twin.Err.String(), want) {
 		t.Errorf("stderr says %q; want it to name %s, the file that does not read", twin.Err, want)
@@ -144,8 +144,8 @@ func TestInitInAnUnmintedTwinMintsTheWriterItWritesAs(t *testing.T) {
 	}
 	twin.Commands.Events = nil
 	_, e := run(t, twin, "add", "unfiled/children", "{title: f}")
-	if _, failed := e.Outcome.(cli.Failed); failed {
-		t.Fatalf("add ended %#v; want it done", e.Outcome)
+	if _, failed := e.Outcome().(cli.Failed); failed {
+		t.Fatalf("add ended %#v; want it done", e.Outcome())
 	}
 	minted := writerOn(t, e)
 	if minted == twinID {
@@ -171,8 +171,8 @@ func TestInitThatFailsAfterItsMintEndsMinted(t *testing.T) {
 	durably(pins.CreateOnce(pinFile, []byte("not a pin")))
 	twin.Process.Pin = func(git.Checkout) files.Files { return pins }
 	_, e := run(t, twin, "admin", "init")
-	if _, failed := e.Outcome.(cli.Failed); !failed || len(e.Store.Creates) == 0 {
-		t.Fatalf("admin init over a pin that does not read ended %#v with creates %v; want it failed after its mint", e.Outcome, e.Store.Creates)
+	if _, failed := e.Outcome().(cli.Failed); !failed || len(e.Store.Creates) == 0 {
+		t.Fatalf("admin init over a pin that does not read ended %#v with creates %v; want it failed after its mint", e.Outcome(), e.Store.Creates)
 	}
 	if got := writerOn(t, e); got == twinID {
 		t.Errorf("the event names %s, the twin's own id; want the writer init minted", got)

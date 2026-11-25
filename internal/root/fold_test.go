@@ -92,16 +92,16 @@ func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 		t.Errorf("an open over a torn span folds %+v; want the enrollment, version one, the 6 creates and one torn span", f)
 	}
 	// the body ran: only it records a verbs block
-	if failed, ok := e.Outcome.(cli.Failed); ok && failed.Failure.Reason() == "store" || e.Verbs == nil {
-		t.Errorf("a verb over a torn span ends %#v with verbs %v; want its body's outcome", e.Outcome, e.Verbs)
+	if failed, ok := e.Outcome().(cli.Failed); ok && failed.Failure.Reason() == "store" || e.Verbs == nil {
+		t.Errorf("a verb over a torn span ends %#v with verbs %v; want its body's outcome", e.Outcome(), e.Verbs)
 	}
 }
 
 func TestAVerbWithNoStoreFailsAsTheEnvironments(t *testing.T) {
 	_, e := run(t, outside(NewTwin()), "get", "lit-abc/title")
-	failed, ok := e.Outcome.(cli.Failed)
+	failed, ok := e.Outcome().(cli.Failed)
 	if !ok || failed.Failure.Reason() != "store" || failed.Failure.Class() != reason.ClassEnvironment || len(e.Store.Folds) != 0 {
-		t.Errorf("a verb with no store ends %#v with folds %v; want it failed as the store's, no fold", e.Outcome, e.Store.Folds)
+		t.Errorf("a verb with no store ends %#v with folds %v; want it failed as the store's, no fold", e.Outcome(), e.Store.Folds)
 	}
 }
 

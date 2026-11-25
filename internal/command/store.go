@@ -193,13 +193,21 @@ type (
 		IncompleteTailBytes uint64     `json:"incomplete_tail_bytes"`
 		Torn                []tornLine `json:"torn"`
 	}
-	// tornLine is a ref's torn spans, a torn tail among them, and how many
-	// were torn for each reason.
+	// tornLine is a ref's torn spans, and how many were torn for each
+	// reason, every reason written, zeros included.
 	tornLine struct {
-		Ref   string         `json:"ref"`
-		Spans int            `json:"torn_spans"`
-		Bytes uint64         `json:"torn_bytes"`
-		Why   map[string]int `json:"why"`
+		Ref   string  `json:"ref"`
+		Spans int     `json:"torn_spans"`
+		Bytes uint64  `json:"torn_bytes"`
+		Why   whyLine `json:"why"`
+	}
+	whyLine struct {
+		Truncated       int `json:"truncated"`
+		NoMagic         int `json:"no_magic"`
+		OverBound       int `json:"over_bound"`
+		CRCMismatch     int `json:"crc_mismatch"`
+		BadRecordLength int `json:"bad_record_length"`
+		NoRecords       int `json:"no_records"`
 	}
 	// appendedLine is an append that landed its frame, durable: outcome
 	// appended.
@@ -421,26 +429,14 @@ func reads(rs []store.Scanned) *readLine {
 	torn := map[string]tornLine{}
 	for _, r := range rs {
 		l.FramesRead += len(r.Scan.Frames)
-		l.BytesRead += uint64(r.Scan.Until() - r.Range.From)
+		l.BytesRead += uint64(r.Scan.Until - r.Range.From)
+		l.IncompleteTailBytes += r.Scan.InFlight().Len()
 		name := string(r.Range.Stream.Ref.Name())
 		t := torn[name]
-		tore := func(s store.Span, why store.Refusal) {
-			if t.Why == nil {
-				t.Why = map[string]int{}
-			}
+		for _, s := range r.Scan.Torn {
 			t.Spans++
 			t.Bytes += s.Len()
-			t.Why[refusal(why)]++
-		}
-		for _, s := range r.Scan.Torn {
-			tore(s.Span, s.Why)
-		}
-		switch tail := r.Scan.Tail.(type) {
-		case store.NoTail:
-		case store.InFlight:
-			l.IncompleteTailBytes += tail.Span.Len()
-		case store.TornTail:
-			tore(tail.Span, tail.Why)
+			t.Why.count(s.Why)
 		}
 		if t.Spans > 0 {
 			t.Ref = name
@@ -453,23 +449,24 @@ func reads(rs []store.Scanned) *readLine {
 	return l
 }
 
-// refusal is why a frame was refused, as the line spells it.
-func refusal(r store.Refusal) string {
+// count is w with one more span torn for r.
+func (w *whyLine) count(r store.Refusal) {
 	switch r.(type) {
 	case store.Truncated:
-		return "truncated"
+		w.Truncated++
 	case store.NoMagic:
-		return "no_magic"
+		w.NoMagic++
 	case store.OverBound:
-		return "over_bound"
+		w.OverBound++
 	case store.CRCMismatch:
-		return "crc_mismatch"
+		w.CRCMismatch++
 	case store.BadRecordLength:
-		return "bad_record_length"
+		w.BadRecordLength++
 	case store.NoRecords:
-		return "no_records"
+		w.NoRecords++
+	default:
+		panic(fmt.Sprintf("command: %T is not a Refusal", r))
 	}
-	panic(fmt.Sprintf("command: %T is not a Refusal", r))
 }
 
 func created(o files.Made) bool {
