@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/promptctl/lit2/internal/address"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
@@ -26,14 +27,15 @@ const (
 	Rm
 )
 
+// String is the verb as a person types it: its command's name.
 func (v Verb) String() string {
 	switch v {
 	case Set:
-		return "set"
+		return commandname.Set().String()
 	case Add:
-		return "add"
+		return commandname.Add().String()
 	case Rm:
-		return "rm"
+		return commandname.Rm().String()
 	}
 	panic(fmt.Sprintf("verbs: %d is not a Verb", uint8(v)))
 }
@@ -557,7 +559,7 @@ func VerbsOf(r config.Row) []string {
 	switch f.Decl.Multi {
 	case field.Set:
 		if _, ok := shapeOf(Rm, f.Decl); ok {
-			out = append(out, "rm "+string(f.At)+"/<member>")
+			out = append(out, Rm.String()+" "+string(f.At)+"/<member>")
 		}
 	case field.Elements:
 		out = append(out, "rm "+string(f.At)+"/<id>")

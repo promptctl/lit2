@@ -75,8 +75,8 @@ func twinReader() config.ReaderVersion {
 func NewTwin() Twin {
 	t := NewFreshTwin()
 	t.Code.Commit(map[string][]byte{verbs.WorkspacePath(): assets.DefaultWorkspace.Bytes()})
-	if status := Run(t.Process, []string{"admin", "init"}); status != 0 {
-		panic(fmt.Sprintf("root: the twin's admin init exited %d: %s", status, t.Err))
+	if status := Run(t.Process, commandname.Init().Words()); status != 0 {
+		panic(fmt.Sprintf("root: the twin's %s exited %d: %s", commandname.Init(), status, t.Err))
 	}
 	t.Out.Reset()
 	t.Err.Reset()
@@ -172,6 +172,9 @@ func storesOf(c git.Checkout, ports store.Ports) func(git.Checkout) store.Ports 
 // composition, and its event is kept by no log.
 func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 	var forged error
+	// [LAW:single-enforcer] exception: a summary no row parsed, since a
+	// forged write is no command line; its name is the reserved one no row
+	// may take, so it is never read as a person's command.
 	e := invoke(t.Process, cli.Summary{Name: commandname.Forged()}, func(r body) command.Ran {
 		return r.ran(r.verb(func(v inForce) cli.Outcome {
 			c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })

@@ -29,23 +29,9 @@ func fields(t *testing.T) config.Table {
 	return schema.Table()
 }
 
-// lit2 is lit2's command line, failing t when it does not build.
-func lit2(t *testing.T) Commands {
-	t.Helper()
-	c, err := Lit2()
-	if err != nil {
-		t.Fatalf("lit2's command line does not build: %v", err)
-	}
-	return c
-}
-
 // parse is the command args parse to on lit2's command line.
 func parse(args ...string) (Command, error) {
-	c, err := Lit2()
-	if err != nil {
-		return nil, err
-	}
-	p, err := Parse(c, args)
+	p, err := Parse(Lit2(), args)
 	return p.Command, err
 }
 
@@ -79,7 +65,7 @@ func made(r Row) Command {
 // its own Make makes, asked under that name, and --help names it with its
 // summary: a row added, renamed or regrouped is covered with no edit here.
 func TestEveryRowParsesToItsCommandUnderItsName(t *testing.T) {
-	c := lit2(t)
+	c := Lit2()
 	help := HelpText(c, ActiveFields{Table: fields(t)})
 	for _, r := range c.rows {
 		args := append(r.Name.Words(), operandsFor(r.Operands)...)
@@ -87,9 +73,32 @@ func TestEveryRowParsesToItsCommandUnderItsName(t *testing.T) {
 		if err != nil || p.Asked.Name != r.Name || !reflect.DeepEqual(p.Command, made(r)) {
 			t.Errorf("Parse(%q) = %#v, %v; want %#v asked as %s", args, p, err, made(r), r.Name)
 		}
-		if !strings.Contains(help, r.Name.String()) || !strings.Contains(help, r.Summary) {
-			t.Errorf("--help does not name %s with its summary %q", r.Name, r.Summary)
+		if !helpLine(help, r) {
+			t.Errorf("--help has no line of %s with its summary %q", r.Name, r.Summary)
 		}
+	}
+}
+
+// helpLine is whether help has r's own line: its name first, its summary
+// last.
+func helpLine(help string, r Row) bool {
+	for _, l := range strings.Split(help, "\n") {
+		if strings.HasPrefix(l, "  "+r.Name.String()+" ") && strings.HasSuffix(l, " "+r.Summary) {
+			return true
+		}
+	}
+	return false
+}
+
+// lit2's rows are commandname's, so the name every message reads is the
+// name a row parses by.
+func TestLit2sRowsAreTheNamesCommandnameHolds(t *testing.T) {
+	var got []commandname.Name
+	for _, r := range Lit2().rows {
+		got = append(got, r.Name)
+	}
+	if !slices.Equal(got, commandname.Rows()) {
+		t.Errorf("lit2's rows are named %v; want commandname's, %v", got, commandname.Rows())
 	}
 }
 
@@ -200,7 +209,7 @@ func TestEveryParseRefusalHasItsOwnWireName(t *testing.T) {
 // verbs that write each, compared as sets.
 func TestHelpsFieldsAreTheTablesRows(t *testing.T) {
 	table := fields(t)
-	help := HelpText(lit2(t), ActiveFields{Table: table})
+	help := HelpText(Lit2(), ActiveFields{Table: table})
 	got := map[string]bool{}
 	place := ""
 	for _, l := range strings.Split(help, "\n") {
@@ -232,7 +241,7 @@ func TestHelpsFieldsAreTheTablesRows(t *testing.T) {
 // The table is the parser: one more row parses and is helped with no other
 // edit `[LAW:composability]`.
 func TestOneMoreRowIsParsedHelpedAndAskedUnderItsName(t *testing.T) {
-	c := lit2(t)
+	c := Lit2()
 	show := Row{Name: commandname.Verb("show"), Operands: TakesPaths{Make: func(p []PathText, _ Flags) Command { return Get{paths: p} }}, Summary: "read, by another name"}
 	// a command of a kind nothing else in the package has heard of
 	ping := Row{Name: commandname.InGroup("admin", "ping"), Operands: TakesNothing{Make: func() Command { return probe{} }}, Summary: "a command no switch knows"}
@@ -262,7 +271,7 @@ func (probe) command() {}
 // the log keeps for no row's, or runs bare what does not parse, is not
 // built; each beside lit2's own, which is.
 func TestALineThatDoesNotParseOneWayIsNotBuilt(t *testing.T) {
-	c := lit2(t)
+	c := Lit2()
 	nothing := TakesNothing{Make: func() Command { return AdminInit{} }}
 	row := func(n commandname.Name) Row { return Row{Name: n, Operands: nothing} }
 	for _, tc := range []struct {
@@ -274,14 +283,17 @@ func TestALineThatDoesNotParseOneWayIsNotBuilt(t *testing.T) {
 		{"a row twice", []Row{row(commandname.Get())}, c.bare, errAmbiguous},
 		{"a verb a group's word", []Row{row(commandname.Verb("admin"))}, c.bare, errAmbiguous},
 		{"a word with a space", []Row{row(commandname.Verb("two words"))}, c.bare, errNotAWord},
-		{"a word scan takes for a flag", []Row{row(commandname.Verb("-x"))}, c.bare, errNotAWord},
+		{"a word scan takes for a flag", []Row{row(commandname.Verb("--x"))}, c.bare, errNotAWord},
+		{"an empty group", []Row{row(commandname.InGroup("", "sync"))}, c.bare, errNotAWord},
+		{"no operand shape", []Row{{Name: commandname.Verb("ping")}}, c.bare, errNoMake},
+		{"no Make", []Row{{Name: commandname.Verb("ping"), Operands: TakesNothing{}}}, c.bare, errNoMake},
 		{"an empty word", []Row{row(commandname.InGroup("admin", ""))}, c.bare, errNotAWord},
 		{"the unparsed name", []Row{row(commandname.Unparsed())}, c.bare, errReservedName},
 		{"the help name", []Row{row(commandname.Help())}, c.bare, errReservedName},
 		{"the forged name", []Row{row(commandname.Forged())}, c.bare, errReservedName},
 		{"a bare of no row", nil, Bare{Name: commandname.Verb("show")}, errBareNoRow},
 		{"a bare its row refuses", nil, Bare{Name: commandname.Get()}, errBareUnparsed},
-		{"a bare with operands its row takes none of", nil, Bare{Name: commandname.AdminInit(), Operands: []string{"x"}}, errBareUnparsed},
+		{"a bare with operands its row takes none of", nil, Bare{Name: commandname.Init(), Operands: []string{"x"}}, errBareUnparsed},
 	} {
 		if _, err := NewCommands(append(slices.Clone(c.rows), tc.rows...), tc.bare); !errors.Is(err, tc.want) {
 			t.Errorf("%s: NewCommands = %v; want %v", tc.name, err, tc.want)
@@ -296,7 +308,7 @@ func TestALineThatDoesNotParseOneWayIsNotBuilt(t *testing.T) {
 // The paths the event records are the paths as typed, whatever is done
 // with the command after: no row's summary shares its command's storage.
 func TestTheSummaryKeepsThePathsAsTyped(t *testing.T) {
-	c := lit2(t)
+	c := Lit2()
 	for _, r := range c.rows {
 		p, err := Parse(c, append(r.Name.Words(), operandsFor(r.Operands)...))
 		if err != nil {
@@ -323,7 +335,7 @@ func TestTheSummaryKeepsThePathsAsTyped(t *testing.T) {
 // every group, the bare line the row a bare lit2 runs, and both flags,
 // in --help and in the unknown flag's refusal.
 func TestTheProseAroundTheRowsFollowsThem(t *testing.T) {
-	c := lit2(t)
+	c := Lit2()
 	read := commandname.Verb("read")
 	rows := slices.Clone(c.rows)
 	for i, r := range rows {
@@ -354,7 +366,7 @@ func TestTheProseAroundTheRowsFollowsThem(t *testing.T) {
 // TestHelpWithNoVersionSaysWhy: with no version in force there is no field
 // table to print, and help says why in its place.
 func TestHelpWithNoVersionSaysWhy(t *testing.T) {
-	help := HelpText(lit2(t), NoFields{Why: "no version in force"})
+	help := HelpText(Lit2(), NoFields{Why: "no version in force"})
 	if strings.Contains(help, "fields of ") || !strings.Contains(help, "fields: no version in force") {
 		t.Errorf("help with no version:\n%s", help)
 	}
@@ -398,11 +410,46 @@ func TestReportSaysTheReasonAndTheError(t *testing.T) {
 }
 
 func TestSummaryCountsValuesNeverHoldsThem(t *testing.T) {
-	p, err := Parse(lit2(t), []string{"set", "x/status", "done", "y/title", "secret words"})
+	p, err := Parse(Lit2(), []string{"set", "x/status", "done", "y/title", "secret words"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := p.Asked; got.Name != commandname.Set() || !reflect.DeepEqual(got.Paths, []PathText{"x/status", "y/title"}) || got.Values != 2 {
 		t.Errorf("set is asked as %#v; want set, both paths, two values", got)
+	}
+}
+
+// Every flag scan takes is said by --help, with what it does, and listed
+// by the refusal of a flag it does not take.
+func TestHelpAndTheUnknownFlagSayEveryFlag(t *testing.T) {
+	help := HelpText(Lit2(), NoFields{Why: "none"})
+	_, err := parse("get", "x", "--frob")
+	for _, f := range theFlags() {
+		if !strings.Contains(help, f.name+" "+f.does) {
+			t.Errorf("--help does not say %s %s", f.name, f.does)
+		}
+		if !errors.Is(err, errUnknownFlag) || !strings.Contains(err.Error(), f.name) {
+			t.Errorf("an unknown flag is refused with %v; want it to list %s", err, f.name)
+		}
+	}
+}
+
+// A command line holds what it checked: changing the rows or the bare
+// operands it was built from, or the bare it hands out, changes nothing
+// it parses.
+func TestACommandLineHoldsWhatItChecked(t *testing.T) {
+	rows, bare := Lit2().Rows(), Lit2().Bare()
+	c, err := NewCommands(rows, bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows[0].Name = commandname.Verb("admin")
+	bare.Operands[0] = "changed"
+	c.Bare().Operands[0] = "changed"
+	if p, err := Parse(c, []string{"admin", "init"}); err != nil || p.Asked.Name != commandname.Init() {
+		t.Errorf("admin init after its rows changed = %#v, %v; want admin init", p, err)
+	}
+	if p, err := Parse(c, nil); err != nil || !slices.Equal(p.Asked.Paths, []PathText{"/"}) {
+		t.Errorf("a bare lit2 after its operands changed = %#v, %v; want get /", p, err)
 	}
 }

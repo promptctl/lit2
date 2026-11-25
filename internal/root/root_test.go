@@ -18,7 +18,7 @@ import (
 // the panic's value and stack kept, so the run is recorded as a body's
 // panic is.
 func TestAParseThatPanicsIsAskedAsUnparsed(t *testing.T) {
-	asked, answer := parsed(func() (cli.Commands, error) { panic("a parse broke") }, []string{"get", "x"})
+	asked, answer := parsed(func() cli.Commands { panic("a parse broke") }, []string{"get", "x"})
 	failed, ok := answer(body{}).Outcome.(cli.Failed)
 	var in command.Internal
 	if asked.Name != commandname.Unparsed() || !ok || !errors.As(failed.Failure, &in) || !strings.Contains(in.Error(), "a parse broke") || len(in.Stack()) == 0 {
@@ -63,7 +63,7 @@ func TestHelpPrintsTheVerbsAndExitsZero(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"get", "--help"}} {
 		twin := NewTwin()
 		status, e := run(t, twin, args...)
-		for _, r := range lit2(t).Rows() {
+		for _, r := range cli.Lit2().Rows() {
 			if !strings.Contains(twin.Out.String(), r.Name.String()) {
 				t.Errorf("lit2 %q does not name %s on stdout", args, r.Name)
 			}
@@ -91,7 +91,7 @@ func TestARowWithNoBodyIsInternal(t *testing.T) {
 	if status != 70 || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(twin.Err.String(), "lit2 admin sync is not built in this binary; lit-converge-5eq builds it") {
 		t.Errorf("lit2 admin sync: status %d, stderr %q", status, twin.Err)
 	}
-	if e.Command.Name != commandname.AdminSync() {
+	if e.Command.Name != commandname.Sync() {
 		t.Errorf("lit2 admin sync recorded %#v", e.Command)
 	}
 }
@@ -99,11 +99,11 @@ func TestARowWithNoBodyIsInternal(t *testing.T) {
 // A row moved to another group is asked, logged and named by its body
 // under its new name, with no edit beside the row's.
 func TestARegroupedRowIsNamedByItsNewPlace(t *testing.T) {
-	c := lit2(t)
+	c := cli.Lit2()
 	moved := commandname.InGroup("config", "sync")
 	rows := c.Rows()
 	for i, r := range rows {
-		if r.Name == commandname.AdminSync() {
+		if r.Name == commandname.Sync() {
 			rows[i].Name = moved
 		}
 	}
@@ -112,21 +112,11 @@ func TestARegroupedRowIsNamedByItsNewPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	twin := NewTwin()
-	asked, answer := parsed(func() (cli.Commands, error) { return regrouped, nil }, []string{"config", "sync"})
+	asked, answer := parsed(func() cli.Commands { return regrouped }, []string{"config", "sync"})
 	e := invoke(twin.Process, asked, answer)
 	if e.Command.Name != moved || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(failure(t, e).Error(), "lit2 config sync is not built") {
 		t.Errorf("config sync recorded %#v ending %#v; want it asked as config sync, its failure naming config sync", e.Command, e.Outcome)
 	}
-}
-
-// lit2 is lit2's command line, failing t when it does not build.
-func lit2(t *testing.T) cli.Commands {
-	t.Helper()
-	c, err := cli.Lit2()
-	if err != nil {
-		t.Fatalf("lit2's command line does not build: %v", err)
-	}
-	return c
 }
 
 type refusing struct{ err error }

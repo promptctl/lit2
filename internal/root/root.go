@@ -119,13 +119,13 @@ func invoke(p Process, asked cli.Summary, answer func(body) command.Ran) command
 func ask(args []string) (cli.Summary, func(body) command.Ran) { return parsed(cli.Lit2, args) }
 
 // parsed is what args ask of the command line commands builds, and its
-// answer: answer to the command, or the refusal, the line's or the
-// parse's, one value whatever happened, so a run that parsed nothing runs
-// the same steps as one that did. A line that does not build is a lit2
-// bug, answered as broken. A build or parse that panics is asked as
-// unparsed and answered with the panic, its value and stack, as Record
-// answers a body's, so the run is recorded `[LAW:nothing-unseen]`.
-func parsed(commands func() (cli.Commands, error), args []string) (asked cli.Summary, run func(body) command.Ran) {
+// answer: answer to the command, or the parse's refusal, one value
+// whatever the parse did, so a run that parsed nothing runs the same
+// steps as one that did. A line that does not build panics, a lit2 bug;
+// that, or a parse that panics, is asked as unparsed and answered with
+// the panic, its value and stack, as Record answers a body's, so the run
+// is recorded `[LAW:nothing-unseen]`.
+func parsed(commands func() cli.Commands, args []string) (asked cli.Summary, run func(body) command.Ran) {
 	// [LAW:single-enforcer] exception: a second recover beside Record's,
 	// since the parse runs before Record so that what was asked is its
 	// input; lit-law-review-xfz.b5u makes one recover cover the whole run
@@ -136,16 +136,10 @@ func parsed(commands func() (cli.Commands, error), args []string) (asked cli.Sum
 			asked, run = cli.Summary{Name: commandname.Unparsed()}, func(r body) command.Ran { return r.ran(cli.Failed{Failure: broke}) }
 		}
 	}()
-	refused := func(err error) (cli.Summary, func(body) command.Ran) {
-		return cli.Summary{Name: commandname.Unparsed()}, func(r body) command.Ran { return r.ran(failed(err)) }
-	}
-	c, err := commands()
-	if err != nil {
-		return refused(fmt.Errorf("lit2's command line: %w", err))
-	}
+	c := commands()
 	p, err := cli.Parse(c, args)
 	if err != nil {
-		return refused(err)
+		return cli.Summary{Name: commandname.Unparsed()}, func(r body) command.Ran { return r.ran(failed(err)) }
 	}
 	return p.Asked, func(r body) command.Ran { return dispatch(r, c, p) }
 }

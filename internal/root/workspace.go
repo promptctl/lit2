@@ -37,7 +37,7 @@ type inForce struct {
 func (o opened) load() (inForce, error) {
 	in, ok := o.folded.State.Workspace().(fold.InForce)
 	if !ok {
-		return inForce{}, workspaceFailure{err: fmt.Errorf("%w: lit2 %s applies the committed %s", errNoVersionInForce, commandname.ConfigCommit(), verbs.WorkspacePath())}
+		return inForce{}, workspaceFailure{err: fmt.Errorf("%w: lit2 %s applies the committed %s", errNoVersionInForce, commandname.Commit(), verbs.WorkspacePath())}
 	}
 	schema, err := config.Load(in.Active.Bytes, o.p.Reader)
 	if err != nil {
@@ -101,7 +101,7 @@ func (o opened) commit() cli.Outcome {
 	case verbs.OnDisk:
 		disk = f
 	case verbs.NoFile:
-		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%w: there is no %s; write it, commit it, then lit2 %s", errNothingToApply, verbs.WorkspacePath(), commandname.ConfigCommit()))}
+		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%w: there is no %s; write it, commit it, then lit2 %s", errNothingToApply, verbs.WorkspacePath(), commandname.Commit()))}
 	case verbs.UnreadableFile:
 		return cli.Failed{Failure: workspaceFailure{err: fmt.Errorf("reading %s: %w", verbs.WorkspacePath(), f.Err)}}
 	}
@@ -111,12 +111,12 @@ func (o opened) commit() cli.Outcome {
 	}
 	switch at := at.(type) {
 	case git.Untracked:
-		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[2]w: %[1]s is not in HEAD; git add %[1]s and git commit, then lit2 %[3]s", verbs.WorkspacePath(), errNotInHead, commandname.ConfigCommit()))}
+		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[2]w: %[1]s is not in HEAD; git add %[1]s and git commit, then lit2 %[3]s", verbs.WorkspacePath(), errNotInHead, commandname.Commit()))}
 	case git.NotAFile:
-		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[3]w: HEAD holds %[1]s as mode %[2]s, not a regular file; commit %[1]s as a regular file, then lit2 %[4]s", verbs.WorkspacePath(), at.Mode, errNotAFileInHead, commandname.ConfigCommit()))}
+		return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[3]w: HEAD holds %[1]s as mode %[2]s, not a regular file; commit %[1]s as a regular file, then lit2 %[4]s", verbs.WorkspacePath(), at.Mode, errNotAFileInHead, commandname.Commit()))}
 	case git.Tracked:
 		if at.Blob != disk.Blob {
-			return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[3]w: %[1]s differs from HEAD's %[2]s; git commit %[1]s, then lit2 %[4]s", verbs.WorkspacePath(), at.Blob, errDiffersFromHead, commandname.ConfigCommit()))}
+			return cli.Failed{Failure: refuseCommit(fmt.Errorf("%[3]w: %[1]s differs from HEAD's %[2]s; git commit %[1]s, then lit2 %[4]s", verbs.WorkspacePath(), at.Blob, errDiffersFromHead, commandname.Commit()))}
 		}
 	}
 	// version one is written under itself; any later under the version in
@@ -246,7 +246,7 @@ func (o opened) status() cli.Outcome {
 func (r body) init() command.Ran {
 	in, err := command.CheckoutAt(r.place)
 	if err != nil {
-		return r.ran(cli.Failed{Failure: storeFailure{err: fmt.Errorf("%s makes a git checkout a writer: %w", commandname.AdminInit(), err)}})
+		return r.ran(cli.Failed{Failure: storeFailure{err: fmt.Errorf("%s makes a git checkout a writer: %w", commandname.Init(), err)}})
 	}
 	once := r.p.onceFiles(in.Checkout)
 	minting := MintIdentity(once.id, once.key, r.p.Entropy)
@@ -307,7 +307,7 @@ func (r body) enroll(c git.Checkout, once onceFiles, minting Minting) cli.Outcom
 	case verbs.Ask:
 		r.rec.Policy.Bootstrap = "request"
 		drafts = append(drafts, events.Act{About: events.Root{}, Payload: events.Request{}})
-		said = fmt.Sprintf("membership requested: an owner admits you with lit2 add /members '{principal: %q, role: contributor}'\n", me.String())
+		said = fmt.Sprintf("membership requested: an owner admits you with lit2 %s /members '{principal: %q, role: contributor}'\n", commandname.Add(), me.String())
 	case verbs.Unjudged:
 		r.rec.Policy.Bootstrap = "unjudged"
 		return failed(unjudged(s.Policy, c))
@@ -342,7 +342,7 @@ func (r body) enroll(c git.Checkout, once onceFiles, minting Minting) cli.Outcom
 		}
 		drafts, said = append(drafts, act), said+fmt.Sprintf("workspace %s applied as version one\n", ref)
 	case len(drafts) == 0:
-		return written(fmt.Fprintf(r.p.Out, "no workspace version is in force: an owner applies one with lit2 %s\n", commandname.ConfigCommit()))
+		return written(fmt.Fprintf(r.p.Out, "no workspace version is in force: an owner applies one with lit2 %s\n", commandname.Commit()))
 	default:
 		ref = git.HashBlob(c.Format, assets.DefaultWorkspace.Bytes())
 	}

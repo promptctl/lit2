@@ -14,19 +14,25 @@ import (
 // Lit2 is lit2's command line, in the order --help prints it: the four
 // verbs on paths, then admin, what keeps a checkout's store, and config,
 // what applies the workspace's versions, both outside the everyday
-// surface. A bare lit2 is get /. Its error is NewCommands's, a row this
-// file got wrong, which a test that builds it catches.
-func Lit2() (Commands, error) {
-	return NewCommands([]Row{
+// surface. A bare lit2 is get /. A row this file gets wrong panics here,
+// inside the run's recover, so the run is recorded as lit2's own failure,
+// and the test that builds it fails before such a binary ships
+// `[LAW:no-silent-failure]`.
+func Lit2() Commands {
+	c, err := NewCommands([]Row{
 		{Name: commandname.Get(), Operands: TakesPaths{Make: func(p []PathText, _ Flags) Command { return Get{paths: p} }}, Summary: "read the nodes at these paths"},
 		{Name: commandname.Set(), Operands: TakesPairs{Make: func(p []Pair, f Flags) Command { return Set{pairs: p, flags: f} }}, DryRun: true, Summary: "replace the value at each path"},
 		{Name: commandname.Add(), Operands: TakesPairs{Make: func(p []Pair, f Flags) Command { return Add{pairs: p, flags: f} }}, DryRun: true, Summary: "append each value to the list at its path"},
 		{Name: commandname.Rm(), Operands: TakesPaths{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, DryRun: true, Summary: "delete the nodes at these paths"},
-		{Name: commandname.AdminInit(), Operands: TakesNothing{Make: func() Command { return AdminInit{} }}, Summary: "make this checkout a writer: its id, its principal, the workspace's first version"},
-		{Name: commandname.AdminSync(), Operands: TakesNothing{Make: func() Command { return AdminSync{} }}, Summary: "publish this checkout's events and fetch and verify every writer's"},
-		{Name: commandname.ConfigCommit(), Operands: TakesNothing{Make: func() Command { return ConfigCommit{} }}, Summary: "apply the committed " + verbs.WorkspacePath() + " as the next version"},
-		{Name: commandname.ConfigStatus(), Operands: TakesNothing{Make: func() Command { return ConfigStatus{} }}, Summary: "the version in force, the file against it, and any contending"},
+		{Name: commandname.Init(), Operands: TakesNothing{Make: func() Command { return AdminInit{} }}, Summary: "make this checkout a writer: its id, its principal, the workspace's first version"},
+		{Name: commandname.Sync(), Operands: TakesNothing{Make: func() Command { return AdminSync{} }}, Summary: "publish this checkout's events and fetch and verify every writer's"},
+		{Name: commandname.Commit(), Operands: TakesNothing{Make: func() Command { return ConfigCommit{} }}, Summary: "apply the committed " + verbs.WorkspacePath() + " as the next version"},
+		{Name: commandname.Status(), Operands: TakesNothing{Make: func() Command { return ConfigStatus{} }}, Summary: "the version in force, the file against it, and any contending"},
 	}, Bare{Name: commandname.Get(), Operands: []string{"/"}, Shows: "the tree, the lanes in rank order, what is next, and the version in force"})
+	if err != nil {
+		panic(fmt.Sprintf("cli: lit2's command line: %v", err))
+	}
+	return c
 }
 
 // Fields is the field table help prints: the one the version in force
@@ -48,21 +54,22 @@ func (NoFields) fields()     {}
 // place, rendered from the rows the parser and the paths read, each field
 // with its kind and the verbs that write it.
 func HelpText(c Commands, fields Fields) string {
-	sections := c.sections()
+	verbRows, groups := c.sections()
 	var b strings.Builder
 	b.WriteString("lit2 keeps this repository's backlog as a tree of nodes in its own git object database.\n\n")
 	b.WriteString("usage: lit2 <verb> <operand>...")
-	for _, s := range sections[1:] {
-		fmt.Fprintf(&b, "   lit2 %s <command>", s.title)
+	for _, g := range groups {
+		fmt.Fprintf(&b, "   lit2 %s <command>", g.word)
 	}
 	fmt.Fprintf(&b, "   lit2 %s\n", helpFlag)
 	fmt.Fprintf(&b, "lit2 alone is %s: %s\n", strings.Join(append(c.bare.Name.Words(), c.bare.Operands...), " "), c.bare.Shows)
-	fmt.Fprintf(&b, "%s anywhere prints this; %s shows what a write would do; %s ends the flags; - is a value\n", helpFlag, dryRunFlag, endFlags)
-	for _, s := range sections {
-		fmt.Fprintf(&b, "\n%s:\n", s.title)
-		for _, r := range s.rows {
-			fmt.Fprintf(&b, "  %-14s %-15s %s\n", r.Name, synopsis(r.Operands), r.Summary)
-		}
+	for _, f := range theFlags() {
+		fmt.Fprintf(&b, "%s %s; ", f.name, f.does)
+	}
+	fmt.Fprintf(&b, "%s ends the flags; - is a value\n", endFlags)
+	rowLines(&b, "verbs", verbRows)
+	for _, g := range groups {
+		rowLines(&b, g.word, g.rows)
 	}
 	switch f := fields.(type) {
 	case ActiveFields:
@@ -112,30 +119,36 @@ func kindOf(r config.Row) string {
 	panic(fmt.Sprintf("cli: %T is not a Row", r))
 }
 
-// section is one block of --help: the verbs, or one group's commands.
-type section struct {
-	title string
-	rows  []Row
+// group is one group's commands, as --help prints them.
+type group struct {
+	word string
+	rows []Row
 }
 
-// sections is c's rows by the group each name is in, in the order each
-// group first appears: the verbs always first, then every group.
-func (c Commands) sections() []section {
-	all := []section{{title: "verbs"}}
+// sections is c's rows by where each name is: the verbs, and each group
+// in the order it first appears.
+func (c Commands) sections() (verbRows []Row, groups []group) {
 	for _, r := range c.rows {
-		g, in := r.Name.Group()
+		word, in := r.Name.Group()
 		if !in {
-			all[0].rows = append(all[0].rows, r)
+			verbRows = append(verbRows, r)
 			continue
 		}
-		i := slices.IndexFunc(all[1:], func(s section) bool { return s.title == g })
+		i := slices.IndexFunc(groups, func(g group) bool { return g.word == word })
 		if i < 0 {
-			all = append(all, section{title: g})
-			i = len(all) - 2
+			groups, i = append(groups, group{word: word}), len(groups)
 		}
-		all[i+1].rows = append(all[i+1].rows, r)
+		groups[i].rows = append(groups[i].rows, r)
 	}
-	return all
+	return verbRows, groups
+}
+
+// rowLines is one block of --help: its title, then a line per row.
+func rowLines(b *strings.Builder, title string, rows []Row) {
+	fmt.Fprintf(b, "\n%s:\n", title)
+	for _, r := range rows {
+		fmt.Fprintf(b, "  %-14s %-15s %s\n", r.Name, synopsis(r.Operands), r.Summary)
+	}
 }
 
 // synopsis is how --help spells an operand shape.

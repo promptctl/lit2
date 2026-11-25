@@ -133,7 +133,7 @@ func (storeFailure) Reason() string      { return "store" }
 type unenrolled struct{}
 
 func (unenrolled) Error() string {
-	return fmt.Sprintf("this clone names no founding enrollment, so no policy says who may write: lit2 %s founds the store, or adopts the one %s names", commandname.AdminInit(), foundingPath())
+	return fmt.Sprintf("this clone names no founding enrollment, so no policy says who may write: lit2 %s founds the store, or adopts the one %s names", commandname.Init(), foundingPath())
 }
 func (unenrolled) Class() reason.Class { return reason.ClassEnvironment }
 func (unenrolled) Reason() string      { return "policy" }

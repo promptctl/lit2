@@ -128,11 +128,11 @@ func workspace(w World, _ address.Node) ([]string, error) {
 func Workspace(st fold.State, f File) string {
 	in, ok := st.Workspace().(fold.InForce)
 	if !ok {
-		return fmt.Sprintf("no version in force: lit2 %s applies one", commandname.ConfigCommit())
+		return fmt.Sprintf("no version in force: lit2 %s applies one", commandname.Commit())
 	}
 	parts := []string{short(in.Active.Blob) + " in force", WorkspacePath() + " " + fileState(in.Active.Blob, f)}
 	for _, c := range in.Contending {
-		parts = append(parts, fmt.Sprintf("contended by %s, by %s: lit2 %s resolves", short(c.Blob), writer(c.Stamp.By), commandname.ConfigCommit()))
+		parts = append(parts, fmt.Sprintf("contended by %s, by %s: lit2 %s resolves", short(c.Blob), writer(c.Stamp.By), commandname.Commit()))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -144,7 +144,7 @@ func fileState(active git.ObjectID, f File) string {
 		if f.Blob == active {
 			return "matches"
 		}
-		return fmt.Sprintf("differs (%s): commit it, then lit2 %s", short(f.Blob), commandname.ConfigCommit())
+		return fmt.Sprintf("differs (%s): commit it, then lit2 %s", short(f.Blob), commandname.Commit())
 	case NoFile:
 		return "is absent"
 	case UnreadableFile:

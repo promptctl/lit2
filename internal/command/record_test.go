@@ -43,13 +43,13 @@ func stays(work func(Recorder) cli.Outcome) func(Recorder) Ran {
 // it was handed.
 func TestTheEventKeepsThePlaceWorkEndedIn(t *testing.T) {
 	unminted := InCheckout{Checkout: checkout, Identity: Unminted{Missing: Both{}}}
-	minted := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.AdminInit()), unminted, func(Recorder) Ran {
+	minted := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Init()), unminted, func(Recorder) Ran {
 		return Ran{Place: here, Outcome: cli.Done{}}
 	})
 	if !reflect.DeepEqual(minted.Place, here) {
 		t.Errorf("work that ended at %#v recorded the place %#v", here, minted.Place)
 	}
-	broke := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.AdminInit()), unminted, func(Recorder) Ran { panic("the body broke") })
+	broke := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Init()), unminted, func(Recorder) Ran { panic("the body broke") })
 	if !reflect.DeepEqual(broke.Place, unminted) {
 		t.Errorf("work that panicked recorded the place %#v; want the one it was handed, %#v", broke.Place, unminted)
 	}
@@ -75,11 +75,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 }
 
 func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
-	c, err := cli.Lit2()
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := cli.Parse(c, []string{"get", "x"})
+	p, err := cli.Parse(cli.Lit2(), []string{"get", "x"})
 	if err != nil {
 		t.Fatal(err)
 	}

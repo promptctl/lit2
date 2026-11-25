@@ -144,9 +144,11 @@ The decisions the layout needed and the design documents did not make.
   make a missing case a lint failure.
 - **D3 Build** `CGO_ENABLED=0 go build ./cmd/lit2`, one command, a static
   binary; no Makefile.
-- **D4 Argv** is the standard library and a scan over the tables, the verbs
-  and each group's (`admin`, `config`): a flag is `--name` anywhere, `--`
-  ends the flags, `-` is a value.
+- **D4 Argv** is the standard library and a scan over one command line,
+  `cli.Commands`, built only by `NewCommands`: its rows, each named by
+  `commandname` as a verb or a group's command (`admin init`), and what a
+  bare `lit2` runs. A flag is `--name` anywhere, `--` ends the flags, `-` is
+  a value.
 - **D5 The one-way-deps check** is `internal/architecture`, over the
   `layers` block above: Go refuses cycles, not an upward edge that closes
   none.
