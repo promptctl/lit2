@@ -109,9 +109,6 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 		if l, err := f.List(); err != nil || len(l.Names)+len(l.Temps)+len(l.Refused) != 0 {
 			t.Errorf("List of an absent directory = %v, %v; want none", l, err)
 		}
-		if ts, err := f.Temps(n); err != nil || len(ts) != 0 {
-			t.Errorf("Temps of an absent directory = %v, %v; want none", ts, err)
-		}
 		b, dot := files.MustName("b"), files.MustName(".x")
 		for _, m := range []files.Name{b, dot, n} {
 			Create(t, f, m, []byte("x"))
@@ -128,8 +125,7 @@ func Files(t *testing.T, fresh func(*testing.T) files.Files) {
 		_, readErr := f.ReadAt(zero, 0, 1)
 		_, readAllErr := f.ReadAll(zero)
 		_, sizeErr := f.Size(zero)
-		_, tempsErr := f.Temps(zero)
-		for call, err := range map[string]error{"Append": appended.Why, "CreateOnce": created.Why, "ReadAt": readErr, "ReadAll": readAllErr, "Size": sizeErr, "Temps": tempsErr} {
+		for call, err := range map[string]error{"Append": appended.Why, "CreateOnce": created.Why, "ReadAt": readErr, "ReadAll": readAllErr, "Size": sizeErr} {
 			if !errors.Is(err, files.ErrNotAName) {
 				t.Errorf("%s of the zero Name failed with %v; want ErrNotAName, NotAppended or NotPlaced for a write", call, err)
 			}
@@ -165,6 +161,10 @@ func Append(t testing.TB, f files.Files, n files.Name, b []byte) files.Appended 
 	}
 	return got
 }
+
+// Memory is an empty directory in process, standing for /memory: for a
+// test whose files' paths name nothing it reads.
+func Memory() *files.Memory { return files.NewMemory(files.DirAt("/", files.MustName("memory"))) }
 
 // Seams is a Dir's seams, for a test outside files to see or fail its
 // fsyncs, gate its steps, or fail its removals.

@@ -66,7 +66,7 @@ func TestTheIdentityFilesOnDiskAreASecrets(t *testing.T) {
 }
 
 func inMemory(*testing.T) clone {
-	fresh := func() files.Files { return files.NewMemory() }
+	fresh := func() files.Files { return filestest.Memory() }
 	return clone{shared: fresh(), worktree: [2]files.Files{fresh(), fresh()}}
 }
 
@@ -171,12 +171,9 @@ func (h heldFiles) CreateOnce(p files.Name, b []byte) files.Placing {
 	return h.Files.CreateOnce(p, b)
 }
 
-// identityDir is the directory a test's identity files are named in.
-var identityDir = files.DirAt("/", files.MustName("identity"))
-
-// onceIn is the identity file f in fs, named in identityDir.
+// onceIn is the identity file f in fs.
 func onceIn(fs files.Files, f command.File) onceFile {
-	return onceFile{files: fs, dir: identityDir, name: command.NameOf(f)}
+	return onceFile{files: fs, name: command.NameOf(f)}
 }
 
 // mint is MintIdentity of the id in private and the key in shared, from
@@ -206,13 +203,13 @@ func placed(cs []command.Creation, id, key files.Made) bool {
 	want := []struct {
 		name string
 		made files.Made
-	}{{identityDir.PathOf(command.NameOf(command.IDFile{})), id}, {identityDir.PathOf(command.NameOf(command.PrincipalFile{})), key}}
+	}{{command.NameOf(command.IDFile{}).String(), id}, {command.NameOf(command.PrincipalFile{}).String(), key}}
 	if len(cs) != len(want) {
 		return false
 	}
 	for i, c := range cs {
 		p, ok := c.Placing.(files.Placed)
-		if !ok || c.Path != want[i].name || p.Made != want[i].made {
+		if !ok || filepath.Base(c.Path) != want[i].name || p.Made != want[i].made {
 			return false
 		}
 	}
@@ -223,7 +220,7 @@ func placed(cs []command.Creation, id, key files.Made) bool {
 // clone's other files are, unlike the identity files beside it.
 func TestThePinOnDiskIsReadable(t *testing.T) {
 	c := worktrees(t, t.TempDir())[1]
-	if _, err := pin(&writes{stored: &command.StoreFacts{}}, onceFile{files: pinFiles(c), dir: pinDir(c), name: pinFile}, events.EventID{0x1}); err != nil {
+	if _, err := pin(&writes{stored: &command.StoreFacts{}}, onceFile{files: pinFiles(c), name: pinFile}, events.EventID{0x1}); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(pinPath(c))

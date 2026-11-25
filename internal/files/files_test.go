@@ -28,7 +28,7 @@ func TestFilesContract(t *testing.T) {
 		})
 	})
 	t.Run("memory", func(t *testing.T) {
-		filestest.Files(t, func(*testing.T) files.Files { return files.NewMemory() })
+		filestest.Files(t, func(*testing.T) files.Files { return filestest.Memory() })
 	})
 }
 

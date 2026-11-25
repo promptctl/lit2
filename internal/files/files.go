@@ -182,7 +182,9 @@ type Files interface {
 	// partly written. Each directory it makes on the way is fsynced into
 	// its parent before anything under it is written, and the directory
 	// is fsynced after the link whether this call won or lost, so a loser
-	// is as durable as the winner. Once the name holds the file, the other
+	// is as durable as the winner; a sync that fails on the way stops
+	// nothing, and the file placed or found is PlacedNotDurable. Once the
+	// name holds the file, the other
 	// temporary files of the name are reaped: each is a crash's leftover,
 	// or the temp of a create that has lost. On disk this needs hard
 	// links, since link(2) is the one call that both refuses an existing
@@ -191,24 +193,26 @@ type Files interface {
 	// regular file is NotPlaced, NotAFile, never Existing, as it is for
 	// every other call.
 	CreateOnce(n Name, b []byte) Placing
-	// Sync fsyncs the directory, once, so a name in it that another call
-	// created, and may not have synced yet, survives a power loss. Its
-	// failure is the caller's to carry, never to retry: a sync that failed
-	// may have dropped what it held, and a second may pass over it.
+	// Sync fsyncs the directory, so a name in it that another call
+	// created, and may not have synced yet, survives a power loss. Once a
+	// sync of the port's has failed, every later one answers that failure,
+	// since the failed one may have dropped what it held and a second may
+	// pass over it; that is what one process knows, and a later run that
+	// syncs again may pass, so the run that saw the failure is the run
+	// that says it.
 	Sync() error
+	// Dir is the directory the port is of, which names its files.
+	Dir() Dir
 	// ReadAt reads up to size bytes at off, fewer at the end of the file.
 	ReadAt(n Name, off, size uint64) ([]byte, error)
 	// ReadAll reads the whole file, in one open to its end.
 	ReadAll(n Name) ([]byte, error)
 	Size(n Name) (uint64, error)
 	// List is the files of the directory, sorted, the temporary files of
-	// create-onces, and every other entry in it, each refused; a missing
-	// directory holds none.
+	// create-onces, what a create that never ran again left
+	// `[LAW:no-silent-failure]`, and every other entry in it, each
+	// refused; a missing directory holds none.
 	List() (Listing, error)
-	// Temps is the temporary files of create-onces of n in the directory,
-	// sorted, by their names in it: what a create of n that never ran
-	// again left `[LAW:no-silent-failure]`. A missing directory holds none.
-	Temps(n Name) ([]string, error)
 }
 
 // Appending is what an append did: wrote nothing whole, or landed b
@@ -216,13 +220,7 @@ type Files interface {
 // caller reads an end without saying which `[LAW:types-are-the-program]`.
 //
 //sumtype:decl
-type Appending interface {
-	appending()
-	// Landed is whether b is at the end of the file, whole.
-	Landed() bool
-	// Durable is whether b landed and every sync on its way passed.
-	Durable() bool
-}
+type Appending interface{ appending() }
 
 // NotAppended is an append that wrote no whole b: a short write leaves a
 // tail no reader takes for a frame, so writing b again is safe.
@@ -234,35 +232,24 @@ type Appended struct{ End uint64 }
 
 // AppendedNotDurable is b landed whole, the file ending at End, and a
 // sync on its way failed: b is there to every read, and may not be after
-// a power loss. The sync is never tried again, since one that failed may
-// have dropped the bytes it held and a second may pass over them.
+// a power loss. No later sync of the port's is trusted over it, since one
+// that failed may have dropped the bytes it held and a second may pass
+// over them.
 type AppendedNotDurable struct {
 	Appended
 	Why error
 }
 
-func (NotAppended) appending()           {}
-func (NotAppended) Landed() bool         { return false }
-func (NotAppended) Durable() bool        { return false }
-func (Appended) appending()              {}
-func (Appended) Landed() bool            { return true }
-func (Appended) Durable() bool           { return true }
-func (AppendedNotDurable) appending()    {}
-func (AppendedNotDurable) Landed() bool  { return true }
-func (AppendedNotDurable) Durable() bool { return false }
+func (NotAppended) appending()        {}
+func (Appended) appending()           {}
+func (AppendedNotDurable) appending() {}
 
 // Placing is what a create-once did: placed no file at the name, or
 // placed or found one, durable or not, and what it did about the name's
 // other temporary files `[LAW:types-are-the-program]`.
 //
 //sumtype:decl
-type Placing interface {
-	placing()
-	// Landed is whether the name holds a regular file.
-	Landed() bool
-	// Durable is whether it does and every sync on the way passed.
-	Durable() bool
-}
+type Placing interface{ placing() }
 
 // NotPlaced is a create-once that linked no file at the name and found
 // none it may take: nothing of it is at the name, and it reaped nothing.
@@ -287,15 +274,9 @@ type PlacedNotDurable struct {
 	Why error
 }
 
-func (NotPlaced) placing()             {}
-func (NotPlaced) Landed() bool         { return false }
-func (NotPlaced) Durable() bool        { return false }
-func (Placed) placing()                {}
-func (Placed) Landed() bool            { return true }
-func (Placed) Durable() bool           { return true }
-func (PlacedNotDurable) placing()      {}
-func (PlacedNotDurable) Landed() bool  { return true }
-func (PlacedNotDurable) Durable() bool { return false }
+func (NotPlaced) placing()        {}
+func (Placed) placing()           {}
+func (PlacedNotDurable) placing() {}
 
 // Reap is what a create-once that placed its name did about the name's
 // temporary files: the others it removed, a crash's leftovers or the

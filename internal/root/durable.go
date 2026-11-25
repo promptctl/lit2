@@ -1,6 +1,7 @@
 package root
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -24,7 +25,7 @@ import (
 // `[LAW:single-enforcer]`.
 type writes struct {
 	stored   *command.StoreFacts
-	unsynced []string
+	unsynced []unsyncedWrite
 }
 
 // create creates f holding b, once. The error is a create that placed
@@ -44,7 +45,7 @@ func (w *writes) created(c command.Creation) {
 	w.stored.Creates = append(w.stored.Creates, c)
 	switch p := c.Placing.(type) {
 	case files.PlacedNotDurable:
-		w.unsynced = append(w.unsynced, fmt.Sprintf("%s landed, and that it survives a power loss cannot be confirmed: a sync after it failed: %v", c.Path, p.Why))
+		w.unsynced = append(w.unsynced, createdNotDurable{path: c.Path, placed: p})
 	case files.Placed, files.NotPlaced:
 	}
 }
@@ -57,7 +58,7 @@ func (w *writes) appended(a store.Appending) error {
 	case store.NotAppended:
 		return storeFailure{err: fmt.Errorf("no whole frame was written: %w", a.Why)}
 	case store.AppendedNotDurable:
-		w.unsynced = append(w.unsynced, fmt.Sprintf("a frame of %d records landed in the store, and that it survives a power loss cannot be confirmed: a sync after it failed: %v; every later command reads it, so running this command again writes it twice", a.Records, a.Why))
+		w.unsynced = append(w.unsynced, appendedNotDurable{a})
 	case store.Appended:
 	}
 	return nil
@@ -83,11 +84,66 @@ func (w *writes) end(o cli.Outcome) cli.Outcome {
 // notDurable is a run whose writes all landed, some of them with a sync
 // that failed: written, but a power loss may undo them. A failed sync is
 // never retried, since after one the kernel may already have dropped what
-// it did not write, and a second sync can succeed falsely.
-type notDurable struct{ writes []string }
+// it did not write, and a later sync can succeed falsely; the port that
+// saw it answers it to every later sync in this process, and this run is
+// the one that says it. Each write is kept as the value its call returned,
+// and spelled only by Error, so its sync's error stays in the chain
+// `[LAW:types-are-the-program]`.
+type notDurable struct{ writes []unsyncedWrite }
+
+// unsyncedWrite is one write that landed with a sync that failed: a
+// create's, or an append's.
+//
+//sumtype:decl
+type unsyncedWrite interface {
+	unsyncedWrite()
+	// why is the sync's failure.
+	why() error
+}
+
+// createdNotDurable is a create-once of the file at path that placed it
+// not durable.
+type createdNotDurable struct {
+	path   string
+	placed files.PlacedNotDurable
+}
+
+// appendedNotDurable is an append whose frame landed not durable.
+type appendedNotDurable struct{ appended store.AppendedNotDurable }
+
+func (createdNotDurable) unsyncedWrite()  {}
+func (appendedNotDurable) unsyncedWrite() {}
+func (c createdNotDurable) why() error    { return c.placed.Why }
+func (a appendedNotDurable) why() error {
+	return a.appended.Why
+}
+
+// spelled is u as the outcome names it.
+func spelled(u unsyncedWrite) (s string) {
+	switch u := u.(type) {
+	case createdNotDurable:
+		s = fmt.Sprintf("%s landed, and that it survives a power loss cannot be confirmed: a sync after it failed: %v", u.path, u.placed.Why)
+	case appendedNotDurable:
+		s = fmt.Sprintf("a frame of %d records landed in the store, and that it survives a power loss cannot be confirmed: a sync after it failed: %v; every later command reads it, so running this command again writes it twice", u.appended.Records, u.appended.Why)
+	}
+	return s
+}
 
 func (n notDurable) Error() string {
-	return "written, and may not survive a power loss: " + strings.Join(n.writes, "; and ")
+	writes := make([]string, len(n.writes))
+	for i, u := range n.writes {
+		writes[i] = spelled(u)
+	}
+	return "written, and may not survive a power loss: " + strings.Join(writes, "; and ")
+}
+
+// Unwrap is every write's failed sync, so errors.Is finds the errno.
+func (n notDurable) Unwrap() []error {
+	whys := make([]error, len(n.writes))
+	for i, u := range n.writes {
+		whys[i] = u.why()
+	}
+	return whys
 }
 func (notDurable) Class() reason.Class { return reason.ClassEnvironment }
 func (notDurable) Reason() string      { return "durability" }
@@ -104,15 +160,14 @@ func (b both) Error() string   { return b.Failure.Error() + "; and " + b.also.Er
 func (b both) Unwrap() []error { return []error{b.Failure, b.also} }
 
 // onceFile is a file a create-once writes outside the store: its port,
-// the directory the port is of, and its name there.
+// which names the directory it is of, and its name there.
 type onceFile struct {
 	files files.Files
-	dir   files.Dir
 	name  files.Name
 }
 
 // path is f's path, as the event names it.
-func (f onceFile) path() string { return f.dir.PathOf(f.name) }
+func (f onceFile) path() string { return f.files.Dir().PathOf(f.name) }
 
 // onceFiles is every file of a checkout a create-once writes outside the
 // store: the identity's two, the founding pin, and the work tree's two.
@@ -126,41 +181,70 @@ func (p Process) onceFiles(c git.Checkout) onceFiles {
 	shared, private := p.IdentityFiles(c)
 	tree := p.WorkTree(c)
 	return onceFiles{
-		id:        onceFile{files: private, dir: command.DirOf(command.IDFile{}, c), name: command.NameOf(command.IDFile{})},
-		key:       onceFile{files: shared, dir: command.DirOf(command.PrincipalFile{}, c), name: command.NameOf(command.PrincipalFile{})},
-		pin:       onceFile{files: p.Pin(c), dir: pinDir(c), name: pinFile},
-		founding:  onceFile{files: tree, dir: litDir(c), name: foundingFile},
-		workspace: onceFile{files: tree, dir: litDir(c), name: verbs.WorkspaceFile()},
+		id:        onceFile{files: private, name: command.NameOf(command.IDFile{})},
+		key:       onceFile{files: shared, name: command.NameOf(command.PrincipalFile{})},
+		pin:       onceFile{files: p.Pin(c), name: pinFile},
+		founding:  onceFile{files: tree, name: foundingFile},
+		workspace: onceFile{files: tree, name: verbs.WorkspaceFile()},
 	}
 }
 
 func (o onceFiles) all() []onceFile { return []onceFile{o.id, o.key, o.pin, o.founding, o.workspace} }
 
-// leftovers is the temps beside each of c's once files, through p's ports,
-// and in the logs' directory of the store opening opened, or why they did
-// not read. A create reaps its name's temps once it is placed, and the
-// once files are created again only when a person reruns init, so a
-// crash's temp is said on every command until then
-// `[LAW:no-silent-failure]`.
-func leftovers(p Process, c git.Checkout, opening command.Opening) []command.Leftovers {
-	var ls []command.Leftovers
-	beside := func(dir string, temps []string, err error) {
-		switch {
-		case err != nil:
-			ls = append(ls, command.TempsUnread{Dir: dir, Why: err})
-		case len(temps) > 0:
-			ls = append(ls, command.TempsBeside{Dir: dir, Temps: temps})
-		}
-	}
-	for _, f := range p.onceFiles(c).all() {
-		temps, err := f.files.Temps(f.name)
-		beside(f.dir.Path(), temps, err)
-	}
-	switch o := opening.(type) {
-	case command.Opened:
-		temps, err := o.Store.Temps()
-		beside(store.LogsDir(c).Path(), temps, err)
-	case command.Unopened:
+// leftovers is, for each directory of place's once files, through p's
+// ports, and its store's logs' directory, the temps creates left there, or
+// that it was not scanned, and why. Each port's directory is listed once,
+// however many once files it holds; the logs' temps are those the last
+// Heads of the run listed, read where its listing found them. A create
+// reaps its name's temps once it is placed, and the once files are
+// created again only when a person reruns init, so a crash's temp is said
+// on every command until then `[LAW:no-silent-failure]`. Outside a
+// checkout there is no directory to scan.
+func leftovers(p Process, place command.Place, stored *command.StoreFacts) (ls []command.Leftovers) {
+	switch at := place.(type) {
+	case command.InCheckout:
+		ls = append(beside(p.onceFiles(at.Checkout).all()), logTemps(at.Checkout, stored))
+	case command.NoCheckout:
+	case command.Unlocatable:
 	}
 	return ls
 }
+
+// beside is the temps in each distinct directory of fs's ports, listed
+// once each, in the order fs first names them.
+func beside(fs []onceFile) []command.Leftovers {
+	var ls []command.Leftovers
+	seen := map[string]bool{}
+	for _, f := range fs {
+		dir := f.files.Dir().Path()
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if l, err := f.files.List(); err != nil {
+			ls = append(ls, command.TempsNotScanned{Dir: dir, Why: err})
+		} else {
+			ls = append(ls, command.TempsScanned{Dir: dir, Temps: l.Temps})
+		}
+	}
+	return ls
+}
+
+// logTemps is the temps of c's store's logs as the run's last Heads
+// listed them, or why no listing of them was read.
+func logTemps(c git.Checkout, stored *command.StoreFacts) (l command.Leftovers) {
+	switch o := stored.Opening.(type) {
+	case command.Opened:
+		dir := o.Store.Logs().Path()
+		if len(stored.Heads) == 0 {
+			return command.TempsNotScanned{Dir: dir, Why: errNoHeads}
+		}
+		l = command.TempsScanned{Dir: dir, Temps: stored.Heads[len(stored.Heads)-1].Temps}
+	case command.Unopened:
+		l = command.TempsNotScanned{Dir: store.LogsDir(c).Path(), Why: o.Why}
+	}
+	return l
+}
+
+// errNoHeads is a run none of whose steps listed its store's logs.
+var errNoHeads = errors.New("no step of this command read the store's heads")

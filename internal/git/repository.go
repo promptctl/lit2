@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-git/go-billy/v5/osfs"
@@ -37,7 +36,7 @@ type Repository struct{ repo }
 // RepositoryAt is lit's repository, the directory at, which need not
 // exist yet, written by g.
 func (g *Git) RepositoryAt(at files.Dir) Repository {
-	return Repository{repo{b: &onDisk{g: g, at: at}}}
+	return Repository{repo{b: &onDisk{g: g, at: at, entry: files.NewDurability()}}}
 }
 
 type onDisk struct {
@@ -51,10 +50,9 @@ type onDisk struct {
 	mu    sync.Mutex
 	db    *filesystem.Storage
 	packs time.Time
-	// unsynced is the failure of a sync of the repository's entry, once one
-	// failed: never tried again, since a sync that failed may have dropped
-	// what it held and a second may pass over it (fsyncgate)
-	unsynced atomic.Pointer[error]
+	// entry is the syncs of the repository's entry and the directories on
+	// its way: once one fails, every later one answers it
+	entry *files.Durability
 }
 
 // git runs git on the repository at dir: the one place a spawn names
@@ -89,7 +87,7 @@ func (d *onDisk) create() error {
 		return err
 	}
 	in := d.at.Parent()
-	if err := in.Make(); err != nil {
+	if err := d.entry.Make(in); err != nil {
 		return err
 	}
 	tmp, err := os.MkdirTemp(in.Path(), ".repo-")
@@ -329,9 +327,10 @@ func (d *onDisk) write(objs []object) (ids []ObjectID, err error) {
 // rename to another, or found it there, since one found may be a racing
 // create's, not yet synced: every object written into it is only as
 // durable as the name it is under `[LAW:dataflow-not-control-flow]`. Once
-// that sync fails, every later write is refused with its failure, never
-// handed a repository whose name a passing sync might hide was lost
-// `[LAW:no-silent-failure]`.
+// that sync fails, every later write of this repository in this process
+// is refused with its failure, never handed a repository whose name a
+// passing sync might hide was lost `[LAW:no-silent-failure]`; a later run
+// knows nothing of it, so the run that saw it is the run that says it.
 func (d *onDisk) writable() (string, error) {
 	if err := d.g.durable(); err != nil {
 		return "", err
@@ -339,13 +338,8 @@ func (d *onDisk) writable() (string, error) {
 	if err := d.create(); err != nil {
 		return "", err
 	}
-	if failed := d.unsynced.Load(); failed != nil {
-		return "", *failed
-	}
-	if err := d.at.Parent().Sync(); err != nil {
-		err = fmt.Errorf("syncing the entry of lit's repository: %w", err)
-		d.unsynced.CompareAndSwap(nil, &err)
-		return "", *d.unsynced.Load()
+	if err := d.entry.Sync(d.at.Parent()); err != nil {
+		return "", fmt.Errorf("syncing the entry of lit's repository: %w", err)
 	}
 	return d.path()
 }

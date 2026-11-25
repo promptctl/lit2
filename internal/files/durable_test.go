@@ -204,17 +204,62 @@ func TestEveryDirectoryACreateMakesIsSyncedIntoItsParent(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a failed parent sync places nothing", func(t *testing.T) {
-		base := t.TempDir()
-		lit := filepath.Join(base, "lit")
-		got := files.At(filestest.Seamed(d(base), filestest.Recording(&filestest.Syncs{}, failing(lit)))).CreateOnce(a, []byte("x"))
-		if no, ok := got.(files.NotPlaced); !ok || !errors.Is(no.Why, errSync) {
-			t.Errorf("CreateOnce whose parent sync failed = %#v; want NotPlaced, by that sync", got)
+	// a failed parent sync stops no create: the entry is there to every
+	// later step, so the name is placed or found and said not durable
+	for _, before := range []struct {
+		name string
+		made files.Made
+	}{{"absent", files.Created}, {"there, a rerun", files.Existing}} {
+		t.Run("a failed parent sync is PlacedNotDurable, the name "+before.name, func(t *testing.T) {
+			base := t.TempDir()
+			lit := filepath.Join(base, "lit")
+			if before.made == files.Existing {
+				filestest.Create(t, files.At(d(base)), a, []byte("x"))
+			}
+			got := files.At(filestest.Seamed(d(base), filestest.Recording(&filestest.Syncs{}, failing(lit)))).CreateOnce(a, []byte("x"))
+			if p, ok := got.(files.PlacedNotDurable); !ok || p.Made != before.made || !errors.Is(p.Why, errSync) {
+				t.Errorf("CreateOnce whose parent sync failed = %#v; want PlacedNotDurable, %v, by that sync", got, before.made)
+			}
+			holds(t, d(base).PathOf(a), "x")
+		})
+	}
+}
+
+// One port's sync that failed is answered to every later sync of it,
+// though the disk's next would pass: a write that relies on what the
+// failed sync held is never said durable.
+func TestAFailedSyncIsAnsweredToEveryLaterSyncOfThePort(t *testing.T) {
+	base := t.TempDir()
+	d := files.DirAt(base, dir)
+	mkdir(t, d.Path())
+	once := errors.New("the disk refused the fsync, once")
+	failed := false
+	var syncs filestest.Syncs
+	f := files.At(filestest.Seamed(d, filestest.Recording(&syncs, func(path string) error {
+		if path == d.Path() && !failed {
+			failed = true
+			return once
 		}
-		if _, err := os.Lstat(filepath.Join(lit, "store", "log")); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("the log directory is there, %v; want nothing made under an entry not synced", err)
+		return nil
+	})))
+	if p, ok := f.CreateOnce(a, []byte("x")).(files.PlacedNotDurable); !ok || !errors.Is(p.Why, once) {
+		t.Fatalf("the first create = %#v; want PlacedNotDurable, by the failed sync", p)
+	}
+	seen := len(syncs.Seen())
+	if p, ok := f.CreateOnce(files.MustName("b"), []byte("y")).(files.PlacedNotDurable); !ok || p.Made != files.Created || !errors.Is(p.Why, once) {
+		t.Errorf("the second create = %#v; want PlacedNotDurable, Created, by the first failure", p)
+	}
+	if err := f.Sync(); !errors.Is(err, once) {
+		t.Errorf("the port's Sync = %v; want the first failure", err)
+	}
+	for _, p := range syncs.Seen()[seen:] {
+		if p == d.Path() {
+			t.Errorf("the directory was synced again after its sync failed: %v", syncs.Seen()[seen:])
 		}
-	})
+	}
+	if a, ok := f.Append(a, []byte("z")).(files.AppendedNotDurable); !ok || !errors.Is(a.Why, once) {
+		t.Errorf("an append after it = %#v; want AppendedNotDurable, by the first failure", a)
+	}
 }
 
 func TestACreateReapsItsNamesOtherTempsOnceItIsPlaced(t *testing.T) {
@@ -307,16 +352,44 @@ func TestALoserWhoseTempIsReapedFindsTheNameThere(t *testing.T) {
 	temps(t, f.Path())
 }
 
-func TestTempsAreTheNamesOwnAlone(t *testing.T) {
+// A listing's temps are every create's temporary file, by the name's
+// grammar; an entry named like one that holds no count is refused.
+func TestAListingsTempsAreTheCreatesTemps(t *testing.T) {
 	base := t.TempDir()
 	f := files.DirAt(base, dir)
 	mkdir(t, f.Path())
 	for _, temp := range []string{".tmp-a-0", ".tmp-a-1-0", ".tmp-a-x", ".tmp-b-0"} {
 		write(t, filepath.Join(f.Path(), temp), "left")
 	}
-	for n, want := range map[string][]string{"a": {".tmp-a-0"}, "a-1": {".tmp-a-1-0"}, "c": {}} {
-		if got, err := files.At(f).Temps(files.MustName(n)); err != nil || !slices.Equal(got, want) {
-			t.Errorf("Temps(%s) = %v, %v; want %v", n, got, err, want)
+	l, err := files.At(f).List()
+	if err != nil || !slices.Equal(l.Temps, []string{".tmp-a-0", ".tmp-a-1-0", ".tmp-b-0"}) || len(l.Refused) != 1 || l.Refused[0].Name != ".tmp-a-x" {
+		t.Errorf("List = %+v, %v; want the three temps, and .tmp-a-x refused", l, err)
+	}
+}
+
+// Only a regular file is a temp: a directory or a symlink named like one
+// is refused by a listing, and no create's reap removes it.
+func TestAnEntryNamedAsATempThatIsNoFileIsRefusedAndKept(t *testing.T) {
+	base := t.TempDir()
+	f := files.DirAt(base, dir)
+	mkdir(t, f.Path())
+	mkdir(t, filepath.Join(f.Path(), ".tmp-a-0"))
+	symlink(t, t.TempDir(), filepath.Join(f.Path(), ".tmp-a-1"))
+	l, err := files.At(f).List()
+	if err != nil || len(l.Temps) != 0 || len(l.Refused) != 2 {
+		t.Errorf("List = %+v, %v; want no temp, and both entries refused", l, err)
+	}
+	for _, r := range l.Refused {
+		if !errors.As(r.Why, new(files.NotAFile)) {
+			t.Errorf("%s is refused by %v; want NotAFile", r.Name, r.Why)
+		}
+	}
+	if got := files.At(f).CreateOnce(a, []byte("x")); !reapedNone(got, files.Created) {
+		t.Errorf("CreateOnce(a) = %#v; want Placed, Created, reaping nothing", got)
+	}
+	for _, e := range []string{".tmp-a-0", ".tmp-a-1"} {
+		if _, err := os.Lstat(filepath.Join(f.Path(), e)); err != nil {
+			t.Errorf("%s is gone, %v; want it kept", e, err)
 		}
 	}
 }
@@ -331,7 +404,6 @@ func TestACreateOverAMissingBaseIsRefused(t *testing.T) {
 	}
 }
 
-// A Dir's Sync checks it by the step and fsyncs its directory.
 // A Disk's Sync is its directory's.
 func TestADiskSyncsItsDirectory(t *testing.T) {
 	base := t.TempDir()
@@ -350,12 +422,13 @@ func TestADiskSyncsItsDirectory(t *testing.T) {
 	}
 }
 
+// A Dir's sync checks it by the step and fsyncs its directory.
 func TestADirIsSyncedByTheStep(t *testing.T) {
 	base := t.TempDir()
 	var syncs filestest.Syncs
 	d := filestest.Seamed(files.DirAt(base, dir), filestest.Recording(&syncs, filestest.Passing))
 	mkdir(t, d.Path())
-	if err := d.Sync(); err != nil {
+	if err := files.NewDurability().Sync(d); err != nil {
 		t.Fatal(err)
 	}
 	if got := syncs.Seen(); !slices.Equal(got, []string{d.Path()}) {
@@ -364,7 +437,7 @@ func TestADirIsSyncedByTheStep(t *testing.T) {
 	linked, outside := t.TempDir(), t.TempDir()
 	var none filestest.Syncs
 	symlink(t, outside, filepath.Join(linked, dir.String()))
-	notTheDirectory(t, "Sync", filestest.Seamed(files.DirAt(linked, dir), filestest.Recording(&none, filestest.Passing)).Sync())
+	notTheDirectory(t, "Sync", files.NewDurability().Sync(filestest.Seamed(files.DirAt(linked, dir), filestest.Recording(&none, filestest.Passing))))
 	if got := none.Seen(); len(got) != 0 {
 		t.Errorf("Sync through a link synced %v; want nothing", got)
 	}

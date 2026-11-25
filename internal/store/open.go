@@ -70,46 +70,43 @@ func Open(me CheckoutID, p Ports, bound SegmentBound) *Store {
 // again `[LAW:no-silent-failure]` `[LAW:types-are-the-program]`.
 //
 //sumtype:decl
-type Appending interface {
-	appending()
-	// Landed is whether the frame is at the log's end, whole.
-	Landed() bool
-	// Durable is whether it landed and every sync on its way passed.
-	Durable() bool
-}
+type Appending interface{ appending() }
 
 // NotAppended is an append that landed no frame, so writing the batch
-// again is safe, and what it did to find or make its log.
+// again is safe, and what it did to find or make its log, with the failed
+// sync of the log's name when it saw one.
 type NotAppended struct {
 	Log LogAttempt
 	Why error
 }
 
-// Appended is what an append wrote, durable: its records and bytes, the
-// position of the log's end after it, and how it came by its log.
-type Appended struct {
+// Written is the frame an append wrote: its records and bytes, and the
+// position of the log's end after it.
+type Written struct {
 	Records, Bytes int
 	Until          Position
-	Log            LogPlacement
+}
+
+// Appended is a frame that landed, durable, and how its append came by
+// its log, every sync on the way passed.
+type Appended struct {
+	Written
+	Log LogPlaced
 }
 
 // AppendedNotDurable is a frame that landed whole, which every read sees,
 // and a sync on its way, of the frame or of the log's name, that failed,
-// so a power loss may take it.
+// so a power loss may take it. Why holds every failed sync; Log is
+// LogNotDurable when the name's was one.
 type AppendedNotDurable struct {
-	Appended
+	Written
+	Log LogPlacement
 	Why error
 }
 
-func (NotAppended) appending()           {}
-func (NotAppended) Landed() bool         { return false }
-func (NotAppended) Durable() bool        { return false }
-func (Appended) appending()              {}
-func (Appended) Landed() bool            { return true }
-func (Appended) Durable() bool           { return true }
-func (AppendedNotDurable) appending()    {}
-func (AppendedNotDurable) Landed() bool  { return true }
-func (AppendedNotDurable) Durable() bool { return false }
+func (NotAppended) appending()        {}
+func (Appended) appending()           {}
+func (AppendedNotDurable) appending() {}
 
 // LogAttempt is what an append did to find or make its log: found none
 // and placed none, or came by one `[LAW:types-are-the-program]`.
@@ -117,14 +114,23 @@ func (AppendedNotDurable) Durable() bool { return false }
 //sumtype:decl
 type LogAttempt interface{ logAttempt() }
 
-// LogPlacement is how an append came by its log: looked it up, or ran
-// its create. An append that landed a frame has one, so its Log is never
-// NoLog.
+// LogPlacement is how an append came by its log: placed, every sync of
+// its name passing, or placed with one that failed. An append that landed
+// a frame has one, so its Log is never NoLog.
 //
 //sumtype:decl
 type LogPlacement interface {
 	LogAttempt
 	logPlacement()
+}
+
+// LogPlaced is a log an append looked up or created, its name's sync
+// passing.
+//
+//sumtype:decl
+type LogPlaced interface {
+	LogPlacement
+	logPlaced()
 }
 
 // NoLog is an append that found no log it could read and placed none.
@@ -140,11 +146,23 @@ type LogLookedUp struct{}
 // that create's reap of the log's temporary files.
 type LogCreated struct{ files.Placed }
 
-func (NoLog) logAttempt()         {}
-func (LogLookedUp) logAttempt()   {}
-func (LogCreated) logAttempt()    {}
-func (LogLookedUp) logPlacement() {}
-func (LogCreated) logPlacement()  {}
+// LogNotDurable is a log looked up or created whose name's sync failed,
+// so a power loss may take the log, and every frame after it, whatever
+// the append did next `[LAW:no-silent-failure]`.
+type LogNotDurable struct {
+	Log LogPlaced
+	Why error
+}
+
+func (NoLog) logAttempt()           {}
+func (LogLookedUp) logAttempt()     {}
+func (LogCreated) logAttempt()      {}
+func (LogNotDurable) logAttempt()   {}
+func (LogLookedUp) logPlacement()   {}
+func (LogCreated) logPlacement()    {}
+func (LogNotDurable) logPlacement() {}
+func (LogLookedUp) logPlaced()      {}
+func (LogCreated) logPlaced()       {}
 
 // Append writes one command's batch to this checkout's log as one frame:
 // the only local store write a command makes, since every other file is
@@ -153,17 +171,16 @@ func (LogCreated) logPlacement()  {}
 // appended to, so bytes are never added to a file that is not a log. The
 // frame is durable only when every sync on its way passed: the frame's,
 // and the log's name's, which its create syncs, and which a lookup syncs
-// again, since it cannot know the creator's sync passed.
+// again, since it cannot know the creator's sync passed. A failed sync of
+// the name is in every answer after it, a frame landed or not.
 func (s *Store) Append(b Batch) Appending {
 	n := LogName(s.me)
 	var log LogID
-	var a Appended
-	// the log's name's sync: a lookup's, or its create's
-	var unsynced error
+	var placed LogPlacement
 	id, err := s.logID(n)
 	switch {
 	case err == nil:
-		log, a.Log, unsynced = id, LogLookedUp{}, s.ports.files.Sync()
+		log, placed = id, synced(LogLookedUp{}, s.ports.files.Sync())
 	case errors.As(err, new(files.NotFound)):
 		var fresh LogID
 		if _, err := io.ReadFull(s.ports.entropy, fresh[:]); err != nil {
@@ -173,29 +190,55 @@ func (s *Store) Append(b Batch) Appending {
 		case files.NotPlaced:
 			return NotAppended{Log: NoLog{Left: p.Left}, Why: p.Why}
 		case files.Placed:
-			a.Log = LogCreated{p}
+			placed = LogCreated{p}
 		case files.PlacedNotDurable:
-			a.Log, unsynced = LogCreated{p.Placed}, p.Why
+			placed = LogNotDurable{Log: LogCreated{p.Placed}, Why: p.Why}
 		}
 		// a create that lost reads the winner's id
 		if log, err = s.logID(n); err != nil {
-			return NotAppended{Log: a.Log, Why: err}
+			return NotAppended{Log: placed, Why: err}
 		}
 	default:
 		return NotAppended{Log: NoLog{}, Why: err}
 	}
 	frame := Encode(b)
-	a.Records, a.Bytes = len(b.Records()), len(frame)
+	f := Written{Records: len(b.Records()), Bytes: len(frame)}
+	var unsynced error
 	switch w := s.ports.files.Append(n, frame).(type) {
 	case files.NotAppended:
-		return NotAppended{Log: a.Log, Why: w.Why}
+		return NotAppended{Log: placed, Why: w.Why}
 	case files.Appended:
-		a.Until = Position{Log: log, At: Offset(w.End - headerSize)}
+		f.Until = Position{Log: log, At: Offset(w.End - headerSize)}
 	case files.AppendedNotDurable:
-		a.Until, unsynced = Position{Log: log, At: Offset(w.End - headerSize)}, errors.Join(unsynced, w.Why)
+		f.Until, unsynced = Position{Log: log, At: Offset(w.End - headerSize)}, w.Why
 	}
-	if unsynced != nil {
-		return AppendedNotDurable{Appended: a, Why: unsynced}
+	return landed(f, placed, unsynced)
+}
+
+// synced is a placed log as its name's sync left it.
+func synced(p LogPlaced, sync error) LogPlacement {
+	if sync != nil {
+		return LogNotDurable{Log: p, Why: sync}
+	}
+	return p
+}
+
+// landed is a frame that landed, durable only when its log's name's sync
+// and its own both passed.
+func landed(f Written, p LogPlacement, unsynced error) (a Appending) {
+	durable := func(l LogPlaced) Appending {
+		if unsynced != nil {
+			return AppendedNotDurable{Written: f, Log: l, Why: unsynced}
+		}
+		return Appended{Written: f, Log: l}
+	}
+	switch l := p.(type) {
+	case LogNotDurable:
+		a = AppendedNotDurable{Written: f, Log: l, Why: errors.Join(l.Why, unsynced)}
+	case LogLookedUp:
+		a = durable(l)
+	case LogCreated:
+		a = durable(l)
 	}
 	return a
 }
@@ -250,23 +293,19 @@ type Unreadable struct {
 
 // Heads is every stream of the clone, sorted by ref name, and everything
 // that should have been one and is not. RefsRead and LogsRead count what
-// was listed, so a fresh store reads zero of each.
+// was listed, so a fresh store reads zero of each. Temps is the
+// temporary files of log creates the listing found in the logs'
+// directory: a create's that never ran again, or one in flight, for the
+// command to say `[LAW:no-silent-failure]`.
 type Heads struct {
 	Streams            []Stream
 	Unreadable         []Unreadable
 	RefsRead, LogsRead int
+	Temps              []string
 }
 
-// Temps is the temporary files of log creates in the logs' directory: a
-// create's that never ran again, or one in flight, for a command that
-// opens the store to say `[LAW:no-silent-failure]`.
-func (s *Store) Temps() ([]string, error) {
-	logs, err := s.ports.files.List()
-	if err != nil {
-		return nil, err
-	}
-	return logs.Temps, nil
-}
+// Logs is the directory this store's logs are in, as its port names it.
+func (s *Store) Logs() files.Dir { return s.ports.files.Dir() }
 
 // Heads lists refs/lit/ and every log under this common dir. A writer with
 // a log here is read from its log, of which its own publication is a
@@ -283,7 +322,7 @@ func (s *Store) Heads() (Heads, error) {
 	if err != nil {
 		return Heads{}, err
 	}
-	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs.Names) + len(logs.Refused)}
+	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs.Names) + len(logs.Refused), Temps: logs.Temps}
 	unreadable := func(name string, why error) { h.Unreadable = append(h.Unreadable, Unreadable{Name: name, Why: why}) }
 	// an entry of the logs' directory that is no file is a log that will
 	// not read, said as one whose header will not

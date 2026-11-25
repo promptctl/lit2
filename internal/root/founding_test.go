@@ -56,7 +56,7 @@ func TestInitFoundsOverAnEnrollmentNoFileNames(t *testing.T) {
 
 func TestInitRefusesAFoundingFileNamingAnotherFounding(t *testing.T) {
 	s := newSession(t)
-	tree := files.NewMemory()
+	tree := filestest.Memory()
 	filestest.Create(t, tree, FoundingFile(), events.EventID{1}.FileText())
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files { return tree }
 	r := s.lit("admin", "init")

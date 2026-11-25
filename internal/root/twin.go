@@ -88,7 +88,7 @@ func NewTwin() Twin {
 // NewFreshTwin is a twin whose checkout is minted and whose store, work
 // tree and code repository hold nothing: a checkout before admin init
 // applies version one.
-func NewFreshTwin() Twin { return freshTwinOver(files.NewMemory()) }
+func NewFreshTwin() Twin { return freshTwinOver(files.NewMemory(store.LogsDir(twinCheckout))) }
 
 // freshTwinOver is NewFreshTwin whose store's logs are logs.
 func freshTwinOver(logs files.Files) Twin {
@@ -122,10 +122,10 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 	out, errOut, commands := &bytes.Buffer{}, &bytes.Buffer{}, &command.Memory{}
 	entropy := rand.NewChaCha8(seed)
 	opened := command.Opened{Store: store.Open(id, ports, store.DefaultSegmentBound)}
-	tree, code := files.NewMemory(), &git.CodeMemory{}
+	tree, code := files.NewMemory(litDir(c)), &git.CodeMemory{}
 	// the twin is minted: its identity files hold its id and key, so init
 	// finds them there
-	shared, private, pins := files.NewMemory(), files.NewMemory(), files.NewMemory()
+	shared, private, pins := files.NewMemory(command.DirOf(command.PrincipalFile{}, c)), files.NewMemory(command.DirOf(command.IDFile{}, c)), files.NewMemory(pinDir(c))
 	durably(private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()))
 	durably(shared.CreateOnce(command.NameOf(command.PrincipalFile{}), key.FileText()))
 	return Twin{

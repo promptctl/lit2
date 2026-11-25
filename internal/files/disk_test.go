@@ -230,7 +230,7 @@ func TestTheZeroDirIsRefused(t *testing.T) {
 	if l, err := f.List(); !errors.Is(err, files.ErrNoDir) {
 		t.Errorf("List = %v, %v; want ErrNoDir", l, err)
 	}
-	if err := (files.Dir{}).Make(); !errors.Is(err, files.ErrNoDir) {
+	if err := files.NewDurability().Make(files.Dir{}); !errors.Is(err, files.ErrNoDir) {
 		t.Errorf("Make failed with %v; want ErrNoDir", err)
 	}
 }
@@ -371,7 +371,7 @@ func TestADirIsCheckedAndMadeByTheStep(t *testing.T) {
 	symlink(t, outside, filepath.Join(base, dir.String()))
 	linked := files.DirAt(base, dir).Sub(a)
 	notTheDirectory(t, "Check", linked.Check())
-	notTheDirectory(t, "Make", linked.Make())
+	notTheDirectory(t, "Make", files.NewDurability().Make(linked))
 	empty(t, outside)
 	missing := files.DirAt(t.TempDir(), a).Sub(dir)
 	if err := missing.Check(); !errors.Is(err, fs.ErrNotExist) {
@@ -380,7 +380,7 @@ func TestADirIsCheckedAndMadeByTheStep(t *testing.T) {
 	if _, err := os.Lstat(missing.Path()); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Check made %s: %v; want nothing made", missing.Path(), err)
 	}
-	if err := missing.Make(); err != nil {
+	if err := files.NewDurability().Make(missing); err != nil {
 		t.Fatal(err)
 	}
 	if err := missing.Check(); err != nil {

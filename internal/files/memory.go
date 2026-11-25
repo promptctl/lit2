@@ -10,12 +10,16 @@ import (
 // Memory is Files in process, the twin of Disk, held to the same contract
 // suite and safe for concurrent use.
 type Memory struct {
+	dir   Dir
 	mu    sync.Mutex
 	files map[Name][]byte
 }
 
-// NewMemory is an empty directory in process.
-func NewMemory() *Memory { return &Memory{files: map[Name][]byte{}} }
+// NewMemory is an empty directory in process, standing for d, which names
+// its files.
+func NewMemory(d Dir) *Memory { return &Memory{dir: d, files: map[Name][]byte{}} }
+
+func (m *Memory) Dir() Dir { return m.dir }
 
 // with runs do under the lock once n is a name: the one place Memory
 // refuses the zero Name `[LAW:single-enforcer]`.
@@ -105,9 +109,4 @@ func (m *Memory) List() (Listing, error) {
 	ns := slices.AppendSeq([]Name{}, maps.Keys(m.files))
 	slices.SortFunc(ns, func(a, b Name) int { return strings.Compare(a.s, b.s) })
 	return Listing{Names: ns}, nil
-}
-
-// Temps is none: a directory in process writes no temporary file.
-func (m *Memory) Temps(n Name) ([]string, error) {
-	return nil, m.with(n, func() error { return nil })
 }

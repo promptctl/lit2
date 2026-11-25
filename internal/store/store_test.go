@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/panics"
@@ -123,7 +123,7 @@ func TestAPublicationWhoseSegmentDoesNotFillItsSpanIsUnreadableAndResealed(t *te
 	if _, err := s.Publish(pub); err != nil {
 		t.Fatal(err)
 	}
-	reader := Open(CheckoutID{0xc}, MemoryPorts(files.NewMemory(), p.objects, p.refs, bytes.NewReader(nil)), DefaultSegmentBound)
+	reader := Open(CheckoutID{0xc}, MemoryPorts(filestest.Memory(), p.objects, p.refs, bytes.NewReader(nil)), DefaultSegmentBound)
 	h, err = reader.Heads()
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +181,7 @@ func TestAPublicationOfNoSegmentIsUnreadableAndResealed(t *testing.T) {
 func appended(t *testing.T, me CheckoutID, records ...string) (*Store, Ports, [][]byte, LogID) {
 	t.Helper()
 	repo := git.NewMemory()
-	p := MemoryPorts(files.NewMemory(), repo, repo, bytes.NewReader(make([]byte, 64)))
+	p := MemoryPorts(filestest.Memory(), repo, repo, bytes.NewReader(make([]byte, 64)))
 	s := Open(me, p, DefaultSegmentBound)
 	var frames [][]byte
 	for _, r := range records {

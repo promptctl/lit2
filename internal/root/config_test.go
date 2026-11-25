@@ -49,7 +49,7 @@ func (s session) pins(e events.EventID) {
 // nil.
 func (s session) file(b []byte) {
 	s.t.Helper()
-	tree := files.NewMemory()
+	tree := filestest.Memory()
 	if b != nil {
 		filestest.Create(s.t, tree, verbs.WorkspaceFile(), b)
 	}

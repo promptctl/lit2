@@ -86,9 +86,7 @@ func Run(p Process, args []string) int {
 		w := &writes{stored: rec.Stored}
 		out := w.end(dispatch(body{p: p, now: now, rec: rec, w: w}, table, groups, cmd))
 		// after the body, so the temps its creates reaped are not said
-		if in, ok := p.Place.(command.InCheckout); ok {
-			rec.Stored.Temps = leftovers(p, in.Checkout, rec.Stored.Opening)
-		}
+		rec.Stored.Temps = leftovers(p, p.Place, rec.Stored)
 		return out
 	})
 	// [LAW:no-silent-failure] exception: stderr is where failures are said,

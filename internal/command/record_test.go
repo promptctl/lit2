@@ -159,8 +159,8 @@ func TestAVerbsLineSaysWhetherTheStoreTookAnAppend(t *testing.T) {
 		want    bool
 	}{
 		{nil, false},
-		{[]store.Appending{store.Appended{Records: 1, Log: store.LogLookedUp{}}}, true},
-		{[]store.Appending{store.AppendedNotDurable{Appended: store.Appended{Records: 1, Log: store.LogLookedUp{}}, Why: errors.New("fsync failed")}}, true},
+		{[]store.Appending{store.Appended{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}}}, true},
+		{[]store.Appending{store.AppendedNotDurable{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}, Why: errors.New("fsync failed")}}, true},
 		{[]store.Appending{store.NotAppended{Log: store.NoLog{}, Why: errors.New("no space")}}, false},
 	} {
 		m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "set"}, Started: t0, Store: StoreFacts{Appends: tc.appends}, Verbs: &VerbsFacts{}, Outcome: cli.Done{}})

@@ -7,6 +7,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
 	"github.com/promptctl/lit2/internal/store/storetest"
@@ -14,7 +15,7 @@ import (
 
 func memoryStore() *store.Store {
 	repo := git.NewMemory()
-	return store.Open(store.CheckoutID{9}, store.MemoryPorts(files.NewMemory(), repo, repo, storetest.Entropy(1)), store.DefaultSegmentBound)
+	return store.Open(store.CheckoutID{9}, store.MemoryPorts(filestest.Memory(), repo, repo, storetest.Entropy(1)), store.DefaultSegmentBound)
 }
 
 func storeBlockOf(t *testing.T, f StoreFacts) map[string]any {
@@ -98,27 +99,31 @@ func TestAFreshStoresHeadsAreZeros(t *testing.T) {
 	}
 }
 
-// The store block says each directory with temps no create of their name
-// has reaped, and each whose temps did not read, and why; and none when
-// none is left.
-func TestTheStoreBlockSaysTheLeftoverTemps(t *testing.T) {
+// The store block says each directory scanned, with the temps no create
+// of their name has reaped, none or some, and each not scanned, and why;
+// and no directory when no scan was meant.
+func TestTheStoreBlockSaysEachDirectoryScannedOrWhyNot(t *testing.T) {
 	block := storeBlockOf(t, StoreFacts{Temps: []Leftovers{
-		TempsBeside{Dir: "/w/.git/lit/store/log", Temps: []string{".tmp-0d-0"}},
-		TempsUnread{Dir: "/w/.lit", Why: errors.New("a symlink")},
+		TempsScanned{Dir: "/w/.git/lit/store/log", Temps: []string{".tmp-0d-0"}},
+		TempsScanned{Dir: "/w/.git/lit"},
+		TempsNotScanned{Dir: "/w/.lit", Why: errors.New("a symlink")},
 	}})
 	temps, _ := block["temps"].([]any)
-	if len(temps) != 2 {
-		t.Fatalf("the store block is %v; want two directories' temps", block)
+	if len(temps) != 3 {
+		t.Fatalf("the store block is %v; want three directories", block)
 	}
-	beside, unread := temps[0].(map[string]any), temps[1].(map[string]any)
-	if got, _ := beside["temps"].([]any); beside["dir"] != "/w/.git/lit/store/log" || len(got) != 1 || got[0] != ".tmp-0d-0" {
-		t.Errorf("the logs' temps are %v; want the directory and .tmp-0d-0", beside)
+	some, empty, unread := temps[0].(map[string]any), temps[1].(map[string]any), temps[2].(map[string]any)
+	if got, _ := some["temps"].([]any); some["dir"] != "/w/.git/lit/store/log" || some["scan"] != "scanned" || len(got) != 1 || got[0] != ".tmp-0d-0" {
+		t.Errorf("the logs' temps are %v; want the directory scanned and .tmp-0d-0", some)
 	}
-	if unread["dir"] != "/w/.lit" || unread["error"] != "a symlink" {
-		t.Errorf("the unread temps are %v; want the directory and why they did not read", unread)
+	if got, ok := empty["temps"].([]any); empty["dir"] != "/w/.git/lit" || empty["scan"] != "scanned" || !ok || len(got) != 0 {
+		t.Errorf("a directory with no temp is %v; want it scanned, its temps an empty list", empty)
+	}
+	if unread["dir"] != "/w/.lit" || unread["scan"] != "not_scanned" || unread["error"] != "a symlink" || unread["temps"] != nil {
+		t.Errorf("the unread temps are %v; want the directory not scanned and why", unread)
 	}
 	if none := storeBlockOf(t, StoreFacts{Opening: Opened{Store: memoryStore()}}); none["temps"] != nil {
-		t.Errorf("a store block with no temp left says %v", none["temps"])
+		t.Errorf("a store block with no directory scanned says %v", none["temps"])
 	}
 }
 
@@ -134,9 +139,9 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 		Prior: store.Resealed{Why: errors.New("its publication does not read")}}
 	block := storeBlockOf(t, StoreFacts{
 		Heads: []store.Heads{h}, Reads: []store.Scanned{{Range: store.Range{Stream: h.Streams[0], From: 0}, Scan: scan}},
-		Appends: []store.Appending{appended, store.AppendedNotDurable{Appended: appended, Why: errors.New("fsync failed")},
+		Appends: []store.Appending{appended, store.AppendedNotDurable{Written: appended.Written, Log: appended.Log, Why: errors.New("fsync failed")},
 			store.NotAppended{Log: store.NoLog{Left: []files.Leftover{{Name: ".tmp-09-0", Why: errors.New("busy")}}}, Why: errors.New("no space")},
-			store.Appended{Records: 1, Log: store.LogCreated{Placed: files.Placed{Made: files.Existing, Reap: files.Reap{Reaped: []string{".tmp-09-1"}}}}}},
+			store.Appended{Written: store.Written{Records: 1}, Log: store.LogCreated{Placed: files.Placed{Made: files.Existing, Reap: files.Reap{Reaped: []string{".tmp-09-1"}}}}}},
 		Publishes: []store.Publishing{published, idle, resealed, nothing},
 	})
 	appends, _ := block["append"].([]any)
@@ -182,8 +187,33 @@ func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {
 	}
 }
 
+// An append says the sync of its log's name: synced, not_durable and why,
+// whatever the frame did after, or none when it placed no log.
+func TestAnAppendSaysTheSyncOfItsLogsName(t *testing.T) {
+	block := storeBlockOf(t, StoreFacts{Appends: []store.Appending{
+		store.Appended{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}},
+		store.NotAppended{Log: store.LogNotDurable{Log: store.LogCreated{Placed: files.Placed{Made: files.Created}}, Why: errors.New("EIO")}, Why: errors.New("the header did not read")},
+		store.NotAppended{Log: store.NoLog{}, Why: errors.New("no space")},
+	}})
+	appends, _ := block["append"].([]any)
+	if len(appends) != 3 {
+		t.Fatalf("the block holds %v; want three appends", block["append"])
+	}
+	synced, unsynced, none := appends[0].(map[string]any), appends[1].(map[string]any), appends[2].(map[string]any)
+	if synced["log"] != "looked_up" || synced["log_sync"] != "synced" || synced["log_sync_why"] != nil {
+		t.Errorf("an append whose log's name synced is %v; want looked_up, synced", synced)
+	}
+	if unsynced["outcome"] != "not_appended" || unsynced["why"] != "the header did not read" || unsynced["log"] != "created" ||
+		unsynced["log_sync"] != "not_durable" || unsynced["log_sync_why"] != "EIO" {
+		t.Errorf("an append that landed nothing after its log's sync failed is %v; want not_appended, the log created, not_durable by EIO", unsynced)
+	}
+	if none["log"] != "none" || none["log_sync"] != "none" {
+		t.Errorf("an append that placed no log is %v; want no log and no sync", none)
+	}
+}
+
 func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
-	appended := store.Appended{Records: 2, Bytes: 40, Log: store.LogLookedUp{}}
+	appended := store.Appended{Written: store.Written{Records: 2, Bytes: 40}, Log: store.LogLookedUp{}}
 	e := Record(&FixedClock{At: t0}, noGit, inv, func(_ time.Time, r Recorder) cli.Outcome {
 		r.Stored.Appends = append(r.Stored.Appends, appended)
 		panic("after the append")

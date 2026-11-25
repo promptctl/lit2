@@ -29,29 +29,32 @@ type StoreFacts struct {
 	Temps     []Leftovers
 }
 
-// Leftovers is the temps creates left beside one of the checkout's
-// create-once files, or in its store's logs' directory, which no create of
-// their name has reaped since: a crash's, said on every command until a
-// create reaps them `[LAW:no-silent-failure]`; or why that directory's
-// temps could not be read.
+// Leftovers is what one directory of the checkout's create-once files, or
+// its store's logs' directory, was found to hold of the temps creates
+// left, which no create of their name has reaped since: a crash's, said on
+// every command until a create reaps them `[LAW:no-silent-failure]`. A
+// directory is scanned, its temps none or some, or not scanned, and why,
+// so a directory with no temp is never said as one nobody looked in.
 //
 //sumtype:decl
 type Leftovers interface{ leftovers() }
 
-// TempsBeside is the temps in the directory at Dir, one or more.
-type TempsBeside struct {
+// TempsScanned is the directory at Dir, listed: the temps it holds, none
+// or some.
+type TempsScanned struct {
 	Dir   string
 	Temps []string
 }
 
-// TempsUnread is the directory at Dir whose temps did not read.
-type TempsUnread struct {
+// TempsNotScanned is the directory at Dir, whose temps were not read, and
+// why.
+type TempsNotScanned struct {
 	Dir string
 	Why error
 }
 
-func (TempsBeside) leftovers() {}
-func (TempsUnread) leftovers() {}
+func (TempsScanned) leftovers()    {}
+func (TempsNotScanned) leftovers() {}
 
 // Creation is one create-once a command ran: the file's path, and what
 // the create did, which a durable write and one whose sync failed say
@@ -64,7 +67,19 @@ type Creation struct {
 // Landed is whether any append the facts hold wrote its frame, durable or
 // not: what the verbs block calls written.
 func (f StoreFacts) Landed() bool {
-	return slices.ContainsFunc(f.Appends, store.Appending.Landed)
+	return slices.ContainsFunc(f.Appends, landed)
+}
+
+func landed(a store.Appending) (frame bool) {
+	switch a.(type) {
+	case store.Appended:
+		frame = true
+	case store.AppendedNotDurable:
+		frame = true
+	case store.NotAppended:
+		frame = false
+	}
+	return frame
 }
 
 // Opening is the store an invocation's checkout opened, once, or why it has
@@ -94,22 +109,30 @@ type (
 		Open    *openLine     `json:"open,omitempty"`
 		Heads   []headsLine   `json:"heads,omitempty"`
 		Read    *readLine     `json:"read,omitempty"`
-		Append  []any         `json:"append,omitempty"`
+		Append  []appendRow   `json:"append,omitempty"`
 		Publish []publishLine `json:"publish,omitempty"`
-		Create  []any         `json:"create,omitempty"`
-		Temps   []any         `json:"temps,omitempty"`
+		Create  []createRow   `json:"create,omitempty"`
+		Temps   []tempsRow    `json:"temps,omitempty"`
 	}
-	// createLine is a create that placed its file, durable or not; a
-	// create that placed none is a notPlacedLine.
-	createLine struct {
+	// placedLine is a create that placed its file, durable: outcome
+	// placed.
+	placedLine struct {
 		Path    string `json:"path"`
 		Outcome string `json:"outcome"`
 		Made    string `json:"made"`
-		Why     string `json:"why,omitempty"`
 		reapLine
 	}
-	// notPlacedLine is a create that placed nothing, and its own temp
-	// when it could not remove it.
+	// placedNotDurableLine is a create that placed its file and whose
+	// sync failed: outcome not_durable, and why.
+	placedNotDurableLine struct {
+		Path    string `json:"path"`
+		Outcome string `json:"outcome"`
+		Made    string `json:"made"`
+		Why     string `json:"why"`
+		reapLine
+	}
+	// notPlacedLine is a create that placed nothing: outcome not_placed,
+	// why, and its own temp when it could not remove it.
 	notPlacedLine struct {
 		Path      string     `json:"path"`
 		Outcome   string     `json:"outcome"`
@@ -125,14 +148,28 @@ type (
 	}
 	// logLine is how an append came by its log: looked_up; created, its
 	// header the log's; existing, a racing create's header the log's; or
-	// none, and the reap of its create, or the temp its create left.
+	// none, and the reap of its create, or the temp its create left. Its
+	// log_sync is the sync of the log's name: synced, not_durable with
+	// log_sync_why, or none when it placed no log.
 	logLine struct {
-		Log string `json:"log"`
+		Log        string `json:"log"`
+		LogSync    string `json:"log_sync"`
+		LogSyncWhy string `json:"log_sync_why,omitempty"`
 		reapLine
 	}
-	tempsBesideLine struct {
+	// scannedLine is a directory listed: scan scanned, and its temps,
+	// none or some.
+	scannedLine struct {
 		Dir   string   `json:"dir"`
+		Scan  string   `json:"scan"`
 		Temps []string `json:"temps"`
+	}
+	// notScannedLine is a directory whose temps were not read: scan
+	// not_scanned, and why.
+	notScannedLine struct {
+		Dir   string `json:"dir"`
+		Scan  string `json:"scan"`
+		Error string `json:"error"`
 	}
 	leftLine struct {
 		Name string `json:"name"`
@@ -163,16 +200,27 @@ type (
 		Spans int    `json:"torn_spans"`
 		Bytes uint64 `json:"torn_bytes"`
 	}
-	// appendLine is an append that landed its frame, durable or not; an
-	// append that wrote none is a notAppendedLine.
-	appendLine struct {
+	// appendedLine is an append that landed its frame, durable: outcome
+	// appended.
+	appendedLine struct {
 		Outcome  string `json:"outcome"`
 		Records  int    `json:"records"`
 		Bytes    int    `json:"bytes"`
 		LogUntil uint64 `json:"log_until"`
-		Why      string `json:"why,omitempty"`
 		logLine
 	}
+	// appendedNotDurableLine is an append that landed its frame and whose
+	// sync failed: outcome not_durable, and why.
+	appendedNotDurableLine struct {
+		Outcome  string `json:"outcome"`
+		Records  int    `json:"records"`
+		Bytes    int    `json:"bytes"`
+		LogUntil uint64 `json:"log_until"`
+		Why      string `json:"why"`
+		logLine
+	}
+	// notAppendedLine is an append that wrote no frame: outcome
+	// not_appended, and why.
 	notAppendedLine struct {
 		Outcome string `json:"outcome"`
 		Why     string `json:"why"`
@@ -192,6 +240,32 @@ type (
 		PriorWhy       string `json:"prior_why,omitempty"`
 	}
 )
+
+// appendRow is one append as the line spells it; its outcome says which
+// `[LAW:types-are-the-program]`.
+//
+//sumtype:decl
+type appendRow interface{ appendRow() }
+
+// createRow is one create as the line spells it; its outcome says which.
+//
+//sumtype:decl
+type createRow interface{ createRow() }
+
+// tempsRow is one directory's temps as the line spells it; its scan says
+// which.
+//
+//sumtype:decl
+type tempsRow interface{ tempsRow() }
+
+func (appendedLine) appendRow()           {}
+func (appendedNotDurableLine) appendRow() {}
+func (notAppendedLine) appendRow()        {}
+func (placedLine) createRow()             {}
+func (placedNotDurableLine) createRow()   {}
+func (notPlacedLine) createRow()          {}
+func (scannedLine) tempsRow()             {}
+func (notScannedLine) tempsRow()          {}
 
 // storeBlock is the facts as the line's store block, or nil when no store
 // step ran.
@@ -225,59 +299,74 @@ func storeBlock(f StoreFacts) *storeLine {
 	return l
 }
 
-// tempsOf is a directory's leftover temps, or why they did not read.
-func tempsOf(l Leftovers) any {
+// tempsOf is a directory's temps: scanned, and those it holds, or not
+// scanned, and why. Each builder below is a switch over its sum that
+// gochecksumtype holds exhaustive, so no variant goes unspelled.
+func tempsOf(l Leftovers) (row tempsRow) {
 	switch l := l.(type) {
-	case TempsBeside:
-		return tempsBesideLine(l)
-	case TempsUnread:
-		return dirErrorLine{Dir: l.Dir, Error: l.Why.Error()}
+	case TempsScanned:
+		row = scannedLine{Dir: l.Dir, Scan: "scanned", Temps: append([]string{}, l.Temps...)}
+	case TempsNotScanned:
+		row = notScannedLine{Dir: l.Dir, Scan: "not_scanned", Error: l.Why.Error()}
 	}
-	panic(fmt.Sprintf("command: %T is not a Leftovers", l))
+	return row
 }
 
 // appendOf is an append as the line spells it: appended, not_durable with
 // the failed sync, or not_appended and why, each with how it came by its
 // log.
-func appendOf(a store.Appending) any {
-	landed := func(outcome string, a store.Appended, why string) appendLine {
-		return appendLine{Outcome: outcome, Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), Why: why, logLine: logOf(a.Log)}
-	}
+func appendOf(a store.Appending) (row appendRow) {
 	switch a := a.(type) {
 	case store.Appended:
-		return landed("appended", a, "")
+		row = appendedLine{Outcome: "appended", Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), logLine: logOf(a.Log)}
 	case store.AppendedNotDurable:
-		return landed("not_durable", a.Appended, a.Why.Error())
+		row = appendedNotDurableLine{Outcome: "not_durable", Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), Why: a.Why.Error(), logLine: logOf(a.Log)}
 	case store.NotAppended:
-		return notAppendedLine{Outcome: "not_appended", Why: a.Why.Error(), logLine: logOf(a.Log)}
+		row = notAppendedLine{Outcome: "not_appended", Why: a.Why.Error(), logLine: logOf(a.Log)}
 	}
-	panic(fmt.Sprintf("command: %T is not an Appending", a))
+	return row
 }
 
-func logOf(l store.LogAttempt) logLine {
+// logOf is how an append came by its log, and the sync of its name.
+func logOf(l store.LogAttempt) (line logLine) {
 	switch l := l.(type) {
 	case store.NoLog:
-		return logLine{Log: "none", reapLine: reapLine{TempsReaped: []string{}, TempsLeft: leftOf(l.Left)}}
+		line = logLine{Log: "none", LogSync: "none", reapLine: reapLine{TempsReaped: []string{}, TempsLeft: leftOf(l.Left)}}
 	case store.LogLookedUp:
-		return logLine{Log: "looked_up", reapLine: reapOf(files.Reap{})}
+		line = placedLog(l)
 	case store.LogCreated:
-		return logLine{Log: made(l.Made), reapLine: reapOf(l.Reap)}
+		line = placedLog(l)
+	case store.LogNotDurable:
+		line = placedLog(l.Log)
+		line.LogSync, line.LogSyncWhy = "not_durable", l.Why.Error()
 	}
-	panic(fmt.Sprintf("command: %T is not a LogAttempt", l))
+	return line
+}
+
+// placedLog is a log looked up or created, its name's sync passing.
+func placedLog(l store.LogPlaced) (line logLine) {
+	switch l := l.(type) {
+	case store.LogLookedUp:
+		line = logLine{Log: "looked_up", reapLine: reapOf(files.Reap{})}
+	case store.LogCreated:
+		line = logLine{Log: made(l.Made), reapLine: reapOf(l.Reap)}
+	}
+	line.LogSync = "synced"
+	return line
 }
 
 // createOf is a create as the line spells it: placed, not_durable with the
 // failed sync, or not_placed and why.
-func createOf(c Creation) any {
+func createOf(c Creation) (row createRow) {
 	switch p := c.Placing.(type) {
 	case files.Placed:
-		return createLine{Path: c.Path, Outcome: "placed", Made: made(p.Made), reapLine: reapOf(p.Reap)}
+		row = placedLine{Path: c.Path, Outcome: "placed", Made: made(p.Made), reapLine: reapOf(p.Reap)}
 	case files.PlacedNotDurable:
-		return createLine{Path: c.Path, Outcome: "not_durable", Made: made(p.Made), Why: p.Why.Error(), reapLine: reapOf(p.Reap)}
+		row = placedNotDurableLine{Path: c.Path, Outcome: "not_durable", Made: made(p.Made), Why: p.Why.Error(), reapLine: reapOf(p.Reap)}
 	case files.NotPlaced:
-		return notPlacedLine{Path: c.Path, Outcome: "not_placed", Why: p.Why.Error(), TempsLeft: leftOf(p.Left)}
+		row = notPlacedLine{Path: c.Path, Outcome: "not_placed", Why: p.Why.Error(), TempsLeft: leftOf(p.Left)}
 	}
-	panic(fmt.Sprintf("command: %T is not a Placing", c.Placing))
+	return row
 }
 
 func reapOf(r files.Reap) reapLine {

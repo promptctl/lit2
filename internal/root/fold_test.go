@@ -8,7 +8,6 @@ import (
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/events"
-	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
@@ -81,7 +80,7 @@ func TestEveryOpenFoldsEveryRecord(t *testing.T) {
 func TestATornSpanIsSkippedAndCounted(t *testing.T) {
 	twin := NewFreshTwin()
 	repo := git.NewMemory()
-	logs := files.NewMemory()
+	logs := filestest.Memory()
 	ports := store.MemoryPorts(logs, repo, repo, rand.NewChaCha8([32]byte{5}))
 	opened := command.Opened{Store: store.Open(twinID, ports, store.DefaultSegmentBound)}
 	twin.Process.Store, twin.Process.Open = opened, func(git.Checkout, command.Minted) command.Opening { return opened }

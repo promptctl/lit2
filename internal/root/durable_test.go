@@ -2,9 +2,11 @@ package root
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -29,7 +31,7 @@ var errSync = errors.New("the fsync failed")
 // unsynced is a session over a fresh twin whose store's logs answer
 // faults, its workspace committed as admin init applies it.
 func unsynced(t *testing.T, faults filestest.Faults) session {
-	twin := freshTwinOver(filestest.NotDurable(files.NewMemory(), faults))
+	twin := freshTwinOver(filestest.NotDurable(files.NewMemory(store.LogsDir(twinCheckout)), faults))
 	twin.Code.Commit(map[string][]byte{verbs.WorkspacePath(): assets.DefaultWorkspace.Bytes()})
 	return session{t: t, twin: &twin}
 }
@@ -102,8 +104,8 @@ func TestTheRecoveryPhraseIsShownWheneverTheKeyWasCreated(t *testing.T) {
 	// one as shared makes it over the files it is given, which it returns.
 	mint := func(t *testing.T, shared func(files.Files) files.Files) (session, *files.Memory) {
 		s := unsynced(t, filestest.Faults{})
-		under := files.NewMemory()
-		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared(under), files.NewMemory() }
+		under := files.NewMemory(twinShared)
+		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared(under), files.NewMemory(twinPrivate) }
 		return s, under
 	}
 	// phrase is the phrase of the key under holds, which init must print.
@@ -148,7 +150,7 @@ func TestTheRecoveryPhraseIsShownWheneverTheKeyWasCreated(t *testing.T) {
 // on, and fails durability naming the file.
 func TestAWorkTreeFileWhoseSyncFailedEndsInitNotDurable(t *testing.T) {
 	s := unsynced(t, filestest.Faults{})
-	tree := files.NewMemory()
+	tree := files.NewMemory(litDir(twinCheckout))
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files {
 		return filestest.NotDurable(tree, filestest.Faults{CreateOnce: errSync})
 	}
@@ -162,38 +164,66 @@ func TestAWorkTreeFileWhoseSyncFailedEndsInitNotDurable(t *testing.T) {
 	}
 }
 
-// Every command in a checkout says the temps beside the checkout's own
-// files that no create has reaped, a crash's, and the files whose temps do
-// not read; never relying on git to show them.
+// Every command in a checkout says, for each directory of its own files,
+// listed once however many it holds, the temps no create has reaped, a
+// crash's, or that it was not scanned, and why; and the same of its
+// store's logs. Never relying on git to show them.
 func TestLeftoversSaysTheCheckoutsTemps(t *testing.T) {
 	dir := checkout(t, minted)
 	c := git.Checkout{WorkTree: dir, GitDir: filepath.Join(dir, ".git"), CommonDir: filepath.Join(dir, ".git")}
 	disk := Process{IdentityFiles: identityFiles, Pin: pinFiles, WorkTree: workTree}
+	unminted := command.Unopened{Why: errors.New("unminted")}
 	var want []command.Leftovers
+	at := map[string]int{}
 	for _, f := range disk.onceFiles(c).all() {
-		want = append(want, command.TempsBeside{Dir: f.dir.Path(), Temps: []string{plant(t, f.dir.Path(), f.name.String())}})
+		d := f.files.Dir().Path()
+		temp := plant(t, d, f.name.String())
+		if i, seen := at[d]; seen {
+			s := want[i].(command.TempsScanned)
+			s.Temps = append(s.Temps, temp)
+			slices.Sort(s.Temps)
+			want[i] = s
+			continue
+		}
+		at[d] = len(want)
+		want = append(want, command.TempsScanned{Dir: d, Temps: []string{temp}})
 	}
-	if got := leftovers(disk, c, command.Unopened{Why: errors.New("unminted")}); !reflect.DeepEqual(got, want) {
-		t.Errorf("the checkout's temps are %#v; want each file's own temp, by its directory: %#v", got, want)
+	if len(want) == len(disk.onceFiles(c).all()) {
+		t.Fatalf("the checkout's once files are in %d directories; want some sharing one, to show it listed once", len(want))
 	}
-	t.Run("a .lit that is no directory has its files' temps unread", func(t *testing.T) {
+	want = append(want, command.TempsNotScanned{Dir: store.LogsDir(c).Path(), Why: unminted.Why})
+	if got := leftovers(disk, command.InCheckout{Checkout: c}, &command.StoreFacts{Opening: unminted}); !reflect.DeepEqual(got, want) {
+		t.Errorf("the checkout's temps are %#v; want each directory's temps, once, and the logs not scanned: %#v", got, want)
+	}
+	t.Run("a .lit that is no directory is not scanned, once", func(t *testing.T) {
 		if err := os.RemoveAll(litDir(c).Path()); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(t.TempDir(), litDir(c).Path()); err != nil {
 			t.Fatal(err)
 		}
-		got := leftovers(disk, c, command.Unopened{Why: errors.New("unminted")})
-		if len(got) != 5 {
-			t.Fatalf("the checkout's temps are %#v; want the three identity files' and .lit's two unread", got)
+		got := leftovers(disk, command.InCheckout{Checkout: c}, &command.StoreFacts{Opening: unminted})
+		if len(got) != len(want) {
+			t.Fatalf("the checkout's temps are %#v; want one row per directory, as before", got)
 		}
-		for _, l := range got[3:] {
-			if u, ok := l.(command.TempsUnread); !ok || u.Dir != litDir(c).Path() || !errors.As(u.Why, new(files.NotTheDirectory)) {
-				t.Errorf("the .lit temps are %#v; want unread, the symlink refused", l)
-			}
+		lit := got[at[litDir(c).Path()]]
+		if u, ok := lit.(command.TempsNotScanned); !ok || u.Dir != litDir(c).Path() || !errors.As(u.Why, new(files.NotTheDirectory)) {
+			t.Errorf("the .lit temps are %#v; want not scanned, the symlink refused", lit)
+		}
+	})
+	t.Run("outside a checkout no directory is scanned", func(t *testing.T) {
+		if got := leftovers(disk, command.NoCheckout{Dir: dir}, &command.StoreFacts{Opening: unminted}); got != nil {
+			t.Errorf("outside a checkout the temps are %#v; want none", got)
 		}
 	})
 }
+
+// twinShared and twinPrivate are the directories of the twin's identity
+// files, which a port a test gives it is of, so its paths are the twin's.
+var (
+	twinShared  = command.DirOf(command.PrincipalFile{}, twinCheckout)
+	twinPrivate = command.DirOf(command.IDFile{}, twinCheckout)
+)
 
 // plant is a crash's temp of the file name in the directory at dir.
 func plant(t *testing.T, dir, name string) string {
@@ -209,8 +239,10 @@ func plant(t *testing.T, dir, name string) string {
 }
 
 // A run's event says the temps its Process's ports hold, the key's and
-// the store's logs', by the directories they are of: the twin runs the
-// one scan Main's runs do.
+// the store's logs', by the directories the ports are of, the logs' as the
+// run's heads listed them: the twin runs the one scan Main's runs do. A
+// directory with no temp is said scanned and empty, and the logs of a run
+// none of whose steps read the heads are said not scanned.
 func TestARunsEventSaysTheTempsOfItsPorts(t *testing.T) {
 	shared, logs := t.TempDir(), t.TempDir()
 	logsDir := files.DirAt(logs, files.MustName("log"))
@@ -218,14 +250,41 @@ func TestARunsEventSaysTheTempsOfItsPorts(t *testing.T) {
 	sharedDir := files.DirAt(shared, files.MustName("lit"))
 	key := plant(t, sharedDir.Path(), command.NameOf(command.PrincipalFile{}).String())
 	log := plant(t, logsDir.Path(), store.LogName(twinID).String())
-	twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return files.At(sharedDir), files.NewMemory() }
-	_, e := run(t, twin, "--help")
-	want := []command.Leftovers{
-		command.TempsBeside{Dir: command.DirOf(command.PrincipalFile{}, twinCheckout).Path(), Temps: []string{key}},
-		command.TempsBeside{Dir: store.LogsDir(twinCheckout).Path(), Temps: []string{log}},
+	private := filestest.Memory()
+	twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return files.At(sharedDir), private }
+	ports := func(logs command.Leftovers) []command.Leftovers {
+		return []command.Leftovers{
+			command.TempsScanned{Dir: private.Dir().Path()},
+			command.TempsScanned{Dir: sharedDir.Path(), Temps: []string{key}},
+			command.TempsScanned{Dir: pinDir(twinCheckout).Path()},
+			command.TempsScanned{Dir: litDir(twinCheckout).Path()},
+			logs,
+		}
 	}
-	if !reflect.DeepEqual(e.Store.Temps, want) {
-		t.Errorf("the event's temps are %#v; want the key's and the log's, by their directories: %#v", e.Store.Temps, want)
+	_, e := run(t, twin, "get", "lit-abc/title")
+	if want := ports(command.TempsScanned{Dir: logsDir.Path(), Temps: []string{log}}); !reflect.DeepEqual(e.Store.Temps, want) {
+		t.Errorf("the event's temps are %#v; want each port's, by its own directory: %#v", e.Store.Temps, want)
+	}
+	noHeads := leftovers(twin.Process, twin.Process.Place, &command.StoreFacts{Opening: twin.Process.Store})
+	if want := ports(command.TempsNotScanned{Dir: logsDir.Path(), Why: errNoHeads}); !reflect.DeepEqual(noHeads, want) {
+		t.Errorf("a run that read no heads says the temps %#v; want the logs not scanned: %#v", noHeads, want)
+	}
+}
+
+// A run's not-durable failure keeps each write's failed sync in its
+// chain, so a caller asking for the errno finds it, whichever write's it
+// was and whatever failure the run ended in first.
+func TestANotDurableRunsChainHoldsEachSyncsError(t *testing.T) {
+	w := &writes{stored: &command.StoreFacts{}}
+	w.created(command.Creation{Path: "/twin/.lit/founding", Placing: files.PlacedNotDurable{Why: fmt.Errorf("syncing: %w", syscall.EIO)}})
+	if err := w.appended(store.AppendedNotDurable{Written: store.Written{Records: 1}, Log: store.LogLookedUp{}, Why: syscall.ENOSPC}); err != nil {
+		t.Fatal(err)
+	}
+	for name, o := range map[string]cli.Outcome{"done": w.end(cli.Done{}), "failed first": w.end(failed(errors.New("the body failed")))} {
+		f, ok := o.(cli.Failed)
+		if !ok || !errors.Is(f.Failure, syscall.EIO) || !errors.Is(f.Failure, syscall.ENOSPC) {
+			t.Errorf("a %s run is %#v; want failed, its chain holding EIO and ENOSPC", name, o)
+		}
 	}
 }
 
@@ -235,13 +294,13 @@ func TestEveryWriteWhoseSyncFailedEndsTheRunNotDurable(t *testing.T) {
 	t.Run("the checkout id", func(t *testing.T) {
 		s := unsynced(t, filestest.Faults{})
 		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) {
-			return files.NewMemory(), filestest.NotDurable(files.NewMemory(), filestest.Faults{CreateOnce: errSync})
+			return files.NewMemory(twinShared), filestest.NotDurable(files.NewMemory(twinPrivate), filestest.Faults{CreateOnce: errSync})
 		}
 		notDurableRun(t, s.lit("admin", "init"), command.PathOf(command.IDFile{}, twinCheckout))
 	})
 	t.Run("the founding pin", func(t *testing.T) {
 		s := unsynced(t, filestest.Faults{})
-		pins := filestest.NotDurable(files.NewMemory(), filestest.Faults{CreateOnce: errSync})
+		pins := filestest.NotDurable(files.NewMemory(pinDir(twinCheckout)), filestest.Faults{CreateOnce: errSync})
 		s.twin.Process.Pin = func(git.Checkout) files.Files { return pins }
 		notDurableRun(t, s.lit("admin", "init"), pinPath(twinCheckout))
 	})
@@ -271,7 +330,7 @@ func TestEveryWriteWhoseSyncFailedEndsTheRunNotDurable(t *testing.T) {
 func TestAFailedRunCarriesItsNotDurableWrites(t *testing.T) {
 	s := unsynced(t, filestest.Faults{})
 	// version one's file lands not durable, and then does not read back
-	broken := unreadWorkspace{files.NewMemory()}
+	broken := unreadWorkspace{files.NewMemory(litDir(twinCheckout))}
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files {
 		return filestest.NotDurable(broken, filestest.Faults{CreateOnce: errSync})
 	}
@@ -310,19 +369,19 @@ func (gone) Write([]byte) (int, error) { return 0, syscall.EPIPE }
 func TestAPhraseThatCouldNotBeShownFailsTheRun(t *testing.T) {
 	fresh := func(t *testing.T, shared files.Files) said {
 		s := unsynced(t, filestest.Faults{})
-		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared, files.NewMemory() }
+		s.twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared, files.NewMemory(twinPrivate) }
 		s.twin.Process.Out = gone{}
 		return s.lit("admin", "init")
 	}
 	keyPath := command.PathOf(command.PrincipalFile{}, twinCheckout)
 	t.Run("a key read back", func(t *testing.T) {
-		r := fresh(t, files.NewMemory())
+		r := fresh(t, files.NewMemory(twinShared))
 		if r.status == 0 || reasonOf(r.event) != "output" || !strings.Contains(r.err, keyPath) || !strings.Contains(r.err, "was not shown") {
 			t.Errorf("init is status %d, reason %q, stderr %q; want it failed, the phrase of %s said not shown", r.status, reasonOf(r.event), r.err, keyPath)
 		}
 	})
 	t.Run("a key that does not read back", func(t *testing.T) {
-		r := fresh(t, unreadKey{files.NewMemory()})
+		r := fresh(t, unreadKey{files.NewMemory(twinShared)})
 		if r.status == 0 || reasonOf(r.event) != "output" || !strings.Contains(r.err, "was not shown") || !strings.Contains(r.err, errKeyUnread.Error()) {
 			t.Errorf("init is status %d, reason %q, stderr %q; want the phrase not shown and the readback's failure, both said", r.status, reasonOf(r.event), r.err)
 		}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
@@ -294,7 +295,7 @@ func TestABrokenRefOrObjectIsOneUnreadableStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a reader holding no log
-	ports := store.WithFiles(store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7)), files.NewMemory())
+	ports := store.WithFiles(store.DiskPorts(gittest.Runner(t), c, storetest.Entropy(7)), filestest.Memory())
 	objects, _ := store.RepositoryOf(ports)
 	// d's one segment, its loose file cut to half, so its header reads and
 	// its body does not, as a filesystem that lost a write would leave it
