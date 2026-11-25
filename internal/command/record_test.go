@@ -270,6 +270,18 @@ func TestAReadTheEventIsMadeOfThatPanicsIsUnrecorded(t *testing.T) {
 	}
 }
 
+// A line Say did not deliver is the Unrecorded's to say, when a read at the
+// end leaves no event to say it was not delivered.
+func TestALineSayDidNotDeliverIsSaidByTheUnrecorded(t *testing.T) {
+	refused := cli.Failed{Failure: Broke(errors.New("refused"))}
+	s := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { return refused })
+	s.Say = func(string) error { return errors.New("stderr is closed") }
+	e, ok := Record(&FixedClock{At: t0}, func() []git.Spawn { panic("the spawns broke") }, s).(Unrecorded)
+	if !ok || e.Said != cli.Report(refused) {
+		t.Errorf("a refused line before the spawns broke ended %#v; want unrecorded, saying the line", e)
+	}
+}
+
 // A run's duration covers Say: the clock read for it is read after Say
 // had the line.
 func TestTheDurationCoversSayingTheErrorLine(t *testing.T) {

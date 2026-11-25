@@ -90,8 +90,9 @@ type Recorded struct {
 
 // Unrecorded is a run that made no event: a read the event is made of, at
 // its start or its end, broke, Broke. Said is what the run says of the
-// outcome it had: its error line and, when a panic ended it, that panic's
-// stack, which no event keeps; nothing when it broke before it had one.
+// outcome it had, which no event keeps: its error line, when Say did not
+// deliver it, and the stack of a panic that ended it; nothing when it
+// broke before it had an outcome.
 type Unrecorded struct {
 	Said  string
 	Broke Internal
@@ -346,9 +347,8 @@ func (Internal) Reason() string { return "internal" }
 //   - a panic in Say is a line it did not deliver, which the event says;
 //   - a panic in Begin, or in the end's reads, the clock again for the
 //     duration and the git processes the run spawned, leaves no event to
-//     make: the run is Unrecorded, saying the stack of a panic that ended
-//     its outcome, which Say had no way to say, once Say has the outcome's
-//     line.
+//     make: the run is Unrecorded, saying what Say did not, the line it
+//     did not deliver and the stack of a panic that ended the outcome.
 func Record[A any](c Clock, spawns func() []git.Spawn, s Stages[A]) Ended {
 	return Caught(func() Ended {
 		inv := s.Begin()
@@ -360,7 +360,7 @@ func Record[A any](c Clock, spawns func() []git.Spawn, s Stages[A]) Ended {
 			e := Event{Invocation: inv, Command: r.asked, Place: r.where(), Duration: c.Now().Sub(inv.Started), Store: r.stored, Config: r.config, Verbs: r.did, Policy: r.policy, Git: spawns(), Ending: ended}
 			return Recorded{Event: e, Status: end.status}
 		}, func(broke Internal) Ended {
-			return Unrecorded{Said: string(stackOf(end.outcome)), Broke: broke}
+			return Unrecorded{Said: unsaid(end, ended) + string(stackOf(end.outcome)), Broke: broke}
 		})
 	}, func(broke Internal) Ended { return Unrecorded{Broke: broke} })
 }
@@ -395,6 +395,23 @@ func ending(end said, say func(string) error) Ending {
 		}, func(broke Internal) Delivery { return SayPanicked{Broke: broke} })}
 	}
 	panic(fmt.Sprintf("command: %T is not an Outcome", end.outcome))
+}
+
+// unsaid is end's line when Say did not deliver it, as ended says.
+func unsaid(end said, ended Ending) string {
+	switch e := ended.(type) {
+	case Succeeded:
+		return ""
+	case Failed:
+		switch e.Line.(type) {
+		case Delivered:
+			return ""
+		case Refused, SayPanicked:
+			return end.line
+		}
+		panic(fmt.Sprintf("command: %T is not a Delivery", e.Line))
+	}
+	panic(fmt.Sprintf("command: %T is not an Ending", ended))
 }
 
 // failedFor is the outcome of a run that broke.

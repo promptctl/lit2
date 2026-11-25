@@ -234,8 +234,8 @@ func ScanFrames(from Offset, b []byte) Scan {
 }
 
 // unframed is where the bytes from pos, whose frame was refused for why,
-// stop being no frame: next, the next whole frame's start, read as
-// following, or the bytes' end, where following is no frame; and cut,
+// stop being no frame: next, the next whole frame's start or the bytes'
+// end, and following, what the bytes there read as; and cut,
 // where its torn bytes stop. That is next, unless no whole frame follows
 // and a finishable frame does: then it is the first such frame, since
 // every frame after it lies in the bytes its length claims.
@@ -254,7 +254,7 @@ func unframed(b []byte, pos int, why Refusal) (next, cut int, following read) {
 			}
 		}
 	}
-	return len(b), cut, noFrame{why: Truncated{}}
+	return len(b), cut, frameAt(b[len(b):])
 }
 
 // nextMagic is where after q the next frame may start: the next place the
