@@ -239,9 +239,9 @@ func (o opened) status() cli.Outcome {
 // store; then, in a store no version is in force in, the workspace's
 // version one: the file in the work tree, or the default profile written
 // there when there is none. The mint moves the place: the run ends in its
-// checkout as the mint left it, its identity files read again as every
-// run reads them, so the store init opens and the place its event says
-// are that one place's, whatever the mint did.
+// checkout with the identity the mint read back, so the store init opens,
+// the principal it prints and the place its event says are that one
+// read's, whatever the mint did.
 func (r body) init() command.Ran {
 	in, err := command.CheckoutAt(r.place)
 	if err != nil {
@@ -253,7 +253,7 @@ func (r body) init() command.Ran {
 	for _, c := range minting.creations() {
 		r.w.created(c)
 	}
-	r.place = identified(r.p, in.Checkout)
+	r.place = command.InCheckout{Checkout: in.Checkout, Identity: minting.identity()}
 	return r.ran(r.enroll(in.Checkout, once, minting))
 }
 

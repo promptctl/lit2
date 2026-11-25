@@ -136,6 +136,11 @@ func TestInitInAnUnmintedTwinMintsTheWriterItWritesAs(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("admin init exited %d: %s", status, twin.Err)
 	}
+	in, _ := initd.Place.(command.InCheckout)
+	key, _ := in.Identity.(command.Minted)
+	if want := "principal " + key.Key.Principal().String(); !strings.Contains(twin.Out.String(), want) {
+		t.Errorf("init printed %q; want %q, the principal of the writer its event names", twin.Out, want)
+	}
 	twin.Commands.Events = nil
 	_, e := run(t, twin, "add", "unfiled/children", "{title: f}")
 	if _, failed := e.Outcome.(cli.Failed); failed {
