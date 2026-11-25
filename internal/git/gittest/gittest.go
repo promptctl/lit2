@@ -1,11 +1,12 @@
 // Package gittest is the contract suites of lit's repository's two ports,
 // Objects and Refs, and of the code repository, Code, each run over the
 // repository on disk and its twin in memory side by side, so a test over
-// the twin is a test over the repository: one contract is what both
-// arms are `[LAW:one-source-of-truth]`, written down as D2. The helpers that make a
-// repository, run git or plant a directory are built with the integration
-// tag alone, so a fast test cannot call one; the suites' real arms are
-// built from this package's own unexported ones.
+// the twin is a test over the repository: one contract is what both arms
+// are `[LAW:one-source-of-truth]`, written down as D2. The helpers it
+// exports to make a repository, run git or plant a directory are built
+// with the integration tag alone, so a fast test cannot call one by name;
+// the suites' real arms are built from this package's own unexported
+// ones.
 package gittest
 
 import (

@@ -37,15 +37,13 @@ const (
 	noBlock    rule = "is missing from ARCHITECTURE.md"
 	opened     rule = "opens an envelope below the verbs, which no layer there may read (INV:opaque-envelope)"
 	reaches    rule = "is a test the fast loop builds and imports os/exec"
-	spawner    rule = "is a test kit's file the fast loop builds, imports os/exec, and exports a name"
 )
 
 // The fast loop's split, as the source declares it (D2): a file built
-// only with the integration tag is outside the fast loop; a test the fast
-// loop builds imports no spawn; and a kit's file it builds that imports
-// spawn exports nothing, so the processes the fast loop starts are the
-// contract suites' real arms, reached through their suites alone
-// `[LAW:single-enforcer]`.
+// only with the integration tag is outside the fast loop, and a test file
+// the fast loop builds imports no spawn. That is all this checks; what a
+// test reaches through the code it calls is the compiler's to rule on, by
+// where the helpers that reach the world are defined.
 const (
 	integration = "integration"
 	spawn       = "os/exec"
@@ -184,9 +182,6 @@ func checkCode(tree fs.FS, mod string, rank map[string]int, declared map[string]
 			if fast && strings.HasSuffix(path, "_test.go") {
 				vs = append(vs, checkFastTest(path, f)...)
 			}
-			if rest, ok := strings.CutPrefix(filepath.Dir(path), "internal/"); fast && ok && kit(rest) && !strings.HasSuffix(path, "_test.go") {
-				vs = append(vs, checkKitFile(path, f)...)
-			}
 			return nil
 		})
 		if err != nil {
@@ -258,39 +253,6 @@ func checkFastTest(path string, f *ast.File) []violation {
 	for _, imp := range f.Imports {
 		if ip := strings.Trim(imp.Path.Value, "`\""); ip == spawn {
 			vs = append(vs, violation{path + ": import " + ip, reaches})
-		}
-	}
-	return vs
-}
-
-// checkKitFile holds a kit's file the fast loop builds to exporting no
-// name if it starts a process, by its imports and its declarations.
-func checkKitFile(path string, f *ast.File) []violation {
-	if !slices.ContainsFunc(f.Imports, func(imp *ast.ImportSpec) bool { return strings.Trim(imp.Path.Value, "`\"") == spawn }) {
-		return nil
-	}
-	var vs []violation
-	for _, d := range f.Decls {
-		switch d := d.(type) {
-		case *ast.FuncDecl:
-			if d.Recv == nil && d.Name.IsExported() {
-				vs = append(vs, violation{path + ": func " + d.Name.Name, spawner})
-			}
-		case *ast.GenDecl:
-			for _, s := range d.Specs {
-				switch s := s.(type) {
-				case *ast.TypeSpec:
-					if s.Name.IsExported() {
-						vs = append(vs, violation{path + ": type " + s.Name.Name, spawner})
-					}
-				case *ast.ValueSpec:
-					for _, n := range s.Names {
-						if n.IsExported() {
-							vs = append(vs, violation{path + ": " + n.Name, spawner})
-						}
-					}
-				}
-			}
 		}
 	}
 	return vs
@@ -596,9 +558,6 @@ func TestTheCheckerNamesEachBreak(t *testing.T) {
 		{"os/exec in a test built without integration", "internal/git/git_test.go", "//go:build !integration\n\npackage git\n\nimport _ \"os/exec\"\n", reaches},
 		{"os/exec in a test built with integration or unix", "internal/git/git_test.go", "//go:build integration || unix\n\npackage git\n\nimport _ \"os/exec\"\n", reaches},
 		{"os/exec in a contract suite's run", "internal/git/contract_test.go", "package git\n\nimport _ \"os/exec\"\n", reaches},
-		{"an exported func in a kit's file that imports os/exec", "internal/git/gittest/oracle.go", "package gittest\n\nimport _ \"os/exec\"\n\nfunc Init() {}\n", spawner},
-		{"an exported type in a kit's file that imports os/exec", "internal/git/gittest/oracle.go", "package gittest\n\nimport _ \"os/exec\"\n\ntype Repo struct{}\n", spawner},
-		{"an exported var in a kit's file that imports os/exec", "internal/git/gittest/oracle.go", "package gittest\n\nimport _ \"os/exec\"\n\nvar Bin = \"git\"\n", spawner},
 		{"a test of the program importing a unit, not its kit", "cmd/lit2/smoke_test.go", "//go:build integration\n\npackage main\n\nimport _ \"example.com/m/internal/git\"\n", program},
 	} {
 		tree := synthetic()
@@ -665,9 +624,7 @@ func TestTheFastLoopsTestsReachTheWorldOnlyAsDeclared(t *testing.T) {
 	for _, tc := range []struct{ name, path, text string }{
 		{"os/exec in a test built only with integration", "internal/git/git_test.go", "//go:build integration\n\npackage git\n\nimport _ \"os/exec\"\n"},
 		{"os/exec in a test built with integration on unix", "internal/git/fifo_test.go", "//go:build integration && unix\n\npackage git\n\nimport _ \"os/exec\"\n"},
-		{"os/exec in a kit's file that exports nothing", "internal/git/gittest/oracle.go", "package gittest\n\nimport _ \"os/exec\"\n\nfunc spawn() {}\n\ntype repo struct{}\n\nfunc (repo) Commit() {}\n"},
-		{"an exported name in a kit's file that starts no process", "internal/git/gittest/gittest.go", "package gittest\n\nfunc Refs() {}\n"},
-		{"os/exec and an export in a kit's integration file", "internal/git/gittest/integration.go", "//go:build integration\n\npackage gittest\n\nimport _ \"os/exec\"\n\nfunc Git() {}\n"},
+		{"os/exec in the code a test kit builds", "internal/git/gittest/oracle.go", "package gittest\n\nimport _ \"os/exec\"\n"},
 		{"a test of the program importing a unit's kit", "cmd/lit2/smoke_test.go", "//go:build integration\n\npackage main\n\nimport _ \"example.com/m/internal/git/gittest\"\n"},
 	} {
 		tree := synthetic()

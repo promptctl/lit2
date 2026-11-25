@@ -12,10 +12,9 @@ import (
 	"github.com/promptctl/lit2/internal/git"
 )
 
-// The contract suites' real arms. This file starts git and exports no
-// name, as internal/architecture holds every such kit file the fast loop
-// builds to, so a fast test reaches the git binary through a suite alone;
-// integration.go names them for the tests built with the integration tag.
+// The contract suites' real arms, unexported; integration.go, built with
+// the integration tag alone, names them for the tests built with it, so a
+// fast test cannot call one by name.
 
 // isolation is the environment every git a test runs is under, the
 // oracle's and lit2's own: the git on PATH, and no config of the

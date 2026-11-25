@@ -128,13 +128,15 @@ The decisions the layout needed and the design documents did not make.
   ./...`, holds unit tests and each port's contract suite, which runs in
   its package's `contract_test.go` over the port's twin and its real
   adapter side by side, so the fast loop runs git and the disk in those
-  suites. A `_test.go` file it builds imports no `os/exec`, and a test
-  kit's file it builds that imports `os/exec` exports no name, so git is
-  reached through a suite alone. A file it builds is one with no
-  `//go:build` line or one whose line holds with `integration` unset;
-  every other test of git, the disk or the built binary is `//go:build
-  integration`, and so is a test kit's file exporting what makes a
-  repository, runs git or plants a directory. Lint is golangci-lint v2 as a `tool`
+  suites. A file it builds is one with no `//go:build` line or one whose
+  line holds with `integration` unset. Two things are checked: a
+  `_test.go` file it builds imports no `os/exec`, which
+  `internal/architecture` holds; and a helper a test kit exports to make
+  a repository, run git or plant a directory is defined in the kit's
+  `//go:build integration` file, so a test the fast loop builds that
+  calls one does not compile. Every other test of git, the disk or the
+  built binary is `//go:build integration` by convention, which review
+  holds. Lint is golangci-lint v2 as a `tool`
   directive: `default: standard` plus exhaustive and gochecksumtype, and
   gofmt; sealed interfaces marked `//sumtype:decl` and typed-integer enums
   make a missing case a lint failure.
