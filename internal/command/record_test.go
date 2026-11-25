@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/reason"
 	"github.com/promptctl/lit2/internal/store"
 )
 
@@ -34,26 +35,80 @@ var (
 	here = InCheckout{Checkout: checkout, Identity: Minted{Checkout: store.CheckoutID{9}, Key: key}}
 )
 
-// stays is work that ends in the place it was handed, here.
-func stays(work func(Recorder) cli.Outcome) func(Recorder) Ran {
-	return func(r Recorder) Ran { return Ran{Place: here, Outcome: work(r)} }
+// record is the event of work run with its place read as at first.
+func record(c Clock, spawns func() []git.Spawn, inv Invocation, at Place, work func(Recorder) cli.Outcome) Event {
+	return Record(c, spawns, inv, func(r Recorder) cli.Outcome {
+		p := at
+		r.Placed(&p)
+		return work(r)
+	}).Event
 }
 
-// Record keeps the place work ended in, and, when work panics, the place
-// it was handed.
-func TestTheEventKeepsThePlaceWorkEndedIn(t *testing.T) {
+// The place recorded is the cell work holds it in: where work moved it, a
+// panic after the move included, and none before work read one.
+func TestTheEventKeepsThePlaceWorkHeldWhenItEnded(t *testing.T) {
 	unminted := InCheckout{Checkout: checkout, Identity: Unminted{Missing: Both{}}}
-	minted := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Init()), unminted, func(Recorder) Ran {
-		return Ran{Place: here, Outcome: cli.Done{}}
-	})
-	if !reflect.DeepEqual(minted.Place, here) {
-		t.Errorf("work that ended at %#v recorded the place %#v", here, minted.Place)
+	for _, tc := range []struct {
+		name string
+		then func()
+	}{
+		{"work that ends", func() {}},
+		{"work that panics after the move", func() { panic("the body broke") }},
+	} {
+		e := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Init()), func(r Recorder) cli.Outcome {
+			p := Place(unminted)
+			r.Placed(&p)
+			p = here
+			tc.then()
+			return cli.Done{}
+		}).Event
+		if !reflect.DeepEqual(e.Place, Placed(here)) {
+			t.Errorf("%s: recorded the place %#v; want the one it moved to, %#v", tc.name, e.Place, here)
+		}
 	}
-	broke := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Init()), unminted, func(Recorder) Ran { panic("the body broke") })
-	if !reflect.DeepEqual(broke.Place, unminted) {
-		t.Errorf("work that panicked recorded the place %#v; want the one it was handed, %#v", broke.Place, unminted)
+	unread := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Init()), func(Recorder) cli.Outcome { panic("before the place") }).Event
+	if unread.Place != (PlaceUnread{}) || decode(t, unread)["place"] == nil {
+		t.Errorf("work that panicked before reading its place recorded %#v; want PlaceUnread, said on the line", unread.Place)
 	}
 }
+
+// What was asked is what work says, once it knows; before that, the
+// invocation's own.
+func TestTheEventKeepsWhatWorkSaidWasAsked(t *testing.T) {
+	said := cli.Summary{Name: commandname.Get(), Paths: []cli.PathText{"x"}}
+	e := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Unparsed()), func(r Recorder) cli.Outcome {
+		r.Asked(said)
+		panic("after asking")
+	}).Event
+	if !reflect.DeepEqual(e.Command, said) {
+		t.Errorf("a panic after asking recorded %#v; want %#v", e.Command, said)
+	}
+	before := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Unparsed()), func(Recorder) cli.Outcome { panic("before asking") }).Event
+	if before.Command.Name != commandname.Unparsed() {
+		t.Errorf("a panic before asking recorded %s; want the invocation's, unparsed", before.Command.Name)
+	}
+}
+
+// The line and the status are the outcome's, derived under the recover: a
+// failure whose rendering panics ends as the Internal of that panic.
+func TestALineThatPanicsToRenderEndsInternal(t *testing.T) {
+	ended := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), func(r Recorder) cli.Outcome {
+		p := Place(here)
+		r.Placed(&p)
+		return cli.Failed{Failure: unsayable{}}
+	})
+	in, ok := ended.Event.Outcome.(cli.Failed).Failure.(Internal)
+	if !ok || !strings.Contains(in.Error(), "no words for it") || ended.Status != 70 || !strings.Contains(ended.Line, "no words for it") {
+		t.Errorf("a failure that cannot be said ended %#v; want an Internal of its panic, said, exit 70", ended)
+	}
+}
+
+// unsayable is a failure whose message panics.
+type unsayable struct{}
+
+func (unsayable) Error() string       { panic("no words for it") }
+func (unsayable) Class() reason.Class { return reason.ClassRefused }
+func (unsayable) Reason() string      { return "unsayable" }
 
 func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 	for _, tc := range []struct {
@@ -65,9 +120,9 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 		{commandname.Get(), cli.Failed{Failure: Broke(errors.New("not built"))}, 70},
 	} {
 		given := asked(inv, tc.name)
-		e := Record(&FixedClock{At: t0}, noGit, given, here, stays(func(Recorder) cli.Outcome {
+		e := record(&FixedClock{At: t0}, noGit, given, here, func(Recorder) cli.Outcome {
 			return tc.outcome
-		}))
+		})
 		if !reflect.DeepEqual(e.Invocation, given) || cli.ExitCode(e.Outcome) != tc.exit {
 			t.Errorf("%s: the event is %#v; want the invocation, the summary and exit %d", tc.name, e, tc.exit)
 		}
@@ -79,9 +134,9 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := Record(&FixedClock{At: t0}, noGit, asking(inv, p.Asked), here, stays(func(Recorder) cli.Outcome {
+	e := record(&FixedClock{At: t0}, noGit, asking(inv, p.Asked), here, func(Recorder) cli.Outcome {
 		panic("the body broke")
-	}))
+	})
 	if e.Command.Name != commandname.Get() || len(e.Command.Paths) != 1 || e.Command.Paths[0] != "x" {
 		t.Errorf("a panic in get x recorded %#v; want get with its one path", e.Command)
 	}
@@ -99,10 +154,10 @@ func TestAPanickingBodyKeepsWhatWasAsked(t *testing.T) {
 // duration runs from the reading Record is given.
 func TestRecordTimesTheRunFromTheReadingItIsGiven(t *testing.T) {
 	clock := &FixedClock{At: t0.Add(250 * time.Millisecond)}
-	e := Record(clock, noGit, asked(inv, commandname.Help()), here, stays(func(Recorder) cli.Outcome {
+	e := record(clock, noGit, asked(inv, commandname.Help()), here, func(Recorder) cli.Outcome {
 		clock.At = clock.At.Add(1500 * time.Millisecond)
 		return cli.Done{}
-	}))
+	})
 	if !e.Started.Equal(t0) || e.Duration != 1750*time.Millisecond {
 		t.Errorf("Started %v, Duration %v; want %v, 1.75s", e.Started, e.Duration, t0)
 	}
@@ -112,10 +167,10 @@ func TestRecordTimesTheRunFromTheReadingItIsGiven(t *testing.T) {
 // body gives it, and a run that read none has no config block at all.
 func TestTheVersionInForceIsRecordedOnceTheBodyGivesIt(t *testing.T) {
 	given := ConfigFacts{Ref: "ab12", Facts: config.Facts{Gate: "none"}}
-	e := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, stays(func(r Recorder) cli.Outcome {
+	e := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(r Recorder) cli.Outcome {
 		r.Configured(given)
 		panic("after the fold")
-	}))
+	})
 	if e.Config == nil || *e.Config != given {
 		t.Fatalf("the event's config is %+v; want %+v kept through the panic", e.Config, given)
 	}
@@ -124,7 +179,7 @@ func TestTheVersionInForceIsRecordedOnceTheBodyGivesIt(t *testing.T) {
 	if block["ref"] != "ab12" || counts["levels"] != 0.0 {
 		t.Errorf("the config block is %v; want the ref and every zero count written", block)
 	}
-	none := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, stays(func(Recorder) cli.Outcome { return cli.Done{} }))
+	none := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
 	if _, ok := decode(t, none)["config"]; ok || none.Config != nil {
 		t.Error("a run that read no version has a config block")
 	}
@@ -209,7 +264,7 @@ func TestEverySpawnReachesTheLoggedLine(t *testing.T) {
 		{Args: []string{"rev-parse"}, Ended: git.Exited{Code: 128}, Stderr: "fatal: not a git repository"},
 		{Args: []string{"hash-object"}, Ended: git.Unstarted{Why: errors.New("git is not on PATH")}},
 	}
-	e := Record(&FixedClock{At: t0}, func() []git.Spawn { return ran }, asked(inv, commandname.Get()), here, stays(func(Recorder) cli.Outcome { return cli.Done{} }))
+	e := record(&FixedClock{At: t0}, func() []git.Spawn { return ran }, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
 	block, _ := decode(t, e)["git"].([]any)
 	if len(block) != 2 {
 		t.Fatalf("the git block is %v; want both spawns", block)
@@ -219,7 +274,7 @@ func TestEverySpawnReachesTheLoggedLine(t *testing.T) {
 	if exited["exit"] != 128.0 || exited["stderr"] != "fatal: not a git repository" || unstarted["unstarted"] != "git is not on PATH" || unstarted["exit"] != nil {
 		t.Errorf("the git block is %v; want git's exit and stderr, and why the other never started", block)
 	}
-	none := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, stays(func(Recorder) cli.Outcome { return cli.Done{} }))
+	none := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { return cli.Done{} })
 	if block, ok := decode(t, none)["git"].([]any); !ok || len(block) != 0 {
 		t.Errorf("a run with no git logged %v; want an empty block", decode(t, none)["git"])
 	}
@@ -232,7 +287,7 @@ type joined struct{ Internal }
 func (j joined) Unwrap() []error { return []error{j.Internal, errors.New("and a write not durable")} }
 
 func TestAnInternalJoinedWithAnotherFailureKeepsItsStack(t *testing.T) {
-	broke := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, stays(func(Recorder) cli.Outcome { panic("the body broke") })).Outcome.(cli.Failed).Failure.(Internal)
+	broke := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Get()), here, func(Recorder) cli.Outcome { panic("the body broke") }).Outcome.(cli.Failed).Failure.(Internal)
 	m := decode(t, Event{Invocation: asked(inv, commandname.Get()), Place: here, Outcome: cli.Failed{Failure: joined{broke}}})
 	if stack, _ := m["stack"].(string); stack == "" || stack != string(broke.Stack()) {
 		t.Errorf("the line's stack is %q; want the Internal's", m["stack"])

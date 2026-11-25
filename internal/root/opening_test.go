@@ -192,7 +192,7 @@ func TestEveryInvocationRecordsThePlaceItsStoreOpenedAt(t *testing.T) {
 		"outside a checkout": {outside(NewTwin()), false},
 	} {
 		_, e := run(t, tc.twin, "--help")
-		if _, opens := command.OpeningAt(e.Place).(command.Opens); opens != tc.opens {
+		if _, opens := command.OpeningAt(readPlace(t, e)).(command.Opens); opens != tc.opens {
 			t.Errorf("%s: the event's place is %#v, which opens a store: %v; want %v", name, e.Place, opens, tc.opens)
 		}
 	}
@@ -217,4 +217,14 @@ func TestTheTwinsStoreMovesNoTraceID(t *testing.T) {
 	if q.Trace != b.Trace {
 		t.Errorf("a twin whose store created a log minted trace %s; one that did not, %s", b.Trace, q.Trace)
 	}
+}
+
+// readPlace is the place e's run read, failing the test when it read none.
+func readPlace(t *testing.T, e command.Event) command.Place {
+	t.Helper()
+	p, read := e.Place.(command.Place)
+	if !read {
+		t.Fatalf("the event's place is %#v; want one the run read", e.Place)
+	}
+	return p
 }

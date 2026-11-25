@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/promptctl/lit2/internal/cli"
@@ -26,12 +27,26 @@ func NewLog(dir string) Sink { return commandLog{dir: dir} }
 
 type commandLog struct{ dir string }
 
-// Housekeeping is a write whose event is in the log and whose removal of
-// old day files failed: a fact of its own, not a lost record. Write builds
-// it from the removal's error.
-type Housekeeping struct{ err error }
+// Housekeeping is a write whose event is in the log and whose pruning did
+// not finish: a removal of an old day file failed, or the directory holds
+// entries that are not day files, which pruning never removes, so the log
+// would grow past its retention unseen `[LAW:nothing-unseen]`. It is a fact
+// of its own, not a lost record. Write builds it from what pruning saw.
+type Housekeeping struct {
+	err    error
+	strays []string
+}
 
-func (h Housekeeping) Error() string { return h.err.Error() }
+func (h Housekeeping) Error() string {
+	var said []string
+	if h.err != nil {
+		said = append(said, h.err.Error())
+	}
+	if len(h.strays) > 0 {
+		said = append(said, fmt.Sprintf("skipped %s: not day files, so never pruned", strings.Join(h.strays, ", ")))
+	}
+	return strings.Join(said, "; ")
+}
 
 func (h Housekeeping) Unwrap() error { return h.err }
 
@@ -57,30 +72,36 @@ func (l commandLog) Write(e Event) error {
 	if err := errors.Join(werr, f.Close()); err != nil {
 		return err
 	}
-	if err := l.prune(day.Add(-retention)); err != nil {
-		return Housekeeping{err: err}
+	if h := l.prune(day.Add(-retention)); h.err != nil || len(h.strays) > 0 {
+		return h
 	}
 	return nil
 }
 
-// prune removes every day file dated before cutoff. A day file is a
-// regular file so named. A file another invocation removed first is gone,
-// which is what pruning asks for.
-func (l commandLog) prune(cutoff time.Time) error {
+// prune removes every day file dated before cutoff, and says what it could
+// not prune: the removal that failed, and every entry that is not a day
+// file, a regular file so named. A file another invocation removed first
+// is gone, which is what pruning asks for.
+func (l commandLog) prune(cutoff time.Time) Housekeeping {
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
-		return err
+		return Housekeeping{err: err}
 	}
+	var h Housekeeping
 	for _, entry := range entries {
 		day, err := time.Parse(time.DateOnly+".jsonl", entry.Name())
-		if err != nil || !entry.Type().IsRegular() || !day.Before(cutoff) {
-			continue // not a day file, or not yet 30 days old
+		if err != nil || !entry.Type().IsRegular() {
+			h.strays = append(h.strays, entry.Name())
+			continue
+		}
+		if !day.Before(cutoff) {
+			continue // not yet 30 days old
 		}
 		if err := os.Remove(filepath.Join(l.dir, entry.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+			h.err = errors.Join(h.err, err)
 		}
 	}
-	return nil
+	return h
 }
 
 // Memory is a sink that keeps every event in order, for tests.
@@ -209,7 +230,7 @@ func encode(e Event) ([]byte, error) {
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
 		Config:     configBlock(e.Config),
-		Store:      storeBlock(OpeningAt(e.Place), e.Store),
+		Store:      storeBlock(openingOf(e.Place), e.Store),
 		Fold:       foldBlock(e.Store.Folds),
 		Verbs:      verbsBlock(e.Verbs, e.Store.Landed()),
 		Policy:     policyBlock(e.Policy),
@@ -239,8 +260,10 @@ func encode(e Event) ([]byte, error) {
 	return b, nil
 }
 
-func placeLine(p Place) any {
+func placeLine(p Placed) any {
 	switch p := p.(type) {
+	case PlaceUnread:
+		return unreadLine{}
 	case InCheckout:
 		c := p.Checkout
 		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, ObjectFormat: c.Format.String(), Identity: identityLine(p.Identity, c)}}
@@ -249,8 +272,21 @@ func placeLine(p Place) any {
 	case Unlocatable:
 		return unlocatableLine{dirErrorLine{p.Dir, p.Err.Error()}}
 	}
-	panic(fmt.Sprintf("command: %T is not a Place", p))
+	panic(fmt.Sprintf("command: %T is not a Placed", p))
 }
+
+// openingOf is what an event's place opened: what a place read opens, and
+// none where the run ended before reading one.
+func openingOf(p Placed) Opening {
+	if read, ok := p.(Place); ok {
+		return OpeningAt(read)
+	}
+	return NoStore{Why: errPlaceUnread}
+}
+
+// errPlaceUnread is why a run that ended before reading its place opened
+// no store.
+var errPlaceUnread = errors.New("the run ended before its place was read")
 
 // identityLine is the writer and its principal as did:key, or the paths
 // missing, or the path that does not read and why; never the key's seed,
@@ -276,6 +312,9 @@ type (
 	}
 	noCheckoutLine struct {
 		Outside dirLine `json:"outside"`
+	}
+	unreadLine struct {
+		Unread struct{} `json:"unread"`
 	}
 	unlocatableLine struct {
 		Unlocatable dirErrorLine `json:"unlocatable"`

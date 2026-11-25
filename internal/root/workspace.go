@@ -241,12 +241,13 @@ func (o opened) status() cli.Outcome {
 // version one: the file in the work tree, or the default profile written
 // there when there is none. The mint moves the place: the run ends in its
 // checkout with the identity the mint read back, so the store init opens,
-// the principal it prints and the place its event says are that one
-// read's, whatever the mint did.
-func (r body) init() command.Ran {
-	in, err := command.CheckoutAt(r.place)
+// the principal it prints and the place its event says, the cell the mint
+// moves, are that one read's, whatever the mint did, and a panic after the
+// mint is recorded in the minted place.
+func (r body) init() cli.Outcome {
+	in, err := command.CheckoutAt(*r.place)
 	if err != nil {
-		return r.ran(cli.Failed{Failure: storeFailure{err: fmt.Errorf("%s makes a git checkout a writer: %w", commandname.Init(), err)}})
+		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("%s makes a git checkout a writer: %w", commandname.Init(), err)}}
 	}
 	once := r.p.onceFiles(in.Checkout)
 	minting := MintIdentity(once.id, once.key, r.p.Entropy)
@@ -254,8 +255,8 @@ func (r body) init() command.Ran {
 	for _, c := range minting.creations() {
 		r.w.created(c)
 	}
-	r.place = command.InCheckout{Checkout: in.Checkout, Identity: minting.identity()}
-	return r.ran(r.enroll(in.Checkout, once, minting))
+	*r.place = command.InCheckout{Checkout: in.Checkout, Identity: minting.identity()}
+	return r.enroll(in.Checkout, once, minting)
 }
 
 // enroll is admin init in c after its mint.

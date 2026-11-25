@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -71,8 +72,10 @@ func TestAWriteRemovesDayFilesOlderThan30Days(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := NewLog(dir).Write(Event{Invocation: asked(inv, commandname.Help()), Place: here, Outcome: cli.Done{}}); err != nil {
-		t.Fatal(err)
+	// notes.txt is no day file: pruning keeps it and says so
+	err := NewLog(dir).Write(Event{Invocation: asked(inv, commandname.Help()), Place: here, Outcome: cli.Done{}})
+	if h := new(Housekeeping); !errors.As(err, h) || !strings.Contains(err.Error(), "notes.txt") {
+		t.Fatalf("a write beside notes.txt = %v; want a Housekeeping naming it", err)
 	}
 	for name, kept := range map[string]bool{
 		"2026-10-01.jsonl": false, // 41 days old

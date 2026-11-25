@@ -36,10 +36,11 @@ type TraceID [16]byte
 
 func (t TraceID) String() string { return hex.EncodeToString(t[:]) }
 
-// Invocation is what is known of an invocation before its work runs: its
-// trace, its release, its agent, the command it asked for, parsed or not,
-// and Started, the clock's first reading, taken before the place was read,
-// so the duration covers every step of the run.
+// Invocation is what is known of an invocation: its trace, its release,
+// its agent, the command it asked for, parsed or not, and Started, the
+// clock's first reading, taken before anything else the run does, so the
+// duration covers every step of it. All but the command are known before
+// its work runs; the command is what its work says was asked.
 type Invocation struct {
 	Trace   TraceID
 	Version string
@@ -48,12 +49,13 @@ type Invocation struct {
 	Started time.Time
 }
 
-// Ran is what an invocation's work ended with: the place it ended in, the
-// place it was handed unless admin init minted its writer, and its
-// outcome.
-type Ran struct {
-	Place   Place
-	Outcome cli.Outcome
+// Ended is an invocation's end: its event, and the error line and exit
+// status of its outcome, derived once, under the recover that made the
+// outcome, so nothing the process does after reads the outcome again.
+type Ended struct {
+	Event  Event
+	Line   string
+	Status int
 }
 
 // ConfigFacts is the version in force a run read from its store's fold:
@@ -72,7 +74,7 @@ type ConfigFacts struct {
 // an absent config block; Git is empty when no git ran.
 type Event struct {
 	Invocation
-	Place    Place
+	Place    Placed
 	Duration time.Duration
 	Store    StoreFacts
 	Config   *ConfigFacts
@@ -82,11 +84,15 @@ type Event struct {
 	Outcome  cli.Outcome
 }
 
-// Recorder is where a body says what it did, each fact as soon as it is
-// known, so a panic keeps the facts given before it: each store step, the
-// version in force, and what the verb did, the last of each kept; and the
-// policy the store folded under, set as each part of it is known.
+// Recorder is where a run says what it did, each fact as soon as it is
+// known, so a panic keeps the facts given before it: what was asked; the
+// place, as the cell the body reads and moves it in, so the event reads
+// the one place the body held; each store step, the version in force, and
+// what the verb did, the last of each kept; and the policy the store
+// folded under, set as each part of it is known.
 type Recorder struct {
+	Asked      func(cli.Summary)
+	Placed     func(*Place)
 	Stored     *StoreFacts
 	Configured func(ConfigFacts)
 	Told       func(VerbsFacts)
@@ -96,7 +102,10 @@ type Recorder struct {
 // Place is where an invocation ran.
 //
 //sumtype:decl
-type Place interface{ place() }
+type Place interface {
+	Placed
+	place()
+}
 
 // InCheckout is an invocation inside a git checkout, with its identity.
 type InCheckout struct {
@@ -117,6 +126,21 @@ type Unlocatable struct {
 func (InCheckout) place()  {}
 func (NoCheckout) place()  {}
 func (Unlocatable) place() {}
+
+// Placed is where an event says its run was: the Place it read, or
+// PlaceUnread. Only an event holds one; a body runs after its place is
+// read, so its type is Place `[LAW:types-are-the-program]`.
+//
+//sumtype:decl
+type Placed interface{ placed() }
+
+// PlaceUnread is a run that ended, by a panic, before its place was read.
+type PlaceUnread struct{}
+
+func (InCheckout) placed()  {}
+func (NoCheckout) placed()  {}
+func (Unlocatable) placed() {}
+func (PlaceUnread) placed() {}
 
 // Located is what git found where an invocation runs, before its identity
 // is read: a checkout, none, or a search that failed.
@@ -161,41 +185,63 @@ func (Internal) Class() reason.Class { return reason.ClassInternal }
 // Reason is internal.
 func (Internal) Reason() string { return "internal" }
 
-// Record runs work at the place at as one invocation and returns its event
-// on every path work takes. What was known before work runs is the
-// invocation, given, not reported by work, and the place the event keeps
-// is the one work ended in, returned by it `[LAW:dataflow-not-control-flow]`;
-// the clock is read again only for the duration. A panic in work becomes
-// an Internal outcome carrying its value and stack, and the event keeps
-// what was asked and at, the place work was handed `[LAW:nothing-unseen]`.
-// Each store step's result goes on Stored as
-// the step returns it, so the facts of the steps that ran survive a panic
-// too. The version in force arrives through Configured once the fold has
-// read it, and a verb's body says what it did through Told. Every git
-// process the invocation ran, before work as well as in it, is read from
-// spawns once work has returned, so the event is whole when Record
-// returns.
-func Record(c Clock, spawns func() []git.Spawn, inv Invocation, at Place, work func(r Recorder) Ran) Event {
+// Record runs work as one invocation and returns its end on every path
+// work takes: the event, and the outcome's error line and exit status,
+// derived inside the one recover, so a panic in any step of work, or in
+// rendering what its outcome says, is an Internal outcome carrying its
+// value and stack `[LAW:single-enforcer]` `[LAW:nothing-unseen]`. What was
+// known before work runs is inv; what work learns goes on the Recorder as
+// it learns it, so a panic keeps every fact given before it: what was
+// asked, else inv's command; the place, else PlaceUnread, read from the
+// cell the body holds it in, so a place a body moved is the one recorded;
+// each store step's result, the version in force and what a verb did. The
+// clock is read again only for the duration, and every git process the
+// invocation ran is read from spawns once work has returned, so the event
+// is whole when Record returns. Those two reads are outside the recover: a
+// panic there leaves no event, and its caller says the run unrecorded.
+func Record(c Clock, spawns func() []git.Spawn, inv Invocation, work func(r Recorder) cli.Outcome) Ended {
+	var at *Place
 	var facts StoreFacts
 	var config *ConfigFacts
 	var did *VerbsFacts
 	var policy PolicyFacts
-	ran := recovered(at, func() Ran {
-		return work(Recorder{
+	var line string
+	var status int
+	outcome, broke, panicked := Caught(func() cli.Outcome {
+		o := work(Recorder{
+			Asked:      func(s cli.Summary) { inv.Command = s },
+			Placed:     func(p *Place) { at = p },
 			Stored:     &facts,
 			Configured: func(c ConfigFacts) { config = &c },
 			Told:       func(v VerbsFacts) { did = &v },
 			Policy:     &policy,
 		})
+		line, status = cli.Report(o), cli.ExitCode(o)
+		return o
 	})
-	return Event{Invocation: inv, Place: ran.Place, Duration: c.Now().Sub(inv.Started), Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: ran.Outcome}
+	if panicked {
+		// total: an Internal's class, reason and message are fixed when it
+		// is made, the panic's value formatted by fmt, which catches a
+		// panicking Error or String
+		outcome = cli.Failed{Failure: broke}
+		line, status = cli.Report(outcome), cli.ExitCode(outcome)
+	}
+	var place Placed = PlaceUnread{}
+	if at != nil {
+		place = *at
+	}
+	e := Event{Invocation: inv, Place: place, Duration: c.Now().Sub(inv.Started), Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: outcome}
+	return Ended{Event: e, Line: line, Status: status}
 }
 
-func recovered(at Place, work func() Ran) (ran Ran) {
+// Caught is f's value, or the Internal of its panic, with its value and
+// stack: the one place a panic is caught, each caller saying what its
+// panic means for the run.
+func Caught[T any](f func() T) (v T, broke Internal, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			ran = Ran{Place: at, Outcome: cli.Failed{Failure: Panicked(r, debug.Stack())}}
+			broke, panicked = Panicked(r, debug.Stack()), true
 		}
 	}()
-	return work()
+	return f(), Internal{}, false
 }

@@ -231,10 +231,10 @@ func TestAnAppendSaysTheSyncOfItsLogsName(t *testing.T) {
 
 func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 	appended := store.Appended{Written: store.Written{Records: 2, Bytes: 40}, Log: store.LogLookedUp{}}
-	e := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Set()), here, stays(func(r Recorder) cli.Outcome {
+	e := record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Set()), here, func(r Recorder) cli.Outcome {
 		r.Stored.Appends = append(r.Stored.Appends, appended)
 		panic("after the append")
-	}))
+	})
 	if len(e.Store.Appends) != 1 || e.Store.Appends[0].(store.Appended).Bytes != appended.Bytes || cli.ExitCode(e.Outcome) != 70 {
 		t.Errorf("a panic after an append recorded %+v, exit %d; want the append kept, exit 70", e.Store, cli.ExitCode(e.Outcome))
 	}

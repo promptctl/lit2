@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
@@ -34,11 +35,11 @@ func Main(args []string) int {
 	// [LAW:no-silent-failure] a build with no version cannot say which
 	// workspace versions it reads, so it does not run. Nothing is recorded,
 	// since an invocation records the version it ran as, so it exits with
-	// status 2, outside every recorded class, which D9 reads as unrecorded.
+	// the unrecorded status.
 	reader, err := config.ReadReaderVersion(buildStamp())
 	if err != nil {
 		_, _ = io.WriteString(os.Stderr, "lit2: "+err.Error()+"\n")
-		return 2
+		return cli.Unrecorded
 	}
 	g := git.Find(os.Environ())
 	// [LAW:single-enforcer] one keeper of failed syncs for the process,
