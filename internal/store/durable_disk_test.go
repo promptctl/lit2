@@ -12,7 +12,6 @@ import (
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/store"
-	"github.com/promptctl/lit2/internal/store/storetest"
 )
 
 // An append that places no log says what its create left.
@@ -30,7 +29,7 @@ func TestAnAppendThatPlacesNoLogSaysItsCreatesTemp(t *testing.T) {
 		return nil
 	})
 	seams.Remove = func(*os.Root, string) error { return errRemove }
-	s := store.Open(me, store.RepositoryInMemory(files.At(filestest.Seamed(logs, seams), files.NewDurability()), storetest.Entropy(4)), store.DefaultSegmentBound)
+	s := openOver(files.At(filestest.Seamed(logs, seams), files.NewDurability()))
 	got, ok := s.Append(must[store.Batch](t)(store.NewBatch(store.Record("lost")))).(store.NotAppended)
 	if !ok || !errors.Is(got.Why, errCreate) {
 		t.Fatalf("Append whose create's temp would not sync = %#v; want NotAppended, by that sync", got)
@@ -52,7 +51,7 @@ func TestTheStoreSaysTheLogsTemps(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(logs.Path(), temp), []byte("a crash's"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.Open(me, store.RepositoryInMemory(files.At(logs, files.NewDurability()), storetest.Entropy(4)), store.DefaultSegmentBound).Temps()
+	got, err := openOver(files.At(logs, files.NewDurability())).Temps()
 	if err != nil || !slices.Equal(got, []string{temp}) {
 		t.Errorf("Temps = %v, %v; want the temp %s said", got, err, temp)
 	}

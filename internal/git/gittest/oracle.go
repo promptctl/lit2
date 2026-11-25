@@ -65,10 +65,16 @@ func ask(t testing.TB, dir, stdin string, args ...string) (string, error) {
 	return strings.TrimRight(string(out), "\n"), nil
 }
 
-// oracle is ask, failing t when git refuses.
+// oracle is ask with no stdin, failing t when git refuses.
 func oracle(t testing.TB, dir string, args ...string) string {
 	t.Helper()
-	out, err := ask(t, dir, "", args...)
+	return oracleIn(t, dir, "", args...)
+}
+
+// oracleIn is ask, failing t when git refuses.
+func oracleIn(t testing.TB, dir, stdin string, args ...string) string {
+	t.Helper()
+	out, err := ask(t, dir, stdin, args...)
 	if err != nil {
 		t.Fatal(err)
 	}

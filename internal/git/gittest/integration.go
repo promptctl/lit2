@@ -75,11 +75,7 @@ func Config(t testing.TB, dir string, args ...string) (string, bool) {
 // GitIn is Git with stdin given.
 func GitIn(t testing.TB, dir, stdin string, args ...string) string {
 	t.Helper()
-	out, err := ask(t, dir, stdin, args...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return oracleIn(t, dir, stdin, args...)
 }
 
 // Env is the environment a test's lit2 runs git under, the one the oracle
