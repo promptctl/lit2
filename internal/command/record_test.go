@@ -127,32 +127,27 @@ func TestTheEventKeepsWhatWasAsked(t *testing.T) {
 	}
 }
 
-// A panic in the answer says End never ran; one in End, or before the
-// answer, ran no answer whose end was skipped, and says nothing of it.
-func TestOnlyAnAnswerThatPanicsSaysTheEndDidNotRun(t *testing.T) {
-	ended := false
+// End runs over an answer that panicked as over any other outcome, so a
+// run that crashed still says what its End finds; a panic in End is the
+// run's outcome.
+func TestEndRunsOverAnAnswerThatPanicked(t *testing.T) {
+	scanned := []Leftovers{TempsScanned{Dir: "/w/.git/lit/checkout"}}
 	answering := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { panic("the answer broke") })
-	answering.End = func(_ Run, o cli.Outcome) cli.Outcome { ended = true; return o }
+	var given cli.Outcome
+	answering.End = func(r Run, o cli.Outcome) cli.Outcome {
+		given = o
+		r.Stored().Temps = scanned
+		return o
+	}
+	e := recordedOf(t, Record(&FixedClock{At: t0}, noGit, answering)).Event
+	in, _ := given.(cli.Failed).Failure.(Internal)
+	if !strings.Contains(in.Error(), "the answer broke") || len(in.Stack()) == 0 || !reflect.DeepEqual(e.Outcome, given) || !reflect.DeepEqual(e.Store.Temps, scanned) {
+		t.Errorf("End was given %v and the event holds %v, temps %v; want End over the answer's panic, its temps kept", given, e.Outcome, e.Store.Temps)
+	}
 	ending := stages(summary(commandname.Get()), here, func(Run) cli.Outcome { return cli.Done{} })
 	ending.End = func(Run, cli.Outcome) cli.Outcome { panic("the end broke") }
-	locating := stages(summary(commandname.Get()), here, nil)
-	locating.Locate = func() Located { panic("locating broke") }
-	for _, tc := range []struct {
-		name    string
-		stages  Stages[struct{}]
-		stopped bool
-	}{
-		{"the answer", answering, true},
-		{"the end", ending, false},
-		{"locating", locating, false},
-	} {
-		in, _ := recordedOf(t, Record(&FixedClock{At: t0}, noGit, tc.stages)).Event.Outcome.(cli.Failed).Failure.(Internal)
-		if !strings.Contains(in.Error(), "broke") || errors.Is(in, errStoppedBeforeItsEnd) != tc.stopped || len(in.Stack()) == 0 {
-			t.Errorf("a panic in %s ended %v; want its panic and stack, saying the end did not run: %v", tc.name, in, tc.stopped)
-		}
-	}
-	if ended {
-		t.Error("End ran after the answer panicked")
+	if in, _ := recordedOf(t, Record(&FixedClock{At: t0}, noGit, ending)).Event.Outcome.(cli.Failed).Failure.(Internal); !strings.Contains(in.Error(), "the end broke") || len(in.Stack()) == 0 {
+		t.Errorf("a panic in End ended %v; want its Internal", in)
 	}
 }
 

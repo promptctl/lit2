@@ -33,7 +33,8 @@ type StoreFacts struct {
 // left, which no create of their name has reaped since: a crash's, said on
 // every command until a create reaps them `[LAW:no-silent-failure]`. A
 // directory is scanned, its temps none or some, or not scanned, and why,
-// so a directory with no temp is never said as one nobody looked in.
+// so a directory with no temp is never said as one nobody looked in; a
+// scan that broke before it named its directories is TempsScanBroke.
 //
 //sumtype:decl
 type Leftovers interface{ leftovers() }
@@ -52,8 +53,13 @@ type TempsNotScanned struct {
 	Why error
 }
 
+// TempsScanBroke is a scan that panicked, Broke, before it said each
+// directory it scans, so no directory's temps are known.
+type TempsScanBroke struct{ Broke Internal }
+
 func (TempsScanned) leftovers()    {}
 func (TempsNotScanned) leftovers() {}
+func (TempsScanBroke) leftovers()  {}
 
 // Creation is one create-once a command ran: the file's path, and what
 // the create did, which a durable write and one whose sync failed say
@@ -149,6 +155,13 @@ type (
 		Dir   string `json:"dir"`
 		Scan  string `json:"scan"`
 		Error string `json:"error"`
+	}
+	// scanBrokeLine is a scan that broke before it named a directory:
+	// scan broke, its panic, and its stack.
+	scanBrokeLine struct {
+		Scan  string `json:"scan"`
+		Error string `json:"error"`
+		Stack string `json:"stack"`
 	}
 	leftLine struct {
 		Name string `json:"name"`
@@ -259,6 +272,7 @@ func (placedNotDurableLine) createRow()   {}
 func (notPlacedLine) createRow()          {}
 func (scannedLine) tempsRow()             {}
 func (notScannedLine) tempsRow()          {}
+func (scanBrokeLine) tempsRow()           {}
 
 // storeBlock is the facts as the line's store block, its store opened as o
 // says.
@@ -298,6 +312,8 @@ func tempsOf(l Leftovers) (row tempsRow) {
 		row = scannedLine{Dir: l.Dir, Scan: "scanned", Temps: append([]string{}, l.Temps...)}
 	case TempsNotScanned:
 		row = notScannedLine{Dir: l.Dir, Scan: "not_scanned", Error: l.Why.Error()}
+	case TempsScanBroke:
+		row = scanBrokeLine{Scan: "broke", Error: l.Broke.Error(), Stack: string(l.Broke.Stack())}
 	}
 	return row
 }

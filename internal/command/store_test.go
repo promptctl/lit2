@@ -142,6 +142,10 @@ func TestTheStoreBlockSaysEachDirectoryScannedOrWhyNot(t *testing.T) {
 	if none := storeBlockOf(t, StoreFacts{}); none["temps"] != nil {
 		t.Errorf("a store block with no directory scanned says %v", none["temps"])
 	}
+	broken := storeBlockOf(t, StoreFacts{Temps: []Leftovers{TempsScanBroke{Broke: Panicked("the scan broke", []byte("goroutine 1"))}}})
+	if rows, _ := broken["temps"].([]any); len(rows) != 1 || !reflect.DeepEqual(rows[0], map[string]any{"scan": "broke", "error": "panic: the scan broke", "stack": "goroutine 1"}) {
+		t.Errorf("a scan that broke is %v; want it broke, with its panic and stack", broken["temps"])
+	}
 }
 
 func TestAWriteThenAPublishThenAnIdlePublishSayWhatTheyDid(t *testing.T) {

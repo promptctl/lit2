@@ -35,8 +35,9 @@ func (Lost) written() {}
 
 // Unpruned is something pruning left: a listing of the log's directory
 // that failed, so nothing old was found; an old day file whose removal
-// failed, so the log keeps more than its retention; or an entry that is
-// not a day file, which pruning never removes. String says it.
+// failed, so the log keeps more than its retention; an entry that is not
+// a day file, which pruning never removes; or pruning that panicked, its
+// event already in the log. String says it.
 //
 //sumtype:decl
 type Unpruned interface {
@@ -56,9 +57,13 @@ type Unremoved struct {
 // NotADayFile is an entry, Name, that is not a day file.
 type NotADayFile struct{ Name string }
 
-func (Unlisted) unpruned()    {}
-func (Unremoved) unpruned()   {}
-func (NotADayFile) unpruned() {}
+// PruningBroke is pruning that panicked, Broke.
+type PruningBroke struct{ Broke Internal }
+
+func (Unlisted) unpruned()     {}
+func (Unremoved) unpruned()    {}
+func (NotADayFile) unpruned()  {}
+func (PruningBroke) unpruned() {}
 
 func (u Unlisted) String() string {
 	return "listing it failed, so no old day file was pruned: " + u.Err.Error()
@@ -70,6 +75,10 @@ func (u Unremoved) String() string {
 
 func (n NotADayFile) String() string {
 	return fmt.Sprintf("kept %s: not a day file, so never pruned", n.Name)
+}
+
+func (p PruningBroke) String() string {
+	return fmt.Sprintf("pruning broke, the event in the log: %v\n%s", p.Broke, p.Broke.Stack())
 }
 
 // retention is how long a day file of the command log is kept (D12).
@@ -84,12 +93,15 @@ type commandLog struct{ dir string }
 // Write appends the event's line in one O_APPEND write, so concurrent
 // invocations never interleave, then prunes the day files more than 30
 // days older than the event's day. The record is the job, so it comes
-// first: once it is in, the write is Kept, with what pruning left.
+// first, and only its append says whether the event is in the log: once
+// it is, the write is Kept, with what pruning left, a pruning that
+// panicked among it.
 func (l commandLog) Write(e Event) Written {
-	if err := l.append(e); err != nil {
+	if err := Caught(func() error { return l.append(e) }, func(broke Internal) error { return broke }); err != nil {
 		return Lost{Why: err}
 	}
-	return Kept{Left: l.prune(e.Started.UTC().Truncate(24 * time.Hour).Add(-retention))}
+	cutoff := e.Started.UTC().Truncate(24 * time.Hour).Add(-retention)
+	return Kept{Left: Caught(func() []Unpruned { return l.prune(cutoff) }, func(broke Internal) []Unpruned { return []Unpruned{PruningBroke{Broke: broke}} })}
 }
 
 // append is e's line appended to its day's file.

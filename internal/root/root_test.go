@@ -72,6 +72,22 @@ func TestAPanicInAnyStageIsRecorded(t *testing.T) {
 	}
 }
 
+// A command that panics still ends with its end steps: the temps beside
+// its checkout's files are scanned and said.
+func TestACommandThatPanicsStillScansItsTemps(t *testing.T) {
+	twin := NewTwin()
+	twin.Process.Out = panicking{}
+	e := recordedOf(t, invoke(twin.Process, asking(cli.Lit2, "--help"))).Event
+	if _, failed := e.Outcome.(cli.Failed); !failed || len(e.Store.Temps) == 0 {
+		t.Errorf("a panicking help ended %#v with temps %#v; want it failed, every directory scanned", e.Outcome, e.Store.Temps)
+	}
+	for _, l := range e.Store.Temps {
+		if _, scanned := l.(command.TempsScanned); !scanned {
+			t.Errorf("a panicking help left %#v; want each directory scanned", l)
+		}
+	}
+}
+
 // is is whether a Where is want.
 func is(want command.Where) func(command.Where) bool {
 	return func(w command.Where) bool { return w == want }

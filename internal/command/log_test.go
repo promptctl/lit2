@@ -154,3 +154,14 @@ func TestPruningSaysEachThingItLeft(t *testing.T) {
 		t.Errorf("a write beside two old day files that will not go = %#v; want both said", kept)
 	}
 }
+
+// Only the append says whether the event is in the log: an event that
+// panics to encode is lost, and said with its panic.
+func TestAnEventThatPanicsToEncodeIsLost(t *testing.T) {
+	dir := t.TempDir()
+	lost, ok := NewLog(dir).Write(Event{Invocation: inv, Command: summary(commandname.Get()), Place: here, Outcome: cli.Failed{Failure: unsayable{}}}).(Lost)
+	var in Internal
+	if !ok || !errors.As(lost.Why, &in) || !strings.Contains(in.Error(), "no words for it") || len(in.Stack()) == 0 {
+		t.Errorf("an event that panics to encode = %#v; want it lost for its panic", lost)
+	}
+}

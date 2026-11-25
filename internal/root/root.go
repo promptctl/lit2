@@ -151,10 +151,13 @@ func invoke(p Process, ask func() (cli.Summary, func(body) cli.Outcome)) command
 		Identify: func(l command.Located) command.Place { return identified(p, l) },
 		Answer:   func(answer func(body) cli.Outcome, at command.Run) cli.Outcome { return answer(body{p: p, run: at}) },
 		End: func(at command.Run, o cli.Outcome) cli.Outcome {
-			o = durable(*at.Stored(), o)
-			// after the answer, so the temps its creates reaped are not said
-			at.Stored().Temps = leftovers(p, at.Place())
-			return o
+			// after the answer, so the temps its creates reaped are not said;
+			// a scan that panics is a fact of the scan, so the outcome, and
+			// the judgement of the writes, stand
+			at.Stored().Temps = command.Caught(func() []command.Leftovers { return leftovers(p, at.Place()) }, func(broke command.Internal) []command.Leftovers {
+				return []command.Leftovers{command.TempsScanBroke{Broke: broke}}
+			})
+			return durable(*at.Stored(), o)
 		},
 	})
 }

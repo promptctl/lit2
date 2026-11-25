@@ -211,20 +211,23 @@ func TestAnAppendThatLandedNothingCarriesItsLogsFailedSync(t *testing.T) {
 	}
 }
 
-// A body that panics still leaves its event, which says the run's end
-// steps did not run, its writes' durability unjudged and its temps
-// unscanned, never an empty scan read as nothing left.
-func TestAPanickingBodysEventSaysItsEndStepsDidNotRun(t *testing.T) {
+// A body that panics still ends: its writes' durability is judged, and a
+// temps scan that panics in turn is said as a scan that broke, never an
+// empty scan read as nothing left, and never in place of the body's panic.
+func TestAPanickingBodyStillEnds(t *testing.T) {
 	s := sessionOver(t, files.NewMemory(store.LogsDir(twinCheckout)))
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files { panic("the work tree is gone") }
 	r := s.lit("admin", "init")
 	f, ok := r.event.Outcome.(cli.Failed)
-	if !ok || !strings.Contains(f.Failure.Error(), "the work tree is gone") || !strings.Contains(f.Failure.Error(), "no directory's temps were scanned") ||
-		!strings.Contains(f.Failure.Error(), "durability of its writes was not judged") {
-		t.Errorf("the panicking run's outcome is %#v; want the panic, and that its end steps did not run", r.event.Outcome)
+	var in command.Internal
+	if !ok || !errors.As(f.Failure, &in) || !strings.Contains(in.Error(), "the work tree is gone") {
+		t.Errorf("the panicking run's outcome is %#v; want the body's panic", r.event.Outcome)
 	}
-	if r.event.Store.Temps != nil {
-		t.Errorf("the panicking run's temps are %#v; want none scanned", r.event.Store.Temps)
+	if len(r.event.Store.Temps) != 1 {
+		t.Fatalf("the panicking run's temps are %#v; want the scan that broke", r.event.Store.Temps)
+	}
+	if broke, isBroke := r.event.Store.Temps[0].(command.TempsScanBroke); !isBroke || !strings.Contains(broke.Broke.Error(), "the work tree is gone") || len(broke.Broke.Stack()) == 0 {
+		t.Errorf("the panicking run's temps are %#v; want the scan that broke, with its panic", r.event.Store.Temps)
 	}
 }
 

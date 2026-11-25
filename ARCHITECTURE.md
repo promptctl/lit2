@@ -164,7 +164,8 @@ The decisions the layout needed and the design documents did not make.
 - **D9 Exit statuses**: 0 ok; 1 refused; 64 usage (`EX_USAGE`); 70 internal
   (`EX_SOFTWARE`); 78 environment (`EX_CONFIG`). Any other status means lit2
   died unrecorded; lit2 itself ends a run unrecorded with 2, Go's panic
-  status, when it has no event to write (its start or end panicked) or when
+  status, when it has no event to write (its build has no
+  version to record, or its start or end panicked) or when
   it lost the event and stderr would not take the loss. stdout carries only
   the answer asked for; stderr only the error line, the unrecorded line, and
   the command log's line: an event lost, or each thing pruning left: a

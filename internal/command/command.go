@@ -128,15 +128,14 @@ type Run struct{ r *run }
 // asked, how far it got in reading its place, and the facts its steps
 // gave.
 type run struct {
-	started   time.Time
-	asked     cli.Summary
-	where     func() Where
-	at        Place
-	answering bool
-	stored    StoreFacts
-	policy    PolicyFacts
-	config    *ConfigFacts
-	did       *VerbsFacts
+	started time.Time
+	asked   cli.Summary
+	where   func() Where
+	at      Place
+	stored  StoreFacts
+	policy  PolicyFacts
+	config  *ConfigFacts
+	did     *VerbsFacts
 }
 
 // Started is the clock's first reading, the run's now.
@@ -257,19 +256,15 @@ func (Internal) Class() reason.Class { return reason.ClassInternal }
 // Reason is internal.
 func (Internal) Reason() string { return "internal" }
 
-// errStoppedBeforeItsEnd is an answer that panicked, so the run's End did
-// not run: the durability of its writes was not judged, and no
-// directory's temps were scanned, never an empty scan that reads as none
-// left `[LAW:no-silent-failure]`.
-var errStoppedBeforeItsEnd = errors.New("the run stopped before its end: the durability of its writes was not judged, and no directory's temps were scanned")
-
 // Record runs one invocation's stages, in order, and returns how it ended,
 // on every path it takes. Each stage is caught, by Caught, and its panic
 // means what its place in the run makes it `[LAW:nothing-unseen]`:
-//   - a panic from Ask through End, or in saying its outcome's error line
-//     and status, is the run's outcome, an Internal, recorded with the
-//     facts given before it, and, when Answer panicked, that End did not
-//     run;
+//   - a panic in Answer is its outcome, an Internal, which End runs over
+//     as over any other, so a run that crashed still says the durability of
+//     what it wrote and the temps it left;
+//   - a panic from Ask through Identify, or in End, or in saying the
+//     outcome's error line and status, is the run's outcome, an Internal,
+//     recorded with the facts given before it;
 //   - a panic in Begin, or in the end's reads, the clock again for the
 //     duration and the git processes the run spawned, leaves no event to
 //     make: the run is Unrecorded, saying the outcome it had.
@@ -277,12 +272,7 @@ func Record[A any](c Clock, spawns func() []git.Spawn, s Stages[A]) Ended {
 	return Caught(func() Ended {
 		inv := s.Begin()
 		r := &run{started: inv.Started, asked: cli.Unparsed(), where: func() Where { return PlaceUnread{} }}
-		end := Caught(func() said { return saying(through(r, s)) }, func(broke Internal) said {
-			if r.answering {
-				broke.err = fmt.Errorf("%w; %w", broke.err, errStoppedBeforeItsEnd)
-			}
-			return saying(cli.Failed{Failure: broke})
-		})
+		end := Caught(func() said { return saying(through(r, s)) }, func(broke Internal) said { return saying(failedFor(broke)) })
 		return Caught(func() Ended {
 			e := Event{Invocation: inv, Command: r.asked, Place: r.where(), Duration: c.Now().Sub(inv.Started), Store: r.stored, Config: r.config, Verbs: r.did, Policy: r.policy, Git: spawns(), Outcome: end.outcome}
 			return Recorded{Event: e, Line: end.line, Status: end.status}
@@ -294,8 +284,8 @@ func Record[A any](c Clock, spawns func() []git.Spawn, s Stages[A]) Ended {
 
 // through is s's stages from Ask, each given to r as it is known: what
 // was asked; what git found; then the place, held where the event reads
-// it, so a place Answer moves is the place recorded. While Answer runs, r
-// is answering, so its panic says End did not run.
+// it, so a place Answer moves is the place recorded; then End, over the
+// answer's outcome, whatever it was.
 func through[A any](r *run, s Stages[A]) cli.Outcome {
 	asked, answer := s.Ask()
 	r.asked = asked
@@ -304,11 +294,11 @@ func through[A any](r *run, s Stages[A]) cli.Outcome {
 	r.at = s.Identify(l)
 	r.where = func() Where { return r.at }
 	at := Run{r: r}
-	r.answering = true
-	o := s.Answer(answer, at)
-	r.answering = false
-	return s.End(at, o)
+	return s.End(at, Caught(func() cli.Outcome { return s.Answer(answer, at) }, failedFor))
 }
+
+// failedFor is the outcome of a run that broke.
+func failedFor(broke Internal) cli.Outcome { return cli.Failed{Failure: broke} }
 
 // said is an outcome with what it says: its error line and exit status.
 type said struct {
