@@ -234,11 +234,8 @@ func beside(fs []onceFile) []command.Leftovers {
 			continue
 		}
 		seen[dir] = true
-		if l, err := f.files.List(); err != nil {
-			ls = append(ls, command.TempsNotScanned{Dir: dir, Why: err})
-		} else {
-			ls = append(ls, command.TempsScanned{Dir: dir, Temps: l.Temps})
-		}
+		l, err := f.files.List()
+		ls = append(ls, scanned(dir, l.Temps, err))
 	}
 	return ls
 }
@@ -246,8 +243,13 @@ func beside(fs []onceFile) []command.Leftovers {
 // logTemps is the temps of the logs ports hold, listed now, or why they
 // were not.
 func logTemps(ports store.Ports) command.Leftovers {
-	dir := ports.Logs().Path()
 	temps, err := ports.Temps()
+	return scanned(ports.Logs().Path(), temps, err)
+}
+
+// scanned is the temps a listing of dir found, or, when the listing
+// failed, why dir was not scanned.
+func scanned(dir string, temps []string, err error) command.Leftovers {
 	if err != nil {
 		return command.TempsNotScanned{Dir: dir, Why: err}
 	}

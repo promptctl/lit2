@@ -124,11 +124,12 @@ func (u Unminted) Files() []File {
 }
 
 // Opening is what a place opens: a minted checkout's store, for its
-// writer, or none, and why, in the words of what the place holds. It is
-// the place's, derived by OpeningAt and never set beside it, so whether an
-// invocation's store opened is said once `[LAW:one-source-of-truth]`: the
-// root opens the store by it and the line says its opening by it, or by
-// the writer admin init minted, which no place read before init names.
+// writer, or none, and why, in the words of what the place holds. A verb's
+// is its place's, derived by OpeningAt and never set beside it
+// `[LAW:one-source-of-truth]`: the root opens the store by it and the line
+// says its opening by it. admin init alone opens a store its place, read
+// before it minted, cannot name, and the opening it tells the event is the
+// one it opened, in one step: see Event.Opening.
 //
 //sumtype:decl
 type Opening interface{ opening() }
@@ -148,21 +149,31 @@ func (NoStore) opening() {}
 
 // OpeningAt is what p opens.
 func OpeningAt(p Place) Opening {
+	in, err := CheckoutAt(p)
+	if err != nil {
+		return NoStore{Why: err}
+	}
+	switch id := in.Identity.(type) {
+	case Minted:
+		return Opens{Checkout: in.Checkout, Writer: id}
+	case Unminted:
+		return NoStore{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(in.Checkout), " and "))}
+	case Unreadable:
+		return NoStore{Why: fmt.Errorf("reading %s: %w", PathOf(id.File, in.Checkout), id.Err)}
+	}
+	panic(fmt.Sprintf("command: %T is not an Identity", in.Identity))
+}
+
+// CheckoutAt is the checkout p is in, or why p is in none: git finding no
+// checkout, or the search's own failure.
+func CheckoutAt(p Place) (InCheckout, error) {
 	switch p := p.(type) {
 	case InCheckout:
-		switch id := p.Identity.(type) {
-		case Minted:
-			return Opens{Checkout: p.Checkout, Writer: id}
-		case Unminted:
-			return NoStore{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(p.Checkout), " and "))}
-		case Unreadable:
-			return NoStore{Why: fmt.Errorf("reading %s: %w", PathOf(id.File, p.Checkout), id.Err)}
-		}
-		panic(fmt.Sprintf("command: %T is not an Identity", p.Identity))
+		return p, nil
 	case NoCheckout:
-		return NoStore{Why: git.NotFound{Dir: p.Dir}}
+		return InCheckout{}, git.NotFound{Dir: p.Dir}
 	case Unlocatable:
-		return NoStore{Why: p.Err}
+		return InCheckout{}, p.Err
 	}
 	panic(fmt.Sprintf("command: %T is not a Place", p))
 }

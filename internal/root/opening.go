@@ -14,7 +14,7 @@ import (
 // twin-backed test runs under is read as lit2 reads it on disk.
 func placeOf(p Process) command.Place {
 	switch l := p.Locate().(type) {
-	case command.Found:
+	case command.AtCheckout:
 		return command.InCheckout{Checkout: l.Checkout, Identity: readIdentity(p.IdentityFiles(l.Checkout))}
 	case command.NoCheckout:
 		return l

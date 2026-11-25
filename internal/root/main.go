@@ -101,7 +101,7 @@ func locate(g *git.Git, dir string) command.Located {
 	if err != nil {
 		return command.Unlocatable{Dir: dir, Err: err}
 	}
-	return command.Found{Checkout: c}
+	return command.AtCheckout{Checkout: c}
 }
 
 // diskStores is the ports of a checkout's clone's store on disk, lit's

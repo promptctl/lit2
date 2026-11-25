@@ -240,18 +240,11 @@ func (o opened) status() cli.Outcome {
 // version one: the file in the work tree, or the default profile written
 // there when there is none.
 func (r body) init() cli.Outcome {
-	none := func(why error) cli.Outcome {
-		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer: %w", why)}}
+	in, err := command.CheckoutAt(r.place)
+	if err != nil {
+		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer: %w", err)}}
 	}
-	var c git.Checkout
-	switch at := r.place.(type) {
-	case command.InCheckout:
-		c = at.Checkout
-	case command.NoCheckout:
-		return none(git.NotFound{Dir: at.Dir})
-	case command.Unlocatable:
-		return none(at.Err)
-	}
+	c := in.Checkout
 	once := r.p.onceFiles(c)
 	minting := MintIdentity(once.id, once.key, r.p.Entropy)
 	// every file init creates is on its event, by path, durable or not
@@ -280,15 +273,11 @@ func (r body) init() cli.Outcome {
 		}
 		return cli.Failed{Failure: unread}
 	}
-	// the store this run opens is the minted writer's, which the place,
-	// read before the mint, cannot name, so the event is told it
-	opens := command.Opens{Checkout: c, Writer: minted}
-	r.rec.Minted(opens)
 	tree := r.p.WorkTree(c)
 	if err := adopt(r.w, once.pin, tree); err != nil {
 		return failed(err)
 	}
-	o, err := r.openAs(r.p.writerOf(opens))
+	o, err := r.openInitialized(command.Opens{Checkout: c, Writer: minted})
 	if err != nil {
 		return failed(err)
 	}

@@ -85,7 +85,7 @@ func landed(a store.Appending) (frame bool) {
 // that ran, and the reads summed, with torn bytes per ref.
 type (
 	storeLine struct {
-		Open    any           `json:"open"`
+		Open    openRow       `json:"open"`
 		Heads   []headsLine   `json:"heads,omitempty"`
 		Read    *readLine     `json:"read,omitempty"`
 		Append  []appendRow   `json:"append,omitempty"`
@@ -243,6 +243,14 @@ type createRow interface{ createRow() }
 //sumtype:decl
 type tempsRow interface{ tempsRow() }
 
+// openRow is the store's opening as the line spells it; its state says
+// which.
+//
+//sumtype:decl
+type openRow interface{ openRow() }
+
+func (openedLine) openRow()               {}
+func (unopenedLine) openRow()             {}
 func (appendedLine) appendRow()           {}
 func (appendedNotDurableLine) appendRow() {}
 func (notAppendedLine) appendRow()        {}
@@ -450,7 +458,7 @@ func prior(p store.Prior) (kept, commit, why string) {
 }
 
 // open is o as the line spells it.
-func open(o Opening) any {
+func open(o Opening) openRow {
 	switch o := o.(type) {
 	case Opens:
 		return openedLine{State: "opened", Writer: o.Writer.Checkout.String()}

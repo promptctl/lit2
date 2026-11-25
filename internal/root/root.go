@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -105,16 +106,34 @@ func Run(p Process, args []string) int {
 	return cli.ExitCode(event.Outcome)
 }
 
-// ask is what args ask for, parsed or not, and its answer: the command's
-// body, or the parse's refusal, one value whatever the parse did, so a
-// run that parsed nothing runs the same steps as one that did.
+// ask is what args ask for, parsed or not, and its answer: see parsed.
 func ask(args []string) (cli.Summary, func(body) cli.Outcome) {
 	table, groups := cli.Verbs(), cli.Groups()
-	cmd, err := cli.Parse(table, groups, args)
+	return parsed(
+		func() (cli.Command, error) { return cli.Parse(table, groups, args) },
+		func(r body, cmd cli.Command) cli.Outcome { return dispatch(r, table, groups, cmd) },
+	)
+}
+
+// parsed is what parse asks for and its answer: answer to the command, or
+// the parse's refusal, one value whatever the parse did, so a run that
+// parsed nothing runs the same steps as one that did. A parse or summary
+// that panics is asked as unparsed and answered with the panic, its value
+// and stack, as Record answers a body's, so the run is recorded
+// `[LAW:nothing-unseen]`; one recover for the whole run is
+// lit-law-review-xfz.b5u's.
+func parsed(parse func() (cli.Command, error), answer func(body, cli.Command) cli.Outcome) (asked cli.Summary, run func(body) cli.Outcome) {
+	defer func() {
+		if p := recover(); p != nil {
+			broke := command.Panicked(p, debug.Stack())
+			asked, run = cli.Summary{Name: cli.Unparsed}, func(body) cli.Outcome { return cli.Failed{Failure: broke} }
+		}
+	}()
+	cmd, err := parse()
 	if err != nil {
 		return cli.Summary{Name: cli.Unparsed}, func(body) cli.Outcome { return failed(err) }
 	}
-	return cli.Summarize(cmd), func(r body) cli.Outcome { return dispatch(r, table, groups, cmd) }
+	return cli.Summarize(cmd), func(r body) cli.Outcome { return answer(r, cmd) }
 }
 
 // unfinished is body's outcome. A body that panics panics on, saying that

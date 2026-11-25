@@ -103,7 +103,7 @@ func freshTwinOver(logs files.Files) Twin {
 // either writes read by both, its work tree holding the FoundingFile t's
 // holds, as a clone of the repository t committed it to does.
 func NewTwinBeside(t Twin) Twin {
-	beside := twinOver(t.Process.Stores(besideCheckout), besideCheckout, besideID, besideKey(), [32]byte{'b', 'e', 's', 'i', 'd', 'e', ' ', 't', 'w', 'i', 'n'})
+	beside := twinOver(t.Process.Stores(twinCheckout), besideCheckout, besideID, besideKey(), [32]byte{'b', 'e', 's', 'i', 'd', 'e', ' ', 't', 'w', 'i', 'n'})
 	named, err := foundingFileIn(t.Tree)
 	if err != nil {
 		panic(err)
@@ -130,8 +130,8 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 			Clock:         &command.FixedClock{At: time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)},
 			Entropy:       entropy,
 			Agent:         events.Unlabeled{},
-			Locate:        func() command.Located { return command.Found{Checkout: c} },
-			Stores:        func(git.Checkout) store.Ports { return ports },
+			Locate:        func() command.Located { return command.AtCheckout{Checkout: c} },
+			Stores:        storesOf(c, ports),
 			WorkTree:      func(git.Checkout) files.Files { return tree },
 			Code:          func(git.Checkout) git.Code { return code },
 			Git:           func() []git.Spawn { return []git.Spawn{} },
@@ -152,12 +152,24 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 	}
 }
 
+// storesOf is the store ports of c's clone, as Main's are of each
+// checkout's, so a run that asks for another checkout's store fails as a
+// wrong path through Main's would read the wrong clone.
+func storesOf(c git.Checkout, ports store.Ports) func(git.Checkout) store.Ports {
+	return func(at git.Checkout) store.Ports {
+		if at != c {
+			panic(fmt.Sprintf("root: the twin holds the store of %s, not %s", c.CommonDir, at.CommonDir))
+		}
+		return ports
+	}
+}
+
 // Forge is a modified client's write: verb on ops compiled and minted as
 // lit2 mints them and appended with no verdict asked of the fold, the
 // event a test hands every replica for the fold to refuse
 // `[LAW:single-enforcer]`.
 func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
-	rec := command.Recorder{Minted: func(command.Opens) {}, Stored: &command.StoreFacts{}, Configured: func(command.ConfigFacts) {}, Told: func(command.VerbsFacts) {}, Policy: &command.PolicyFacts{}}
+	rec := command.Recorder{Initialized: func(command.Opens) {}, Stored: &command.StoreFacts{}, Configured: func(command.ConfigFacts) {}, Told: func(command.VerbsFacts) {}, Policy: &command.PolicyFacts{}}
 	var forged error
 	w := &writes{stored: rec.Stored}
 	out := body{p: t.Process, now: t.Process.Clock.Now(), place: placeOf(t.Process), rec: rec, w: w}.verb(func(v inForce) cli.Outcome {

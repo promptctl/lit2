@@ -59,43 +59,44 @@ type ConfigFacts struct {
 }
 
 // Event is the command event: the invocation, how long it took, the writer
-// admin init minted, what its store steps did, the version it ran under,
-// every git process it ran, and how it ended. Minted is nil when the run
-// minted no writer, Config when it read no version, which the event
-// records as an absent config block; Git is empty when no git ran.
+// admin init made its checkout, what its store steps did, the version it
+// ran under, every git process it ran, and how it ended. Initialized is
+// nil for every run but an admin init that reached its store, Config when
+// the run read no version, which the event records as an absent config
+// block; Git is empty when no git ran.
 type Event struct {
 	Invocation
-	Duration time.Duration
-	Minted   *Opens
-	Store    StoreFacts
-	Config   *ConfigFacts
-	Verbs    *VerbsFacts
-	Policy   PolicyFacts
-	Git      []git.Spawn
-	Outcome  cli.Outcome
+	Duration    time.Duration
+	Initialized *Opens
+	Store       StoreFacts
+	Config      *ConfigFacts
+	Verbs       *VerbsFacts
+	Policy      PolicyFacts
+	Git         []git.Spawn
+	Outcome     cli.Outcome
 }
 
-// Opening is the store e's run opened: its place's, or, once admin init
-// minted the place's writer, that writer's, which the place read before
-// the run could not name.
+// Opening is the store e's run opened: its place's, or, for admin init,
+// the writer it made its checkout, found there or minted, whose store it
+// opened, which a place read before a mint cannot name.
 func (e Event) Opening() Opening {
-	if e.Minted != nil {
-		return *e.Minted
+	if e.Initialized != nil {
+		return *e.Initialized
 	}
 	return OpeningAt(e.Place)
 }
 
 // Recorder is where a body says what it did, each fact as soon as it is
 // known, so a panic keeps the facts given before it: the writer admin init
-// minted, each store step, the version in force, and what the verb did,
-// the last of each kept; and the policy the store folded under, set as
-// each part of it is known.
+// opened its store for, each store step, the version in force, and what
+// the verb did, the last of each kept; and the policy the store folded
+// under, set as each part of it is known.
 type Recorder struct {
-	Minted     func(Opens)
-	Stored     *StoreFacts
-	Configured func(ConfigFacts)
-	Told       func(VerbsFacts)
-	Policy     *PolicyFacts
+	Initialized func(Opens)
+	Stored      *StoreFacts
+	Configured  func(ConfigFacts)
+	Told        func(VerbsFacts)
+	Policy      *PolicyFacts
 }
 
 // Place is where an invocation ran.
@@ -129,10 +130,10 @@ func (Unlocatable) place() {}
 //sumtype:decl
 type Located interface{ located() }
 
-// Found is a checkout git found.
-type Found struct{ Checkout git.Checkout }
+// AtCheckout is a checkout git found.
+type AtCheckout struct{ Checkout git.Checkout }
 
-func (Found) located()       {}
+func (AtCheckout) located()  {}
 func (NoCheckout) located()  {}
 func (Unlocatable) located() {}
 
@@ -146,6 +147,12 @@ type Internal struct {
 
 // Broke is lit2 failing with err.
 func Broke(err error) Internal { return Internal{err: err} }
+
+// Panicked is lit2 failing with a panic's value, recovered where stack was
+// taken.
+func Panicked(value any, stack []byte) Internal {
+	return Internal{err: fmt.Errorf("panic: %v", value), stack: stack}
+}
 
 func (i Internal) Error() string { return i.err.Error() }
 
@@ -173,27 +180,27 @@ func (Internal) Reason() string { return "internal" }
 // spawns once work has returned, so the event is whole when Record
 // returns.
 func Record(c Clock, spawns func() []git.Spawn, inv Invocation, work func(r Recorder) cli.Outcome) Event {
-	var minted *Opens
+	var initialized *Opens
 	var facts StoreFacts
 	var config *ConfigFacts
 	var did *VerbsFacts
 	var policy PolicyFacts
 	outcome := recovered(func() cli.Outcome {
 		return work(Recorder{
-			Minted:     func(o Opens) { minted = &o },
-			Stored:     &facts,
-			Configured: func(c ConfigFacts) { config = &c },
-			Told:       func(v VerbsFacts) { did = &v },
-			Policy:     &policy,
+			Initialized: func(o Opens) { initialized = &o },
+			Stored:      &facts,
+			Configured:  func(c ConfigFacts) { config = &c },
+			Told:        func(v VerbsFacts) { did = &v },
+			Policy:      &policy,
 		})
 	})
-	return Event{Invocation: inv, Duration: c.Now().Sub(inv.Started), Minted: minted, Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: outcome}
+	return Event{Invocation: inv, Duration: c.Now().Sub(inv.Started), Initialized: initialized, Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: outcome}
 }
 
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {
 	defer func() {
 		if r := recover(); r != nil {
-			outcome = cli.Failed{Failure: Internal{err: fmt.Errorf("panic: %v", r), stack: debug.Stack()}}
+			outcome = cli.Failed{Failure: Panicked(r, debug.Stack())}
 		}
 	}()
 	return work()

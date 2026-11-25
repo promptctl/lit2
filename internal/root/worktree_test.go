@@ -22,7 +22,9 @@ func initOnDisk(t *testing.T, c git.Checkout) (int, command.Event) {
 	t.Helper()
 	twin := NewFreshTwin()
 	twin.Code.Commit(map[string][]byte{verbs.WorkspacePath(): assets.DefaultWorkspace.Bytes()})
-	twin.Process.Locate = func() command.Located { return command.Found{Checkout: c} }
+	twin.Process.Locate = func() command.Located { return command.AtCheckout{Checkout: c} }
+	// c's clone's store is the twin's, in memory
+	twin.Process.Stores = storesOf(c, twin.Process.Stores(twinCheckout))
 	twin.Process.WorkTree = workTree(files.NewDurability())
 	return run(t, twin, "admin", "init")
 }

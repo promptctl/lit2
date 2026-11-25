@@ -53,6 +53,15 @@ func (r body) open() (opened, error) {
 	panic(fmt.Sprintf("root: %T is not an Opening", command.OpeningAt(r.place)))
 }
 
+// openInitialized folds the store of o, the writer admin init made its
+// checkout, and tells the event the store is o's in the same step, so the
+// writer it says is the one whose store was opened: the place, read before
+// a mint, cannot name it.
+func (r body) openInitialized(o command.Opens) (opened, error) {
+	r.rec.Initialized(o)
+	return r.openAs(r.p.writerOf(o))
+}
+
 // openAs folds w's store, seeded with the founding its clone pinned.
 func (r body) openAs(w writer) (opened, error) {
 	founding, err := pinned(r.p.Pin(w.checkout))

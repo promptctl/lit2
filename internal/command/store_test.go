@@ -71,7 +71,7 @@ func TestEveryLineSaysItsStoresOpening(t *testing.T) {
 	} {
 		at := inv
 		at.Place = tc.place
-		block, _ := decode(t, Event{Invocation: asked(at, "help"), Minted: tc.minted, Outcome: cli.Done{}})["store"].(map[string]any)
+		block, _ := decode(t, Event{Invocation: asked(at, "help"), Initialized: tc.minted, Outcome: cli.Done{}})["store"].(map[string]any)
 		if o, _ := block["open"].(map[string]any); !reflect.DeepEqual(o, tc.want) {
 			t.Errorf("%s: the store block is %v; want its open block %v", tc.name, block, tc.want)
 		}
