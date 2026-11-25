@@ -30,17 +30,17 @@ import (
 
 // Process is the world every invocation reads, its ports set once by Main
 // or by NewTwin, every field set, so nothing downstream checks for nil.
-// Where the invocation runs, and the store it holds, are not among them:
-// Run reads the place through Locate and IdentityFiles and opens its store
-// through Stores, the same steps over the disk or the twins.
+// Where the invocation runs, and the store it opens, are not among them:
+// Run reads the place through Locate and IdentityFiles, and the store the
+// place opens is opened through Stores, the same steps over the disk or
+// the twins.
 type Process struct {
 	Clock   command.Clock
 	Entropy io.Reader
 	Agent   events.Agent
-	// Locate is the directory the invocation runs in and the checkout git
-	// finds there: git.NotFound when there is none, and any other error
-	// when the search itself failed.
-	Locate func() (dir string, c git.Checkout, err error)
+	// Locate is the checkout git finds where the invocation runs, none, or
+	// a search that failed.
+	Locate func() command.Located
 	// Stores is the ports of a checkout's clone's store, every writer's.
 	Stores func(git.Checkout) store.Ports
 	// WorkTree is the files of a checkout's work tree's .lit directory,
@@ -67,11 +67,11 @@ type Process struct {
 }
 
 // Run runs one invocation, the one composition Main and the twin share:
-// it mints the trace id, reads the clock, the place and the store that
-// place opens, and parses the command, handing Record each of these facts
-// as an input `[LAW:dataflow-not-control-flow]`; Record then records the
-// command's body, every write it made and the temps left beside the
-// checkout's files as one event. It puts the outcome's error line on
+// it mints the trace id, reads the clock and the place, and parses the
+// command, handing Record each of these facts as an input
+// `[LAW:dataflow-not-control-flow]`; Record then records the command's
+// answer, every write it made and the temps left beside the checkout's
+// files as one event, the same steps whether the command parsed or not. It puts the outcome's error line on
 // Err before writing the event, so a slow or hung log cannot hold the line
 // back, and returns the outcome's exit status.
 func Run(p Process, args []string) int {
@@ -84,21 +84,12 @@ func Run(p Process, args []string) int {
 	// read before the place, so the run's duration covers its reading
 	started := p.Clock.Now()
 	place := placeOf(p)
-	at := situate(p, place)
-	table, groups := cli.Verbs(), cli.Groups()
-	cmd, unparsed := cli.Parse(table, groups, args)
-	asked := cli.Summary{Name: cli.Unparsed}
-	if unparsed == nil {
-		asked = cli.Summarize(cmd)
-	}
-	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: place, Agent: p.Agent}
-	event := command.Record(p.Clock, p.Git, inv, asked, started, func(rec command.Recorder) cli.Outcome {
-		if unparsed != nil {
-			return failed(unparsed)
-		}
+	asked, answer := ask(args)
+	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: place, Agent: p.Agent, Command: asked, Started: started}
+	event := command.Record(p.Clock, p.Git, inv, func(rec command.Recorder) cli.Outcome {
 		w := &writes{stored: rec.Stored}
 		out := w.end(unfinished(func() cli.Outcome {
-			return dispatch(body{p: p, now: started, place: place, at: at, rec: rec, w: w}, table, groups, cmd)
+			return answer(body{p: p, now: started, place: place, rec: rec, w: w})
 		}))
 		// after the body, so the temps its creates reaped are not said
 		rec.Stored.Temps = leftovers(p, place)
@@ -112,6 +103,18 @@ func Run(p Process, args []string) int {
 		_, _ = io.WriteString(p.Err, logFailure(err))
 	}
 	return cli.ExitCode(event.Outcome)
+}
+
+// ask is what args ask for, parsed or not, and its answer: the command's
+// body, or the parse's refusal, one value whatever the parse did, so a
+// run that parsed nothing runs the same steps as one that did.
+func ask(args []string) (cli.Summary, func(body) cli.Outcome) {
+	table, groups := cli.Verbs(), cli.Groups()
+	cmd, err := cli.Parse(table, groups, args)
+	if err != nil {
+		return cli.Summary{Name: cli.Unparsed}, func(body) cli.Outcome { return failed(err) }
+	}
+	return cli.Summarize(cmd), func(r body) cli.Outcome { return dispatch(r, table, groups, cmd) }
 }
 
 // unfinished is body's outcome. A body that panics panics on, saying that
@@ -137,13 +140,12 @@ func (s stoppedBeforeItsEnd) String() string {
 }
 
 // body is one invocation as its body sees it: the process, the clock's
-// first reading, its place and the store that place holds, where its facts
+// first reading, its place, which says the store it opens, where its facts
 // go, and where its writes are said.
 type body struct {
 	p     Process
 	now   time.Time
 	place command.Place
-	at    situation
 	rec   command.Recorder
 	w     *writes
 }

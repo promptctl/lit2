@@ -240,11 +240,18 @@ func (o opened) status() cli.Outcome {
 // version one: the file in the work tree, or the default profile written
 // there when there is none.
 func (r body) init() cli.Outcome {
-	in, ok := r.place.(command.InCheckout)
-	if !ok {
-		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer, and this is none")}}
+	none := func(why error) cli.Outcome {
+		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer: %w", why)}}
 	}
-	c := in.Checkout
+	var c git.Checkout
+	switch at := r.place.(type) {
+	case command.InCheckout:
+		c = at.Checkout
+	case command.NoCheckout:
+		return none(git.NotFound{Dir: at.Dir})
+	case command.Unlocatable:
+		return none(at.Err)
+	}
 	once := r.p.onceFiles(c)
 	minting := MintIdentity(once.id, once.key, r.p.Entropy)
 	// every file init creates is on its event, by path, durable or not
@@ -273,17 +280,21 @@ func (r body) init() cli.Outcome {
 		}
 		return cli.Failed{Failure: unread}
 	}
+	// the store this run opens is the minted writer's, which the place,
+	// read before the mint, cannot name, so the event is told it
+	opens := command.Opens{Checkout: c, Writer: minted}
+	r.rec.Minted(opens)
 	tree := r.p.WorkTree(c)
 	if err := adopt(r.w, once.pin, tree); err != nil {
 		return failed(err)
 	}
-	o, err := r.openAs(r.p.writerOf(c, minted))
+	o, err := r.openAs(r.p.writerOf(opens))
 	if err != nil {
 		return failed(err)
 	}
 	// the file names the clone's founding, for the next clone to adopt
 	if f, founded := o.founding.(fold.FoundedBy); founded {
-		if err := writeFoundingFile(r.w, once.founding, f, pinPath(in.Checkout)); err != nil {
+		if err := writeFoundingFile(r.w, once.founding, f, pinPath(c)); err != nil {
 			return failed(err)
 		}
 	}
@@ -304,7 +315,7 @@ func (r body) init() cli.Outcome {
 		said = fmt.Sprintf("membership requested: an owner admits you with lit2 add /members '{principal: %q, role: contributor}'\n", me.String())
 	case verbs.Unjudged:
 		r.rec.Policy.Bootstrap = "unjudged"
-		return failed(unjudged(s.Policy, in.Checkout))
+		return failed(unjudged(s.Policy, c))
 	case verbs.Asked:
 		r.rec.Policy.Bootstrap = "already_requested"
 		return written(fmt.Fprintf(r.p.Out, "membership requested: no owner has admitted %s yet\n", me))
@@ -329,8 +340,8 @@ func (r body) init() cli.Outcome {
 		if err != nil {
 			return cli.Failed{Failure: workspaceFailure{err: err}}
 		}
-		ref = git.HashBlob(in.Checkout.Format, b)
-		act, err := verbs.Admit(o.folded.State, b, in.Checkout.Format, r.p.Reader)
+		ref = git.HashBlob(c.Format, b)
+		act, err := verbs.Admit(o.folded.State, b, c.Format, r.p.Reader)
 		if err != nil {
 			return failed(err)
 		}
@@ -338,7 +349,7 @@ func (r body) init() cli.Outcome {
 	case len(drafts) == 0:
 		return written(io.WriteString(r.p.Out, "no workspace version is in force: an owner applies one with lit2 config commit\n"))
 	default:
-		ref = git.HashBlob(in.Checkout.Format, assets.DefaultWorkspace.Bytes())
+		ref = git.HashBlob(c.Format, assets.DefaultWorkspace.Bytes())
 	}
 	if founds {
 		return o.found(once, drafts, ref, said)

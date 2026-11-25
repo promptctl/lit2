@@ -16,8 +16,8 @@ import (
 // the body that called them hands them here, so the event keeps one
 // emitter `[LAW:single-enforcer]`. A step that did not run left nothing,
 // and a fresh store's heads are a block of zeros `[LAW:nothing-unseen]`.
-// Whether the store opened is the invocation's place, not a step's
-// result: see OpeningAt.
+// Whether the store opened is its place's, or the writer admin init
+// minted, not a store step's result: see Event.Opening.
 type StoreFacts struct {
 	Heads     []store.Heads
 	Reads     []store.Scanned
@@ -85,7 +85,7 @@ func landed(a store.Appending) (frame bool) {
 // that ran, and the reads summed, with torn bytes per ref.
 type (
 	storeLine struct {
-		Open    openLine      `json:"open"`
+		Open    any           `json:"open"`
 		Heads   []headsLine   `json:"heads,omitempty"`
 		Read    *readLine     `json:"read,omitempty"`
 		Append  []appendRow   `json:"append,omitempty"`
@@ -154,9 +154,14 @@ type (
 		Name string `json:"name"`
 		Why  string `json:"why"`
 	}
-	// openLine is the store's opening. Why a store did not open is the
-	// place block's to say, so it is said once.
-	openLine struct {
+	// The store's opening: the writer it opened for, whose log the run's
+	// writes land in, or unopened. Why a store did not open is the place
+	// block's to say, so it is said once.
+	openedLine struct {
+		State  string `json:"state"`
+		Writer string `json:"writer"`
+	}
+	unopenedLine struct {
 		State string `json:"state"`
 	}
 	headsLine struct {
@@ -247,9 +252,10 @@ func (notPlacedLine) createRow()          {}
 func (scannedLine) tempsRow()             {}
 func (notScannedLine) tempsRow()          {}
 
-// storeBlock is the facts as the line's store block, opened at p or not.
-func storeBlock(p Place, f StoreFacts) storeLine {
-	l := storeLine{Open: open(p)}
+// storeBlock is the facts as the line's store block, its store opened as o
+// says.
+func storeBlock(o Opening, f StoreFacts) storeLine {
+	l := storeLine{Open: open(o)}
 	for _, h := range f.Heads {
 		hl := headsLine{RefsRead: h.RefsRead, LogsRead: h.LogsRead, Streams: len(h.Streams), Unreadable: []badStreamLine{}}
 		for _, u := range h.Unreadable {
@@ -443,13 +449,13 @@ func prior(p store.Prior) (kept, commit, why string) {
 	panic(fmt.Sprintf("command: %T is not a Prior", p))
 }
 
-// open is the opening of a store at p as the line spells it.
-func open(p Place) (line openLine) {
-	switch OpeningAt(p).(type) {
+// open is o as the line spells it.
+func open(o Opening) any {
+	switch o := o.(type) {
 	case Opens:
-		line = openLine{State: "opened"}
+		return openedLine{State: "opened", Writer: o.Writer.Checkout.String()}
 	case NoStore:
-		line = openLine{State: "unopened"}
+		return unopenedLine{State: "unopened"}
 	}
-	return line
+	panic(fmt.Sprintf("command: %T is not an Opening", o))
 }

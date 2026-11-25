@@ -127,7 +127,8 @@ func (u Unminted) Files() []File {
 // writer, or none, and why, in the words of what the place holds. It is
 // the place's, derived by OpeningAt and never set beside it, so whether an
 // invocation's store opened is said once `[LAW:one-source-of-truth]`: the
-// root opens the store by it and the line says its opening by it.
+// root opens the store by it and the line says its opening by it, or by
+// the writer admin init minted, which no place read before init names.
 //
 //sumtype:decl
 type Opening interface{ opening() }
@@ -159,7 +160,7 @@ func OpeningAt(p Place) Opening {
 		}
 		panic(fmt.Sprintf("command: %T is not an Identity", p.Identity))
 	case NoCheckout:
-		return NoStore{Why: fmt.Errorf("no git checkout at or above %s", p.Dir)}
+		return NoStore{Why: git.NotFound{Dir: p.Dir}}
 	case Unlocatable:
 		return NoStore{Why: p.Err}
 	}

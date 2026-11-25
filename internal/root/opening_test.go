@@ -43,9 +43,7 @@ func appendOne(t *testing.T, s *store.Store, me store.CheckoutID) []string {
 
 // outside is twin run where git finds no checkout.
 func outside(twin Twin) Twin {
-	twin.Process.Locate = func() (string, git.Checkout, error) {
-		return "/nowhere", git.Checkout{}, git.NotFound{Dir: "/nowhere"}
-	}
+	twin.Process.Locate = func() command.Located { return command.NoCheckout{Dir: "/nowhere"} }
 	return twin
 }
 
@@ -62,15 +60,12 @@ func withIDFile(t *testing.T, twin Twin, text []byte) Twin {
 	return twin
 }
 
-// streams is the writers whose streams s holds.
+// streams is the writers whose streams s holds, failing t on any stream
+// that does not read.
 func streams(t *testing.T, s *store.Store) []store.Ref {
 	t.Helper()
-	h, err := s.Heads()
-	if err != nil {
-		t.Fatal(err)
-	}
 	var refs []store.Ref
-	for _, st := range h.Streams {
+	for _, st := range storetest.Heads(t, s).Streams {
 		refs = append(refs, st.Ref)
 	}
 	return refs
@@ -128,7 +123,8 @@ func TestATwinWhoseIDFileDoesNotParseOpensNoStore(t *testing.T) {
 	}
 }
 
-// admin init in a checkout with no identity mints its writer, and the
+// admin init in a checkout with no identity mints its writer, its own
+// event says the store it opened and wrote is that writer's, and the
 // writes after it are that writer's, in its stream.
 func TestInitInAnUnmintedTwinMintsTheWriterItWritesAs(t *testing.T) {
 	twin := NewFreshTwin()
@@ -136,7 +132,8 @@ func TestInitInAnUnmintedTwinMintsTheWriterItWritesAs(t *testing.T) {
 	shared := files.NewMemory(command.DirOf(command.PrincipalFile{}, twinCheckout))
 	private := files.NewMemory(command.DirOf(command.IDFile{}, twinCheckout))
 	twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared, private }
-	if status := Run(twin.Process, []string{"admin", "init"}); status != 0 {
+	status, initd := run(t, twin, "admin", "init")
+	if status != 0 {
 		t.Fatalf("admin init exited %d: %s", status, twin.Err)
 	}
 	twin.Commands.Events = nil
@@ -147,6 +144,13 @@ func TestInitInAnUnmintedTwinMintsTheWriterItWritesAs(t *testing.T) {
 	minted := writerOn(t, e)
 	if minted == twinID {
 		t.Errorf("the run after init writes as %s, the twin's own id; want the id init minted", minted)
+	}
+	in, _ := initd.Place.(command.InCheckout)
+	if _, unminted := in.Identity.(command.Unminted); !unminted {
+		t.Errorf("init's event's place is %#v; want the checkout as init found it, unminted", initd.Place)
+	}
+	if o, opened := initd.Opening().(command.Opens); !opened || o.Writer.Checkout != minted || len(initd.Store.Appends) == 0 {
+		t.Errorf("init's event opened %#v and appended %d frames; want the store of %s, the writer it minted, written to", initd.Opening(), len(initd.Store.Appends), minted)
 	}
 	if got := streams(t, twin.Store()); !slices.Equal(got, []store.Ref{store.WriterRef{Checkout: minted}}) {
 		t.Errorf("the store holds the streams %v; want the minted writer's alone, %s", got, minted)
@@ -166,9 +170,19 @@ func TestEveryInvocationRecordsThePlaceItsStoreOpenedAt(t *testing.T) {
 		"outside a checkout": {outside(NewTwin()), false},
 	} {
 		_, e := run(t, tc.twin, "--help")
-		if _, opens := command.OpeningAt(e.Place).(command.Opens); opens != tc.opens {
+		if _, opens := e.Opening().(command.Opens); opens != tc.opens {
 			t.Errorf("%s: the event's place is %#v, which opens a store: %v; want %v", name, e.Place, opens, tc.opens)
 		}
+	}
+}
+
+// A command that does not parse runs the end steps a parsed one does: its
+// event lists the temps beside the checkout's files, so a crash's temp is
+// said on that command too.
+func TestAnUnparsedCommandScansTheTempsToo(t *testing.T) {
+	_, e := run(t, NewTwin(), "no-such-verb")
+	if e.Command.Name != cli.Unparsed || len(e.Store.Temps) == 0 {
+		t.Errorf("an unparsed command recorded %#v with temps %v; want it unparsed, every directory scanned", e.Command, e.Store.Temps)
 	}
 }
 

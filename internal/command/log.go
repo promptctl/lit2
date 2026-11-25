@@ -209,7 +209,7 @@ func encode(e Event) ([]byte, error) {
 		Command:    commandFacts{Paths: append([]cli.PathText{}, e.Command.Paths...)},
 		Counts:     counts{Paths: len(e.Command.Paths), Values: e.Command.Values},
 		Config:     configBlock(e.Config),
-		Store:      storeBlock(e.Place, e.Store),
+		Store:      storeBlock(e.Opening(), e.Store),
 		Fold:       foldBlock(e.Store.Folds),
 		Verbs:      verbsBlock(e.Verbs, e.Store.Landed()),
 		Policy:     policyBlock(e.Policy),

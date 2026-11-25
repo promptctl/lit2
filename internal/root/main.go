@@ -2,6 +2,7 @@ package root
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -79,16 +80,28 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
 
-// here locates the checkout of the working directory through g.
-func here(g *git.Git) func() (string, git.Checkout, error) {
-	return func() (string, git.Checkout, error) {
+// here locates the checkout of the working directory through g. A working
+// directory that has no path is ".", the one name it still has.
+func here(g *git.Git) func() command.Located {
+	return func() command.Located {
 		dir, err := os.Getwd()
 		if err != nil {
-			return "", git.Checkout{}, fmt.Errorf("reading the working directory: %w", err)
+			return command.Unlocatable{Dir: ".", Err: fmt.Errorf("reading the working directory: %w", err)}
 		}
-		c, err := g.Locate(dir)
-		return dir, c, err
+		return locate(g, dir)
 	}
+}
+
+// locate is the checkout g finds from dir, none, or why the search failed.
+func locate(g *git.Git, dir string) command.Located {
+	c, err := g.Locate(dir)
+	if errors.As(err, new(git.NotFound)) {
+		return command.NoCheckout{Dir: dir}
+	}
+	if err != nil {
+		return command.Unlocatable{Dir: dir, Err: err}
+	}
+	return command.Found{Checkout: c}
 }
 
 // diskStores is the ports of a checkout's clone's store on disk, lit's

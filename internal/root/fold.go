@@ -37,20 +37,20 @@ type opened struct {
 // or whose store no enrollment founded: only admin init, which founds it,
 // reads such a store.
 func (r body) open() (opened, error) {
-	switch at := r.at.(type) {
-	case held:
-		op, err := r.openAs(at.writer)
+	switch o := command.OpeningAt(r.place).(type) {
+	case command.Opens:
+		op, err := r.openAs(r.p.writerOf(o))
 		if err != nil {
 			return opened{}, err
 		}
-		if err := unjudged(op.folded.State.Policy(), at.checkout); err != nil {
+		if err := unjudged(op.folded.State.Policy(), o.Checkout); err != nil {
 			return opened{}, err
 		}
 		return op, nil
-	case noStore:
-		return opened{}, storeFailure{err: at.why}
+	case command.NoStore:
+		return opened{}, storeFailure{err: o.Why}
 	}
-	panic(fmt.Sprintf("root: %T is not a situation", r.at))
+	panic(fmt.Sprintf("root: %T is not an Opening", command.OpeningAt(r.place)))
 }
 
 // openAs folds w's store, seeded with the founding its clone pinned.

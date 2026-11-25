@@ -36,12 +36,17 @@ type TraceID [16]byte
 
 func (t TraceID) String() string { return hex.EncodeToString(t[:]) }
 
-// Invocation is what is known of an invocation before its work runs.
+// Invocation is what is known of an invocation before its work runs: its
+// trace, its release, where it ran, its agent, the command it asked for,
+// parsed or not, and Started, the clock's first reading, taken before the
+// place was read, so the duration covers every step of the run.
 type Invocation struct {
 	Trace   TraceID
 	Version string
 	Place   Place
 	Agent   events.Agent
+	Command cli.Summary
+	Started time.Time
 }
 
 // ConfigFacts is the version in force a run read from its store's fold:
@@ -53,16 +58,15 @@ type ConfigFacts struct {
 	Ref string
 }
 
-// Event is the command event: the invocation, what was asked, when it
-// started, how long it took, what its store steps did, the version it ran
-// under, every git process it ran, and how it ended. Config is nil when
-// the run read no version, which the event records as an absent config
-// block; Git is empty when no git ran.
+// Event is the command event: the invocation, how long it took, the writer
+// admin init minted, what its store steps did, the version it ran under,
+// every git process it ran, and how it ended. Minted is nil when the run
+// minted no writer, Config when it read no version, which the event
+// records as an absent config block; Git is empty when no git ran.
 type Event struct {
 	Invocation
-	Command  cli.Summary
-	Started  time.Time
 	Duration time.Duration
+	Minted   *Opens
 	Store    StoreFacts
 	Config   *ConfigFacts
 	Verbs    *VerbsFacts
@@ -71,11 +75,23 @@ type Event struct {
 	Outcome  cli.Outcome
 }
 
+// Opening is the store e's run opened: its place's, or, once admin init
+// minted the place's writer, that writer's, which the place read before
+// the run could not name.
+func (e Event) Opening() Opening {
+	if e.Minted != nil {
+		return *e.Minted
+	}
+	return OpeningAt(e.Place)
+}
+
 // Recorder is where a body says what it did, each fact as soon as it is
-// known, so a panic keeps the facts given before it: each store step, the
-// version in force, and what the verb did, the last of each kept; and the
-// policy the store folded under, set as each part of it is known.
+// known, so a panic keeps the facts given before it: the writer admin init
+// minted, each store step, the version in force, and what the verb did,
+// the last of each kept; and the policy the store folded under, set as
+// each part of it is known.
 type Recorder struct {
+	Minted     func(Opens)
 	Stored     *StoreFacts
 	Configured func(ConfigFacts)
 	Told       func(VerbsFacts)
@@ -107,6 +123,19 @@ func (InCheckout) place()  {}
 func (NoCheckout) place()  {}
 func (Unlocatable) place() {}
 
+// Located is what git found where an invocation runs, before its identity
+// is read: a checkout, none, or a search that failed.
+//
+//sumtype:decl
+type Located interface{ located() }
+
+// Found is a checkout git found.
+type Found struct{ Checkout git.Checkout }
+
+func (Found) located()       {}
+func (NoCheckout) located()  {}
+func (Unlocatable) located() {}
+
 // Internal is lit2 failing: an error that answers no class, a panic, a row
 // whose body is not built. Outside this package it is built from its
 // cause by Broke.
@@ -131,11 +160,9 @@ func (Internal) Class() reason.Class { return reason.ClassInternal }
 // Reason is internal.
 func (Internal) Reason() string { return "internal" }
 
-// Record runs work as one invocation and returns its event on every path.
-// What was known before work runs is given, not reported by it
-// `[LAW:dataflow-not-control-flow]`: the invocation, the command it asked
-// for, parsed or not, and started, the clock's reading before the place
-// was read, so the duration covers every step of the run; the clock is
+// Record runs work as one invocation and returns its event on every path
+// work takes. What was known before work runs is the invocation, given,
+// not reported by work `[LAW:dataflow-not-control-flow]`; the clock is
 // read again only for the duration. A panic in work becomes an Internal
 // outcome carrying its value and stack, and the event keeps what was
 // asked `[LAW:nothing-unseen]`. Each store step's result goes on Stored as
@@ -145,20 +172,22 @@ func (Internal) Reason() string { return "internal" }
 // process the invocation ran, before work as well as in it, is read from
 // spawns once work has returned, so the event is whole when Record
 // returns.
-func Record(c Clock, spawns func() []git.Spawn, inv Invocation, asked cli.Summary, started time.Time, work func(r Recorder) cli.Outcome) Event {
+func Record(c Clock, spawns func() []git.Spawn, inv Invocation, work func(r Recorder) cli.Outcome) Event {
+	var minted *Opens
 	var facts StoreFacts
 	var config *ConfigFacts
 	var did *VerbsFacts
 	var policy PolicyFacts
 	outcome := recovered(func() cli.Outcome {
 		return work(Recorder{
+			Minted:     func(o Opens) { minted = &o },
 			Stored:     &facts,
 			Configured: func(c ConfigFacts) { config = &c },
 			Told:       func(v VerbsFacts) { did = &v },
 			Policy:     &policy,
 		})
 	})
-	return Event{Invocation: inv, Command: asked, Started: started, Duration: c.Now().Sub(started), Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: outcome}
+	return Event{Invocation: inv, Duration: c.Now().Sub(inv.Started), Minted: minted, Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: outcome}
 }
 
 func recovered(work func() cli.Outcome) (outcome cli.Outcome) {

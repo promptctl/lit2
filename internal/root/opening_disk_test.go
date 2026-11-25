@@ -16,27 +16,19 @@ import (
 	"github.com/promptctl/lit2/internal/store"
 )
 
-// readAt is the place lit2 reads at dir through g, and the store it opens
-// there, as Run derives them over Main's ports.
-func readAt(g *git.Git, dir string) (command.Place, situation) {
+// diskAt is Main's ports of place and store as lit2 run at dir through g
+// has them.
+func diskAt(g *git.Git, dir string) Process {
 	u := files.NewDurability()
-	p := Process{
-		Locate: func() (string, git.Checkout, error) {
-			c, err := g.Locate(dir)
-			return dir, c, err
-		},
+	return Process{
+		Locate:        func() command.Located { return locate(g, dir) },
 		IdentityFiles: identityFiles(u),
 		Stores:        diskStores(g, rand.Reader, u),
 	}
-	place := placeOf(p)
-	return place, situate(p, place)
 }
 
 // placeAt is the place lit2 reads at dir through g.
-func placeAt(g *git.Git, dir string) command.Place {
-	place, _ := readAt(g, dir)
-	return place
-}
+func placeAt(g *git.Git, dir string) command.Place { return placeOf(diskAt(g, dir)) }
 
 func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 	for config, want := range map[string]git.ObjectFormat{
@@ -50,13 +42,14 @@ func TestAMintedCheckoutOpensItsStoreUnderTheCommonDir(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		p, o := readAt(gittest.Runner(t), dir)
+		disk := diskAt(gittest.Runner(t), dir)
+		p := placeOf(disk)
 		in, located := p.(command.InCheckout)
-		opened, ok := o.(held)
-		if !located || !ok || in.Checkout.Format != want {
-			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, o, want)
+		o, opens := command.OpeningAt(p).(command.Opens)
+		if !located || !opens || in.Checkout.Format != want {
+			t.Fatalf("a minted checkout is %#v and opens %#v; want its store, format %s", p, command.OpeningAt(p), want)
 		}
-		if got := appendOne(t, opened.store, twinID); !slices.Equal(got, []string{"an event"}) {
+		if got := appendOne(t, disk.writerOf(o).store, twinID); !slices.Equal(got, []string{"an event"}) {
 			t.Errorf("the opened store reads back %v", got)
 		}
 		// the store is the common dir's: one opened from the common dir
@@ -86,14 +79,8 @@ func TestAPlaceWithNoWriterOpensNoStore(t *testing.T) {
 			return d
 		}()},
 	} {
-		if _, o := readAt(dir.g, dir.dir); !isNoStore(o) {
-			t.Errorf("%s opens %#v; want no store, and why", name, o)
+		if o, none := command.OpeningAt(placeAt(dir.g, dir.dir)).(command.NoStore); !none || o.Why == nil {
+			t.Errorf("%s opens %#v; want no store, and why", name, command.OpeningAt(placeAt(dir.g, dir.dir)))
 		}
 	}
-}
-
-// isNoStore is whether s is no store, said with why.
-func isNoStore(s situation) bool {
-	none, ok := s.(noStore)
-	return ok && none.why != nil
 }
