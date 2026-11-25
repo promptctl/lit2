@@ -168,46 +168,47 @@ var (
 // Flags is the flags a command was given beside --help.
 type Flags struct{ DryRun bool }
 
-// Operands is the shape of a row's operands; Make's parameter is the shape,
-// so a row cannot make its command from the wrong one. A shape that writes
-// hands its Make the flags, so the shape alone says whether a row takes
-// --dry-run, and no row can take it and not honour it.
+// Operands is what a row's Make is handed: its operands, in their shape,
+// and the flags, when the command has a dry run. Make's parameters are the
+// shape, so a row cannot make its command from the wrong operands, and a
+// row takes --dry-run exactly when its command is handed it, so none takes
+// it and ignores it `[LAW:types-are-the-program]`.
 //
 //sumtype:decl
 type Operands interface {
 	operands()
 	// makes is whether the shape has its Make, which NewCommands requires.
 	makes() bool
-	// writes is whether the row takes --dry-run, which only a write does.
-	writes() bool
+	// dryRuns is whether Make is handed --dry-run.
+	dryRuns() bool
 }
 
-// ReadsPaths is one or more paths read: get.
-type ReadsPaths struct{ Make func([]PathText) Command }
+// TakesPaths is one or more paths, with no dry run: get.
+type TakesPaths struct{ Make func([]PathText) Command }
 
-// WritesPaths is one or more paths written: rm.
-type WritesPaths struct {
+// TakesPathsDryRun is one or more paths and the flags: rm.
+type TakesPathsDryRun struct {
 	Make func([]PathText, Flags) Command
 }
 
-// WritesPairs is one or more path-value pairs written: set, add.
-type WritesPairs struct{ Make func([]Pair, Flags) Command }
+// TakesPairsDryRun is one or more path-value pairs and the flags: set, add.
+type TakesPairsDryRun struct{ Make func([]Pair, Flags) Command }
 
-// TakesNothing is no operands: a group's commands.
+// TakesNothing is no operands, with no dry run: a group's commands.
 type TakesNothing struct{ Make func() Command }
 
-func (ReadsPaths) operands()       {}
-func (WritesPaths) operands()      {}
-func (WritesPairs) operands()      {}
-func (TakesNothing) operands()     {}
-func (o ReadsPaths) makes() bool   { return o.Make != nil }
-func (o WritesPaths) makes() bool  { return o.Make != nil }
-func (o WritesPairs) makes() bool  { return o.Make != nil }
-func (o TakesNothing) makes() bool { return o.Make != nil }
-func (ReadsPaths) writes() bool    { return false }
-func (WritesPaths) writes() bool   { return true }
-func (WritesPairs) writes() bool   { return true }
-func (TakesNothing) writes() bool  { return false }
+func (TakesPaths) operands()           {}
+func (TakesPathsDryRun) operands()     {}
+func (TakesPairsDryRun) operands()     {}
+func (TakesNothing) operands()         {}
+func (o TakesPaths) makes() bool       { return o.Make != nil }
+func (o TakesPathsDryRun) makes() bool { return o.Make != nil }
+func (o TakesPairsDryRun) makes() bool { return o.Make != nil }
+func (o TakesNothing) makes() bool     { return o.Make != nil }
+func (TakesPaths) dryRuns() bool       { return false }
+func (TakesPathsDryRun) dryRuns() bool { return true }
+func (TakesPairsDryRun) dryRuns() bool { return true }
+func (TakesNothing) dryRuns() bool     { return false }
 
 // Command is a parsed command line. Its fields are unexported and Parse is
 // the only constructor, so a pathless Get or an odd operand on Set cannot
@@ -331,8 +332,9 @@ func (c Commands) route(words []string, flags Flags) (Parsed, error) {
 		if !begins(name, words) {
 			continue
 		}
-		if flags.DryRun && !r.Operands.writes() {
-			return Parsed{}, refuseUsage(fmt.Errorf("%s: %w; only a write takes it", r.Name, errNoDryRun))
+		if flags.DryRun && !r.Operands.dryRuns() {
+			dry := c.named(func(r Row) bool { return r.Operands.dryRuns() })
+			return Parsed{}, refuseUsage(fmt.Errorf("%s: %w; the commands with a dry run are %s", r.Name, errNoDryRun, dry))
 		}
 		return r.parse(words[len(name):], flags)
 	}
@@ -380,19 +382,19 @@ func scan(args []string) (scanned, error) {
 // command's paths: the command hands out only copies of them.
 func (r Row) parse(operands []string, flags Flags) (Parsed, error) {
 	switch o := r.Operands.(type) {
-	case ReadsPaths:
+	case TakesPaths:
 		paths, err := r.paths(operands)
 		if err != nil {
 			return Parsed{}, err
 		}
 		return Parsed{Asked: Summary{Name: r.Name, Paths: paths}, Command: o.Make(paths)}, nil
-	case WritesPaths:
+	case TakesPathsDryRun:
 		paths, err := r.paths(operands)
 		if err != nil {
 			return Parsed{}, err
 		}
 		return Parsed{Asked: Summary{Name: r.Name, Paths: paths}, Command: o.Make(paths, flags)}, nil
-	case WritesPairs:
+	case TakesPairsDryRun:
 		if len(operands) == 0 || len(operands)%2 != 0 {
 			return Parsed{}, refuseUsage(fmt.Errorf("%s: %w; got %d operands", r.Name, errNotPairs, len(operands)))
 		}
@@ -433,10 +435,15 @@ func (c Commands) isGroup(word string) bool {
 }
 
 // known names every command c holds, for a failure to list.
-func (c Commands) known() string {
-	names := make([]string, len(c.rows))
-	for i, r := range c.rows {
-		names[i] = r.Name.String()
+func (c Commands) known() string { return c.named(func(Row) bool { return true }) }
+
+// named names the commands of c's rows that are, for a failure to list.
+func (c Commands) named(are func(Row) bool) string {
+	var names []string
+	for _, r := range c.rows {
+		if are(r) {
+			names = append(names, r.Name.String())
+		}
 	}
 	return strings.Join(names, ", ")
 }

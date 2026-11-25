@@ -16,10 +16,10 @@ import (
 // `[LAW:no-silent-failure]`.
 func Lit2() Commands {
 	c, err := NewCommands([]Row{
-		{Name: commandname.Get(), Operands: ReadsPaths{Make: func(p []PathText) Command { return Get{paths: p} }}, Summary: "read the nodes at these paths"},
-		{Name: commandname.Set(), Operands: WritesPairs{Make: func(p []Pair, f Flags) Command { return Set{pairs: p, flags: f} }}, Summary: "replace the value at each path"},
-		{Name: commandname.Add(), Operands: WritesPairs{Make: func(p []Pair, f Flags) Command { return Add{pairs: p, flags: f} }}, Summary: "append each value to the list at its path"},
-		{Name: commandname.Rm(), Operands: WritesPaths{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, Summary: "delete the nodes at these paths"},
+		{Name: commandname.Get(), Operands: TakesPaths{Make: func(p []PathText) Command { return Get{paths: p} }}, Summary: "read the nodes at these paths"},
+		{Name: commandname.Set(), Operands: TakesPairsDryRun{Make: func(p []Pair, f Flags) Command { return Set{pairs: p, flags: f} }}, Summary: "replace the value at each path"},
+		{Name: commandname.Add(), Operands: TakesPairsDryRun{Make: func(p []Pair, f Flags) Command { return Add{pairs: p, flags: f} }}, Summary: "append each value to the list at its path"},
+		{Name: commandname.Rm(), Operands: TakesPathsDryRun{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, Summary: "delete the nodes at these paths"},
 		{Name: commandname.Init(), Operands: TakesNothing{Make: func() Command { return Init{} }}, Summary: "make this checkout a writer: its id, its principal, the workspace's first version"},
 		{Name: commandname.Sync(), Operands: TakesNothing{Make: func() Command { return Sync{} }}, Summary: "publish this checkout's events and fetch and verify every writer's"},
 		{Name: commandname.Commit(), Operands: TakesNothing{Make: func() Command { return Commit{} }}, Summary: "apply the committed " + verbs.WorkspacePath() + " as the next version"},

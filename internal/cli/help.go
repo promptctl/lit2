@@ -129,9 +129,9 @@ func rowLines(b *strings.Builder, title string, rows []Row) {
 // synopsis is how --help spells an operand shape.
 func synopsis(o Operands) string {
 	switch o.(type) {
-	case ReadsPaths, WritesPaths:
+	case TakesPaths, TakesPathsDryRun:
 		return "path..."
-	case WritesPairs:
+	case TakesPairsDryRun:
 		return "path value..."
 	case TakesNothing:
 		return ""

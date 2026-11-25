@@ -38,9 +38,9 @@ func parse(args ...string) (Command, error) {
 // operandsFor is one operand line o takes: a path, a pair, or nothing.
 func operandsFor(o Operands) []string {
 	switch o.(type) {
-	case ReadsPaths, WritesPaths:
+	case TakesPaths, TakesPathsDryRun:
 		return []string{"x"}
-	case WritesPairs:
+	case TakesPairsDryRun:
 		return []string{"x", "v"}
 	case TakesNothing:
 		return nil
@@ -51,11 +51,11 @@ func operandsFor(o Operands) []string {
 // made is the command r's own Make makes of operandsFor, with no flags.
 func made(r Row) Command {
 	switch o := r.Operands.(type) {
-	case ReadsPaths:
+	case TakesPaths:
 		return o.Make([]PathText{"x"})
-	case WritesPaths:
+	case TakesPathsDryRun:
 		return o.Make([]PathText{"x"}, Flags{})
-	case WritesPairs:
+	case TakesPairsDryRun:
 		return o.Make([]Pair{{"x", "v"}}, Flags{})
 	case TakesNothing:
 		return o.Make()
@@ -124,7 +124,7 @@ func TestABareLit2IsAGetOfTheRoot(t *testing.T) {
 		}
 	}
 	if _, err := parse("--dry-run"); !errors.Is(err, errNoDryRun) {
-		t.Errorf("lit2 --dry-run = %v; want errNoDryRun: a get takes no --dry-run", err)
+		t.Errorf("lit2 --dry-run = %v; want errNoDryRun: get has no dry run", err)
 	}
 }
 
@@ -232,9 +232,9 @@ func TestHelpsFieldsAreTheTablesRows(t *testing.T) {
 // edit `[LAW:composability]`.
 func TestOneMoreRowIsParsedHelpedAndAskedUnderItsName(t *testing.T) {
 	c := Lit2()
-	show := Row{Name: commandname.Verb("show"), Operands: ReadsPaths{Make: func(p []PathText) Command { return Get{paths: p} }}, Summary: "read, by another name"}
-	// a write, which takes --dry-run by its shape alone
-	erase := Row{Name: commandname.Verb("erase"), Operands: WritesPaths{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, Summary: "delete, by another name"}
+	show := Row{Name: commandname.Verb("show"), Operands: TakesPaths{Make: func(p []PathText) Command { return Get{paths: p} }}, Summary: "read, by another name"}
+	// a command handed --dry-run, which it takes by its shape alone
+	erase := Row{Name: commandname.Verb("erase"), Operands: TakesPathsDryRun{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, Summary: "delete, by another name"}
 	// a command of a kind nothing else in the package has heard of
 	ping := Row{Name: commandname.InGroup("admin", "ping"), Operands: TakesNothing{Make: func() Command { return probe{} }}, Summary: "a command no switch knows"}
 	more, err := NewCommands(append(slices.Clone(c.rows), show, erase, ping), c.bare)
@@ -249,8 +249,8 @@ func TestOneMoreRowIsParsedHelpedAndAskedUnderItsName(t *testing.T) {
 	if err != nil || got.Asked.Name != erase.Name || !reflect.DeepEqual(got.Command, Rm{paths: []PathText{"x"}, flags: Flags{DryRun: true}}) {
 		t.Errorf("erase x --dry-run = %#v, %v; want a dry rm asked as erase", got, err)
 	}
-	if _, err := Parse(more, []string{"show", "x", "--dry-run"}); !errors.Is(err, errNoDryRun) {
-		t.Errorf("show x --dry-run = %v; want errNoDryRun: a read takes no --dry-run", err)
+	if _, err := Parse(more, []string{"show", "x", "--dry-run"}); !errors.Is(err, errNoDryRun) || !strings.Contains(err.Error(), "rm, erase") {
+		t.Errorf("show x --dry-run = %v; want errNoDryRun, listing the commands with a dry run, erase among them", err)
 	}
 	got, err = Parse(more, []string{"admin", "ping"})
 	if err != nil || got.Asked.Name != ping.Name || got.Command != (probe{}) {
