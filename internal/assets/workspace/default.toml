@@ -1,7 +1,8 @@
 # This project's lit2 model: its levels, columns, labels, checks and links.
-# lit2 admin init wrote it and applied it as version one. Edit it, commit it,
-# then run lit2 config commit to put the committed version in force; until
-# then every command runs on the version applied last.
+# lit2 wrote it when this checkout became a writer, and applied it as version
+# one. Edit it, commit it, then apply the committed version, the command
+# lit2 --help names, to put it in force; until then every command runs on
+# the version applied last.
 
 prefix = "lit"
 claim_ttl = "6h"

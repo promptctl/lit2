@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/reason"
 )
 
@@ -17,13 +18,10 @@ import (
 // the panic's value and stack kept, so the run is recorded as a body's
 // panic is.
 func TestAParseThatPanicsIsAskedAsUnparsed(t *testing.T) {
-	asked, answer := parsed(func() (cli.Command, error) { panic("a parse broke") }, func(body, cli.Command) command.Ran {
-		t.Fatal("a parse that panicked answered its command")
-		return command.Ran{}
-	})
+	asked, answer := parsed(func() cli.Commands { panic("a parse broke") }, []string{"get", "x"})
 	failed, ok := answer(body{}).Outcome.(cli.Failed)
 	var in command.Internal
-	if asked.Name != cli.Unparsed || !ok || !errors.As(failed.Failure, &in) || !strings.Contains(in.Error(), "a parse broke") || len(in.Stack()) == 0 {
+	if asked.Name != commandname.Unparsed() || !ok || !errors.As(failed.Failure, &in) || !strings.Contains(in.Error(), "a parse broke") || len(in.Stack()) == 0 {
 		t.Errorf("a panicking parse asked %#v and answered %#v; want unparsed, answered Internal with its value and stack", asked, failed)
 	}
 }
@@ -65,12 +63,12 @@ func TestHelpPrintsTheVerbsAndExitsZero(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"get", "--help"}} {
 		twin := NewTwin()
 		status, e := run(t, twin, args...)
-		for _, verb := range []string{"get", "set", "add", "rm", "admin init", "admin sync"} {
-			if !strings.Contains(twin.Out.String(), verb) {
-				t.Errorf("lit2 %q does not name %s on stdout", args, verb)
+		for _, r := range cli.Lit2().Rows() {
+			if !strings.Contains(twin.Out.String(), r.Name.String()) {
+				t.Errorf("lit2 %q does not name %s on stdout", args, r.Name)
 			}
 		}
-		if status != 0 || twin.Err.Len() != 0 || e.Command.Name != "help" {
+		if status != 0 || twin.Err.Len() != 0 || e.Command.Name != commandname.Help() {
 			t.Errorf("lit2 %q: status %d, stderr %q, command %q; want 0, nothing, help", args, status, twin.Err, e.Command.Name)
 		}
 	}
@@ -79,7 +77,7 @@ func TestHelpPrintsTheVerbsAndExitsZero(t *testing.T) {
 func TestAnUnknownVerbIsUsage(t *testing.T) {
 	twin := NewTwin()
 	status, e := run(t, twin, "frobnicate")
-	if status != 64 || !strings.HasPrefix(twin.Err.String(), "error (reason=unknown_verb): ") || reasonOf(e) != "unknown_verb" || e.Command.Name != cli.Unparsed {
+	if status != 64 || !strings.HasPrefix(twin.Err.String(), "error (reason=unknown_verb): ") || reasonOf(e) != "unknown_verb" || e.Command.Name != commandname.Unparsed() {
 		t.Errorf("lit2 frobnicate: status %d, stderr %q, event %#v", status, twin.Err, e)
 	}
 	if twin.Out.Len() != 0 {
@@ -93,8 +91,31 @@ func TestARowWithNoBodyIsInternal(t *testing.T) {
 	if status != 70 || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(twin.Err.String(), "lit2 admin sync is not built in this binary; lit-converge-5eq builds it") {
 		t.Errorf("lit2 admin sync: status %d, stderr %q", status, twin.Err)
 	}
-	if e.Command.Name != "admin sync" {
+	if e.Command.Name != commandname.Sync() {
 		t.Errorf("lit2 admin sync recorded %#v", e.Command)
+	}
+}
+
+// A row moved to another group is asked, logged and named by its body
+// under its new name, with no edit beside the row's.
+func TestARegroupedRowIsNamedByItsNewPlace(t *testing.T) {
+	c := cli.Lit2()
+	moved := commandname.InGroup("config", "sync")
+	rows := c.Rows()
+	for i, r := range rows {
+		if r.Name == commandname.Sync() {
+			rows[i].Name = moved
+		}
+	}
+	regrouped, err := cli.NewCommands(rows, c.Bare())
+	if err != nil {
+		t.Fatal(err)
+	}
+	twin := NewTwin()
+	asked, answer := parsed(func() cli.Commands { return regrouped }, []string{"config", "sync"})
+	e := invoke(twin.Process, asked, answer)
+	if e.Command.Name != moved || !errors.Is(failure(t, e), errNotBuilt) || !strings.Contains(failure(t, e).Error(), "lit2 config sync is not built") {
+		t.Errorf("config sync recorded %#v ending %#v; want it asked as config sync, its failure naming config sync", e.Command, e.Outcome)
 	}
 }
 

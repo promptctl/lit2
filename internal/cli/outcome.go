@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/reason"
 )
 
@@ -64,50 +65,12 @@ func Report(o Outcome) string {
 	panic(fmt.Sprintf("cli: %T is not an Outcome", o))
 }
 
-// CommandName is the name the command event gives what was asked.
-type CommandName string
-
-// Unparsed names an argv that did not parse.
-const Unparsed CommandName = "unparsed"
-
 // Summary is what the command event records of a command: its name, its
 // paths as typed, and how many values it carried. A value's text is never
-// recorded; Values counts them.
+// recorded; Values counts them. Parse makes it from the row that parsed,
+// so its name is the row's.
 type Summary struct {
-	Name   CommandName
+	Name   commandname.Name
 	Paths  []PathText
 	Values int
-}
-
-// Summarize is a command's Summary.
-func Summarize(c Command) Summary {
-	switch c := c.(type) {
-	case Help:
-		return Summary{Name: "help"}
-	case Get:
-		return Summary{Name: "get", Paths: c.paths}
-	case Rm:
-		return Summary{Name: "rm", Paths: c.paths}
-	case Set:
-		return summarizePairs("set", c.pairs)
-	case Add:
-		return summarizePairs("add", c.pairs)
-	case AdminInit:
-		return Summary{Name: "admin init"}
-	case AdminSync:
-		return Summary{Name: "admin sync"}
-	case ConfigCommit:
-		return Summary{Name: "config commit"}
-	case ConfigStatus:
-		return Summary{Name: "config status"}
-	}
-	panic(fmt.Sprintf("cli: %T is not a Command", c))
-}
-
-func summarizePairs(name CommandName, pairs []Pair) Summary {
-	paths := make([]PathText, len(pairs))
-	for i, p := range pairs {
-		paths[i] = p.Path
-	}
-	return Summary{Name: name, Paths: paths, Values: len(pairs)}
 }

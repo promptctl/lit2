@@ -259,7 +259,7 @@ func memberOf(in events.Policy, v field.Literal) (events.PrincipalID, events.Nam
 		return events.PrincipalID{}, events.Name{}, refuse("value", `a member is {principal: "did:key:…", role: …}`)
 	}
 	if held, ok := in.Role(id); ok {
-		return events.PrincipalID{}, events.Name{}, refuse("value", "%s is already a member, as %s: set /members/%s/role moves it", id, held, id)
+		return events.PrincipalID{}, events.Name{}, refuse("value", "%s is already a member, as %s: %s /members/%s/role moves it", id, held, Set, id)
 	}
 	return id, role, nil
 }

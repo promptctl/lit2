@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/cli"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
@@ -19,7 +20,7 @@ func memoryStore() *store.Store {
 
 func storeBlockOf(t *testing.T, f StoreFacts) map[string]any {
 	t.Helper()
-	m := decode(t, Event{Invocation: asked(inv, "get"), Place: here, Store: f, Outcome: cli.Done{}})
+	m := decode(t, Event{Invocation: asked(inv, commandname.Get()), Place: here, Store: f, Outcome: cli.Done{}})
 	block, ok := m["store"].(map[string]any)
 	if !ok {
 		t.Fatalf("the line has no store block: %v", m)
@@ -64,7 +65,7 @@ func TestEveryLineSaysItsStoresOpening(t *testing.T) {
 		{"outside a checkout", NoCheckout{Dir: "/"}, unopened},
 		{"an unlocatable one", Unlocatable{Dir: "/", Err: errors.New("git broke")}, unopened},
 	} {
-		block, _ := decode(t, Event{Invocation: asked(inv, "help"), Place: tc.place, Outcome: cli.Done{}})["store"].(map[string]any)
+		block, _ := decode(t, Event{Invocation: asked(inv, commandname.Help()), Place: tc.place, Outcome: cli.Done{}})["store"].(map[string]any)
 		if o, _ := block["open"].(map[string]any); !reflect.DeepEqual(o, tc.want) {
 			t.Errorf("%s: the store block is %v; want its open block %v", tc.name, block, tc.want)
 		}
@@ -230,7 +231,7 @@ func TestAnAppendSaysTheSyncOfItsLogsName(t *testing.T) {
 
 func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 	appended := store.Appended{Written: store.Written{Records: 2, Bytes: 40}, Log: store.LogLookedUp{}}
-	e := Record(&FixedClock{At: t0}, noGit, asked(inv, "set"), here, stays(func(r Recorder) cli.Outcome {
+	e := Record(&FixedClock{At: t0}, noGit, asked(inv, commandname.Set()), here, stays(func(r Recorder) cli.Outcome {
 		r.Stored.Appends = append(r.Stored.Appends, appended)
 		panic("after the append")
 	}))
@@ -241,7 +242,7 @@ func TestStoreFactsSurviveAPanickingBody(t *testing.T) {
 
 // The checkout's object format is on the place line, beside its paths.
 func TestThePlaceSaysTheCheckoutsObjectFormat(t *testing.T) {
-	place, _ := decode(t, Event{Invocation: asked(inv, "get"), Place: here, Outcome: cli.Done{}})["place"].(map[string]any)
+	place, _ := decode(t, Event{Invocation: asked(inv, commandname.Get()), Place: here, Outcome: cli.Done{}})["place"].(map[string]any)
 	c, _ := place["checkout"].(map[string]any)
 	if c["object_format"] != "sha256" || c["git_dir"] != "/w/.git" {
 		t.Errorf("the place line is %v; want the checkout's paths and its format, sha256", place)

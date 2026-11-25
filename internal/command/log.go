@@ -199,7 +199,7 @@ func configBlock(c *ConfigFacts) *configLine {
 
 func encode(e Event) ([]byte, error) {
 	l := line{
-		Event:      "lit2 " + string(e.Command.Name),
+		Event:      "lit2 " + e.Command.Name.String(),
 		TraceID:    e.Trace.String(),
 		Service:    "lit2",
 		StartedAt:  e.Started.UTC().Format(time.RFC3339Nano),

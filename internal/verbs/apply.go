@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/lit2/internal/address"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/evaluate"
 	"github.com/promptctl/lit2/internal/events"
@@ -127,11 +128,11 @@ func workspace(w World, _ address.Node) ([]string, error) {
 func Workspace(st fold.State, f File) string {
 	in, ok := st.Workspace().(fold.InForce)
 	if !ok {
-		return "no version in force: lit2 config commit applies one"
+		return fmt.Sprintf("no version in force: lit2 %s applies one", commandname.Commit())
 	}
 	parts := []string{short(in.Active.Blob) + " in force", WorkspacePath() + " " + fileState(in.Active.Blob, f)}
 	for _, c := range in.Contending {
-		parts = append(parts, fmt.Sprintf("contended by %s, by %s: lit2 config commit resolves", short(c.Blob), writer(c.Stamp.By)))
+		parts = append(parts, fmt.Sprintf("contended by %s, by %s: lit2 %s resolves", short(c.Blob), writer(c.Stamp.By), commandname.Commit()))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -143,7 +144,7 @@ func fileState(active git.ObjectID, f File) string {
 		if f.Blob == active {
 			return "matches"
 		}
-		return fmt.Sprintf("differs (%s): commit it, then lit2 config commit", short(f.Blob))
+		return fmt.Sprintf("differs (%s): commit it, then lit2 %s", short(f.Blob), commandname.Commit())
 	case NoFile:
 		return "is absent"
 	case UnreadableFile:

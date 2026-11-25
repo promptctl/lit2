@@ -2,38 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/field"
 	"github.com/promptctl/lit2/internal/verbs"
 )
-
-// Verbs is the verb table: the four verbs on paths.
-func Verbs() Table {
-	return Table{rows: []Row{
-		{Name: "get", Operands: TakesPaths{Make: func(p []PathText, _ Flags) Command { return Get{paths: p} }}, Summary: "read the nodes at these paths"},
-		{Name: "set", Operands: TakesPairs{Make: func(p []Pair, f Flags) Command { return Set{pairs: p, flags: f} }}, DryRun: true, Summary: "replace the value at each path"},
-		{Name: "add", Operands: TakesPairs{Make: func(p []Pair, f Flags) Command { return Add{pairs: p, flags: f} }}, DryRun: true, Summary: "append each value to the list at its path"},
-		{Name: "rm", Operands: TakesPaths{Make: func(p []PathText, f Flags) Command { return Rm{paths: p, flags: f} }}, DryRun: true, Summary: "delete the nodes at these paths"},
-	}}
-}
-
-// Groups is the command groups, in the order --help prints them: admin,
-// what keeps a checkout's store, and config, what applies the workspace's
-// versions, both outside the everyday surface.
-func Groups() []Group {
-	return []Group{
-		{Word: "admin", Table: Table{rows: []Row{
-			{Name: "init", Operands: TakesNothing{Make: func() Command { return AdminInit{} }}, Summary: "make this checkout a writer: its id, its principal, the workspace's first version"},
-			{Name: "sync", Operands: TakesNothing{Make: func() Command { return AdminSync{} }}, Summary: "publish this checkout's events and fetch and verify every writer's"},
-		}}},
-		{Word: "config", Table: Table{rows: []Row{
-			{Name: "commit", Operands: TakesNothing{Make: func() Command { return ConfigCommit{} }}, Summary: "apply the committed " + verbs.WorkspacePath() + " as the next version"},
-			{Name: "status", Operands: TakesNothing{Make: func() Command { return ConfigStatus{} }}, Summary: "the version in force, the file against it, and any contending"},
-		}}},
-	}
-}
 
 // Fields is the field table help prints: the one the version in force
 // declares, or none, and why.
@@ -53,15 +28,23 @@ func (NoFields) fields()     {}
 // HelpText is --help: the verbs and each group, and the field table at each
 // place, rendered from the rows the parser and the paths read, each field
 // with its kind and the verbs that write it.
-func HelpText(verbTable Table, groups []Group, fields Fields) string {
+func HelpText(c Commands, fields Fields) string {
+	verbRows, groups := c.sections()
 	var b strings.Builder
 	b.WriteString("lit2 keeps this repository's backlog as a tree of nodes in its own git object database.\n\n")
-	b.WriteString("usage: lit2 <verb> <operand>...   lit2 admin <command>   lit2 config <command>   lit2 --help\n")
-	b.WriteString("lit2 alone is get /: the tree, the lanes in rank order, what is next, and the version in force\n")
-	b.WriteString("--help anywhere prints this; --dry-run shows what a write would do; -- ends the flags; - is a value\n")
-	section(&b, "verbs", "", verbTable)
+	b.WriteString("usage: lit2 <verb> <operand>...")
 	for _, g := range groups {
-		section(&b, g.Word, g.Word+" ", g.Table)
+		fmt.Fprintf(&b, "   lit2 %s <command>", g.word)
+	}
+	fmt.Fprintf(&b, "   lit2 %s\n", helpFlag)
+	fmt.Fprintf(&b, "lit2 alone is %s: %s\n", strings.Join(c.bare.line(), " "), c.bare.Shows)
+	for _, f := range theFlags() {
+		fmt.Fprintf(&b, "%s %s; ", f.name, f.does)
+	}
+	fmt.Fprintf(&b, "%s ends the flags; - is a value\n", endFlags)
+	rowLines(&b, "verbs", verbRows)
+	for _, g := range groups {
+		rowLines(&b, g.word, g.rows)
 	}
 	switch f := fields.(type) {
 	case ActiveFields:
@@ -111,19 +94,44 @@ func kindOf(r config.Row) string {
 	panic(fmt.Sprintf("cli: %T is not a Row", r))
 }
 
-func section(b *strings.Builder, title, prefix string, t Table) {
+// group is one group's commands, as --help prints them.
+type group struct {
+	word string
+	rows []Row
+}
+
+// sections is c's rows by where each name is: the verbs, and each group
+// in the order it first appears.
+func (c Commands) sections() (verbRows []Row, groups []group) {
+	for _, r := range c.rows {
+		word, in := r.Name.Group()
+		if !in {
+			verbRows = append(verbRows, r)
+			continue
+		}
+		i := slices.IndexFunc(groups, func(g group) bool { return g.word == word })
+		if i < 0 {
+			groups, i = append(groups, group{word: word}), len(groups)
+		}
+		groups[i].rows = append(groups[i].rows, r)
+	}
+	return verbRows, groups
+}
+
+// rowLines is one block of --help: its title, then a line per row.
+func rowLines(b *strings.Builder, title string, rows []Row) {
 	fmt.Fprintf(b, "\n%s:\n", title)
-	for _, r := range t.rows {
-		fmt.Fprintf(b, "  %-14s %-15s %s\n", prefix+r.Name, synopsis(r.Operands), r.Summary)
+	for _, r := range rows {
+		fmt.Fprintf(b, "  %-14s %-15s %s\n", r.Name, synopsis(r.Operands), r.Summary)
 	}
 }
 
 // synopsis is how --help spells an operand shape.
 func synopsis(o Operands) string {
 	switch o.(type) {
-	case TakesPaths:
+	case TakesPaths, TakesPathsDryRun:
 		return "path..."
-	case TakesPairs:
+	case TakesPairsDryRun:
 		return "path value..."
 	case TakesNothing:
 		return ""

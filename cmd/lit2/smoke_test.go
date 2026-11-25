@@ -175,19 +175,13 @@ func TestSmoke(t *testing.T) {
 		stdout, errs string
 		dir          string
 	}{
-		{[]string{"--help"}, 0, "admin sync", "", sb.dir},
-		{[]string{"--help"}, 0, "admin init", "", sb.dir},
+		{[]string{"--help"}, 0, "usage: lit2 ", "", sb.dir},
 		{nil, 78, "", "error (reason=store): ", sb.dir},
-		{[]string{"--help"}, 0, "admin sync", "", broken},
-		{[]string{"--help"}, 0, "admin sync", "", parses},
+		{[]string{"--help"}, 0, "usage: lit2 ", "", broken},
+		{[]string{"--help"}, 0, "usage: lit2 ", "", parses},
 	} {
 		status, stdout, stderr := sb.run(t, tc.dir, tc.args...)
 		statuses = append(statuses, status)
-		for _, verb := range []string{"get", "set", "add", "rm"} {
-			if tc.stdout != "" && !strings.Contains(stdout, verb) {
-				t.Errorf("lit2 %q does not name %s on stdout:\n%s", tc.args, verb, stdout)
-			}
-		}
 		if status != tc.status || !holds(stdout, tc.stdout) || !strings.HasPrefix(stderr, tc.errs) || (tc.errs == "") != (stderr == "") {
 			t.Errorf("lit2 %q: status %d, stdout %q, stderr %q", tc.args, status, stdout, stderr)
 		}

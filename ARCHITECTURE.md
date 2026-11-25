@@ -45,6 +45,7 @@ store
 git
 files
 reason
+commandname
 assets
 panics
 ```
@@ -98,6 +99,7 @@ row; the architecture test fails on one without.
 | §5.8 Record | `command` | the command event and the command log |
 | §5.9 Sync | `store`, `git` | the background sync process in store; push and fetch through the user's git |
 | the order of the §5 steps | `root` | the dispatcher every invocation passes through |
+| a command's name | `commandname`, `cli` | each command's name as typed in commandname, the one spelling every layer that names a command reads; the rows that parse and help by it in cli |
 | exit classes and statuses | `reason`, `cli` | the four classes in reason; each layer's failure names its own reasons; statuses in cli |
 | checkout discovery | `git` | the work tree, private git dir and common dir |
 | the code repository's HEAD and history | `git` | the blob HEAD holds at a path and whether one was ever there, read, never written |
@@ -142,9 +144,11 @@ The decisions the layout needed and the design documents did not make.
   make a missing case a lint failure.
 - **D3 Build** `CGO_ENABLED=0 go build ./cmd/lit2`, one command, a static
   binary; no Makefile.
-- **D4 Argv** is the standard library and a scan over the tables, the verbs
-  and each group's (`admin`, `config`): a flag is `--name` anywhere, `--`
-  ends the flags, `-` is a value.
+- **D4 Argv** is the standard library and a scan over one command line,
+  `cli.Commands`, built only by `NewCommands`: its rows, each named by
+  `commandname` as a verb or a group's command (`admin init`), and what a
+  bare `lit2` runs. A flag is `--name` anywhere, `--` ends the flags, `-` is
+  a value.
 - **D5 The one-way-deps check** is `internal/architecture`, over the
   `layers` block above: Go refuses cycles, not an upward edge that closes
   none.
