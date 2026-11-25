@@ -146,23 +146,26 @@ type turnTaking struct {
 	turn int
 }
 
-func (f *turnTaking) Append(n files.Name, b []byte) (uint64, error) {
+func (f *turnTaking) Append(n files.Name, b []byte) files.Appending {
 	prev := "go"
 	if f.turn > 0 {
 		prev = fmt.Sprintf("turn-%d", f.turn-1)
 	}
 	await(f.t, func() bool { return exists(f.t, filepath.Join(f.dir, prev)) })
-	end, err := f.Files.Append(n, b)
-	if err != nil {
-		return end, err
+	got := f.Files.Append(n, b)
+	if _, landed := got.(files.Appended); !landed {
+		return got
 	}
 	// O_EXCL, so a turn two processes both took fails the second
 	h, err := os.OpenFile(filepath.Join(f.dir, fmt.Sprintf("turn-%d", f.turn)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return end, err
+	if err == nil {
+		err = h.Close()
 	}
 	f.turn += 2
-	return end, h.Close()
+	if err != nil {
+		f.t.Fatalf("handing on turn %d: %v", f.turn-2, err)
+	}
+	return got
 }
 
 // await polls done, briefly, until it holds or the test's deadline, a

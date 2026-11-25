@@ -211,7 +211,7 @@ func encode(e Event) ([]byte, error) {
 		Config:     configBlock(e.Config),
 		Store:      storeBlock(e.Store),
 		Fold:       foldBlock(e.Store.Folds),
-		Verbs:      verbsBlock(e.Verbs, len(e.Store.Appends) > 0),
+		Verbs:      verbsBlock(e.Verbs, e.Store.Landed()),
 		Policy:     policyBlock(e.Policy),
 		Git:        gitBlock(e.Git),
 		Place:      placeLine(e.Place),
@@ -241,13 +241,27 @@ func placeLine(p Place) any {
 	switch p := p.(type) {
 	case InCheckout:
 		c := p.Checkout
-		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, ObjectFormat: c.Format.String(), Identity: identityLine(p.Identity, c)}}
+		return inCheckoutLine{checkoutLine{WorkTree: c.WorkTree, GitDir: c.GitDir, CommonDir: c.CommonDir, ObjectFormat: c.Format.String(), Identity: identityLine(p.Identity, c), Temps: tempsLine(p.Temps)}}
 	case NoCheckout:
 		return noCheckoutLine{dirLine(p)}
 	case Unlocatable:
 		return unlocatableLine{dirErrorLine{p.Dir, p.Err.Error()}}
 	}
 	panic(fmt.Sprintf("command: %T is not a Place", p))
+}
+
+// tempsLine is each file's leftover temps, or why they did not read.
+func tempsLine(ls []Leftovers) []any {
+	l := []any{}
+	for _, left := range ls {
+		switch left := left.(type) {
+		case TempsBeside:
+			l = append(l, tempsBesideLine{Path: left.Path, Temps: append([]string{}, left.Temps...)})
+		case TempsUnread:
+			l = append(l, pathErrorLine{Path: left.Path, Error: left.Why.Error()})
+		}
+	}
+	return l
 }
 
 // identityLine is the writer and its principal as did:key, or the paths
@@ -295,6 +309,11 @@ type (
 		CommonDir    string `json:"common_dir"`
 		ObjectFormat string `json:"object_format"`
 		Identity     any    `json:"identity"`
+		Temps        []any  `json:"temps"`
+	}
+	tempsBesideLine struct {
+		Path  string   `json:"path"`
+		Temps []string `json:"temps"`
 	}
 	dirLine struct {
 		Dir string `json:"dir"`

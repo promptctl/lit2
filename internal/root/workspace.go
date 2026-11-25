@@ -244,19 +244,30 @@ func (r body) init() cli.Outcome {
 	if !ok {
 		return cli.Failed{Failure: storeFailure{err: fmt.Errorf("admin init makes a git checkout a writer, and this is none")}}
 	}
-	shared, private := r.p.IdentityFiles(in.Checkout)
-	minted, fresh, err := MintIdentity(shared, private, r.p.Entropy)
-	if err != nil {
-		return cli.Failed{Failure: storeFailure{err: err}}
-	}
-	r.rec.Stored.Inits = append(r.rec.Stored.Inits, fresh)
-	said := fmt.Sprintf("principal %s\n", minted.Key.Principal())
-	if fresh.Key == files.Created {
-		said += fmt.Sprintf("recovery phrase: %s\nwrite it down: it is the one way to restore this key\n", minted.Key.Phrase())
-	}
-	// the phrase is said before anything else can fail: it is shown once
-	if out, isFailed := written(io.WriteString(r.p.Out, said)).(cli.Failed); isFailed {
-		return out
+	c := in.Checkout
+	shared, private := r.p.IdentityFiles(c)
+	// every file init creates is on its event, by path, durable or not
+	shared, private = r.recording(shared, command.DirOf(command.PrincipalFile{}, c)), r.recording(private, command.DirOf(command.IDFile{}, c))
+	// the phrase is said the moment its key lands, before anything else
+	// can fail, a readback or a sync: it is shown once
+	var phrase cli.Outcome
+	minted, err := MintIdentity(shared, private, r.p.Entropy, func(k events.Key) {
+		phrase = written(fmt.Fprintf(r.p.Out, "principal %s\nrecovery phrase: %s\nwrite it down: it is the one way to restore this key\n", k.Principal(), k.Phrase()))
+	})
+	switch phrase.(type) {
+	case nil:
+		if err != nil {
+			return cli.Failed{Failure: storeFailure{err: err}}
+		}
+		if out, isFailed := written(fmt.Fprintf(r.p.Out, "principal %s\n", minted.Key.Principal())).(cli.Failed); isFailed {
+			return out
+		}
+	case cli.Failed:
+		return phrase
+	case cli.Done:
+		if err != nil {
+			return cli.Failed{Failure: storeFailure{err: err}}
+		}
 	}
 	opening := r.p.Open(in.Checkout, minted)
 	r.rec.Stored.Opening = opening
@@ -264,8 +275,7 @@ func (r body) init() cli.Outcome {
 	if !ok {
 		return cli.Failed{Failure: storeFailure{err: opening.(command.Unopened).Why}}
 	}
-	tree := r.p.WorkTree(in.Checkout)
-	pins := r.p.Pin(in.Checkout)
+	tree, pins := r.recording(r.p.WorkTree(c), litDir(c)), r.recording(r.p.Pin(c), pinDir(c))
 	if err := adopt(pins, tree); err != nil {
 		return failed(err)
 	}
@@ -342,8 +352,8 @@ func (r body) init() cli.Outcome {
 // there first when there is none; read back, so a race to create it
 // applies the winner's.
 func versionOne(tree files.Files) ([]byte, error) {
-	if _, err := tree.CreateOnce(verbs.WorkspaceFile(), assets.DefaultWorkspace.Bytes()); err != nil {
-		return nil, fmt.Errorf("writing %s: %w", verbs.WorkspacePath(), err)
+	if no, failed := tree.CreateOnce(verbs.WorkspaceFile(), assets.DefaultWorkspace.Bytes()).(files.NotPlaced); failed {
+		return nil, fmt.Errorf("writing %s: %w", verbs.WorkspacePath(), no.Why)
 	}
 	b, err := read(tree, verbs.WorkspaceFile(), func(b []byte) ([]byte, error) { return b, nil })
 	if err != nil {

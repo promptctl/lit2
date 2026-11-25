@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/lit2/internal/command"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
+	"github.com/promptctl/lit2/internal/store/storetest"
 )
 
 // appendOne appends one record through s and reads every record of its
@@ -22,9 +23,7 @@ func appendOne(t *testing.T, s *store.Store, me store.CheckoutID) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Append(b); err != nil {
-		t.Fatal(err)
-	}
+	storetest.AppendAll(t, s, b)
 	h, err := s.Heads()
 	if err != nil || len(h.Streams) != 1 || h.Streams[0].Ref != (store.WriterRef{Checkout: me}) {
 		t.Fatalf("after one append the heads are %+v, %v; want the writer's one stream", h, err)

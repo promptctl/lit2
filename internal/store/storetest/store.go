@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 	"github.com/promptctl/lit2/internal/store"
@@ -82,15 +83,17 @@ func texts(bt store.Batch) []string {
 	return ts
 }
 
-// AppendAll appends each batch in turn.
-func AppendAll(t *testing.T, s *store.Store, bs ...store.Batch) []store.Appended {
+// AppendAll appends each batch in turn, failing t unless each is
+// Appended.
+func AppendAll(t testing.TB, s *store.Store, bs ...store.Batch) []store.Appended {
 	t.Helper()
 	out := make([]store.Appended, len(bs))
 	for i, bt := range bs {
-		var err error
-		if out[i], err = s.Append(bt); err != nil {
-			t.Fatal(err)
+		got, ok := s.Append(bt).(store.Appended)
+		if !ok {
+			t.Fatalf("append %d = %#v; want Appended", i, got)
 		}
+		out[i] = got
 	}
 	return out
 }
@@ -245,9 +248,7 @@ func Store(t *testing.T, sub Substrate) {
 		AppendAll(t, s, batch(t, "before"))
 		partial := store.Encode(batch(t, "lost in a crash"))
 		partial = partial[:len(partial)/2]
-		if _, err := p.Logs.Append(store.LogName(a), partial); err != nil {
-			t.Fatal(err)
-		}
+		filestest.Append(t, p.Logs, store.LogName(a), partial)
 		scan := Whole(t, s, store.WriterRef{Checkout: a})
 		if !slices.Equal(Read(scan), []string{"before"}) || len(scan.Torn) != 0 || uint64(scan.Until-scan.End) != uint64(len(partial)) {
 			t.Errorf("with a partial frame the log reads %+v; want the whole frame and the rest an incomplete tail", scan)
@@ -270,8 +271,8 @@ func Store(t *testing.T, sub Substrate) {
 			wg.Go(func() {
 				s := store.Open(a, p.Ports, store.DefaultSegmentBound)
 				for _, bt := range bs {
-					if _, err := s.Append(bt); err != nil {
-						t.Error(err)
+					if got, ok := s.Append(bt).(store.Appended); !ok {
+						t.Errorf("Append = %#v; want Appended", got)
 						return
 					}
 				}
@@ -394,9 +395,7 @@ func Store(t *testing.T, sub Substrate) {
 		// the header and half a frame: what a crash in the first append leaves
 		half := store.Encode(batch(t, "half"))
 		crashed := sub.Fresh(t)
-		if _, err := crashed.Logs.CreateOnce(store.LogName(a), append(header, half[:len(half)/2]...)); err != nil {
-			t.Fatal(err)
-		}
+		filestest.Create(t, crashed.Logs, store.LogName(a), append(header, half[:len(half)/2]...))
 		s = store.Open(a, crashed.Ports, store.DefaultSegmentBound)
 		sealed, err := s.SealOwn()
 		if want := (store.NothingToPublish{Ref: store.WriterRef{Checkout: a}, Log: heads(t, s).Streams[0].Until.Log}); err != nil || sealed != want {
@@ -453,9 +452,7 @@ func Store(t *testing.T, sub Substrate) {
 		PublishOwn(t, s)
 		// the same repository beside a log holding only the first batch
 		rewound := sub.Fetched(t, p)
-		if _, err := rewound.Logs.CreateOnce(store.LogName(a), short); err != nil {
-			t.Fatal(err)
-		}
+		filestest.Create(t, rewound.Logs, store.LogName(a), short)
 		if _, err := store.Open(a, rewound.Ports, store.DefaultSegmentBound).SealOwn(); !errors.As(err, new(store.ShorterThanPublished)) {
 			t.Errorf("sealing a log shorter than its publication failed with %v; want ShorterThanPublished", err)
 		}

@@ -317,13 +317,20 @@ func (d *onDisk) write(objs []object) ([]ObjectID, error) {
 }
 
 // writable is the repository's path, created if it is not yet, under a
-// git that keeps it durable.
+// git that keeps it durable. Its entry in the directory it is in is
+// fsynced on every path, whether this call renamed it into place, lost the
+// rename to another, or found it there, since one found may be a racing
+// create's, not yet synced: every object written into it is only as
+// durable as the name it is under `[LAW:dataflow-not-control-flow]`.
 func (d *onDisk) writable() (string, error) {
 	if err := d.g.durable(); err != nil {
 		return "", err
 	}
 	if err := d.create(); err != nil {
 		return "", err
+	}
+	if err := d.at.Parent().Sync(); err != nil {
+		return "", fmt.Errorf("syncing the entry of lit's repository: %w", err)
 	}
 	return d.path()
 }

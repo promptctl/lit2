@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/git/gittest"
 )
@@ -714,4 +715,49 @@ func TestARepositoryDirThatIsALinkIsRefused(t *testing.T) {
 			t.Errorf("the link is %v, %v after the write; want it still the link, never renamed over", info, err)
 		}
 	})
+}
+
+// lit's repository's entry in the directory it is in is fsynced before a
+// write is handed the repository, on every path: a repository the write
+// renamed into place, one whose rename it lost to another create, and one
+// it found there. The lost rename is forced by the gate: a second create
+// makes the repository between this one's look and its rename.
+func TestTheRepositorysEntryIsSyncedOnEveryWrite(t *testing.T) {
+	g := gittest.Runner(t)
+	in := filepath.Join(gittest.Physical(t), "store")
+	at := func(seams filestest.Seams) files.Dir {
+		return filestest.Seamed(files.DirAt(filepath.Dir(in), files.MustName(filepath.Base(in))), seams).Sub(files.MustName("repo"))
+	}
+	// synced fails t unless a write through seams synced in, last.
+	synced := func(t *testing.T, path string, seams func(*filestest.Syncs) filestest.Seams) {
+		t.Helper()
+		var syncs filestest.Syncs
+		gittest.PutBlob(t, g.RepositoryAt(at(seams(&syncs))), []byte(path))
+		if seen := syncs.Seen(); len(seen) == 0 || seen[len(seen)-1] != in {
+			t.Errorf("a write %s synced %v; want %s, the directory the repository is in, last", path, seen, in)
+		}
+	}
+	recording := func(s *filestest.Syncs) filestest.Seams { return filestest.Recording(s, filestest.Passing) }
+	synced(t, "renaming it into place", recording)
+	synced(t, "finding it there", recording)
+
+	// the creating walk of the directory it is in is the first look at
+	// it, since the check before finds no directory and looks at nothing;
+	// the other create runs there, after this one found no repository and
+	// before its rename, which it then loses
+	in = filepath.Join(gittest.Physical(t), "store")
+	other := false
+	synced(t, "losing its rename", func(s *filestest.Syncs) filestest.Seams {
+		seams := recording(s)
+		seams.Gate = func(path string) {
+			if path == in && !other {
+				other = true
+				gittest.PutBlob(t, g.RepositoryAt(at(filestest.OS())), []byte("the other create"))
+			}
+		}
+		return seams
+	})
+	if !other {
+		t.Error("the other create never ran; want it inside this one's creating walk")
+	}
 }

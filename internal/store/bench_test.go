@@ -32,9 +32,7 @@ func BenchmarkAFoldReadsEveryPublishedStream(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if _, err := s.Append(bt); err != nil {
-				b.Fatal(err)
-			}
+			storetest.AppendAll(b, s, bt)
 		}
 		sealed, err := s.SealOwn()
 		if err != nil {

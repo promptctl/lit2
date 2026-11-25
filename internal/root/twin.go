@@ -88,12 +88,15 @@ func NewTwin() Twin {
 // NewFreshTwin is a twin whose checkout is minted and whose store, work
 // tree and code repository hold nothing: a checkout before admin init
 // applies version one.
-func NewFreshTwin() Twin {
+func NewFreshTwin() Twin { return freshTwinOver(files.NewMemory()) }
+
+// freshTwinOver is NewFreshTwin whose store's logs are logs.
+func freshTwinOver(logs files.Files) Twin {
 	// the store draws from its own source, so a log it creates moves no
 	// trace id the twin mints
 	stored := rand.NewChaCha8([32]byte{'l', 'i', 't', '2', ' ', 's', 't', 'o', 'r', 'e'})
 	repo := git.NewMemory()
-	ports := store.MemoryPorts(files.NewMemory(), repo, repo, stored)
+	ports := store.MemoryPorts(logs, repo, repo, stored)
 	return twinOver(ports, twinCheckout, twinID, twinKey(), [32]byte{'l', 'i', 't', '2', ' ', 't', 'w', 'i', 'n'})
 }
 
@@ -125,12 +128,8 @@ func twinOver(ports store.Ports, c git.Checkout, id store.CheckoutID, key events
 	// the twin is minted: its identity files hold its id and key, so init
 	// finds them there
 	shared, private, pins := files.NewMemory(), files.NewMemory(), files.NewMemory()
-	if _, err := private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()); err != nil {
-		panic(err)
-	}
-	if _, err := shared.CreateOnce(command.NameOf(command.PrincipalFile{}), key.FileText()); err != nil {
-		panic(err)
-	}
+	durably(private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()))
+	durably(shared.CreateOnce(command.NameOf(command.PrincipalFile{}), key.FileText()))
 	return Twin{
 		Process: Process{
 			Clock:         &command.FixedClock{At: time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)},
@@ -180,8 +179,16 @@ func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 		forged = err
 		return cli.Done{}
 	})
-	if f, isFailed := out.(cli.Failed); isFailed {
+	if f, isFailed := durable(*rec.Stored, out).(cli.Failed); isFailed {
 		return f.Failure
 	}
 	return forged
+}
+
+// durably panics unless p placed its file durably: the twin's setup is
+// over twins whose writes are.
+func durably(p files.Placing) {
+	if _, ok := p.(files.Placed); !ok {
+		panic(fmt.Sprintf("root: the twin's setup create is %#v; want Placed", p))
+	}
 }

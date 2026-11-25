@@ -12,8 +12,10 @@ import (
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
+	"github.com/promptctl/lit2/internal/files/filestest"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
+	"github.com/promptctl/lit2/internal/store/storetest"
 	"github.com/promptctl/lit2/internal/verbs"
 )
 
@@ -29,7 +31,7 @@ func enrolledOnly(t *testing.T) session {
 	s := freshSession(t)
 	m := must(events.Mint(events.Context{Writer: twinID, Agent: events.Unlabeled{}, ConfigRef: blob(noPlan), Policy: 1, Now: s.twin.Process.Clock.Now()},
 		events.NewDrafts(events.Act{About: events.Root{}, Payload: events.Enroll{Owner: verbs.Owner, Roles: verbs.DefaultRoles()}}), twinKey().Signer(), rand.NewChaCha8([32]byte{9})))
-	must(s.twin.Process.Store.(command.Opened).Store.Append(m.Batch))
+	storetest.AppendAll(s.t, s.twin.Process.Store.(command.Opened).Store, m.Batch)
 	s.pins(m.Events[0].ID())
 	return s
 }
@@ -48,9 +50,7 @@ func (s session) file(b []byte) {
 	s.t.Helper()
 	tree := files.NewMemory()
 	if b != nil {
-		if _, err := tree.CreateOnce(verbs.WorkspaceFile(), b); err != nil {
-			s.t.Fatal(err)
-		}
+		filestest.Create(s.t, tree, verbs.WorkspaceFile(), b)
 	}
 	s.twin.Process.WorkTree = func(git.Checkout) files.Files { return tree }
 }

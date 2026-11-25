@@ -81,7 +81,7 @@ func Run(p Process, args []string) int {
 			return failed(err)
 		}
 		rec.Asked(cli.Summarize(cmd))
-		return dispatch(body{p: p, now: now, rec: rec}, table, groups, cmd)
+		return durable(*rec.Stored, dispatch(body{p: p, now: now, rec: rec}, table, groups, cmd))
 	})
 	// [LAW:no-silent-failure] exception: stderr is where failures are said,
 	// a lost event among them; when writing to it fails there is no channel

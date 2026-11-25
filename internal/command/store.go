@@ -23,14 +23,31 @@ type StoreFacts struct {
 	Heads     []store.Heads
 	Reads     []store.Scanned
 	Folds     []fold.FoldFacts
-	Appends   []store.Appended
+	Appends   []store.Appending
 	Publishes []store.Publishing
-	Inits     []Fresh
+	Creates   []Creation
 }
 
-// Fresh is what admin init did to each identity file: created it, or
-// found it there already.
-type Fresh struct{ Checkout, Key files.Made }
+// Creation is one create-once a command ran: the file's path, and what
+// the create did, which a durable write and one whose sync failed say
+// apart `[LAW:no-silent-failure]`.
+type Creation struct {
+	Path    string
+	Placing files.Placing
+}
+
+// Landed is whether any append the facts hold wrote its frame, durable or
+// not: what the verbs block calls written.
+func (f StoreFacts) Landed() bool {
+	for _, a := range f.Appends {
+		switch a.(type) {
+		case store.Appended, store.AppendedNotDurable:
+			return true
+		case store.NotAppended:
+		}
+	}
+	return false
+}
 
 // Opening is the store an invocation's checkout opened, once, or why it has
 // none.
@@ -49,7 +66,7 @@ func (Opened) opening()   {}
 func (Unopened) opening() {}
 
 func (f StoreFacts) empty() bool {
-	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Folds)+len(f.Appends)+len(f.Publishes)+len(f.Inits) == 0
+	return f.Opening == nil && len(f.Heads)+len(f.Reads)+len(f.Folds)+len(f.Appends)+len(f.Publishes)+len(f.Creates) == 0
 }
 
 // The store block as the line spells it: one object per step that ran,
@@ -59,13 +76,33 @@ type (
 		Open    *openLine     `json:"open,omitempty"`
 		Heads   []headsLine   `json:"heads,omitempty"`
 		Read    *readLine     `json:"read,omitempty"`
-		Append  []appendLine  `json:"append,omitempty"`
+		Append  []any         `json:"append,omitempty"`
 		Publish []publishLine `json:"publish,omitempty"`
-		Init    []initLine    `json:"init,omitempty"`
+		Create  []any         `json:"create,omitempty"`
 	}
-	initLine struct {
-		CheckoutCreated bool `json:"checkout_created"`
-		KeyCreated      bool `json:"key_created"`
+	// createLine is a create that placed its file, durable or not; a
+	// create that placed none is a notPlacedLine.
+	createLine struct {
+		Path    string `json:"path"`
+		Outcome string `json:"outcome"`
+		Made    string `json:"made"`
+		Why     string `json:"why,omitempty"`
+		sweptLine
+	}
+	notPlacedLine struct {
+		Path    string `json:"path"`
+		Outcome string `json:"outcome"`
+		Why     string `json:"why"`
+	}
+	// sweptLine is what a create did about its name's other temps: those
+	// it removed, and those it could not, and why.
+	sweptLine struct {
+		TempsReaped []string   `json:"temps_reaped"`
+		TempsLeft   []leftLine `json:"temps_left"`
+	}
+	leftLine struct {
+		Name string `json:"name"`
+		Why  string `json:"why"`
 	}
 	openLine struct {
 		State string `json:"state"`
@@ -76,6 +113,7 @@ type (
 		LogsRead   int             `json:"logs_read"`
 		Streams    int             `json:"streams"`
 		Unreadable []badStreamLine `json:"unreadable"`
+		Temps      []string        `json:"temps"`
 	}
 	badStreamLine struct {
 		Name string `json:"name"`
@@ -92,11 +130,20 @@ type (
 		Spans int    `json:"torn_spans"`
 		Bytes uint64 `json:"torn_bytes"`
 	}
+	// appendLine is an append that landed its frame, durable or not; an
+	// append that wrote none is a notAppendedLine.
 	appendLine struct {
+		Outcome    string `json:"outcome"`
 		Records    int    `json:"records"`
 		Bytes      int    `json:"bytes"`
 		LogUntil   uint64 `json:"log_until"`
 		LogCreated bool   `json:"log_created"`
+		Why        string `json:"why,omitempty"`
+		sweptLine
+	}
+	notAppendedLine struct {
+		Outcome string `json:"outcome"`
+		Why     string `json:"why"`
 	}
 	publishLine struct {
 		Outcome        string `json:"outcome"`
@@ -121,7 +168,7 @@ func storeBlock(f StoreFacts) *storeLine {
 	}
 	l := &storeLine{Open: open(f.Opening)}
 	for _, h := range f.Heads {
-		hl := headsLine{RefsRead: h.RefsRead, LogsRead: h.LogsRead, Streams: len(h.Streams), Unreadable: []badStreamLine{}}
+		hl := headsLine{RefsRead: h.RefsRead, LogsRead: h.LogsRead, Streams: len(h.Streams), Unreadable: []badStreamLine{}, Temps: append([]string{}, h.Temps...)}
 		for _, u := range h.Unreadable {
 			hl.Unreadable = append(hl.Unreadable, badStreamLine{Name: u.Name, Why: u.Why.Error()})
 		}
@@ -131,15 +178,61 @@ func storeBlock(f StoreFacts) *storeLine {
 		l.Read = reads(f.Reads)
 	}
 	for _, a := range f.Appends {
-		l.Append = append(l.Append, appendLine{Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), LogCreated: created(a.Log)})
+		l.Append = append(l.Append, appendOf(a))
 	}
 	for _, p := range f.Publishes {
 		l.Publish = append(l.Publish, publish(p))
 	}
-	for _, in := range f.Inits {
-		l.Init = append(l.Init, initLine{CheckoutCreated: created(in.Checkout), KeyCreated: created(in.Key)})
+	for _, c := range f.Creates {
+		l.Create = append(l.Create, createOf(c))
 	}
 	return l
+}
+
+// appendOf is an append as the line spells it: appended, not_durable with
+// the failed sync, or not_appended and why.
+func appendOf(a store.Appending) any {
+	landed := func(outcome string, a store.Appended, why string) appendLine {
+		return appendLine{Outcome: outcome, Records: a.Records, Bytes: a.Bytes, LogUntil: uint64(a.Until.At), LogCreated: created(a.Log), Why: why, sweptLine: swept(a.Swept)}
+	}
+	switch a := a.(type) {
+	case store.Appended:
+		return landed("appended", a, "")
+	case store.AppendedNotDurable:
+		return landed("not_durable", a.Appended, a.Why.Error())
+	case store.NotAppended:
+		return notAppendedLine{Outcome: "not_appended", Why: a.Why.Error()}
+	}
+	panic(fmt.Sprintf("command: %T is not an Appending", a))
+}
+
+// createOf is a create as the line spells it: placed, not_durable with the
+// failed sync, or not_placed and why.
+func createOf(c Creation) any {
+	switch p := c.Placing.(type) {
+	case files.Placed:
+		return createLine{Path: c.Path, Outcome: "placed", Made: made(p.Made), sweptLine: swept(p.Swept)}
+	case files.PlacedNotDurable:
+		return createLine{Path: c.Path, Outcome: "not_durable", Made: made(p.Made), Why: p.Why.Error(), sweptLine: swept(p.Swept)}
+	case files.NotPlaced:
+		return notPlacedLine{Path: c.Path, Outcome: "not_placed", Why: p.Why.Error()}
+	}
+	panic(fmt.Sprintf("command: %T is not a Placing", c.Placing))
+}
+
+func swept(s files.Swept) sweptLine {
+	l := sweptLine{TempsReaped: append([]string{}, s.Reaped...), TempsLeft: []leftLine{}}
+	for _, left := range s.Left {
+		l.TempsLeft = append(l.TempsLeft, leftLine{Name: left.Name, Why: left.Why.Error()})
+	}
+	return l
+}
+
+func made(m files.Made) string {
+	if created(m) {
+		return "created"
+	}
+	return "existing"
 }
 
 // publish is a publish as the line spells it. Nothing to publish touched no

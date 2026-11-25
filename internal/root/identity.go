@@ -29,32 +29,44 @@ var errIdentityUnreadable = errors.New("an unreadable identity file")
 
 // MintIdentity creates the checkout id in private and the principal's key
 // in shared, each once, then reads both back, so a worktree that loses a
-// race to create the clone's key signs with the winner's. It is init's
-// call; it prints nothing. init prints the recovery phrase only for a
-// Created key.
-func MintIdentity(shared, private files.Files, entropy io.Reader) (command.Minted, command.Fresh, error) {
+// race to create the clone's key signs with the winner's. It prints
+// nothing. When the key file is the one this call created, made has the
+// key, before anything is read back: its phrase is shown once, and no
+// failure after the file landed, a readback's or a sync's, may lose it
+// `[LAW:no-silent-failure]`. A create whose sync failed is landed, and the
+// mint goes on; its record says so.
+func MintIdentity(shared, private files.Files, entropy io.Reader, made func(events.Key)) (command.Minted, error) {
 	var id store.CheckoutID
 	if _, err := io.ReadFull(entropy, id[:]); err != nil {
-		return command.Minted{}, command.Fresh{}, fmt.Errorf("drawing the checkout id: %w", err)
+		return command.Minted{}, fmt.Errorf("drawing the checkout id: %w", err)
 	}
 	key, err := events.NewKey(entropy)
 	if err != nil {
-		return command.Minted{}, command.Fresh{}, err
+		return command.Minted{}, err
 	}
-	var fresh command.Fresh
-	if fresh.Checkout, err = private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()); err != nil {
-		return command.Minted{}, command.Fresh{}, fmt.Errorf("creating the checkout id file: %w", err)
+	if no, failed := private.CreateOnce(command.NameOf(command.IDFile{}), id.FileText()).(files.NotPlaced); failed {
+		return command.Minted{}, fmt.Errorf("creating the checkout id file: %w", no.Why)
 	}
-	if fresh.Key, err = shared.CreateOnce(command.NameOf(command.PrincipalFile{}), key.FileText()); err != nil {
-		return command.Minted{}, command.Fresh{}, fmt.Errorf("creating the key file: %w", err)
+	fresh := func(m files.Made) {
+		if m == files.Created {
+			made(key)
+		}
+	}
+	switch p := shared.CreateOnce(command.NameOf(command.PrincipalFile{}), key.FileText()).(type) {
+	case files.NotPlaced:
+		return command.Minted{}, fmt.Errorf("creating the key file: %w", p.Why)
+	case files.Placed:
+		fresh(p.Made)
+	case files.PlacedNotDurable:
+		fresh(p.Made)
 	}
 	switch got := readIdentity(shared, private).(type) {
 	case command.Minted:
-		return got, fresh, nil
+		return got, nil
 	case command.Unminted:
-		return command.Minted{}, command.Fresh{}, fmt.Errorf("the identity files created are not there: %d missing", len(got.Files()))
+		return command.Minted{}, fmt.Errorf("the identity files created are not there: %d missing", len(got.Files()))
 	case command.Unreadable:
-		return command.Minted{}, command.Fresh{}, fmt.Errorf("%w: %w", errIdentityUnreadable, got.Err)
+		return command.Minted{}, fmt.Errorf("%w: %w", errIdentityUnreadable, got.Err)
 	}
 	panic("root: readIdentity answered no Identity")
 }

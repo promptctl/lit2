@@ -13,7 +13,10 @@ import (
 	"io/fs"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/promptctl/lit2/internal/files/internal/seam"
 )
 
 // Name is a file's name in its directory: one path element, never empty,
@@ -28,6 +31,29 @@ var ErrNotAName = errors.New("not a file's name in one directory")
 // tempPrefix starts the name of every temporary file CreateOnce writes,
 // and no Name, so a temp is never a file of the port.
 const tempPrefix = ".tmp-"
+
+// tempName is the i'th temporary file of a create-once of n: the one
+// spelling of a temp, which tempOf reads back `[LAW:one-source-of-truth]`.
+func tempName(n Name, i int) string { return tempPrefix + n.s + "-" + strconv.Itoa(i) }
+
+// tempOf is the name whose temporary file entry is, when it is one: the
+// prefix, a name, a dash and a count of digits alone. So .tmp-a-1-0 is a
+// temp of a-1, never of a, and .tmp-x is no temp at all.
+func tempOf(entry string) (Name, bool) {
+	rest, ok := strings.CutPrefix(entry, tempPrefix)
+	dash := strings.LastIndexByte(rest, '-')
+	if !ok || dash < 0 || dash == len(rest)-1 || strings.Trim(rest[dash+1:], "0123456789") != "" {
+		return Name{}, false
+	}
+	n, err := NameOf(rest[:dash])
+	return n, err == nil
+}
+
+// isTempOf is whether entry is a temporary file of a create-once of n.
+func isTempOf(entry string, n Name) bool {
+	of, ok := tempOf(entry)
+	return ok && of == n
+}
 
 // NameOf is s as a name, refused with ErrNotAName when it is empty, . or
 // .., holds /, \ or NUL, any of which would reach outside the directory
@@ -76,14 +102,11 @@ var ErrNotABase = errors.New("not an absolute path to start a Dir from")
 type Dir struct {
 	base  string
 	elems []Name
-	// gate runs between the step's look at each entry and its open, given
-	// the entry's path: ungated, but in a Dir files' own tests gate, a
-	// swap of the entry, the race the step's checks of what it opened close
-	gate func(path string)
+	// seams are the steps a test stands in for: the OS's own, but in a
+	// Dir a test built through filestest, which gates a swap of an entry or
+	// a race between a temp and its link, or sees or fails an fsync
+	seams seam.Seams
 }
-
-// ungated is the gate of every Dir but a test's: nothing.
-func ungated(string) {}
 
 // DirAt is the directory first in base, which must be absolute; a base
 // that is not is a bug, so it panics `[LAW:parse-dont-validate]`.
@@ -91,12 +114,21 @@ func DirAt(base string, first Name) Dir {
 	if !filepath.IsAbs(base) {
 		panic(fmt.Errorf("files: DirAt(%q): %w", base, ErrNotABase))
 	}
-	return Dir{base: base, elems: []Name{first}, gate: ungated}
+	return Dir{base: base, elems: []Name{first}, seams: seam.OS()}
+}
+
+// Seamed is d with s at its seams: a test's Dir, whose fsyncs, removals
+// and steps it sees, fails or gates. Only files and filestest can build a
+// Seams, since its package is internal to files, so a test gets one from
+// filestest `[LAW:locality-or-seam]`.
+func (d Dir) Seamed(s seam.Seams) Dir {
+	d.seams = s
+	return d
 }
 
 // Sub is the directory n in d.
 func (d Dir) Sub(n Name) Dir {
-	return Dir{base: d.base, elems: append(slices.Clone(d.elems), n), gate: d.gate}
+	return Dir{base: d.base, elems: append(slices.Clone(d.elems), n), seams: d.seams}
 }
 
 // ErrNoParent is the parent asked of a Dir of one element, whose parent is
@@ -109,7 +141,7 @@ func (d Dir) Parent() Dir {
 	if len(d.elems) < 2 {
 		panic(fmt.Errorf("files: the parent of %s: %w", d.Path(), ErrNoParent))
 	}
-	return Dir{base: d.base, elems: slices.Clone(d.elems[:len(d.elems)-1]), gate: d.gate}
+	return Dir{base: d.base, elems: slices.Clone(d.elems[:len(d.elems)-1]), seams: d.seams}
 }
 
 // Path is the directory's path, as a message names it.
@@ -145,36 +177,123 @@ func (d Dir) valid() error {
 // directory.
 type Files interface {
 	// Append writes b at the end of the file in one write on an O_APPEND
-	// descriptor, then fsyncs, and returns the file's offset after it; so
-	// concurrent appends land whole with no lock. A missing file is
-	// NotFound.
-	Append(n Name, b []byte) (end uint64, err error)
+	// descriptor, so concurrent appends land whole with no lock, then
+	// fsyncs the file and its directory, so the name an acknowledged append
+	// is under survives a power loss as its bytes do. A missing file is
+	// NotAppended, NotFound.
+	Append(n Name, b []byte) Appending
 	// CreateOnce creates the file holding b unless it exists: b is written
 	// to a temporary file, fsynced and linked into place, so exactly one
 	// creation wins and the file is never seen, nor left by a crash,
-	// partly written. On disk this needs hard links, since link(2) is the
-	// one call that both refuses an existing name and puts whole bytes
-	// under it; a filesystem without them fails the first create, saying
-	// so. A name that holds anything but a regular file is NotAFile, never
-	// Existing, as it is for every other call.
-	CreateOnce(n Name, b []byte) (Made, error)
+	// partly written. Each directory it makes on the way is fsynced into
+	// its parent before anything under it is written, and the directory
+	// is fsynced after the link whether this call won or lost, so a loser
+	// is as durable as the winner. Once the name holds the file, the other
+	// temporary files of the name are reaped: each is a crash's leftover,
+	// or the temp of a create that has lost. On disk this needs hard
+	// links, since link(2) is the one call that both refuses an existing
+	// name and puts whole bytes under it; a filesystem without them fails
+	// the first create, saying so. A name that holds anything but a
+	// regular file is NotPlaced, NotAFile, never Existing, as it is for
+	// every other call.
+	CreateOnce(n Name, b []byte) Placing
 	// ReadAt reads up to size bytes at off, fewer at the end of the file.
 	ReadAt(n Name, off, size uint64) ([]byte, error)
 	// ReadAll reads the whole file, in one open to its end.
 	ReadAll(n Name) ([]byte, error)
 	Size(n Name) (uint64, error)
-	// List is the files of the directory, sorted, and every other entry in
-	// it but a create-once's temporary files, each refused; a missing
+	// List is the files of the directory, sorted, the temporary files of
+	// create-onces, and every other entry in it, each refused; a missing
 	// directory holds none.
 	List() (Listing, error)
+	// Temps is the temporary files of create-onces of n in the directory,
+	// sorted, by their names in it: what a create of n that never ran
+	// again left `[LAW:no-silent-failure]`. A missing directory holds none.
+	Temps(n Name) ([]string, error)
 }
 
-// Listing is a directory's entries: its files, sorted, and each entry that
-// is no file of the port, refused, so an entry that should have been a
-// file is said, never dropped `[LAW:no-silent-failure]`. A create-once's
-// temporary files, named by the reserved prefix, are neither.
+// Appending is what an append did: wrote nothing whole, or landed b
+// whole, durable or not. Its three states are its three variants, so no
+// caller reads an end without saying which `[LAW:types-are-the-program]`.
+//
+//sumtype:decl
+type Appending interface{ appending() }
+
+// NotAppended is an append that wrote no whole b: a short write leaves a
+// tail no reader takes for a frame, so writing b again is safe.
+type NotAppended struct{ Why error }
+
+// Appended is b landed whole at the end, the file ending at End, and the
+// file and its directory fsynced.
+type Appended struct{ End uint64 }
+
+// AppendedNotDurable is b landed whole, the file ending at End, and a
+// sync on its way failed: b is there to every read, and may not be after
+// a power loss. The sync is never tried again, since one that failed may
+// have dropped the bytes it held and a second may pass over them.
+type AppendedNotDurable struct {
+	End uint64
+	Why error
+}
+
+func (NotAppended) appending()        {}
+func (Appended) appending()           {}
+func (AppendedNotDurable) appending() {}
+
+// Placing is what a create-once did: placed no file at the name, or
+// placed or found one, durable or not, and what it did about the name's
+// other temporary files `[LAW:types-are-the-program]`.
+//
+//sumtype:decl
+type Placing interface{ placing() }
+
+// NotPlaced is a create-once that linked no file at the name and found
+// none it may take: nothing of it is at the name, and it reaped nothing.
+type NotPlaced struct{ Why error }
+
+// Placed is the name holding a regular file, which this call created or
+// found, with every sync on its way passed.
+type Placed struct {
+	Made  Made
+	Swept Swept
+}
+
+// PlacedNotDurable is the name holding a regular file, which this call
+// created or found, and a sync on its way failed: the file is there to
+// every read, and the name may not be after a power loss.
+type PlacedNotDurable struct {
+	Made  Made
+	Swept Swept
+	Why   error
+}
+
+func (NotPlaced) placing()        {}
+func (Placed) placing()           {}
+func (PlacedNotDurable) placing() {}
+
+// Swept is what a create-once that placed its name did about the name's
+// temporary files: the others it removed, a crash's leftovers or the temps
+// of creates that lost, and each it could not remove, its own among them,
+// so nothing it leaves is silent `[LAW:no-silent-failure]`.
+type Swept struct {
+	Reaped []string
+	Left   []Leftover
+}
+
+// Leftover is a temporary file a create-once could not remove: its name
+// in the directory, and why.
+type Leftover struct {
+	Name string
+	Why  error
+}
+
+// Listing is a directory's entries: its files, sorted; the temporary
+// files of create-onces, sorted, which a create of their name reaps; and
+// each entry that is no file of the port, refused, so an entry that should
+// have been a file is said, never dropped `[LAW:no-silent-failure]`.
 type Listing struct {
 	Names   []Name
+	Temps   []string
 	Refused []Refused
 }
 
@@ -190,11 +309,11 @@ func (r Refused) Error() string { return r.Why.Error() }
 
 func (r Refused) Unwrap() error { return r.Why }
 
-// Made is the outcome of a create-once: the file was created, or found
-// there already.
+// Made is the outcome of a create-once that placed its name: the file was
+// created, or found there already.
 type Made uint8
 
-// The two answers of CreateOnce.
+// The two answers of a placing CreateOnce.
 const (
 	Existing Made = iota + 1
 	Created

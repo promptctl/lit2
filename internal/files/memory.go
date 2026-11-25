@@ -39,25 +39,33 @@ func (m *Memory) file(n Name, do func(f []byte) error) error {
 	})
 }
 
-func (m *Memory) Append(n Name, b []byte) (end uint64, err error) {
-	err = m.file(n, func(f []byte) error {
+// Append lands b at once, durable, since a directory in process has no
+// power to lose.
+func (m *Memory) Append(n Name, b []byte) Appending {
+	var end uint64
+	if err := m.file(n, func(f []byte) error {
 		m.files[n] = append(f, b...)
 		end = uint64(len(m.files[n]))
 		return nil
-	})
-	return end, err
+	}); err != nil {
+		return NotAppended{Why: err}
+	}
+	return Appended{End: end}
 }
 
-func (m *Memory) CreateOnce(n Name, b []byte) (made Made, err error) {
-	err = m.with(n, func() error {
-		if _, ok := m.files[n]; ok {
-			made = Existing
-			return nil
+// CreateOnce places n at once, durable; a directory in process writes no
+// temporary file, so it sweeps none.
+func (m *Memory) CreateOnce(n Name, b []byte) Placing {
+	made := Existing
+	if err := m.with(n, func() error {
+		if _, ok := m.files[n]; !ok {
+			m.files[n], made = slices.Clone(b), Created
 		}
-		m.files[n], made = slices.Clone(b), Created
 		return nil
-	})
-	return made, err
+	}); err != nil {
+		return NotPlaced{Why: err}
+	}
+	return Placed{Made: made, Swept: Swept{Reaped: []string{}, Left: []Leftover{}}}
 }
 
 func (m *Memory) ReadAt(n Name, off, size uint64) (b []byte, err error) {
@@ -87,11 +95,19 @@ func (m *Memory) Size(n Name) (size uint64, err error) {
 }
 
 // List is every file; a directory in process holds nothing else, so none
-// is refused.
+// is a temp and none is refused.
 func (m *Memory) List() (Listing, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ns := slices.AppendSeq([]Name{}, maps.Keys(m.files))
 	slices.SortFunc(ns, func(a, b Name) int { return strings.Compare(a.s, b.s) })
-	return Listing{Names: ns, Refused: []Refused{}}, nil
+	return Listing{Names: ns, Temps: []string{}, Refused: []Refused{}}, nil
+}
+
+// Temps is none: a directory in process writes no temporary file.
+func (m *Memory) Temps(n Name) ([]string, error) {
+	if err := n.valid(); err != nil {
+		return nil, err
+	}
+	return []string{}, nil
 }

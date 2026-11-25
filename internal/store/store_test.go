@@ -189,8 +189,8 @@ func appended(t *testing.T, me CheckoutID, records ...string) (*Store, Ports, []
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Append(b); err != nil {
-			t.Fatal(err)
+		if got, ok := s.Append(b).(Appended); !ok {
+			t.Fatalf("Append = %#v; want Appended", got)
 		}
 		frames = append(frames, Encode(b))
 	}

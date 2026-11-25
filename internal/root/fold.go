@@ -107,14 +107,20 @@ func (o opened) mint(drafts []events.Draft, ref git.ObjectID) (events.Minted, er
 	return m, nil
 }
 
-// append writes m's frame to the store, recording what it wrote.
+// append writes m's frame to the store, recording what it did. Only a
+// frame that never landed fails it: one that landed and whose sync failed
+// is written, which every later read sees, so the caller goes on and says
+// what it wrote, and the run then ends notDurable from the record.
 func (o opened) append(m events.Minted) error {
-	appended, err := o.store.Store.Append(m.Batch)
-	if err != nil {
-		return storeFailure{err: err}
+	appending := o.store.Store.Append(m.Batch)
+	o.rec.Stored.Appends = append(o.rec.Stored.Appends, appending)
+	switch a := appending.(type) {
+	case store.NotAppended:
+		return storeFailure{err: fmt.Errorf("nothing was written: %w", a.Why)}
+	case store.Appended, store.AppendedNotDurable:
+		return nil
 	}
-	o.rec.Stored.Appends = append(o.rec.Stored.Appends, appended)
-	return nil
+	panic(fmt.Sprintf("root: %T is not an Appending", appending))
 }
 
 // storeFailure is a verb that has no store to read, or whose store failed

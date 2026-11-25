@@ -35,9 +35,9 @@ func DiskPorts(g *git.Git, at git.Checkout, entropy io.Reader) Ports {
 }
 
 // MemoryPorts is a store in process: its logs in logs, the in-memory
-// twin, which whoever builds the store keeps, and lit's repository's
-// objects and refs.
-func MemoryPorts(logs *files.Memory, objects git.Objects, refs git.Refs, entropy io.Reader) Ports {
+// twin or a twin over it, which whoever builds the store keeps, and lit's
+// repository's objects and refs.
+func MemoryPorts(logs files.Files, objects git.Objects, refs git.Refs, entropy io.Reader) Ports {
 	return Ports{files: logs, objects: objects, refs: refs, entropy: entropy}
 }
 
@@ -64,50 +64,100 @@ func Open(me CheckoutID, p Ports, bound SegmentBound) *Store {
 	return &Store{me: me, ports: p, bound: bound}
 }
 
-// Appended is what an append wrote: its records and bytes, the position of
-// the log's end after it, and whether this append created the log.
+// Appending is what an append did: wrote no frame, or landed its frame,
+// durable or not. A frame that landed is there to the next Heads, so it is
+// never said as one that was not written, which a caller would write
+// again `[LAW:no-silent-failure]` `[LAW:types-are-the-program]`.
+//
+//sumtype:decl
+type Appending interface{ appending() }
+
+// NotAppended is an append that landed no frame, so writing the batch
+// again is safe.
+type NotAppended struct{ Why error }
+
+// Appended is what an append wrote, durable: its records and bytes, the
+// position of the log's end after it, whether this append created the
+// log, and what that create did about the log's temporary files.
 type Appended struct {
 	Records, Bytes int
 	Until          Position
 	Log            files.Made
+	Swept          files.Swept
 }
+
+// AppendedNotDurable is a frame that landed whole, which every read sees,
+// and a sync on its way, of the frame or of the log's name, that failed,
+// so a power loss may take it.
+type AppendedNotDurable struct {
+	Appended
+	Why error
+}
+
+func (NotAppended) appending()        {}
+func (Appended) appending()           {}
+func (AppendedNotDurable) appending() {}
 
 // Append writes one command's batch to this checkout's log as one frame:
 // the only local store write a command makes, since every other file is
 // derived. The first append creates the log, so exactly one header
-// survives two first appends racing.
-func (s *Store) Append(b Batch) (Appended, error) {
+// survives two first appends racing. The frame is durable only when every
+// sync on its way passed, the log's create's among them.
+func (s *Store) Append(b Batch) Appending {
 	n := LogName(s.me)
-	log, opened, err := s.ownLog(n)
-	if err != nil {
-		return Appended{}, err
+	log, placing := s.ownLog(n)
+	var a Appended
+	var why error
+	switch p := placing.(type) {
+	case files.NotPlaced:
+		return NotAppended{Why: p.Why}
+	case files.Placed:
+		a.Log, a.Swept = p.Made, p.Swept
+	case files.PlacedNotDurable:
+		a.Log, a.Swept, why = p.Made, p.Swept, p.Why
 	}
 	frame := Encode(b)
-	end, err := s.ports.files.Append(n, frame)
-	if err != nil {
-		return Appended{}, err
+	a.Records, a.Bytes = len(b.Records()), len(frame)
+	switch w := s.ports.files.Append(n, frame).(type) {
+	case files.NotAppended:
+		return NotAppended{Why: w.Why}
+	case files.Appended:
+		a.Until = Position{Log: log, At: Offset(w.End - headerSize)}
+	case files.AppendedNotDurable:
+		a.Until, why = Position{Log: log, At: Offset(w.End - headerSize)}, errors.Join(why, w.Why)
 	}
-	return Appended{Records: len(b.Records()), Bytes: len(frame), Until: Position{Log: log, At: Offset(end - headerSize)}, Log: opened}, nil
+	if why != nil {
+		return AppendedNotDurable{Appended: a, Why: why}
+	}
+	return a
 }
 
 // ownLog is the id of the log n, created with a new id when there is
-// none. The log is read before it is appended to, so bytes are never
-// added to a file that is not a log.
-func (s *Store) ownLog(n files.Name) (LogID, files.Made, error) {
+// none, and what the create did: a log already there is Placed, Existing,
+// sweeping nothing, since Append syncs the directory of the log it writes
+// to. The log is read before it is appended to, so bytes are never added
+// to a file that is not a log.
+func (s *Store) ownLog(n files.Name) (LogID, files.Placing) {
 	id, err := s.logID(n)
 	if !errors.As(err, new(files.NotFound)) {
-		return id, files.Existing, err
+		if err != nil {
+			return LogID{}, files.NotPlaced{Why: err}
+		}
+		return id, files.Placed{Made: files.Existing, Swept: files.Swept{Reaped: []string{}, Left: []files.Leftover{}}}
 	}
 	var fresh LogID
 	if _, err := io.ReadFull(s.ports.entropy, fresh[:]); err != nil {
-		return LogID{}, 0, fmt.Errorf("minting a log id: %w", err)
+		return LogID{}, files.NotPlaced{Why: fmt.Errorf("minting a log id: %w", err)}
 	}
-	opened, err := s.ports.files.CreateOnce(n, logHeader(fresh))
-	if err != nil {
-		return LogID{}, 0, err
+	placing := s.ports.files.CreateOnce(n, logHeader(fresh))
+	if _, none := placing.(files.NotPlaced); none {
+		return LogID{}, placing
 	}
-	id, err = s.logID(n)
-	return id, opened, err
+	// a create that lost reads the winner's id
+	if id, err = s.logID(n); err != nil {
+		return LogID{}, files.NotPlaced{Why: err}
+	}
+	return id, placing
 }
 
 func (s *Store) logID(n files.Name) (LogID, error) {
@@ -158,12 +208,15 @@ type Unreadable struct {
 	Why  error
 }
 
-// Heads is every stream of the clone, sorted by ref name, and everything
-// that should have been one and is not. RefsRead and LogsRead count what
-// was listed, so a fresh store reads zero of each.
+// Heads is every stream of the clone, sorted by ref name, everything that
+// should have been one and is not, and the temporary files of log
+// creates in the logs' directory: a create's that never ran again, said,
+// or one in flight `[LAW:no-silent-failure]`. RefsRead and LogsRead count
+// what was listed, so a fresh store reads zero of each.
 type Heads struct {
 	Streams            []Stream
 	Unreadable         []Unreadable
+	Temps              []string
 	RefsRead, LogsRead int
 }
 
@@ -182,7 +235,7 @@ func (s *Store) Heads() (Heads, error) {
 	if err != nil {
 		return Heads{}, err
 	}
-	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs.Names) + len(logs.Refused)}
+	h := Heads{Streams: []Stream{}, Unreadable: []Unreadable{}, Temps: logs.Temps, RefsRead: len(refs.Heads) + len(refs.Broken), LogsRead: len(logs.Names) + len(logs.Refused)}
 	unreadable := func(name string, why error) { h.Unreadable = append(h.Unreadable, Unreadable{Name: name, Why: why}) }
 	// an entry of the logs' directory that is no file is a log that will
 	// not read, said as one whose header will not

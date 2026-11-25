@@ -3,6 +3,7 @@ package command
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func TestRecordYieldsTheEventOfDoneAndOfFailed(t *testing.T) {
 			r.Asked(cli.Summary{Name: tc.name})
 			return tc.outcome
 		})
-		if e.Invocation != inv || e.Command.Name != tc.name || cli.ExitCode(e.Outcome) != tc.exit {
+		if !reflect.DeepEqual(e.Invocation, inv) || e.Command.Name != tc.name || cli.ExitCode(e.Outcome) != tc.exit {
 			t.Errorf("%s: the event is %#v; want the invocation, the summary and exit %d", tc.name, e, tc.exit)
 		}
 	}
@@ -156,9 +157,14 @@ func TestTheLineCarriesTheDefaultFieldsAndZeroCounts(t *testing.T) {
 
 func TestAVerbsLineSaysWhetherTheStoreTookAnAppend(t *testing.T) {
 	for _, tc := range []struct {
-		appends []store.Appended
+		appends []store.Appending
 		want    bool
-	}{{nil, false}, {[]store.Appended{{Records: 1, Log: files.Created}}, true}} {
+	}{
+		{nil, false},
+		{[]store.Appending{store.Appended{Records: 1, Log: files.Created}}, true},
+		{[]store.Appending{store.AppendedNotDurable{Appended: store.Appended{Records: 1, Log: files.Created}, Why: errors.New("fsync failed")}}, true},
+		{[]store.Appending{store.NotAppended{Why: errors.New("no space")}}, false},
+	} {
 		m := decode(t, Event{Invocation: inv, Command: cli.Summary{Name: "set"}, Started: t0, Store: StoreFacts{Appends: tc.appends}, Verbs: &VerbsFacts{}, Outcome: cli.Done{}})
 		v, _ := m["verbs"].(map[string]any)
 		if v["written"] != tc.want {
