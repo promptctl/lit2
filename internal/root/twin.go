@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
@@ -171,7 +172,7 @@ func storesOf(c git.Checkout, ports store.Ports) func(git.Checkout) store.Ports 
 // composition, and its event is kept by no log.
 func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
 	var forged error
-	e := invoke(t.Process, cli.Summary{Name: "forge"}, func(r body) command.Ran {
+	e := invoke(t.Process, cli.Summary{Name: commandname.Forged()}, func(r body) command.Ran {
 		return r.ran(r.verb(func(v inForce) cli.Outcome {
 			c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
 			if no, refused := c.Refusal(); refused {

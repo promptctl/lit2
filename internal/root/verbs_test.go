@@ -8,6 +8,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 )
@@ -397,7 +398,7 @@ func TestABareLit2IsTheBoardOfAnEmptyWorkspace(t *testing.T) {
 	if got := s.ok(); got != want {
 		t.Errorf("a bare lit2 prints\n%s\nwant\n%s", got, want)
 	}
-	if r := s.lit(); r.event.Command.Name != "get" || len(r.event.Command.Paths) != 1 || r.event.Command.Paths[0] != "/" {
+	if r := s.lit(); r.event.Command.Name != commandname.Get() || len(r.event.Command.Paths) != 1 || r.event.Command.Paths[0] != "/" {
 		t.Errorf("a bare lit2 records %+v; want a get of /", r.event.Command)
 	}
 }

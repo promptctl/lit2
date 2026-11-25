@@ -19,6 +19,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/config"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
@@ -113,22 +114,18 @@ func invoke(p Process, asked cli.Summary, answer func(body) command.Ran) command
 	})
 }
 
-// ask is what args ask for, parsed or not, and its answer: see parsed.
-func ask(args []string) (cli.Summary, func(body) command.Ran) {
-	table, groups := cli.Verbs(), cli.Groups()
-	return parsed(
-		func() (cli.Command, error) { return cli.Parse(table, groups, args) },
-		func(r body, cmd cli.Command) command.Ran { return dispatch(r, table, groups, cmd) },
-	)
-}
+// ask is what args ask of lit2's command line, parsed or not, and its
+// answer: see parsed.
+func ask(args []string) (cli.Summary, func(body) command.Ran) { return parsed(cli.Lit2, args) }
 
-// parsed is what parse asks for and its answer: answer to the command, or
-// the parse's refusal, one value whatever the parse did, so a run that
-// parsed nothing runs the same steps as one that did. A parse or summary
-// that panics is asked as unparsed and answered with the panic, its value
-// and stack, as Record answers a body's, so the run is recorded
-// `[LAW:nothing-unseen]`.
-func parsed(parse func() (cli.Command, error), answer func(body, cli.Command) command.Ran) (asked cli.Summary, run func(body) command.Ran) {
+// parsed is what args ask of the command line commands builds, and its
+// answer: answer to the command, or the refusal, the line's or the
+// parse's, one value whatever happened, so a run that parsed nothing runs
+// the same steps as one that did. A line that does not build is a lit2
+// bug, answered as broken. A build or parse that panics is asked as
+// unparsed and answered with the panic, its value and stack, as Record
+// answers a body's, so the run is recorded `[LAW:nothing-unseen]`.
+func parsed(commands func() (cli.Commands, error), args []string) (asked cli.Summary, run func(body) command.Ran) {
 	// [LAW:single-enforcer] exception: a second recover beside Record's,
 	// since the parse runs before Record so that what was asked is its
 	// input; lit-law-review-xfz.b5u makes one recover cover the whole run
@@ -136,14 +133,21 @@ func parsed(parse func() (cli.Command, error), answer func(body, cli.Command) co
 	defer func() {
 		if p := recover(); p != nil {
 			broke := command.Panicked(p, debug.Stack())
-			asked, run = cli.Summary{Name: cli.Unparsed}, func(r body) command.Ran { return r.ran(cli.Failed{Failure: broke}) }
+			asked, run = cli.Summary{Name: commandname.Unparsed()}, func(r body) command.Ran { return r.ran(cli.Failed{Failure: broke}) }
 		}
 	}()
-	cmd, err := parse()
-	if err != nil {
-		return cli.Summary{Name: cli.Unparsed}, func(r body) command.Ran { return r.ran(failed(err)) }
+	refused := func(err error) (cli.Summary, func(body) command.Ran) {
+		return cli.Summary{Name: commandname.Unparsed()}, func(r body) command.Ran { return r.ran(failed(err)) }
 	}
-	return cli.Summarize(cmd), func(r body) command.Ran { return answer(r, cmd) }
+	c, err := commands()
+	if err != nil {
+		return refused(fmt.Errorf("lit2's command line: %w", err))
+	}
+	p, err := cli.Parse(c, args)
+	if err != nil {
+		return refused(err)
+	}
+	return p.Asked, func(r body) command.Ran { return dispatch(r, c, p) }
 }
 
 // unfinished is body's outcome. A body that panics panics on, saying that
@@ -185,11 +189,12 @@ func (r body) ran(o cli.Outcome) command.Ran { return command.Ran{Place: r.place
 
 // dispatch binds each command to its body. Every verb runs the steps of §5
 // in order on every call: open and fold, the version in force loaded, then
-// its own body.
-func dispatch(r body, table cli.Table, groups []cli.Group, cmd cli.Command) command.Ran {
-	switch c := cmd.(type) {
+// its own body. A body that names its command names it by what was
+// asked, the row's name, never a spelling of its own.
+func dispatch(r body, commands cli.Commands, p cli.Parsed) command.Ran {
+	switch c := p.Command.(type) {
 	case cli.Help:
-		return r.ran(written(io.WriteString(r.p.Out, cli.HelpText(table, groups, r.fields()))))
+		return r.ran(written(io.WriteString(r.p.Out, cli.HelpText(commands, r.fields()))))
 	case cli.Get:
 		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.get(c.Paths()) }))
 	case cli.Set:
@@ -201,13 +206,13 @@ func dispatch(r body, table cli.Table, groups []cli.Group, cmd cli.Command) comm
 	case cli.AdminInit:
 		return r.init()
 	case cli.AdminSync:
-		return r.ran(notBuilt("admin sync", "lit-converge-5eq"))
+		return r.ran(notBuilt(p.Asked.Name, "lit-converge-5eq"))
 	case cli.ConfigCommit:
 		return r.ran(r.stored(opened.commit))
 	case cli.ConfigStatus:
 		return r.ran(r.stored(opened.status))
 	}
-	panic(fmt.Sprintf("root: %T is not a Command", cmd))
+	panic(fmt.Sprintf("root: %T is not a Command", p.Command))
 }
 
 // written is the outcome of writing the answer to stdout. EPIPE is the
@@ -253,7 +258,7 @@ func logFailure(err error) string {
 // notBuilt ends a row whose body is not in this binary yet, naming ticket,
 // the ticket that builds it (D14). Once the last body is bound it is
 // unused, and the lint forces its deletion.
-func notBuilt(verb, ticket string) cli.Outcome {
+func notBuilt(verb commandname.Name, ticket string) cli.Outcome {
 	return cli.Failed{Failure: command.Broke(fmt.Errorf("%w: lit2 %s is not built in this binary; %s builds it", errNotBuilt, verb, ticket))}
 }
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/fold"
 	"github.com/promptctl/lit2/internal/git"
@@ -132,7 +133,7 @@ func (storeFailure) Reason() string      { return "store" }
 type unenrolled struct{}
 
 func (unenrolled) Error() string {
-	return "this clone names no founding enrollment, so no policy says who may write: lit2 admin init founds the store, or adopts the one " + foundingPath() + " names"
+	return fmt.Sprintf("this clone names no founding enrollment, so no policy says who may write: lit2 %s founds the store, or adopts the one %s names", commandname.AdminInit(), foundingPath())
 }
 func (unenrolled) Class() reason.Class { return reason.ClassEnvironment }
 func (unenrolled) Reason() string      { return "policy" }

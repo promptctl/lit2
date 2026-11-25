@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
@@ -156,7 +157,7 @@ func OpeningAt(p Place) Opening {
 	case Minted:
 		return Opens{Checkout: in.Checkout, Writer: id}
 	case Unminted:
-		return NoStore{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 admin init mints it", strings.Join(id.Paths(in.Checkout), " and "))}
+		return NoStore{Why: fmt.Errorf("this checkout has no identity, %s missing: lit2 %s mints it", strings.Join(id.Paths(in.Checkout), " and "), commandname.AdminInit())}
 	case Unreadable:
 		return NoStore{Why: fmt.Errorf("reading %s: %w", PathOf(id.File, in.Checkout), id.Err)}
 	}

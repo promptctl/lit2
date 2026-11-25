@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/fold"
@@ -194,7 +195,7 @@ func (foundingCarried) Reason() string      { return "policy" }
 
 // afterUnpin is what admin init does in a clone whose pin a person removed.
 func afterUnpin() string {
-	return "lit2 admin init then adopts the founding " + foundingPath() + " names, or founds the store when there is no file"
+	return fmt.Sprintf("lit2 %s then adopts the founding %s names, or founds the store when there is no file", commandname.AdminInit(), foundingPath())
 }
 
 // unwritten is a founding frame whose append failed after its enrollment
@@ -215,7 +216,7 @@ func (unwritten) Reason() string      { return "store" }
 type foundingRaced struct{ won fold.FoundedBy }
 
 func (f foundingRaced) Error() string {
-	return fmt.Sprintf("another checkout of this clone founded its store first, by enrollment %s: lit2 admin init again joins it", f.won.Enrollment)
+	return fmt.Sprintf("another checkout of this clone founded its store first, by enrollment %s: lit2 %s again joins it", f.won.Enrollment, commandname.AdminInit())
 }
 func (foundingRaced) Class() reason.Class { return reason.ClassEnvironment }
 func (foundingRaced) Reason() string      { return "founding" }
@@ -229,8 +230,8 @@ type foundingContradicted struct {
 }
 
 func (c foundingContradicted) Error() string {
-	return fmt.Sprintf("this clone's store was founded by enrollment %s, which its pin at %s names, and %s names %s: the pin stands. If %s is the store this clone joins, remove the pin and run lit2 admin init again",
-		c.pinned.Enrollment, c.pin, foundingPath(), c.file.Enrollment, c.file.Enrollment)
+	return fmt.Sprintf("this clone's store was founded by enrollment %s, which its pin at %s names, and %s names %s: the pin stands. If %s is the store this clone joins, remove the pin and run lit2 %s again",
+		c.pinned.Enrollment, c.pin, foundingPath(), c.file.Enrollment, c.file.Enrollment, commandname.AdminInit())
 }
 func (foundingContradicted) Class() reason.Class { return reason.ClassEnvironment }
 func (foundingContradicted) Reason() string      { return "founding" }

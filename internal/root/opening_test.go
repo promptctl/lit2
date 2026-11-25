@@ -8,6 +8,7 @@ import (
 	"github.com/promptctl/lit2/internal/assets"
 	"github.com/promptctl/lit2/internal/cli"
 	"github.com/promptctl/lit2/internal/command"
+	"github.com/promptctl/lit2/internal/commandname"
 	"github.com/promptctl/lit2/internal/files"
 	"github.com/promptctl/lit2/internal/git"
 	"github.com/promptctl/lit2/internal/store"
@@ -202,7 +203,7 @@ func TestEveryInvocationRecordsThePlaceItsStoreOpenedAt(t *testing.T) {
 // said on that command too.
 func TestAnUnparsedCommandScansTheTempsToo(t *testing.T) {
 	_, e := run(t, NewTwin(), "no-such-verb")
-	if e.Command.Name != cli.Unparsed || len(e.Store.Temps) == 0 {
+	if e.Command.Name != commandname.Unparsed() || len(e.Store.Temps) == 0 {
 		t.Errorf("an unparsed command recorded %#v with temps %v; want it unparsed, every directory scanned", e.Command, e.Store.Temps)
 	}
 }
