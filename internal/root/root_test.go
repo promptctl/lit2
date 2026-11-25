@@ -17,11 +17,11 @@ import (
 // the panic's value and stack kept, so the run is recorded as a body's
 // panic is.
 func TestAParseThatPanicsIsAskedAsUnparsed(t *testing.T) {
-	asked, answer := parsed(func() (cli.Command, error) { panic("a parse broke") }, func(body, cli.Command) cli.Outcome {
+	asked, answer := parsed(func() (cli.Command, error) { panic("a parse broke") }, func(body, cli.Command) command.Ran {
 		t.Fatal("a parse that panicked answered its command")
-		return nil
+		return command.Ran{}
 	})
-	failed, ok := answer(body{}).(cli.Failed)
+	failed, ok := answer(body{}).Outcome.(cli.Failed)
 	var in command.Internal
 	if asked.Name != cli.Unparsed || !ok || !errors.As(failed.Failure, &in) || !strings.Contains(in.Error(), "a parse broke") || len(in.Stack()) == 0 {
 		t.Errorf("a panicking parse asked %#v and answered %#v; want unparsed, answered Internal with its value and stack", asked, failed)

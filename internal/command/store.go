@@ -16,8 +16,8 @@ import (
 // the body that called them hands them here, so the event keeps one
 // emitter `[LAW:single-enforcer]`. A step that did not run left nothing,
 // and a fresh store's heads are a block of zeros `[LAW:nothing-unseen]`.
-// Whether the store opened is its place's, or the writer admin init
-// minted, not a store step's result: see Event.Opening.
+// Whether the store opened is the place's the run ended in, not a store
+// step's result: see OpeningAt.
 type StoreFacts struct {
 	Heads     []store.Heads
 	Reads     []store.Scanned

@@ -37,29 +37,28 @@ type opened struct {
 // or whose store no enrollment founded: only admin init, which founds it,
 // reads such a store.
 func (r body) open() (opened, error) {
+	op, err := r.openFounded()
+	if err != nil {
+		return opened{}, err
+	}
+	if err := unjudged(op.folded.State.Policy(), op.checkout); err != nil {
+		return opened{}, err
+	}
+	return op, nil
+}
+
+// openFounded folds the store r's place opens, seeded with the founding
+// its clone pinned, or fails as an environment that has none: the one way
+// a body opens a store, admin init's after its mint included, so the store
+// opened is always the place's `[LAW:one-source-of-truth]`.
+func (r body) openFounded() (opened, error) {
 	switch o := command.OpeningAt(r.place).(type) {
 	case command.Opens:
-		op, err := r.openAs(r.p.writerOf(o))
-		if err != nil {
-			return opened{}, err
-		}
-		if err := unjudged(op.folded.State.Policy(), o.Checkout); err != nil {
-			return opened{}, err
-		}
-		return op, nil
+		return r.openAs(r.p.writerOf(o))
 	case command.NoStore:
 		return opened{}, storeFailure{err: o.Why}
 	}
 	panic(fmt.Sprintf("root: %T is not an Opening", command.OpeningAt(r.place)))
-}
-
-// openInitialized folds the store of o, the writer admin init made its
-// checkout, and tells the event the store is o's in the same step, so the
-// writer it says is the one whose store was opened: the place, read before
-// a mint, cannot name it.
-func (r body) openInitialized(o command.Opens) (opened, error) {
-	r.rec.Initialized(o)
-	return r.openAs(r.p.writerOf(o))
 }
 
 // openAs folds w's store, seeded with the founding its clone pinned.

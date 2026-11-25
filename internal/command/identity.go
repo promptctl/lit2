@@ -124,12 +124,11 @@ func (u Unminted) Files() []File {
 }
 
 // Opening is what a place opens: a minted checkout's store, for its
-// writer, or none, and why, in the words of what the place holds. A verb's
-// is its place's, derived by OpeningAt and never set beside it
-// `[LAW:one-source-of-truth]`: the root opens the store by it and the line
-// says its opening by it. admin init alone opens a store its place, read
-// before it minted, cannot name, and the opening it tells the event is the
-// one it opened, in one step: see Event.Opening.
+// writer, or none, and why, in the words of what the place holds. It is
+// the place's, derived by OpeningAt and never set beside it, so whether an
+// invocation's store opened is said once `[LAW:one-source-of-truth]`: the
+// root opens the store by it and the line says, by it, the opening of the
+// place the run ended in, which admin init's mint moves.
 //
 //sumtype:decl
 type Opening interface{ opening() }

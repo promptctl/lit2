@@ -42,7 +42,7 @@ func TestParallelWritersLeaveEveryLineWhole(t *testing.T) {
 	errs := make(chan error, n)
 	for i := range n {
 		wg.Go(func() {
-			e := Event{Invocation: asked(inv, "help"), Outcome: cli.Done{}}
+			e := Event{Invocation: asked(inv, "help"), Place: here, Outcome: cli.Done{}}
 			e.Trace = TraceID{byte(i)}
 			errs <- log.Write(e)
 		})
@@ -70,7 +70,7 @@ func TestAWriteRemovesDayFilesOlderThan30Days(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := NewLog(dir).Write(Event{Invocation: asked(inv, "help"), Outcome: cli.Done{}}); err != nil {
+	if err := NewLog(dir).Write(Event{Invocation: asked(inv, "help"), Place: here, Outcome: cli.Done{}}); err != nil {
 		t.Fatal(err)
 	}
 	for name, kept := range map[string]bool{
@@ -98,7 +98,7 @@ func TestALogUnderARegularFileFailsToWrite(t *testing.T) {
 	}
 	later := asked(inv, "help")
 	later.Started = t0.Add(time.Hour)
-	e := Event{Invocation: later, Outcome: cli.Done{}}
+	e := Event{Invocation: later, Place: here, Outcome: cli.Done{}}
 	if err := NewLog(filepath.Join(filepath.Dir(file), "commands")).Write(e); err != nil {
 		t.Fatalf("control: a log beside the regular file: %v", err)
 	}

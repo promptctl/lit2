@@ -37,16 +37,23 @@ type TraceID [16]byte
 func (t TraceID) String() string { return hex.EncodeToString(t[:]) }
 
 // Invocation is what is known of an invocation before its work runs: its
-// trace, its release, where it ran, its agent, the command it asked for,
-// parsed or not, and Started, the clock's first reading, taken before the
-// place was read, so the duration covers every step of the run.
+// trace, its release, its agent, the command it asked for, parsed or not,
+// and Started, the clock's first reading, taken before the place was read,
+// so the duration covers every step of the run.
 type Invocation struct {
 	Trace   TraceID
 	Version string
-	Place   Place
 	Agent   events.Agent
 	Command cli.Summary
 	Started time.Time
+}
+
+// Ran is what an invocation's work ended with: the place it ended in, the
+// place it was handed unless admin init minted its writer, and its
+// outcome.
+type Ran struct {
+	Place   Place
+	Outcome cli.Outcome
 }
 
 // ConfigFacts is the version in force a run read from its store's fold:
@@ -58,45 +65,32 @@ type ConfigFacts struct {
 	Ref string
 }
 
-// Event is the command event: the invocation, how long it took, the writer
-// admin init made its checkout, what its store steps did, the version it
-// ran under, every git process it ran, and how it ended. Initialized is
-// nil for every run but an admin init that reached its store, Config when
-// the run read no version, which the event records as an absent config
-// block; Git is empty when no git ran.
+// Event is the command event: the invocation, the place it ended in, which
+// says the store it opened, how long it took, what its store steps did,
+// the version it ran under, every git process it ran, and how it ended.
+// Config is nil when the run read no version, which the event records as
+// an absent config block; Git is empty when no git ran.
 type Event struct {
 	Invocation
-	Duration    time.Duration
-	Initialized *Opens
-	Store       StoreFacts
-	Config      *ConfigFacts
-	Verbs       *VerbsFacts
-	Policy      PolicyFacts
-	Git         []git.Spawn
-	Outcome     cli.Outcome
-}
-
-// Opening is the store e's run opened: its place's, or, for admin init,
-// the writer it made its checkout, found there or minted, whose store it
-// opened, which a place read before a mint cannot name.
-func (e Event) Opening() Opening {
-	if e.Initialized != nil {
-		return *e.Initialized
-	}
-	return OpeningAt(e.Place)
+	Place    Place
+	Duration time.Duration
+	Store    StoreFacts
+	Config   *ConfigFacts
+	Verbs    *VerbsFacts
+	Policy   PolicyFacts
+	Git      []git.Spawn
+	Outcome  cli.Outcome
 }
 
 // Recorder is where a body says what it did, each fact as soon as it is
-// known, so a panic keeps the facts given before it: the writer admin init
-// opened its store for, each store step, the version in force, and what
-// the verb did, the last of each kept; and the policy the store folded
-// under, set as each part of it is known.
+// known, so a panic keeps the facts given before it: each store step, the
+// version in force, and what the verb did, the last of each kept; and the
+// policy the store folded under, set as each part of it is known.
 type Recorder struct {
-	Initialized func(Opens)
-	Stored      *StoreFacts
-	Configured  func(ConfigFacts)
-	Told        func(VerbsFacts)
-	Policy      *PolicyFacts
+	Stored     *StoreFacts
+	Configured func(ConfigFacts)
+	Told       func(VerbsFacts)
+	Policy     *PolicyFacts
 }
 
 // Place is where an invocation ran.
@@ -167,40 +161,40 @@ func (Internal) Class() reason.Class { return reason.ClassInternal }
 // Reason is internal.
 func (Internal) Reason() string { return "internal" }
 
-// Record runs work as one invocation and returns its event on every path
-// work takes. What was known before work runs is the invocation, given,
-// not reported by work `[LAW:dataflow-not-control-flow]`; the clock is
-// read again only for the duration. A panic in work becomes an Internal
-// outcome carrying its value and stack, and the event keeps what was
-// asked `[LAW:nothing-unseen]`. Each store step's result goes on Stored as
+// Record runs work at the place at as one invocation and returns its event
+// on every path work takes. What was known before work runs is the
+// invocation, given, not reported by work, and the place the event keeps
+// is the one work ended in, returned by it `[LAW:dataflow-not-control-flow]`;
+// the clock is read again only for the duration. A panic in work becomes
+// an Internal outcome carrying its value and stack, and the event keeps
+// what was asked and at, the place work was handed `[LAW:nothing-unseen]`.
+// Each store step's result goes on Stored as
 // the step returns it, so the facts of the steps that ran survive a panic
 // too. The version in force arrives through Configured once the fold has
 // read it, and a verb's body says what it did through Told. Every git
 // process the invocation ran, before work as well as in it, is read from
 // spawns once work has returned, so the event is whole when Record
 // returns.
-func Record(c Clock, spawns func() []git.Spawn, inv Invocation, work func(r Recorder) cli.Outcome) Event {
-	var initialized *Opens
+func Record(c Clock, spawns func() []git.Spawn, inv Invocation, at Place, work func(r Recorder) Ran) Event {
 	var facts StoreFacts
 	var config *ConfigFacts
 	var did *VerbsFacts
 	var policy PolicyFacts
-	outcome := recovered(func() cli.Outcome {
+	ran := recovered(at, func() Ran {
 		return work(Recorder{
-			Initialized: func(o Opens) { initialized = &o },
-			Stored:      &facts,
-			Configured:  func(c ConfigFacts) { config = &c },
-			Told:        func(v VerbsFacts) { did = &v },
-			Policy:      &policy,
+			Stored:     &facts,
+			Configured: func(c ConfigFacts) { config = &c },
+			Told:       func(v VerbsFacts) { did = &v },
+			Policy:     &policy,
 		})
 	})
-	return Event{Invocation: inv, Duration: c.Now().Sub(inv.Started), Initialized: initialized, Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: outcome}
+	return Event{Invocation: inv, Place: ran.Place, Duration: c.Now().Sub(inv.Started), Store: facts, Config: config, Verbs: did, Policy: policy, Git: spawns(), Outcome: ran.Outcome}
 }
 
-func recovered(work func() cli.Outcome) (outcome cli.Outcome) {
+func recovered(at Place, work func() Ran) (ran Ran) {
 	defer func() {
 		if r := recover(); r != nil {
-			outcome = cli.Failed{Failure: Panicked(r, debug.Stack())}
+			ran = Ran{Place: at, Outcome: cli.Failed{Failure: Panicked(r, debug.Stack())}}
 		}
 	}()
 	return work()

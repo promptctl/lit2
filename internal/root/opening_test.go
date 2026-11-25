@@ -124,8 +124,8 @@ func TestATwinWhoseIDFileDoesNotParseOpensNoStore(t *testing.T) {
 }
 
 // admin init in a checkout with no identity mints its writer, its own
-// event says the store it opened and wrote is that writer's, and the
-// writes after it are that writer's, in its stream.
+// event ends in the place its mint left, whose store it opened and wrote,
+// and the writes after it are that writer's, in its stream.
 func TestInitInAnUnmintedTwinMintsTheWriterItWritesAs(t *testing.T) {
 	twin := NewFreshTwin()
 	twin.Code.Commit(map[string][]byte{verbs.WorkspacePath(): assets.DefaultWorkspace.Bytes()})
@@ -145,15 +145,31 @@ func TestInitInAnUnmintedTwinMintsTheWriterItWritesAs(t *testing.T) {
 	if minted == twinID {
 		t.Errorf("the run after init writes as %s, the twin's own id; want the id init minted", minted)
 	}
-	in, _ := initd.Place.(command.InCheckout)
-	if _, unminted := in.Identity.(command.Unminted); !unminted {
-		t.Errorf("init's event's place is %#v; want the checkout as init found it, unminted", initd.Place)
-	}
-	if o, opened := initd.Opening().(command.Opens); !opened || o.Writer.Checkout != minted || len(initd.Store.Appends) == 0 {
-		t.Errorf("init's event opened %#v and appended %d frames; want the store of %s, the writer it minted, written to", initd.Opening(), len(initd.Store.Appends), minted)
+	if got := writerOn(t, initd); got != minted || len(initd.Store.Appends) == 0 {
+		t.Errorf("init's event names writer %s and appended %d frames; want %s, the writer it minted, written to", got, len(initd.Store.Appends), minted)
 	}
 	if got := streams(t, twin.Store()); !slices.Equal(got, []store.Ref{store.WriterRef{Checkout: minted}}) {
 		t.Errorf("the store holds the streams %v; want the minted writer's alone, %s", got, minted)
+	}
+}
+
+// admin init that mints and then fails ends in the place its mint left:
+// its event names the writer whose id and key files it lists as created,
+// never the unminted checkout it found.
+func TestInitThatFailsAfterItsMintEndsMinted(t *testing.T) {
+	twin := NewFreshTwin()
+	shared := files.NewMemory(command.DirOf(command.PrincipalFile{}, twinCheckout))
+	private := files.NewMemory(command.DirOf(command.IDFile{}, twinCheckout))
+	twin.Process.IdentityFiles = func(git.Checkout) (files.Files, files.Files) { return shared, private }
+	pins := files.NewMemory(pinDir(twinCheckout))
+	durably(pins.CreateOnce(pinFile, []byte("not a pin")))
+	twin.Process.Pin = func(git.Checkout) files.Files { return pins }
+	_, e := run(t, twin, "admin", "init")
+	if _, failed := e.Outcome.(cli.Failed); !failed || len(e.Store.Creates) == 0 {
+		t.Fatalf("admin init over a pin that does not read ended %#v with creates %v; want it failed after its mint", e.Outcome, e.Store.Creates)
+	}
+	if got := writerOn(t, e); got == twinID {
+		t.Errorf("the event names %s, the twin's own id; want the writer init minted", got)
 	}
 }
 
@@ -170,7 +186,7 @@ func TestEveryInvocationRecordsThePlaceItsStoreOpenedAt(t *testing.T) {
 		"outside a checkout": {outside(NewTwin()), false},
 	} {
 		_, e := run(t, tc.twin, "--help")
-		if _, opens := e.Opening().(command.Opens); opens != tc.opens {
+		if _, opens := command.OpeningAt(e.Place).(command.Opens); opens != tc.opens {
 			t.Errorf("%s: the event's place is %#v, which opens a store: %v; want %v", name, e.Place, opens, tc.opens)
 		}
 	}

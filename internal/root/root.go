@@ -67,35 +67,13 @@ type Process struct {
 	Out, Err io.Writer
 }
 
-// Run runs one invocation, the one composition Main and the twin share:
-// it mints the trace id, reads the clock and the place, and parses the
-// command, handing Record each of these facts as an input
-// `[LAW:dataflow-not-control-flow]`; Record then records the command's
-// answer, every write it made and the temps left beside the checkout's
-// files as one event, the same steps whether the command parsed or not. It puts the outcome's error line on
-// Err before writing the event, so a slow or hung log cannot hold the line
-// back, and returns the outcome's exit status.
+// Run runs one invocation of args: it parses the command and invokes its
+// answer. It puts the outcome's error line on Err before writing the
+// event, so a slow or hung log cannot hold the line back, and returns the
+// outcome's exit status.
 func Run(p Process, args []string) int {
-	var trace command.TraceID
-	if _, err := io.ReadFull(p.Entropy, trace[:]); err != nil {
-		// [LAW:no-silent-failure] no trace id, no event: die loudly, as
-		// crypto/rand itself does when the system's entropy fails.
-		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
-	}
-	// read before the place, so the run's duration covers its reading
-	started := p.Clock.Now()
-	place := placeOf(p)
 	asked, answer := ask(args)
-	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Place: place, Agent: p.Agent, Command: asked, Started: started}
-	event := command.Record(p.Clock, p.Git, inv, func(rec command.Recorder) cli.Outcome {
-		w := &writes{stored: rec.Stored}
-		out := w.end(unfinished(func() cli.Outcome {
-			return answer(body{p: p, now: started, place: place, rec: rec, w: w})
-		}))
-		// after the body, so the temps its creates reaped are not said
-		rec.Stored.Temps = leftovers(p, place)
-		return out
-	})
+	event := invoke(p, asked, answer)
 	// [LAW:no-silent-failure] exception: stderr is where failures are said,
 	// a lost event among them; when writing to it fails there is no channel
 	// left but the exit status, which still carries the outcome.
@@ -106,12 +84,41 @@ func Run(p Process, args []string) int {
 	return cli.ExitCode(event.Outcome)
 }
 
+// invoke is one invocation of answer, asked as asked, the one composition
+// Main's runs and the twin's, its forged writes included, share: it mints
+// the trace id and reads the clock and the place, handing Record each of
+// these facts as an input `[LAW:dataflow-not-control-flow]`; Record then
+// records the answer, every write it made, the place it ended in and the
+// temps left beside the checkout's files as one event.
+func invoke(p Process, asked cli.Summary, answer func(body) command.Ran) command.Event {
+	var trace command.TraceID
+	if _, err := io.ReadFull(p.Entropy, trace[:]); err != nil {
+		// [LAW:no-silent-failure] no trace id, no event: die loudly, as
+		// crypto/rand itself does when the system's entropy fails.
+		panic(fmt.Sprintf("lit2: minting the trace id: %v", err))
+	}
+	// read before the place, so the run's duration covers its reading
+	started := p.Clock.Now()
+	place := placeOf(p)
+	inv := command.Invocation{Trace: trace, Version: p.Reader.String(), Agent: p.Agent, Command: asked, Started: started}
+	return command.Record(p.Clock, p.Git, inv, place, func(rec command.Recorder) command.Ran {
+		w := &writes{stored: rec.Stored}
+		ran := unfinished(func() command.Ran {
+			return answer(body{p: p, now: started, place: place, rec: rec, w: w})
+		})
+		ran.Outcome = w.end(ran.Outcome)
+		// after the body, so the temps its creates reaped are not said
+		rec.Stored.Temps = leftovers(p, ran.Place)
+		return ran
+	})
+}
+
 // ask is what args ask for, parsed or not, and its answer: see parsed.
-func ask(args []string) (cli.Summary, func(body) cli.Outcome) {
+func ask(args []string) (cli.Summary, func(body) command.Ran) {
 	table, groups := cli.Verbs(), cli.Groups()
 	return parsed(
 		func() (cli.Command, error) { return cli.Parse(table, groups, args) },
-		func(r body, cmd cli.Command) cli.Outcome { return dispatch(r, table, groups, cmd) },
+		func(r body, cmd cli.Command) command.Ran { return dispatch(r, table, groups, cmd) },
 	)
 }
 
@@ -120,20 +127,23 @@ func ask(args []string) (cli.Summary, func(body) cli.Outcome) {
 // parsed nothing runs the same steps as one that did. A parse or summary
 // that panics is asked as unparsed and answered with the panic, its value
 // and stack, as Record answers a body's, so the run is recorded
-// `[LAW:nothing-unseen]`; one recover for the whole run is
-// lit-law-review-xfz.b5u's.
-func parsed(parse func() (cli.Command, error), answer func(body, cli.Command) cli.Outcome) (asked cli.Summary, run func(body) cli.Outcome) {
+// `[LAW:nothing-unseen]`.
+func parsed(parse func() (cli.Command, error), answer func(body, cli.Command) command.Ran) (asked cli.Summary, run func(body) command.Ran) {
+	// [LAW:single-enforcer] exception: a second recover beside Record's,
+	// since the parse runs before Record so that what was asked is its
+	// input; lit-law-review-xfz.b5u makes one recover cover the whole run
+	// and deletes this one.
 	defer func() {
 		if p := recover(); p != nil {
 			broke := command.Panicked(p, debug.Stack())
-			asked, run = cli.Summary{Name: cli.Unparsed}, func(body) cli.Outcome { return cli.Failed{Failure: broke} }
+			asked, run = cli.Summary{Name: cli.Unparsed}, func(r body) command.Ran { return r.ran(cli.Failed{Failure: broke}) }
 		}
 	}()
 	cmd, err := parse()
 	if err != nil {
-		return cli.Summary{Name: cli.Unparsed}, func(body) cli.Outcome { return failed(err) }
+		return cli.Summary{Name: cli.Unparsed}, func(r body) command.Ran { return r.ran(failed(err)) }
 	}
-	return cli.Summarize(cmd), func(r body) cli.Outcome { return answer(r, cmd) }
+	return cli.Summarize(cmd), func(r body) command.Ran { return answer(r, cmd) }
 }
 
 // unfinished is body's outcome. A body that panics panics on, saying that
@@ -141,7 +151,7 @@ func parsed(parse func() (cli.Command, error), answer func(body, cli.Command) cl
 // of its temps, did not run, so the event Record writes after the panic
 // says so in its outcome, never an empty scan that reads as none left
 // `[LAW:no-silent-failure]`.
-func unfinished(body func() cli.Outcome) cli.Outcome {
+func unfinished(body func() command.Ran) command.Ran {
 	defer func() {
 		if r := recover(); r != nil {
 			panic(stoppedBeforeItsEnd{panicked: r})
@@ -169,29 +179,33 @@ type body struct {
 	w     *writes
 }
 
+// ran is o, ended in r's place: every body's but admin init's, whose mint
+// moves it.
+func (r body) ran(o cli.Outcome) command.Ran { return command.Ran{Place: r.place, Outcome: o} }
+
 // dispatch binds each command to its body. Every verb runs the steps of §5
 // in order on every call: open and fold, the version in force loaded, then
 // its own body.
-func dispatch(r body, table cli.Table, groups []cli.Group, cmd cli.Command) cli.Outcome {
+func dispatch(r body, table cli.Table, groups []cli.Group, cmd cli.Command) command.Ran {
 	switch c := cmd.(type) {
 	case cli.Help:
-		return written(io.WriteString(r.p.Out, cli.HelpText(table, groups, r.fields())))
+		return r.ran(written(io.WriteString(r.p.Out, cli.HelpText(table, groups, r.fields()))))
 	case cli.Get:
-		return r.verb(func(v inForce) cli.Outcome { return v.get(c.Paths()) })
+		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.get(c.Paths()) }))
 	case cli.Set:
-		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Set, pairs(c.Pairs()), c.Flags()) })
+		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Set, pairs(c.Pairs()), c.Flags()) }))
 	case cli.Add:
-		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Add, pairs(c.Pairs()), c.Flags()) })
+		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Add, pairs(c.Pairs()), c.Flags()) }))
 	case cli.Rm:
-		return r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Rm, paths(c.Paths()), c.Flags()) })
+		return r.ran(r.verb(func(v inForce) cli.Outcome { return v.write(verbs.Rm, paths(c.Paths()), c.Flags()) }))
 	case cli.AdminInit:
 		return r.init()
 	case cli.AdminSync:
-		return notBuilt("admin sync", "lit-converge-5eq")
+		return r.ran(notBuilt("admin sync", "lit-converge-5eq"))
 	case cli.ConfigCommit:
-		return r.stored(opened.commit)
+		return r.ran(r.stored(opened.commit))
 	case cli.ConfigStatus:
-		return r.stored(opened.status)
+		return r.ran(r.stored(opened.status))
 	}
 	panic(fmt.Sprintf("root: %T is not a Command", cmd))
 }

@@ -8,13 +8,12 @@ import (
 	"testing"
 
 	"github.com/promptctl/lit2/internal/cli"
-	"github.com/promptctl/lit2/internal/events"
 	"github.com/promptctl/lit2/internal/store"
 )
 
 func identityOf(t *testing.T, id Identity) map[string]any {
 	t.Helper()
-	m := decode(t, Event{Invocation: Invocation{Place: InCheckout{Checkout: checkout, Identity: id}, Agent: events.Unlabeled{}, Command: cli.Summary{Name: "help"}, Started: t0},
+	m := decode(t, Event{Invocation: asked(inv, "help"), Place: InCheckout{Checkout: checkout, Identity: id},
 		Outcome: cli.Done{}})
 	place, _ := m["place"].(map[string]any)
 	in, _ := place["checkout"].(map[string]any)
@@ -27,7 +26,7 @@ func TestTheLineNamesTheWriterAndItsPrincipalNeverItsKey(t *testing.T) {
 	if got["checkout"] != (store.CheckoutID{9}).String() || got["principal"] != key.Principal().String() {
 		t.Errorf("a minted identity is %v; want the checkout id and the principal's did:key", got)
 	}
-	b, err := json.Marshal(decode(t, Event{Invocation: asked(inv, "help"), Outcome: cli.Done{}}))
+	b, err := json.Marshal(decode(t, Event{Invocation: asked(inv, "help"), Place: here, Outcome: cli.Done{}}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -167,25 +167,26 @@ func storesOf(c git.Checkout, ports store.Ports) func(git.Checkout) store.Ports 
 // Forge is a modified client's write: verb on ops compiled and minted as
 // lit2 mints them and appended with no verdict asked of the fold, the
 // event a test hands every replica for the fold to refuse
-// `[LAW:single-enforcer]`.
+// `[LAW:single-enforcer]`. It is invoked as every run is, through the one
+// composition, and its event is kept by no log.
 func (t Twin) Forge(verb verbs.Verb, ops ...verbs.Operand) error {
-	rec := command.Recorder{Initialized: func(command.Opens) {}, Stored: &command.StoreFacts{}, Configured: func(command.ConfigFacts) {}, Told: func(command.VerbsFacts) {}, Policy: &command.PolicyFacts{}}
 	var forged error
-	w := &writes{stored: rec.Stored}
-	out := body{p: t.Process, now: t.Process.Clock.Now(), place: placeOf(t.Process), rec: rec, w: w}.verb(func(v inForce) cli.Outcome {
-		c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
-		if no, refused := c.Refusal(); refused {
-			forged = no.Err()
+	e := invoke(t.Process, cli.Summary{Name: "forge"}, func(r body) command.Ran {
+		return r.ran(r.verb(func(v inForce) cli.Outcome {
+			c := verbs.Compile(v.world(v.folded.State), verb, ops, func() (string, error) { return "", nil })
+			if no, refused := c.Refusal(); refused {
+				forged = no.Err()
+				return cli.Done{}
+			}
+			m, err := v.mint(c.Drafts, v.ref)
+			if err == nil {
+				err = v.append(m)
+			}
+			forged = err
 			return cli.Done{}
-		}
-		m, err := v.mint(c.Drafts, v.ref)
-		if err == nil {
-			err = v.append(m)
-		}
-		forged = err
-		return cli.Done{}
+		}))
 	})
-	if f, isFailed := w.end(out).(cli.Failed); isFailed {
+	if f, isFailed := e.Outcome.(cli.Failed); isFailed {
 		return f.Failure
 	}
 	return forged

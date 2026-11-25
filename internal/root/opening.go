@@ -15,13 +15,20 @@ import (
 func placeOf(p Process) command.Place {
 	switch l := p.Locate().(type) {
 	case command.AtCheckout:
-		return command.InCheckout{Checkout: l.Checkout, Identity: readIdentity(p.IdentityFiles(l.Checkout))}
+		return identified(p, l.Checkout)
 	case command.NoCheckout:
 		return l
 	case command.Unlocatable:
 		return l
 	}
 	panic(fmt.Sprintf("root: %T is not a Located", p.Locate()))
+}
+
+// identified is c with the writer its identity files hold, read now
+// through p's ports: how a run reads its checkout's identity, and how
+// admin init reads it again after its mint.
+func identified(p Process, c git.Checkout) command.InCheckout {
+	return command.InCheckout{Checkout: c, Identity: readIdentity(p.IdentityFiles(c))}
 }
 
 // writer is a minted checkout, its writer, and its store, opened for that
@@ -34,8 +41,7 @@ type writer struct {
 }
 
 // writerOf is o's writer, with its store over p's ports: how a run opens
-// the store its place opens, and how admin init opens the store of the
-// writer it has just minted.
+// the store its place opens.
 func (p Process) writerOf(o command.Opens) writer {
 	return writer{checkout: o.Checkout, id: o.Writer, store: store.Open(o.Writer.Checkout, p.Stores(o.Checkout), store.DefaultSegmentBound)}
 }
